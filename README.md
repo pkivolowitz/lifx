@@ -1,6 +1,12 @@
 # GLOWUP — LIFX Effect Engine
 
-A modular effect engine for LIFX devices (string lights, beams, single color bulbs, and monochrome bulbs), replacing the battery-draining phone app with a daemon that runs animated effects autonomously from a Raspberry Pi or Mac.
+A modular effect engine for LIFX devices (string lights, beams, single color
+bulbs, and monochrome bulbs), replacing the battery-draining phone app with a
+daemon that runs animated effects autonomously from a Raspberry Pi or Mac.
+
+This project utilizes AI assistance (Claude 4.6) for boilerplate and logic
+expansion. All final architectural decisions, algorithmic validation, and code
+integration are performed by Perry Kivolowitz, the sole Human Author.
 
 ## What It Does
 
