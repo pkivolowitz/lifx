@@ -28,11 +28,11 @@ Typical usage::
 
 from __future__ import annotations
 
-__version__ = "1.3"
+__version__ = "1.4"
 
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from effects import Effect, create_effect, get_registry, KELVIN_DEFAULT, hsbk_to_luminance
 from transport import LifxDevice
@@ -245,13 +245,19 @@ class Engine:
         self,
         devices: list[LifxDevice],
         fps: int = DEFAULT_FPS,
+        frame_callback: Optional[Callable] = None,
     ) -> None:
         """Initialize the engine.
 
         Args:
-            devices: List of :class:`LifxDevice` (must have ``zone_count``
-                     populated via :meth:`LifxDevice.query_all`).
-            fps:     Target frames per second.  Must be positive.
+            devices:        List of :class:`LifxDevice` (must have
+                            ``zone_count`` populated via
+                            :meth:`LifxDevice.query_all`).
+            fps:            Target frames per second.  Must be positive.
+            frame_callback: Optional callable invoked after each frame
+                            with the rendered color list.  Used by the
+                            simulator to display a live preview.  Must
+                            accept a single argument: ``list[HSBK]``.
 
         Raises:
             ValueError: If *devices* is empty or *fps* is not positive.
@@ -269,6 +275,7 @@ class Engine:
         self._lock: threading.Lock = threading.Lock()
         self._stop_event: threading.Event = threading.Event()
         self._effect_start_time: float = 0.0
+        self._frame_callback: Optional[Callable] = frame_callback
 
     def start(self, effect: Effect) -> None:
         """Start or hot-swap the current effect.
@@ -374,12 +381,13 @@ class Engine:
                 self._stop_event.wait(interval)
                 continue
 
+            colors: list = []
             for dev in self.devices:
                 if dev.zone_count is None:
                     # Device hasn't been queried yet; skip it.
                     continue
                 try:
-                    colors: list = effect.render(t, dev.zone_count)
+                    colors = effect.render(t, dev.zone_count)
                     if dev.is_multizone:
                         dev.set_zones(colors, duration_ms=0, rapid=True)
                     elif dev.is_polychrome:
@@ -394,6 +402,15 @@ class Engine:
                     # Don't crash the loop on a single frame error.
                     # A transient render glitch or network hiccup should not
                     # bring down the entire animation.
+                    pass
+
+            # Notify the frame callback (e.g., simulator) with the last
+            # rendered color list.  Wrapped in try/except so a callback
+            # failure never crashes the render loop.
+            if self._frame_callback is not None:
+                try:
+                    self._frame_callback(colors)
+                except Exception:
                     pass
 
             # Frame pacing: sleep only the remaining time in this frame slot.
@@ -417,18 +434,23 @@ class Controller:
         self,
         devices: list[LifxDevice],
         fps: int = DEFAULT_FPS,
+        frame_callback: Optional[Callable] = None,
     ) -> None:
         """Initialize the controller.
 
         Args:
-            devices: List of :class:`LifxDevice` to drive.
-            fps:     Target frames per second.
+            devices:        List of :class:`LifxDevice` to drive.
+            fps:            Target frames per second.
+            frame_callback: Optional callable forwarded to the
+                            :class:`Engine` for per-frame notifications
+                            (e.g., live simulator preview).
 
         Raises:
             ValueError: If *devices* is empty or *fps* is not positive
                         (propagated from :class:`Engine`).
         """
-        self.engine: Engine = Engine(devices, fps)
+        self.engine: Engine = Engine(devices, fps,
+                                     frame_callback=frame_callback)
         self.devices: list[LifxDevice] = list(devices)  # defensive copy
         self._current_effect_name: Optional[str] = None
 

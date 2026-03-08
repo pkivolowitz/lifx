@@ -1,0 +1,358 @@
+"""Live visual simulator for LIFX effects.
+
+Opens a tkinter window displaying colored rectangles — one per zone —
+updated in real-time as the engine renders frames.  This lets you
+preview effects without physical hardware or watch what the engine is
+sending alongside real devices.
+
+The simulator is **optional**.  If tkinter is not available (missing
+``_tkinter`` C extension), :func:`create_simulator` prints a note and
+returns ``None``.  The rest of the system continues unaffected.
+
+Threading model
+---------------
+macOS requires all tkinter calls on the main thread.  The engine
+renders in a background thread and posts frame data onto a
+:class:`queue.Queue`.  The tkinter event loop polls that queue via
+``root.after()`` — no cross-thread GUI calls.
+
+Usage::
+
+    from simulator import create_simulator
+
+    sim = create_simulator(zone_count=108, effect_name="cylon")
+    if sim is not None:
+        # Wire engine's frame_callback to sim.update
+        # Then run sim.run() on the main thread
+        sim.run()
+"""
+
+# Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+# Licensed under the MIT License. See LICENSE file in the project root.
+
+from __future__ import annotations
+
+__version__: str = "1.0"
+
+import queue
+import time
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Graceful tkinter import — the entire module is a no-op if unavailable.
+# ---------------------------------------------------------------------------
+
+try:
+    import tkinter as tk
+    _TK_AVAILABLE: bool = True
+except ImportError:
+    _TK_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+HSBK_MAX: int = 65535
+"""Maximum value for any HSBK component (unsigned 16-bit)."""
+
+HUE_SEXTANTS: int = 6
+"""Number of sextants in the HSB color wheel."""
+
+SIM_ZONE_WIDTH: int = 12
+"""Default width in pixels of each zone rectangle."""
+
+SIM_ZONE_HEIGHT: int = 60
+"""Height in pixels of each zone rectangle."""
+
+SIM_ZONE_GAP: int = 1
+"""Gap in pixels between adjacent zone rectangles."""
+
+SIM_PADDING: int = 10
+"""Padding in pixels around the zone strip."""
+
+SIM_HEADER_HEIGHT: int = 40
+"""Height in pixels reserved for the header text area."""
+
+SIM_POLL_INTERVAL_MS: int = 50
+"""Interval in milliseconds between queue polls (20 Hz)."""
+
+SIM_STOP_CHECK_MS: int = 100
+"""Interval in milliseconds between stop-event checks."""
+
+SIM_WINDOW_TITLE: str = "GlowUp Simulator"
+"""Default window title."""
+
+SIM_BG_COLOR: str = "#1a1a1a"
+"""Window and canvas background color (dark grey)."""
+
+SIM_HEADER_COLOR: str = "#cccccc"
+"""Header text color."""
+
+SIM_FPS_SMOOTHING: int = 10
+"""Number of frames to average for FPS display."""
+
+SIM_MAX_WINDOW_WIDTH: int = 1600
+"""Maximum window width in pixels before zone widths shrink."""
+
+SIM_MIN_ZONE_WIDTH: int = 3
+"""Minimum zone width in pixels (avoids sub-pixel rendering)."""
+
+
+# ---------------------------------------------------------------------------
+# HSBK → RGB conversion (display only)
+# ---------------------------------------------------------------------------
+
+def hsbk_to_rgb(hue: int, sat: int, bri: int, kelvin: int) -> str:
+    """Convert a LIFX HSBK color to a tkinter-compatible hex string.
+
+    Uses the standard HSB-to-RGB algorithm (same as
+    ``effects.hsbk_to_luminance`` lines 333-354) but returns an
+    ``"#RRGGBB"`` hex string instead of computing BT.709 luma.
+
+    The *kelvin* parameter is accepted for API compatibility but
+    ignored — color temperature tinting is not applied.
+
+    Args:
+        hue:    LIFX hue (0-65535, mapped to 0-360°).
+        sat:    LIFX saturation (0-65535).
+        bri:    LIFX brightness (0-65535).
+        kelvin: Color temperature (ignored for display).
+
+    Returns:
+        A hex color string ``"#RRGGBB"`` suitable for tkinter.
+    """
+    # Normalize to [0, 1].
+    h: float = (hue / HSBK_MAX) * HUE_SEXTANTS  # 0-6 for sextant math
+    s: float = sat / HSBK_MAX
+    b: float = bri / HSBK_MAX
+
+    # HSB to RGB (standard algorithm).
+    c: float = b * s           # chroma
+    x: float = c * (1.0 - abs(h % 2.0 - 1.0))  # secondary component
+    m: float = b - c           # brightness offset
+
+    sextant: int = int(h) % HUE_SEXTANTS
+    if sextant == 0:
+        r, g, bl = c + m, x + m, m
+    elif sextant == 1:
+        r, g, bl = x + m, c + m, m
+    elif sextant == 2:
+        r, g, bl = m, c + m, x + m
+    elif sextant == 3:
+        r, g, bl = m, x + m, c + m
+    elif sextant == 4:
+        r, g, bl = x + m, m, c + m
+    else:
+        r, g, bl = c + m, m, x + m
+
+    # Clamp and convert to 8-bit integers.
+    ri: int = min(int(r * 255), 255)
+    gi: int = min(int(g * 255), 255)
+    bi: int = min(int(bl * 255), 255)
+
+    return f"#{ri:02x}{gi:02x}{bi:02x}"
+
+
+# ---------------------------------------------------------------------------
+# Simulator window
+# ---------------------------------------------------------------------------
+
+if _TK_AVAILABLE:
+
+    class SimulatorWindow:
+        """Live preview window showing effect output as colored rectangles.
+
+        Each zone is rendered as a filled rectangle on a tkinter canvas.
+        The engine thread pushes frame data via :meth:`update`, and the
+        tkinter event loop polls the queue to refresh the display.
+
+        Attributes:
+            zone_count:  Number of zones being displayed.
+            effect_name: Name of the active effect (shown in header).
+        """
+
+        def __init__(self, zone_count: int, effect_name: str) -> None:
+            """Create the simulator window.
+
+            Args:
+                zone_count:  Number of zones to display.
+                effect_name: Effect name shown in the header.
+            """
+            self.zone_count: int = zone_count
+            self.effect_name: str = effect_name
+            self._queue: queue.Queue = queue.Queue()
+            self._frame_times: list[float] = []
+
+            # --- Compute adaptive zone width ---------------------------------
+            max_strip: int = SIM_MAX_WINDOW_WIDTH - 2 * SIM_PADDING
+            zone_w: int = min(
+                SIM_ZONE_WIDTH,
+                max(SIM_MIN_ZONE_WIDTH,
+                    (max_strip - (zone_count - 1) * SIM_ZONE_GAP) // zone_count),
+            )
+
+            strip_width: int = (
+                zone_count * zone_w + (zone_count - 1) * SIM_ZONE_GAP
+            )
+            canvas_width: int = strip_width + 2 * SIM_PADDING
+            canvas_height: int = (
+                SIM_HEADER_HEIGHT + SIM_ZONE_HEIGHT + 2 * SIM_PADDING
+            )
+
+            # --- Build the window --------------------------------------------
+            self._root: tk.Tk = tk.Tk()
+            self._root.title(SIM_WINDOW_TITLE)
+            self._root.configure(bg=SIM_BG_COLOR)
+            self._root.resizable(False, False)
+
+            self._canvas: tk.Canvas = tk.Canvas(
+                self._root,
+                width=canvas_width,
+                height=canvas_height,
+                bg=SIM_BG_COLOR,
+                highlightthickness=0,
+            )
+            self._canvas.pack()
+
+            # --- Header text -------------------------------------------------
+            self._header_id = self._canvas.create_text(
+                SIM_PADDING, SIM_PADDING,
+                anchor="nw",
+                text=f"{effect_name}  |  {zone_count} zones",
+                fill=SIM_HEADER_COLOR,
+                font=("Menlo", 12),
+            )
+            self._fps_id = self._canvas.create_text(
+                canvas_width - SIM_PADDING, SIM_PADDING,
+                anchor="ne",
+                text="-- fps",
+                fill=SIM_HEADER_COLOR,
+                font=("Menlo", 12),
+            )
+
+            # --- Zone rectangles (initially black) ---------------------------
+            y_top: int = SIM_HEADER_HEIGHT + SIM_PADDING
+            y_bot: int = y_top + SIM_ZONE_HEIGHT
+            self._rects: list[int] = []
+
+            for i in range(zone_count):
+                x0: int = SIM_PADDING + i * (zone_w + SIM_ZONE_GAP)
+                x1: int = x0 + zone_w
+                rect_id: int = self._canvas.create_rectangle(
+                    x0, y_top, x1, y_bot,
+                    fill="#000000", outline="",
+                )
+                self._rects.append(rect_id)
+
+            # --- Start polling -----------------------------------------------
+            self._root.after(SIM_POLL_INTERVAL_MS, self._poll_queue)
+
+        def update(self, colors: list[tuple[int, int, int, int]]) -> None:
+            """Post a frame to the simulator (called from engine thread).
+
+            This method is thread-safe.  It puts the color list onto an
+            internal queue and returns immediately.  The tkinter event
+            loop picks it up on the next poll cycle.
+
+            Args:
+                colors: List of HSBK tuples, one per zone.
+            """
+            # Non-blocking put; queue is unbounded so this never raises.
+            self._queue.put(colors)
+
+        def _poll_queue(self) -> None:
+            """Drain the queue and display the most recent frame.
+
+            Scheduled via ``root.after()`` — runs on the main thread.
+            Skips stale frames (only the latest matters for display).
+            """
+            latest: Optional[list] = None
+
+            # Drain all queued frames, keep only the newest.
+            try:
+                while True:
+                    latest = self._queue.get_nowait()
+            except queue.Empty:
+                pass
+
+            if latest is not None:
+                now: float = time.monotonic()
+                self._frame_times.append(now)
+
+                # Trim to smoothing window.
+                while (len(self._frame_times) > SIM_FPS_SMOOTHING
+                       and self._frame_times):
+                    self._frame_times.pop(0)
+
+                # Update FPS display.
+                if len(self._frame_times) >= 2:
+                    span: float = (
+                        self._frame_times[-1] - self._frame_times[0]
+                    )
+                    if span > 0:
+                        fps: float = (len(self._frame_times) - 1) / span
+                        self._canvas.itemconfig(
+                            self._fps_id, text=f"{fps:.0f} fps",
+                        )
+
+                # Update zone rectangles.
+                num_colors: int = min(len(latest), len(self._rects))
+                for i in range(num_colors):
+                    hex_color: str = hsbk_to_rgb(*latest[i])
+                    self._canvas.itemconfig(self._rects[i], fill=hex_color)
+
+            # Reschedule.
+            self._root.after(SIM_POLL_INTERVAL_MS, self._poll_queue)
+
+        def run(self) -> None:
+            """Enter the tkinter main loop (blocks the calling thread).
+
+            This must be called from the main thread on macOS.
+            """
+            self._root.mainloop()
+
+        def stop(self) -> None:
+            """Request the tkinter main loop to exit.
+
+            Safe to call from any thread — uses ``root.after()`` to
+            schedule the quit on the main thread.
+            """
+            try:
+                self._root.after(0, self._root.quit)
+            except Exception:
+                # Window may already be destroyed.
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Public factory
+# ---------------------------------------------------------------------------
+
+def create_simulator(
+    zone_count: int,
+    effect_name: str,
+) -> Optional["SimulatorWindow"]:
+    """Create a simulator window if tkinter is available.
+
+    If tkinter is not installed, prints a note to stderr and returns
+    ``None``.  Callers should check the return value and fall back to
+    the non-simulator code path.
+
+    Args:
+        zone_count:  Number of zones to display.
+        effect_name: Effect name shown in the header.
+
+    Returns:
+        A :class:`SimulatorWindow` instance, or ``None`` if tkinter
+        is unavailable.
+    """
+    if not _TK_AVAILABLE:
+        import sys
+        print(
+            "Note: tkinter not available — simulator disabled.  "
+            "Install with: brew install tcl-tk python-tk@3.10",
+            file=sys.stderr,
+        )
+        return None
+
+    return SimulatorWindow(zone_count, effect_name)

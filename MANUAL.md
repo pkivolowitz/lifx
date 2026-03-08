@@ -43,9 +43,10 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
    - [Utility Functions](#utility-functions)
    - [Lifecycle Hooks](#lifecycle-hooks)
    - [Complete Example](#complete-example)
-8. [Engine and Controller API](#engine-and-controller-api)
+8. [Live Simulator](#live-simulator)
+9. [Engine and Controller API](#engine-and-controller-api)
    - [VirtualMultizoneDevice](#virtualmultizonedevice)
-9. [Testing](#testing)
+10. [Testing](#testing)
 
 ---
 
@@ -187,6 +188,7 @@ luma-converted brightness.  You can mix any device types freely.
 | `--config`  | *(none)* | Path to config file containing device groups |
 | `--group`   | *(none)* | Device group name (requires `--config`)   |
 | `--fps`     | 20      | Frames per second for the render loop     |
+| `--sim`     | off     | Open a live simulator window (see [Live Simulator](#live-simulator)) |
 
 You must specify either `--ip` or both `--config` and `--group` (not both).
 
@@ -217,9 +219,13 @@ python3 glowup.py play cylon --config schedule.json --group office --speed 3
 
 # Aurora drifting around a room
 python3 glowup.py play aurora --config schedule.json --group living-room
+
+# Preview an effect in the simulator window alongside the real lights
+python3 glowup.py play cylon --ip <device-ip> --sim
 ```
 
-On stop (Ctrl+C), the device fades to black over 500ms.
+On stop (Ctrl+C or closing the simulator window), the device fades to
+black over 500ms.
 
 ---
 
@@ -591,6 +597,7 @@ glowup.py            CLI — argparse, dispatches to subcommand handlers
     │
     ├── transport.py     LIFX LAN protocol: discovery, LifxDevice, UDP sockets
     ├── engine.py        Engine (threaded frame loop) + Controller (thread-safe API)
+    ├── simulator.py     Live tkinter preview window (optional, graceful fallback)
     ├── solar.py         Sunrise/sunset calculator (NOAA algorithm, no dependencies)
     ├── scheduler.py     Daemon: named device groups, symbolic time scheduling
     │
@@ -854,6 +861,61 @@ class Rainbow(Effect):
 
 Save this as `effects/rainbow.py` and it will automatically appear in
 `python3 glowup.py effects` and be playable via `python3 glowup.py play rainbow --ip ...`.
+
+---
+
+## Live Simulator
+
+The `--sim` flag on the `play` command opens a tkinter window that
+displays the effect output in real-time as colored rectangles — one per
+zone.  This lets you preview effects without physical hardware, or watch
+what the engine is sending alongside real devices.
+
+```bash
+# Preview cylon on your lights and in the simulator window
+python3 glowup.py play cylon --ip 10.0.0.62 --sim
+
+# Works with virtual multizone groups too
+python3 glowup.py play aurora --config schedule.json --group office --sim
+```
+
+The simulator window shows:
+
+- **Zone strip** — a row of colored rectangles, one per zone, updated
+  every frame with true RGB color converted from the LIFX HSBK values.
+- **Header** — the effect name and zone count.
+- **FPS counter** — the actual display refresh rate (smoothed over 10
+  frames).
+
+**Closing the window** triggers the same clean shutdown as Ctrl+C — the
+effect fades to black and devices are powered off.
+
+### How It Works
+
+The engine renders frames in a background thread.  After dispatching
+colors to devices, it calls an optional `frame_callback` with the
+rendered color list.  The simulator puts frame data onto a
+`queue.Queue` (thread-safe), and the tkinter event loop on the main
+thread polls that queue via `root.after()` to update the display.
+This satisfies the macOS requirement that all tkinter calls happen on
+the main thread.
+
+### Graceful Fallback
+
+If tkinter is not available (missing the `_tkinter` C extension), the
+`--sim` flag prints a note and continues without the window.  The rest
+of the system is completely unaffected.  To install tkinter on macOS
+with Homebrew Python:
+
+```bash
+brew install tcl-tk python-tk@3.10
+```
+
+### Adaptive Sizing
+
+Zone widths automatically shrink for large zone counts so the window
+fits on screen (capped at 1600px).  A 108-zone string light fits
+comfortably; a 200-zone virtual group will use narrower rectangles.
 
 ---
 

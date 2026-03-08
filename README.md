@@ -47,6 +47,7 @@ See the **[User Manual](MANUAL.md)** for:
 - All effects with parameter tables
 - Virtual multizone setup and configuration
 - Effect developer guide (how to build your own)
+- Live simulator (`--sim` preview window)
 - Engine, Controller, and VirtualMultizoneDevice API
 - Testing
 
@@ -71,6 +72,7 @@ See [schedule.json.example](schedule.json.example) for config format. Deploy as 
 | `effects/*.py` | Pure renderers — no I/O, no device knowledge |
 | `effects/flag_data.py` | 199-country flag color database |
 | `glowup.py` | CLI entry point (discover, effects, identify, play) |
+| `simulator.py` | Live tkinter preview window (`--sim`), optional graceful fallback |
 | `solar.py` | Sunrise/sunset calculator (NOAA algorithm, no dependencies) |
 | `scheduler.py` | Orchestrator daemon with device groups and symbolic scheduling |
 | `test_virtual_multizone.py` | Mock-based tests for virtual multizone dispatch |

@@ -16,7 +16,7 @@ declarations.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.4"
+__version__ = "1.5"
 
 import argparse
 import json
@@ -52,6 +52,9 @@ IDENTIFY_FRAME_INTERVAL: float = 0.05
 
 IDENTIFY_MIN_BRI: float = 0.05
 """Minimum brightness fraction during identify pulse (5%)."""
+
+SIM_STOP_CHECK_MS: int = 100
+"""Interval in milliseconds between stop-event checks in simulator mode."""
 
 # Minimum column widths for the discovery table display.
 # These prevent columns from collapsing when device labels are short.
@@ -475,8 +478,17 @@ def cmd_play(args: argparse.Namespace) -> None:
     # --- Ensure device is powered on before sending colors --------------------
     dev.set_power(on=True, duration_ms=0)
 
+    # --- Optional simulator window --------------------------------------------
+    sim = None
+    if getattr(args, "sim", False):
+        from simulator import create_simulator
+        sim = create_simulator(dev.zone_count or 1, effect_name)
+
+    frame_cb = sim.update if sim is not None else None
+
     # --- Start the render engine ----------------------------------------------
-    ctrl: Controller = Controller([dev], fps=args.fps)
+    ctrl: Controller = Controller([dev], fps=args.fps,
+                                  frame_callback=frame_cb)
     ctrl.play(effect_name, **effect_params)
 
     status: dict = ctrl.get_status()
@@ -494,8 +506,24 @@ def cmd_play(args: argparse.Namespace) -> None:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    # Block the main thread until a termination signal arrives
-    stop_requested.wait()
+    if sim is not None:
+        # tkinter must run on the main thread (macOS requirement).
+        # Wire window-close to the same stop path as Ctrl+C.
+        sim._root.protocol("WM_DELETE_WINDOW",
+                           lambda: stop_requested.set())
+
+        def _check_stop() -> None:
+            """Poll the stop event from the tkinter event loop."""
+            if stop_requested.is_set():
+                sim.stop()
+            else:
+                sim._root.after(SIM_STOP_CHECK_MS, _check_stop)
+
+        sim._root.after(SIM_STOP_CHECK_MS, _check_stop)
+        sim.run()  # blocks on mainloop (main thread)
+    else:
+        # No simulator — block the main thread until signal arrives.
+        stop_requested.wait()
 
     _print("\nStopping...")
     ctrl.stop(fade_ms=DEFAULT_FADE_MS)
@@ -581,6 +609,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_play.add_argument(
         "--fps", type=int, default=DEFAULT_FPS,
         help=f"Frames per second (default: {DEFAULT_FPS})",
+    )
+    p_play.add_argument(
+        "--sim", action="store_true", default=False,
+        help="Open a live simulator window showing the effect",
     )
 
     # Auto-add every effect's Param declarations as CLI flags.
