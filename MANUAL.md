@@ -1,0 +1,1042 @@
+# GLOWUP - LIFX Effect Engine — User Manual
+
+Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+Licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+This project utilizes AI assistance (Claude 4.6) for boilerplate and logic
+expansion. All final architectural decisions, algorithmic validation, and
+code integration are performed by Perry Kivolowitz, the sole Human Author.
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Requirements](#requirements)
+3. [Quick Start](#quick-start)
+4. [CLI Reference](#cli-reference)
+   - [discover](#discover)
+   - [effects](#effects)
+   - [identify](#identify)
+   - [play](#play)
+5. [Scheduler (Daemon)](#scheduler-daemon)
+   - [Configuration File](#configuration-file)
+   - [Symbolic Times](#symbolic-times)
+   - [Dry Run](#dry-run)
+   - [Installing as a systemd Service](#installing-as-a-systemd-service)
+   - [Controlling the Service](#controlling-the-service)
+6. [Built-in Effects](#built-in-effects)
+   - [cylon](#cylon)
+   - [breathe](#breathe)
+   - [wave](#wave)
+   - [twinkle](#twinkle)
+   - [morse](#morse)
+   - [aurora](#aurora)
+   - [binclock](#binclock)
+   - [flag](#flag)
+7. [Effect Developer Guide](#effect-developer-guide)
+   - [Architecture Overview](#architecture-overview)
+   - [Creating a New Effect](#creating-a-new-effect)
+   - [The Effect Base Class](#the-effect-base-class)
+   - [The Param System](#the-param-system)
+   - [Color Model (HSBK)](#color-model-hsbk)
+   - [Utility Functions](#utility-functions)
+   - [Lifecycle Hooks](#lifecycle-hooks)
+   - [Complete Example](#complete-example)
+8. [Engine and Controller API](#engine-and-controller-api)
+   - [VirtualMultizoneDevice](#virtualmultizonedevice)
+9. [Testing](#testing)
+
+---
+
+## Overview
+
+The GLOWUP LIFX Effect Engine drives animated lighting effects on LIFX
+devices (string lights, beams, Z strips, single color bulbs, and monochrome
+bulbs) over the local network using the LIFX LAN protocol. It replaces the
+battery-draining phone app with a lightweight CLI that can run on a
+Raspberry Pi or similar as a daemon.
+
+Color effects on monochrome (white-only) bulbs are automatically converted
+to perceptually correct brightness using BT.709 luma coefficients.
+
+**Virtual multizone** — Any combination of LIFX devices can be grouped
+into a virtual multizone strip.  Multizone devices (string lights, beams)
+contribute all their zones; single bulbs contribute one zone each.  Five
+white lamps around a room become a 5-zone animation surface; add a
+108-zone string light and it becomes 113 zones.  A cylon scanner sweeps
+lamp to lamp, aurora curtains drift around you, a wave oscillates across
+the room.  Define device groups in a config file and the engine treats
+them as one device.  Effects don't need any changes — they already
+render per-zone colors, and the virtual device routes each color back
+to the correct physical device, batching multizone updates efficiently.
+
+Effects are **pure renderers** — they know nothing about devices or
+networking. Given a timestamp and a zone count, they return a list of
+colors. The engine handles framing, timing, and transport.
+
+## Requirements
+
+- Python 3.10+
+- One or more LIFX devices on the same LAN subnet (multizone, single color, or monochrome)
+- No external dependencies — the entire stack is pure Python
+
+## Quick Start
+
+```bash
+# 1. Find your LIFX devices
+python3 glowup.py discover
+
+# 2. See what effects are available
+python3 glowup.py effects
+
+# 3. Run an effect (replace IP with your device's IP)
+python3 glowup.py play cylon --ip <device-ip>
+
+# 4. Or animate a group of bulbs as a virtual multizone
+python3 glowup.py play cylon --config schedule.json --group office
+
+# 5. Press Ctrl+C to stop (fades to black gracefully)
+```
+
+---
+
+## CLI Reference
+
+The program is invoked as:
+
+```
+python3 glowup.py <command> [options]
+```
+
+### discover
+
+Find all LIFX devices on the local network via UDP broadcast.
+
+```bash
+python3 glowup.py discover [--timeout SECONDS] [--ip ADDRESS] [--json]
+```
+
+| Option      | Default | Description                                    |
+|-------------|---------|------------------------------------------------|
+| `--timeout` | 3.0     | How long to listen for responses (s)           |
+| `--ip`      | *(none)* | Query a specific device IP instead of broadcast |
+| `--json`    | off     | Also print results as JSON                     |
+
+Output is a formatted table showing each device's label, product type,
+group, IP address, MAC address, and zone count.
+
+### effects
+
+List all registered effects and their tunable parameters.
+
+```bash
+python3 glowup.py effects
+```
+
+Each effect is printed with its name, description, and every parameter
+including its default value and valid range.
+
+### identify
+
+Pulse a device's brightness so you can visually locate which physical
+bulb corresponds to a given IP address. The device slowly breathes
+between dim and full brightness in warm white until you press Ctrl+C.
+
+```bash
+python3 glowup.py identify --ip <device-ip>
+```
+
+| Option | Default | Description                          |
+|--------|---------|--------------------------------------|
+| `--ip` | *(required)* | Target device IP address or hostname |
+
+Works with all device types (multizone, single color, monochrome).
+On stop, the device is powered off.
+
+### play
+
+Run an effect on a device or device group. Blocks until Ctrl+C or SIGTERM.
+
+**Single device:**
+
+```bash
+python3 glowup.py play <effect> --ip <device_ip> [--fps N] [--param value ...]
+```
+
+**Virtual multizone (device group):**
+
+```bash
+python3 glowup.py play <effect> --config <file> --group <name> [--fps N] [--param value ...]
+```
+
+When using `--config`/`--group`, devices are combined into a virtual
+multizone strip.  Multizone devices (string lights, beams) contribute all
+their physical zones; single bulbs contribute one zone each.  A group
+containing a 108-zone string light and 4 single bulbs becomes a 112-zone
+virtual device.  Effects that spread patterns across zones (cylon, aurora,
+wave, twinkle) animate across all devices as if they were a single strip.
+Multizone devices receive efficient batched updates (the same 2-packet
+extended multizone protocol); single bulbs receive individual `set_color()`
+calls.  Monochrome bulbs in the group automatically receive BT.709
+luma-converted brightness.  You can mix any device types freely.
+
+| Option      | Default | Description                               |
+|-------------|---------|-------------------------------------------|
+| `--ip`      | *(none)* | Target device IP address (single device mode) |
+| `--config`  | *(none)* | Path to config file containing device groups |
+| `--group`   | *(none)* | Device group name (requires `--config`)   |
+| `--fps`     | 20      | Frames per second for the render loop     |
+
+You must specify either `--ip` or both `--config` and `--group` (not both).
+
+All effect-specific parameters are auto-generated as `--flag` options.
+For example, the cylon effect accepts `--speed`, `--width`, `--hue`, etc.
+Any parameter not specified on the command line uses the effect's default.
+
+**Examples:**
+
+```bash
+# Red cylon scanner, fast and wide
+python3 glowup.py play cylon --ip <device-ip> --speed 1.0 --width 12 --hue 0
+
+# Slow blue-to-green breathe
+python3 glowup.py play breathe --ip <device-ip> --speed 8.0 --hue1 240 --hue2 120
+
+# Morse code message
+python3 glowup.py play morse --ip <device-ip> --message "SOS" --unit 0.1
+
+# Aurora borealis at low brightness
+python3 glowup.py play aurora --ip <device-ip> --brightness 40 --speed 15
+
+# Waving French flag
+python3 glowup.py play flag --ip <device-ip> --country france
+
+# Cylon scanner across 5 room lamps (virtual multizone)
+python3 glowup.py play cylon --config schedule.json --group office --speed 3
+
+# Aurora drifting around a room
+python3 glowup.py play aurora --config schedule.json --group living-room
+```
+
+On stop (Ctrl+C), the device fades to black over 500ms.
+
+---
+
+## Scheduler (Daemon)
+
+The scheduler (`scheduler.py`) runs effects on a timed schedule, with
+sunrise/sunset awareness. It manages multiple independent device groups,
+each running its own effect on its own schedule. Designed to run as a
+systemd service on a Raspberry Pi (or any Linux box).
+
+```bash
+python3 scheduler.py /etc/glowup/schedule.json
+```
+
+The scheduler polls every 30 seconds to determine which schedule entry
+should be active for each group. When the active entry changes, it
+gracefully stops the old effect (SIGTERM → fade to black) and starts
+the new one. Crashed subprocesses are automatically restarted.
+
+### Configuration File
+
+The config file is JSON with three sections: `location`, `groups`, and
+`schedule`.
+
+```json
+{
+    "location": {
+        "latitude": 43.07,
+        "longitude": -89.40,
+        "_comment": "Your coordinates — needed for sunrise/sunset"
+    },
+    "groups": {
+        "porch": ["porch_string_lights"],
+        "living-room": ["10.0.0.10", "10.0.0.12"]
+    },
+    "schedule": [
+        {
+            "name": "porch evening aurora",
+            "group": "porch",
+            "start": "sunset-30m",
+            "stop": "23:00",
+            "effect": "aurora",
+            "params": {
+                "speed": 10.0,
+                "brightness": 60
+            }
+        },
+        {
+            "name": "porch overnight clock",
+            "group": "porch",
+            "start": "23:00",
+            "stop": "sunrise-30m",
+            "effect": "binclock",
+            "params": {
+                "brightness": 40
+            }
+        }
+    ]
+}
+```
+
+**`location`** — Your latitude and longitude in decimal degrees. Required
+for resolving symbolic times (sunrise, sunset, etc.).
+
+**`groups`** — Named collections of device IPs or hostnames. Each group
+is managed independently — multiple groups can run different effects at
+the same time. Use hostnames if you have DNS/mDNS set up, or raw IPs.
+
+**`schedule`** — Ordered list of schedule entries. Each entry specifies:
+
+| Field    | Required | Description                                      |
+|----------|----------|--------------------------------------------------|
+| `name`   | yes      | Human-readable label (used in logs)              |
+| `group`  | yes      | Which device group to target                     |
+| `start`  | yes      | When to start (fixed time or symbolic)           |
+| `stop`   | yes      | When to stop (fixed time or symbolic)            |
+| `effect` | yes      | Effect name (e.g., `"aurora"`, `"cylon"`)        |
+| `params` | no       | Effect parameter overrides (e.g., `{"speed": 5}`) |
+
+When multiple entries for the same group overlap, the first match in
+config file order wins (put higher-priority entries first).
+
+Overnight entries work automatically — if `stop` is earlier than `start`,
+the scheduler adds a day to the stop time (e.g., `"start": "23:00",
+"stop": "06:00"` runs from 11 PM to 6 AM the next morning).
+
+### Symbolic Times
+
+Start and stop times can be fixed (`"14:30"`) or symbolic:
+
+| Symbol     | Meaning                                          |
+|------------|--------------------------------------------------|
+| `sunrise`  | Sun crosses the horizon (upper limb visible)     |
+| `sunset`   | Sun crosses the horizon (upper limb disappears)  |
+| `dawn`     | Civil twilight begins (sun 6° below horizon)     |
+| `dusk`     | Civil twilight ends (sun 6° below horizon)       |
+| `noon`     | Solar noon (sun at highest point)                |
+| `midnight` | 00:00 local time                                 |
+
+Add offsets with `+` or `-`:
+
+```
+sunset-30m       30 minutes before sunset
+sunrise+1h       1 hour after sunrise
+dawn+1h30m       1 hour 30 minutes after dawn
+noon-2h          2 hours before solar noon
+```
+
+Solar calculations use the NOAA algorithm (built-in, no dependencies)
+and are recalculated daily.
+
+### Dry Run
+
+Preview the resolved schedule without running any effects:
+
+```bash
+python3 scheduler.py --dry-run schedule.json.example
+```
+
+This prints solar event times for your location, all device groups, and
+the resolved schedule with concrete times. Active entries are flagged.
+Use this to verify your config before deploying.
+
+### Installing as a systemd Service
+
+1. **Clone the repository** to the target machine:
+
+```bash
+git clone https://github.com/pkivolowitz/lifx.git /home/pi/lifx
+```
+
+2. **Create the config file** at `/etc/glowup/schedule.json`:
+
+```bash
+sudo mkdir -p /etc/glowup
+sudo cp /home/pi/lifx/schedule.json.example /etc/glowup/schedule.json
+sudo nano /etc/glowup/schedule.json   # edit for your location, devices, schedule
+```
+
+3. **Test with dry run** to verify times resolve correctly:
+
+```bash
+python3 /home/pi/lifx/scheduler.py --dry-run /etc/glowup/schedule.json
+```
+
+4. **Test live** before installing the service:
+
+```bash
+python3 /home/pi/lifx/scheduler.py /etc/glowup/schedule.json
+# Watch the logs, Ctrl+C to stop
+```
+
+5. **Install the systemd service**:
+
+```bash
+sudo cp /home/pi/lifx/glowup-scheduler.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable glowup-scheduler
+sudo systemctl start glowup-scheduler
+```
+
+If your install path is not `/home/pi/lifx`, edit the service file first:
+
+```bash
+sudo nano /etc/systemd/system/glowup-scheduler.service
+# Update ExecStart and WorkingDirectory to match your paths
+```
+
+### Controlling the Service
+
+```bash
+# Check status and recent logs
+sudo systemctl status glowup-scheduler
+
+# View full logs
+sudo journalctl -u glowup-scheduler -f          # follow live
+sudo journalctl -u glowup-scheduler --since today
+
+# Stop / start / restart
+sudo systemctl stop glowup-scheduler
+sudo systemctl start glowup-scheduler
+sudo systemctl restart glowup-scheduler
+
+# Disable (won't start on boot)
+sudo systemctl disable glowup-scheduler
+
+# After editing the config file, restart to pick up changes
+sudo systemctl restart glowup-scheduler
+```
+
+The scheduler logs to the systemd journal, including solar event times
+(recalculated daily), schedule transitions, subprocess starts/stops,
+and any errors.
+
+---
+
+## Built-in Effects
+
+### cylon
+
+**Larson scanner** — a bright eye sweeps back and forth with a smooth
+cosine falloff trail. Classic Battlestar Galactica / Knight Rider look.
+The eye follows sinusoidal easing so direction reversals look natural.
+
+| Parameter    | Default | Range       | Description                                    |
+|--------------|---------|-------------|------------------------------------------------|
+| `speed`      | 2.0     | 0.2–30.0   | Seconds per full sweep (there and back)        |
+| `width`      | 5       | 1–50       | Width of the eye in bulbs                      |
+| `hue`        | 0.0     | 0.0–360.0  | Eye color hue in degrees (0=red)               |
+| `brightness` | 100     | 0–100      | Eye brightness as percent                      |
+| `bg`         | 0       | 0–100      | Background brightness as percent               |
+| `trail`      | 0.4     | 0.0–1.0    | Trail decay factor (0=no trail, 1=max)         |
+| `kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin                    |
+
+### breathe
+
+**Color oscillator** — all bulbs oscillate between two colors via sine
+wave. Color 1 shows at the trough, color 2 at the peak, with smooth
+blending through the full cycle. Hue interpolation takes the shortest
+path around the color wheel.
+
+| Parameter    | Default | Range       | Description                                    |
+|--------------|---------|-------------|------------------------------------------------|
+| `speed`      | 4.0     | 0.5–30.0   | Seconds per full cycle                         |
+| `hue1`       | 240.0   | 0.0–360.0  | Color 1 hue in degrees (shown at sin < 0)      |
+| `hue2`       | 0.0     | 0.0–360.0  | Color 2 hue in degrees (shown at sin > 0)      |
+| `sat1`       | 100     | 0–100      | Color 1 saturation percent                     |
+| `sat2`       | 100     | 0–100      | Color 2 saturation percent                     |
+| `brightness` | 100     | 0–100      | Overall brightness percent                     |
+| `kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin                    |
+
+### wave
+
+**Standing wave** — simulates a vibrating string. Bulbs oscillate between
+two colors with fixed nodes (stationary points), just like a real vibrating
+string. Adjacent segments swing in opposite directions.
+
+| Parameter    | Default | Range       | Description                                    |
+|--------------|---------|-------------|------------------------------------------------|
+| `speed`      | 3.0     | 0.3–30.0   | Seconds per oscillation cycle                  |
+| `nodes`      | 6       | 1–20       | Number of stationary nodes along the string    |
+| `hue1`       | 240.0   | 0.0–360.0  | Color 1 hue (negative displacement)            |
+| `hue2`       | 0.0     | 0.0–360.0  | Color 2 hue (positive displacement)            |
+| `sat1`       | 100     | 0–100      | Color 1 saturation percent                     |
+| `sat2`       | 100     | 0–100      | Color 2 saturation percent                     |
+| `brightness` | 100     | 0–100      | Overall brightness percent                     |
+| `kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin                    |
+
+### twinkle
+
+**Christmas lights** — random zones sparkle and fade independently.
+Each zone triggers sparkles at random intervals, flashing bright then
+decaying with a quadratic falloff (fast flash, slow tail) back to the
+background color.
+
+| Parameter    | Default | Range       | Description                                    |
+|--------------|---------|-------------|------------------------------------------------|
+| `speed`      | 0.5     | 0.1–5.0    | Sparkle fade duration in seconds               |
+| `density`    | 0.15    | 0.01–1.0   | Probability a zone sparks per frame            |
+| `hue`        | 0.0     | 0.0–360.0  | Sparkle hue in degrees                         |
+| `saturation` | 0       | 0–100      | Sparkle saturation (0=white sparkle)           |
+| `brightness` | 100     | 0–100      | Peak sparkle brightness percent                |
+| `bg_hue`     | 240.0   | 0.0–360.0  | Background hue in degrees                      |
+| `bg_sat`     | 80      | 0–100      | Background saturation percent                  |
+| `bg_bri`     | 10      | 0–100      | Background brightness percent                  |
+| `kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin                    |
+
+### morse
+
+**Morse code transmitter** — the entire string flashes in unison,
+encoding a message in International Morse Code. Standard timing:
+dot = 1 unit, dash = 3 units, intra-char gap = 1 unit, inter-char
+gap = 3 units, word gap = 7 units. Loops with a configurable pause.
+
+| Parameter    | Default       | Range       | Description                              |
+|--------------|---------------|-------------|------------------------------------------|
+| `message`    | "HELLO WORLD" | *(any text)* | Message to transmit                     |
+| `unit`       | 0.15          | 0.05–2.0   | Duration of one dot in seconds           |
+| `hue`        | 0.0           | 0.0–360.0  | Flash hue in degrees                     |
+| `saturation` | 0             | 0–100      | Flash saturation (0=white)               |
+| `brightness` | 100           | 0–100      | Flash brightness percent                 |
+| `bg_bri`     | 0             | 0–100      | Background brightness (off between flashes) |
+| `pause`      | 5.0           | 0.0–30.0   | Pause in seconds before repeating        |
+| `kelvin`     | 3500          | 1500–9000  | Color temperature in Kelvin              |
+
+### aurora
+
+**Northern lights** — slow-moving curtains of color drift across the
+string. Four overlapping sine wave layers at different frequencies create
+organic brightness variation, while two independent hue waves sweep a
+green-blue-purple palette across the zones.
+
+| Parameter    | Default | Range       | Description                                    |
+|--------------|---------|-------------|------------------------------------------------|
+| `speed`      | 8.0     | 1.0–60.0   | Seconds per full drift cycle                   |
+| `brightness` | 80      | 0–100      | Peak brightness percent                        |
+| `bg_bri`     | 5       | 0–100      | Background brightness percent                  |
+| `kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin                    |
+
+### binclock
+
+**Binary clock** — displays the current wall-clock time in binary.
+Each strand of 36 bulbs encodes hours (4 bits), minutes (6 bits), and
+seconds (6 bits). Each bit is shown on 2 adjacent bulbs for visibility,
+with 2-bulb gaps between groups. Hours, minutes, and seconds each use
+a distinct color (default: red, green, blue) for easy visual identification.
+
+Layout per strand (36 bulbs):
+```
+[HHHH HHHH] [gap] [MMMMMM MMMMMM MMMMMM] [gap] [SSSSSS SSSSSS SSSSSS]
+  4 bits×2    ×2      6 bits × 2 bulbs      ×2      6 bits × 2 bulbs
+```
+
+| Parameter    | Default | Range       | Description                                    |
+|--------------|---------|-------------|------------------------------------------------|
+| `hour_hue`   | 0.0     | 0.0–360.0  | Hour bit hue in degrees (0=red)                |
+| `min_hue`    | 120.0   | 0.0–360.0  | Minute bit hue in degrees (120=green)          |
+| `sec_hue`    | 240.0   | 0.0–360.0  | Second bit hue in degrees (240=blue)           |
+| `brightness` | 80      | 0–100      | "On" bit brightness percent                    |
+| `off_bri`    | 0       | 0–100      | "Off" bit brightness percent                   |
+| `gap_bri`    | 0       | 0–100      | Gap brightness percent (0=dark)                |
+| `kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin                    |
+
+### flag
+
+**Waving national flag** — displays a country's flag as colored stripes
+across the string, with a physically-motivated ripple animation. The flag's
+color stripes are laid along a virtual 1D surface. Five-octave fractal
+Brownian motion (Perlin noise) displaces each point in depth, and a
+perspective projection maps the result onto zones. Stripes closer to the
+viewer expand and may occlude stripes farther away. Surface slope modulates
+brightness to simulate fold shading. Per-zone temporal smoothing (EMA)
+prevents single-bulb flicker at stripe boundaries.
+
+For single-color flags the effect displays a static solid color.
+
+Supports 199 countries plus special flags (pride, trans, bi, eu, un).
+Common aliases work: "usa" → "us", "holland" → "netherlands", etc.
+
+| Parameter    | Default | Range       | Description                                    |
+|--------------|---------|-------------|------------------------------------------------|
+| `country`    | "us"    | *(name)*   | Country name (e.g., us, france, japan, germany) |
+| `speed`      | 1.5     | 0.1–20.0   | Wave propagation speed                         |
+| `brightness` | 80      | 0–100      | Overall brightness percent                     |
+| `direction`  | "left"  | left/right | Stripe read direction (match your layout)      |
+| `kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin                    |
+
+**Examples:**
+
+```bash
+# French flag
+python3 glowup.py play flag --ip <device-ip> --country france
+
+# Slow Japanese flag
+python3 glowup.py play flag --ip <device-ip> --country japan --speed 3
+
+# US flag, reading right to left
+python3 glowup.py play flag --ip <device-ip> --country us --direction right
+```
+
+---
+
+## Effect Developer Guide
+
+### Architecture Overview
+
+```
+glowup.py            CLI — argparse, dispatches to subcommand handlers
+    │
+    ├── transport.py     LIFX LAN protocol: discovery, LifxDevice, UDP sockets
+    ├── engine.py        Engine (threaded frame loop) + Controller (thread-safe API)
+    ├── solar.py         Sunrise/sunset calculator (NOAA algorithm, no dependencies)
+    ├── scheduler.py     Daemon: named device groups, symbolic time scheduling
+    │
+    ├── test_virtual_multizone.py  Tests for VirtualMultizoneDevice (mock-based)
+    │
+    └── effects/
+        ├── __init__.py   Effect base class, Param system, auto-registry, utilities
+        ├── cylon.py      Individual effect implementations
+        ├── breathe.py
+        ├── wave.py
+        ├── twinkle.py
+        ├── morse.py
+        ├── aurora.py
+        ├── binclock.py
+        ├── flag.py         Waving flag with Perlin noise perspective projection
+        └── flag_data.py    199-country flag color database
+```
+
+**Key design principle:** Effects are pure renderers. They receive elapsed
+time and zone count, and return a list of HSBK colors. They never touch
+the network, device objects, or anything outside their render function.
+
+### Creating a New Effect
+
+1. Create a new file in `effects/` (e.g., `effects/rainbow.py`).
+2. Subclass `Effect` and set `name` and `description`.
+3. Declare parameters as class-level `Param` instances.
+4. Implement `render(self, t: float, zone_count: int) -> list[HSBK]`.
+5. That's it — the effect auto-registers and appears in the CLI.
+
+No imports in `__init__.py` are needed. The framework auto-discovers all
+`.py` files in the `effects/` directory via `pkgutil.iter_modules` and
+imports them at startup. The `EffectMeta` metaclass automatically
+registers any `Effect` subclass that defines a `name`.
+
+### The Effect Base Class
+
+```python
+from effects import Effect, Param, HSBK
+
+class MyEffect(Effect):
+    name: str = "myeffect"           # Unique ID — used in CLI and API
+    description: str = "One-liner"   # Shown in effect listings
+
+    def render(self, t: float, zone_count: int) -> list[HSBK]:
+        """Produce one animation frame.
+
+        Args:
+            t:          Seconds elapsed since the effect started (float).
+            zone_count: Number of zones on the target device (int).
+
+        Returns:
+            A list of exactly `zone_count` HSBK tuples.
+        """
+        ...
+```
+
+**Methods available on `self`:**
+
+| Method                        | Description                                         |
+|-------------------------------|-----------------------------------------------------|
+| `render(t, zone_count)`       | **Must override.** Produce one frame of colors.     |
+| `on_start(zone_count)`        | Called when this effect becomes active. Override for setup. |
+| `on_stop()`                   | Called when this effect is stopped/replaced. Override for cleanup. |
+| `get_params() -> dict`        | Returns current parameter values as `{name: value}`. |
+| `set_params(**kwargs)`        | Update parameters at runtime (validates and clamps). |
+| `get_param_defs() -> dict`    | Class method. Returns `{name: Param}` definitions.  |
+
+### The Param System
+
+Parameters are declared as class-level `Param` instances. They serve
+three purposes:
+
+1. **CLI** — auto-generated as `--flag` argparse options.
+2. **API** — provide metadata (type, range, description) for a future REST API.
+3. **Runtime** — store current values with automatic validation and clamping.
+
+```python
+from effects import Param, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX
+
+class MyEffect(Effect):
+    # Numeric param with range clamping
+    speed = Param(2.0, min=0.2, max=30.0,
+                  description="Seconds per cycle")
+
+    # Integer param
+    count = Param(5, min=1, max=20,
+                  description="Number of segments")
+
+    # String param
+    message = Param("HELLO", description="Text to display")
+
+    # Param with discrete choices
+    mode = Param("linear", choices=["linear", "ease", "bounce"],
+                 description="Motion curve type")
+
+    # Color temperature (common pattern)
+    kelvin = Param(KELVIN_DEFAULT, min=KELVIN_MIN, max=KELVIN_MAX,
+                   description="Color temperature in Kelvin")
+```
+
+**Param attributes:**
+
+| Attribute     | Type           | Description                                    |
+|---------------|----------------|------------------------------------------------|
+| `default`     | `Any`          | Default value. Also determines the parameter type (int/float/str). |
+| `min`         | `Optional`     | Minimum allowed value (numeric only). Values below are clamped. |
+| `max`         | `Optional`     | Maximum allowed value (numeric only). Values above are clamped. |
+| `description` | `str`          | Human-readable help text.                      |
+| `choices`     | `Optional[list]` | If set, value must be one of these. Raises `ValueError` otherwise. |
+
+**Type inference:** The type of `default` determines the argparse type.
+Use `2.0` for float, `2` for int, `"text"` for str.
+
+**Accessing params at render time:** Inside `render()`, parameters are
+regular instance attributes:
+
+```python
+def render(self, t: float, zone_count: int) -> list[HSBK]:
+    phase = (t % self.speed) / self.speed   # self.speed is the current value
+    ...
+```
+
+### Color Model (HSBK)
+
+LIFX uses HSBK (Hue, Saturation, Brightness, Kelvin) with all components
+as unsigned 16-bit integers:
+
+| Component    | Range       | Notes                                         |
+|--------------|-------------|-----------------------------------------------|
+| Hue          | 0–65535     | Maps to 0–360 degrees. 0=red, ~21845=green, ~43690=blue |
+| Saturation   | 0–65535     | 0=white/unsaturated, 65535=fully saturated    |
+| Brightness   | 0–65535     | 0=off, 65535=maximum brightness               |
+| Kelvin       | 1500–9000   | Color temperature. Only meaningful when saturation is low. |
+
+The `HSBK` type alias is `tuple[int, int, int, int]`.
+
+**Important constants** (importable from `effects`):
+
+```python
+HSBK_MAX = 65535        # Max value for H, S, B
+KELVIN_MIN = 1500       # Warmest color temperature
+KELVIN_MAX = 9000       # Coolest color temperature
+KELVIN_DEFAULT = 3500   # Warm white default
+```
+
+### Utility Functions
+
+Import these from the `effects` package:
+
+```python
+from effects import hue_to_u16, pct_to_u16
+```
+
+**`hue_to_u16(degrees: float) -> int`**
+Convert a hue in degrees (0–360) to LIFX u16 (0–65535).
+
+```python
+red   = hue_to_u16(0)     # 0
+green = hue_to_u16(120)   # 21845
+blue  = hue_to_u16(240)   # 43690
+```
+
+**`pct_to_u16(percent: int | float) -> int`**
+Convert a percentage (0–100) to LIFX u16 (0–65535).
+
+```python
+half_bright = pct_to_u16(50)   # 32767
+full_bright = pct_to_u16(100)  # 65535
+```
+
+These helpers let you declare user-facing parameters in intuitive units
+(degrees, percentages) while producing the raw u16 values the protocol
+requires.
+
+### Lifecycle Hooks
+
+Override these optional methods for effects that need setup or teardown:
+
+```python
+def on_start(self, zone_count: int) -> None:
+    """Called once when this effect becomes active.
+
+    Use for allocating buffers, seeding random state, or
+    any setup that depends on the actual device zone count.
+    """
+    self._buffer = [(0, 0, 0, KELVIN_DEFAULT)] * zone_count
+
+def on_stop(self) -> None:
+    """Called when this effect is stopped or replaced.
+
+    Use to release resources or reset state.
+    """
+    self._buffer = None
+```
+
+### Complete Example
+
+Here is a complete, minimal effect that creates a rotating rainbow:
+
+```python
+"""Rainbow effect — rotating spectrum across all zones.
+
+A full hue rotation is spread evenly across the string and
+scrolls continuously at a configurable speed.
+"""
+
+__version__ = "1.0"
+
+from . import (
+    Effect, Param, HSBK,
+    HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
+    pct_to_u16,
+)
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# Full hue range (one more than max to wrap correctly).
+HUE_RANGE: int = HSBK_MAX + 1
+
+
+class Rainbow(Effect):
+    """Rotating rainbow — the full spectrum scrolls across the string."""
+
+    name: str = "rainbow"
+    description: str = "Rotating rainbow across all zones"
+
+    speed = Param(4.0, min=0.5, max=60.0,
+                  description="Seconds per full rotation")
+    brightness = Param(100, min=0, max=100,
+                       description="Brightness percent")
+    kelvin = Param(KELVIN_DEFAULT, min=KELVIN_MIN, max=KELVIN_MAX,
+                   description="Color temperature in Kelvin")
+
+    def render(self, t: float, zone_count: int) -> list[HSBK]:
+        """Produce one frame of the rotating rainbow.
+
+        Args:
+            t:          Seconds elapsed since effect started.
+            zone_count: Number of zones on the target device.
+
+        Returns:
+            A list of *zone_count* HSBK tuples.
+        """
+        bri: int = pct_to_u16(self.brightness)
+
+        # Phase offset advances with time, creating the rotation.
+        phase: float = (t / self.speed) % 1.0
+
+        colors: list[HSBK] = []
+        for i in range(zone_count):
+            # Spread the full hue spectrum evenly across zones,
+            # offset by the current phase for rotation.
+            hue: int = int(((i / zone_count) + phase) % 1.0 * HUE_RANGE) % HUE_RANGE
+            colors.append((hue, HSBK_MAX, bri, self.kelvin))
+
+        return colors
+```
+
+Save this as `effects/rainbow.py` and it will automatically appear in
+`python3 glowup.py effects` and be playable via `python3 glowup.py play rainbow --ip ...`.
+
+---
+
+## Engine and Controller API
+
+The `Controller` class in `engine.py` is the thread-safe public interface
+for controlling the effect engine. It is designed to be driven by the CLI
+today and a REST API in the future.
+
+### Controller Methods
+
+```python
+from transport import LifxDevice
+from engine import Controller
+
+# Create a controller with one or more devices
+device = LifxDevice("<device-ip>")
+device.query_all()
+ctrl = Controller([device], fps=20)
+```
+
+**`play(effect_name: str, **params) -> None`**
+Start an effect by its registered name. Any keyword arguments override
+the effect's default parameters.
+
+```python
+ctrl.play("cylon", speed=1.5, width=12, hue=0)
+```
+
+**`stop(fade_ms: int = 500) -> None`**
+Stop the current effect and fade to black. Pass `fade_ms=0` to skip
+the fade.
+
+```python
+ctrl.stop(fade_ms=1000)  # 1-second fade out
+```
+
+**`update_params(**kwargs) -> None`**
+Update parameters on the running effect without restarting it. Unknown
+parameter names are silently ignored.
+
+```python
+ctrl.update_params(speed=3.0, hue=240)
+```
+
+**`get_status() -> dict`**
+Returns the current engine state as a JSON-serializable dict:
+
+```python
+{
+    "running": True,
+    "effect": "cylon",
+    "params": {"speed": 1.5, "width": 12, "hue": 0.0, ...},
+    "fps": 20,
+    "devices": [
+        {"ip": "<device-ip>", "mac": "aa:bb:cc:dd:ee:ff",
+         "label": "My Light", "product": "String Light", "zones": 108}
+    ]
+}
+```
+
+**`list_effects() -> dict`**
+Returns all registered effects with parameter metadata:
+
+```python
+{
+    "cylon": {
+        "description": "Larson scanner — a bright eye sweeps back and forth",
+        "params": {
+            "speed": {"default": 2.0, "min": 0.2, "max": 30.0,
+                      "description": "Seconds per full sweep", "type": "float"},
+            ...
+        }
+    },
+    ...
+}
+```
+
+### VirtualMultizoneDevice
+
+The `VirtualMultizoneDevice` class in `engine.py` wraps any combination of
+LIFX devices into a single virtual multizone device.  Multizone devices
+contribute all their physical zones; single bulbs contribute one zone each.
+
+```python
+from transport import LifxDevice
+from engine import VirtualMultizoneDevice, Controller
+
+# Connect devices of any type
+string_light = LifxDevice("10.0.0.62")  # 108-zone multizone
+white_bulb_1 = LifxDevice("10.0.0.25")  # monochrome single
+color_bulb_1 = LifxDevice("10.0.0.30")  # color single
+
+for dev in [string_light, white_bulb_1, color_bulb_1]:
+    dev.query_all()
+
+# Wrap them — total zone count = 108 + 1 + 1 = 110
+vdev = VirtualMultizoneDevice([string_light, white_bulb_1, color_bulb_1])
+print(vdev.zone_count)  # 110
+
+# Use exactly like a regular device
+ctrl = Controller([vdev], fps=20)
+ctrl.play("cylon", speed=3.0)
+```
+
+**How dispatch works:**
+
+The constructor builds a zone map — a list of `(device, zone_index)` tuples.
+When `set_zones()` is called with the rendered colors:
+
+- **Multizone device zones** are accumulated into a per-device batch, then
+  flushed with a single `set_zones()` call (efficient 2-packet extended
+  multizone protocol, same as direct use).
+- **Single color bulbs** receive `set_color()` with full HSBK.
+- **Monochrome bulbs** receive `set_color()` with BT.709 luma-converted
+  brightness (hue and saturation are converted to perceptual brightness).
+
+The class duck-types the `LifxDevice` interface, so the `Engine`,
+`Controller`, and all effects work without modification.
+
+### LifxDevice Key Methods
+
+```python
+from transport import LifxDevice, discover_devices
+
+# Discovery
+devices = discover_devices(timeout=3.0)
+
+# Direct connection
+dev = LifxDevice("<device-ip>")
+dev.query_all()          # Populates label, product, group, zone_count
+
+# Properties
+dev.label                # "My Light"
+dev.product_name         # "String Light"
+dev.zone_count           # 108
+dev.mac_str              # "aa:bb:cc:dd:ee:ff"
+dev.is_multizone         # True for string lights, beams, Z strips
+dev.is_polychrome        # True for color devices, False for monochrome
+
+# Zone control (multizone devices)
+colors = [(hue, sat, bri, kelvin)] * dev.zone_count
+dev.set_zones(colors, duration_ms=0, rapid=True)
+
+# Single color (non-multizone)
+dev.set_color(hue, sat, bri, kelvin, duration_ms=0)
+
+# Power
+dev.set_power(on=True, duration_ms=1000)
+
+# Cleanup
+dev.close()
+```
+
+---
+
+## Testing
+
+### VirtualMultizoneDevice Tests
+
+The file `test_virtual_multizone.py` contains mock-based tests that verify
+the `VirtualMultizoneDevice` zone mapping and dispatch logic without
+requiring physical LIFX hardware.
+
+```bash
+python3 test_virtual_multizone.py
+```
+
+**What it tests:**
+
+| Test | Description |
+|------|-------------|
+| Zone map expansion | A 6-zone multizone + color bulb + mono bulb = 8 virtual zones |
+| set_zones dispatch | Multizone gets 1 batched `set_zones()`, color bulb gets `set_color()`, mono gets BT.709 luma |
+| set_color broadcast | Fade-to-black `set_color()` reaches all devices |
+| set_power broadcast | `set_power()` reaches all devices |
+| Two multizone devices | Two strips (4+3) batch independently into separate `set_zones()` calls |
+| All singles regression | Pure single-bulb group still works (original use case) |
+
+The tests use `MockDevice` objects that record all method calls for
+assertion.  No sockets are opened and no network traffic is generated.
+
+To add new tests, follow the same pattern: create `MockDevice` instances
+with the desired `zone_count`, `is_multizone`, and `is_polychrome` values,
+build a `VirtualMultizoneDevice`, call methods, and assert against the
+recorded calls.

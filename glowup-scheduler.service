@@ -1,0 +1,20 @@
+# Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+# Licensed under the MIT License. See LICENSE file in the project root.
+
+[Unit]
+Description=GlowUp Effect Scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/lifx/scheduler.py /etc/glowup/schedule.json
+WorkingDirectory=/home/pi/lifx
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glowup-scheduler
+
+[Install]
+WantedBy=multi-user.target

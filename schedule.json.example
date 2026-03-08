@@ -1,0 +1,71 @@
+{
+    "location": {
+        "latitude": 43.07,
+        "longitude": -89.40,
+        "_comment": "Madison, WI — adjust to your location"
+    },
+    "groups": {
+        "_comment": "Each group is a named list of device IPs or hostnames",
+        "porch": [
+            "string_lights"
+        ],
+        "living-room": [
+            "10.0.0.10",
+            "10.0.0.12"
+        ],
+        "_comment2": "Groups also work with the CLI for virtual multizone:",
+        "_comment3": "python3 glowup.py play cylon --config schedule.json --group office",
+        "office": [
+            "10.0.0.25",
+            "10.0.0.26",
+            "10.0.0.27",
+            "10.0.0.28",
+            "10.0.0.29"
+        ]
+    },
+    "schedule": [
+        {
+            "name": "porch evening aurora",
+            "group": "porch",
+            "start": "sunset-30m",
+            "stop": "23:00",
+            "effect": "aurora",
+            "params": {
+                "speed": 10.0,
+                "brightness": 60
+            }
+        },
+        {
+            "name": "porch overnight clock",
+            "group": "porch",
+            "start": "23:00",
+            "stop": "sunrise-30m",
+            "effect": "binclock",
+            "params": {
+                "brightness": 40
+            }
+        },
+        {
+            "name": "porch morning welcome",
+            "group": "porch",
+            "start": "sunrise-30m",
+            "stop": "sunrise+30m",
+            "effect": "rainbow",
+            "params": {
+                "speed": 15.0,
+                "brightness": 70
+            }
+        },
+        {
+            "name": "living room evening",
+            "group": "living-room",
+            "start": "sunset",
+            "stop": "23:30",
+            "effect": "cylon",
+            "params": {
+                "speed": 4.0,
+                "brightness": 50
+            }
+        }
+    ]
+}
