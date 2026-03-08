@@ -1,32 +1,41 @@
-# LIFX Effect Engine
+# GLOWUP — LIFX Effect Engine
 
-A modular effect engine for LIFX string lights, replacing the battery-draining phone app with a daemon that runs animated effects autonomously from a Raspberry Pi or Mac.
+A modular effect engine for LIFX devices (string lights, beams, single color bulbs, and monochrome bulbs), replacing the battery-draining phone app with a daemon that runs animated effects autonomously from a Raspberry Pi or Mac.
 
 ## What It Does
 
 - **Discovery** — finds all LIFX devices on your LAN via UDP broadcast
-- **Effects** — ships with aurora borealis, binary clock, waving flag, Larson scanner (Cylon), Morse code, and more
+- **Effects** — ships with 8 effects: aurora borealis, binary clock, waving flag (199 countries), Larson scanner, Morse code, twinkling lights, standing wave, and color breathe
+- **Virtual multizone** — group any combination of devices into a single animation surface. A 108-zone string light and 4 single bulbs become a 112-zone strip. Effects animate across all devices as one.
+- **Identify** — pulse a bulb's brightness to figure out which physical lamp corresponds to which IP address
+- **Monochrome support** — color effects on white-only bulbs are automatically converted to perceptually correct brightness using BT.709 luma coefficients
 - **Scheduler** — daemon that runs effects on a timed schedule using symbolic times (sunrise, sunset, dawn, dusk) with offsets, supporting multiple independent device groups
 - **Extensible** — add a new effect by dropping a single Python file in `effects/`; it auto-registers and appears in the CLI
 
-No cloud. No app. No account. Just UDP packets on your LAN.
+No cloud. No app. No account. No dependencies. Just UDP packets on your LAN.
 
 ## Quick Start
 
 ```bash
 python3 glowup.py discover                        # find devices
 python3 glowup.py effects                         # list effects + params
+python3 glowup.py identify --ip <device-ip>       # pulse a bulb to locate it
 python3 glowup.py play aurora --ip <device-ip>    # run an effect
 python3 glowup.py play flag --ip <device-ip> --country france
+
+# Virtual multizone — animate across a group of devices
+python3 glowup.py play cylon --config schedule.json --group office
 ```
 
 ## Documentation
 
 See the **[User Manual](MANUAL.md)** for:
-- Full CLI reference
+- Full CLI reference (discover, effects, identify, play)
 - All effects with parameter tables
+- Virtual multizone setup and configuration
 - Effect developer guide (how to build your own)
-- Engine and Controller API
+- Engine, Controller, and VirtualMultizoneDevice API
+- Testing
 
 ## Scheduler (Daemon)
 
@@ -48,9 +57,10 @@ See [schedule.json.example](schedule.json.example) for config format. Deploy as 
 | `effects/__init__.py` | Effect base class, Param system, auto-registration |
 | `effects/*.py` | Pure renderers — no I/O, no device knowledge |
 | `effects/flag_data.py` | 199-country flag color database |
-| `glowup.py` | CLI entry point |
+| `glowup.py` | CLI entry point (discover, effects, identify, play) |
 | `solar.py` | Sunrise/sunset calculator (NOAA algorithm, no dependencies) |
 | `scheduler.py` | Orchestrator daemon with device groups and symbolic scheduling |
+| `test_virtual_multizone.py` | Mock-based tests for virtual multizone dispatch |
 
 ## Effects
 
@@ -69,7 +79,7 @@ See [schedule.json.example](schedule.json.example) for config format. Deploy as 
 
 - Python 3.10+
 - No external dependencies (stdlib only)
-- LIFX devices on the same LAN subnet
+- One or more LIFX devices on the same LAN subnet (multizone, single color, or monochrome)
 
 ## License
 
