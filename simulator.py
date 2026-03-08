@@ -97,6 +97,10 @@ SIM_MAX_WINDOW_WIDTH: int = 1600
 SIM_MIN_ZONE_WIDTH: int = 3
 """Minimum zone width in pixels (avoids sub-pixel rendering)."""
 
+SIM_MIN_WINDOW_WIDTH: int = 360
+"""Minimum window width in pixels so the title bar and header text
+are always readable, even with very few zones."""
+
 # BT.709 luma coefficients — same as effects/__init__.py.
 _LUMA_R: float = 0.2126
 _LUMA_G: float = 0.7152
@@ -260,7 +264,10 @@ if _TK_AVAILABLE:
             strip_width: int = (
                 zone_count * zone_w + (zone_count - 1) * SIM_ZONE_GAP
             )
-            canvas_width: int = strip_width + 2 * SIM_PADDING
+            canvas_width: int = max(
+                strip_width + 2 * SIM_PADDING,
+                SIM_MIN_WINDOW_WIDTH,
+            )
             canvas_height: int = (
                 SIM_HEADER_HEIGHT + SIM_ZONE_HEIGHT + 2 * SIM_PADDING
             )
@@ -297,12 +304,15 @@ if _TK_AVAILABLE:
             )
 
             # --- Zone rectangles (initially black) ---------------------------
+            # Center the strip horizontally when the window is wider
+            # than the strip (e.g., when SIM_MIN_WINDOW_WIDTH kicks in).
+            strip_x_offset: int = (canvas_width - strip_width) // 2
             y_top: int = SIM_HEADER_HEIGHT + SIM_PADDING
             y_bot: int = y_top + SIM_ZONE_HEIGHT
             self._rects: list[int] = []
 
             for i in range(zone_count):
-                x0: int = SIM_PADDING + i * (zone_w + SIM_ZONE_GAP)
+                x0: int = strip_x_offset + i * (zone_w + SIM_ZONE_GAP)
                 x1: int = x0 + zone_w
                 rect_id: int = self._canvas.create_rectangle(
                     x0, y_top, x1, y_bot,
