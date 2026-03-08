@@ -16,7 +16,7 @@ declarations.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.3"
+__version__ = "1.4"
 
 import argparse
 import json
@@ -65,6 +65,32 @@ _COL_MIN_ZONES: int = 5
 # Column separator used in the discovery table
 _COL_SEP: str = "  "
 
+# Startup banner — printed unless -q/--quiet is given.
+_BANNER: str = (
+    f"GlowUp v{__version__} — LIFX Effect Engine\n"
+    "Copyright (c) 2026 Perry Kivolowitz. All rights reserved.\n"
+    "Licensed under the MIT License.\n"
+)
+
+# Module-level quiet flag — set by main() before any subcommand runs.
+_quiet: bool = False
+
+
+def _print(*args: Any, **kwargs: Any) -> None:
+    """Print unless quiet mode is active.
+
+    Drop-in replacement for :func:`print` that respects the global
+    ``_quiet`` flag.  Error output (``file=sys.stderr``) is never
+    suppressed.
+
+    Args:
+        *args:   Positional arguments forwarded to :func:`print`.
+        **kwargs: Keyword arguments forwarded to :func:`print`.
+    """
+    if _quiet and kwargs.get("file") is not sys.stderr:
+        return
+    print(*args, **kwargs)
+
 
 # ---------------------------------------------------------------------------
 # Config file helpers
@@ -93,16 +119,16 @@ def _load_group(config_path: str, group_name: str) -> list[str]:
         with open(config_path, "r") as f:
             config: dict = json.load(f)
     except FileNotFoundError:
-        print(f"ERROR: Config file not found: {config_path}", file=sys.stderr)
+        _print(f"ERROR: Config file not found: {config_path}", file=sys.stderr)
         sys.exit(1)
     except json.JSONDecodeError as exc:
-        print(f"ERROR: Invalid JSON in {config_path}: {exc}", file=sys.stderr)
+        _print(f"ERROR: Invalid JSON in {config_path}: {exc}", file=sys.stderr)
         sys.exit(1)
 
     groups: dict = config.get("groups", {})
     if group_name not in groups:
         available: str = ", ".join(sorted(groups.keys())) if groups else "(none)"
-        print(
+        _print(
             f"ERROR: Group '{group_name}' not found. "
             f"Available: {available}",
             file=sys.stderr,
@@ -111,7 +137,7 @@ def _load_group(config_path: str, group_name: str) -> list[str]:
 
     ips: list = groups[group_name]
     if not ips:
-        print(f"ERROR: Group '{group_name}' is empty.", file=sys.stderr)
+        _print(f"ERROR: Group '{group_name}' is empty.", file=sys.stderr)
         sys.exit(1)
 
     return ips
@@ -131,14 +157,14 @@ def _connect_group(ips: list[str]) -> list[LifxDevice]:
     """
     devices: list[LifxDevice] = []
     for ip in ips:
-        print(f"  Connecting to {ip}...", flush=True)
+        _print(f"  Connecting to {ip}...", flush=True)
         try:
             dev: LifxDevice = LifxDevice(ip)
         except ValueError as exc:
             # Close any already-connected devices before exiting.
             for d in devices:
                 d.close()
-            print(f"ERROR: {exc}", file=sys.stderr)
+            _print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
         dev.query_all()
 
@@ -146,13 +172,13 @@ def _connect_group(ips: list[str]) -> list[LifxDevice]:
             for d in devices:
                 d.close()
             dev.close()
-            print(f"ERROR: No response from {ip}.", file=sys.stderr)
+            _print(f"ERROR: No response from {ip}.", file=sys.stderr)
             sys.exit(1)
 
         kind: str = dev.product_name or "?"
         if not dev.is_polychrome:
             kind += " (monochrome)"
-        print(f"    {dev.label or '?'} — {kind}", flush=True)
+        _print(f"    {dev.label or '?'} — {kind}", flush=True)
         devices.append(dev)
 
     return devices
@@ -176,13 +202,13 @@ def cmd_discover(args: argparse.Namespace) -> None:
         ``timeout`` (float) and ``json`` (bool).
     """
     if args.ip:
-        print(f"Querying {args.ip}...", flush=True)
+        _print(f"Querying {args.ip}...", flush=True)
     else:
-        print("Scanning for LIFX devices...", flush=True)
+        _print("Scanning for LIFX devices...", flush=True)
     devices: list = discover_devices(timeout=args.timeout, target_ip=args.ip)
 
     if not devices:
-        print("No LIFX devices found.")
+        _print("No LIFX devices found.")
         return
 
     # Build a list of plain-dict rows for tabular display
@@ -218,17 +244,17 @@ def cmd_discover(args: argparse.Namespace) -> None:
     header_line: str = _COL_SEP.join(
         cols[i][0].ljust(widths[i]) for i in range(len(cols))
     )
-    print(header_line)
-    print(_COL_SEP.join("-" * widths[i] for i in range(len(cols))))
+    _print(header_line)
+    _print(_COL_SEP.join("-" * widths[i] for i in range(len(cols))))
     for r in rows:
         line: str = _COL_SEP.join(
             str(r[cols[i][1]]).ljust(widths[i]) for i in range(len(cols))
         )
-        print(line)
-    print(f"\n{len(rows)} device(s) found.")
+        _print(line)
+    _print(f"\n{len(rows)} device(s) found.")
 
     if args.json:
-        print("\n" + json.dumps(
+        _print("\n" + json.dumps(
             [
                 {
                     "label": r["label"], "product": r["product"],
@@ -256,12 +282,12 @@ def cmd_effects(args: argparse.Namespace) -> None:
     """
     registry: Dict[str, Any] = get_registry()
     if not registry:
-        print("No effects registered.")
+        _print("No effects registered.")
         return
 
     for name in sorted(registry):
         cls = registry[name]
-        print(f"\n  {name}: {cls.description}")
+        _print(f"\n  {name}: {cls.description}")
         params = cls.get_param_defs()
         if params:
             for pname, pdef in sorted(params.items()):
@@ -271,11 +297,11 @@ def cmd_effects(args: argparse.Namespace) -> None:
                     range_str = f" [{pdef.min}..{pdef.max}]"
                 elif pdef.choices:
                     range_str = f" {pdef.choices}"
-                print(
+                _print(
                     f"    --{pname:16s} {pdef.description} "
                     f"(default: {pdef.default}){range_str}"
                 )
-    print()
+    _print()
 
 
 def cmd_identify(args: argparse.Namespace) -> None:
@@ -291,26 +317,26 @@ def cmd_identify(args: argparse.Namespace) -> None:
         Parsed CLI arguments.  Expected attributes: ``ip`` (str).
     """
     if not args.ip:
-        print("ERROR: --ip is required for identify command.", file=sys.stderr)
+        _print("ERROR: --ip is required for identify command.", file=sys.stderr)
         sys.exit(1)
 
     # --- Connect to device ---------------------------------------------------
-    print(f"Connecting to {args.ip}...", flush=True)
+    _print(f"Connecting to {args.ip}...", flush=True)
     try:
         dev: LifxDevice = LifxDevice(args.ip)
     except ValueError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        _print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
     dev.query_all()
 
     if dev.product is None:
-        print(f"ERROR: No response from {args.ip}.", file=sys.stderr)
+        _print(f"ERROR: No response from {args.ip}.", file=sys.stderr)
         dev.close()
         sys.exit(1)
 
-    print(f"  {dev.label or '?'} — {dev.product_name or '?'}", flush=True)
-    print(f"\nPulsing brightness on {args.ip}.")
-    print("Press Ctrl+C to stop.\n")
+    _print(f"  {dev.label or '?'} — {dev.product_name or '?'}", flush=True)
+    _print(f"\nPulsing brightness on {args.ip}.")
+    _print("Press Ctrl+C to stop.\n")
 
     # --- Power on and pulse ---------------------------------------------------
     dev.set_power(on=True, duration_ms=0)
@@ -344,10 +370,10 @@ def cmd_identify(args: argparse.Namespace) -> None:
         stop_requested.wait(timeout=IDENTIFY_FRAME_INTERVAL)
 
     # --- Cleanup --------------------------------------------------------------
-    print("\nStopping...")
+    _print("\nStopping...")
     dev.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
     dev.close()
-    print("Done.")
+    _print("Done.")
 
 
 def cmd_play(args: argparse.Namespace) -> None:
@@ -376,14 +402,14 @@ def cmd_play(args: argparse.Namespace) -> None:
                            getattr(args, "group", None))
 
     if not has_ip and not has_group:
-        print(
+        _print(
             "ERROR: Specify either --ip or both --config and --group.",
             file=sys.stderr,
         )
         sys.exit(1)
 
     if has_ip and has_group:
-        print(
+        _print(
             "ERROR: --ip and --config/--group are mutually exclusive.",
             file=sys.stderr,
         )
@@ -393,41 +419,41 @@ def cmd_play(args: argparse.Namespace) -> None:
     if has_group:
         # Virtual multizone: load group, connect all devices, wrap.
         ips: list[str] = _load_group(args.config, args.group)
-        print(f"Connecting to group '{args.group}' ({len(ips)} devices)...",
+        _print(f"Connecting to group '{args.group}' ({len(ips)} devices)...",
               flush=True)
         devices: list[LifxDevice] = _connect_group(ips)
         dev = VirtualMultizoneDevice(devices)
-        print(f"  Virtual multizone: {dev.zone_count} zones", flush=True)
+        _print(f"  Virtual multizone: {dev.zone_count} zones", flush=True)
     else:
         # Single device mode.
-        print(f"Connecting to {args.ip}...", flush=True)
+        _print(f"Connecting to {args.ip}...", flush=True)
         try:
             dev = LifxDevice(args.ip)
         except ValueError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
+            _print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
         dev.query_all()
 
         if dev.product is None:
-            print(f"ERROR: No response from {args.ip}.", file=sys.stderr)
+            _print(f"ERROR: No response from {args.ip}.", file=sys.stderr)
             dev.close()
             sys.exit(1)
 
-        print(f"  {dev.label or '?'} — {dev.product_name or '?'}",
+        _print(f"  {dev.label or '?'} — {dev.product_name or '?'}",
               flush=True)
 
         if dev.is_multizone:
-            print(f"  {dev.zone_count} zones", flush=True)
+            _print(f"  {dev.zone_count} zones", flush=True)
         elif dev.is_polychrome:
-            print("  Single color bulb", flush=True)
+            _print("  Single color bulb", flush=True)
         else:
-            print("  Monochrome bulb (BT.709 luma mode)", flush=True)
+            _print("  Monochrome bulb (BT.709 luma mode)", flush=True)
 
     # --- Validate effect name -------------------------------------------------
     effect_name: str = args.effect
     registry: Dict[str, Any] = get_registry()
     if effect_name not in registry:
-        print(
+        _print(
             f"ERROR: Unknown effect '{effect_name}'. "
             f"Available: {', '.join(get_effect_names())}",
             file=sys.stderr,
@@ -454,9 +480,9 @@ def cmd_play(args: argparse.Namespace) -> None:
     ctrl.play(effect_name, **effect_params)
 
     status: dict = ctrl.get_status()
-    print(f"\nPlaying '{effect_name}' at {status['fps']} fps")
-    print(f"Params: {json.dumps(status['params'], indent=2)}")
-    print("Press Ctrl+C to stop.\n")
+    _print(f"\nPlaying '{effect_name}' at {status['fps']} fps")
+    _print(f"Params: {json.dumps(status['params'], indent=2)}")
+    _print("Press Ctrl+C to stop.\n")
 
     # --- Wait for interrupt (SIGINT / SIGTERM) --------------------------------
     stop_requested: threading.Event = threading.Event()
@@ -471,11 +497,11 @@ def cmd_play(args: argparse.Namespace) -> None:
     # Block the main thread until a termination signal arrives
     stop_requested.wait()
 
-    print("\nStopping...")
+    _print("\nStopping...")
     ctrl.stop(fade_ms=DEFAULT_FADE_MS)
     dev.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
     dev.close()
-    print("Done.")
+    _print("Done.")
 
 
 # ---------------------------------------------------------------------------
@@ -499,6 +525,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="glowup",
         description="GlowUp — drive animated effects on "
                     "LIFX devices",
+    )
+    parser.add_argument(
+        "-q", "--quiet", action="store_true",
+        help="Suppress the startup banner and informational output",
     )
     sub = parser.add_subparsers(dest="command", help="Command to run")
 
@@ -592,13 +622,22 @@ def main() -> None:
     """Parse arguments and dispatch to the appropriate subcommand handler.
 
     If no subcommand is given, prints help and exits cleanly.
+    Prints a copyright/license banner on startup unless ``-q``/``--quiet``
+    is given.
     """
+    global _quiet
+
     parser: argparse.ArgumentParser = build_parser()
     args: argparse.Namespace = parser.parse_args()
+
+    _quiet = getattr(args, "quiet", False)
 
     if args.command is None:
         parser.print_help()
         sys.exit(0)
+
+    # Print the startup banner (suppressed by -q/--quiet).
+    _print(_BANNER)
 
     # Dispatch table -- maps subcommand names to handler functions
     commands: Dict[str, Callable[[argparse.Namespace], None]] = {
@@ -613,7 +652,7 @@ def main() -> None:
     )
     if handler is None:
         # Defensive: argparse constrains choices, but guard anyway
-        print(f"ERROR: Unknown command '{args.command}'.", file=sys.stderr)
+        _print(f"ERROR: Unknown command '{args.command}'.", file=sys.stderr)
         sys.exit(1)
 
     handler(args)
