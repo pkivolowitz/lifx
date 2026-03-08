@@ -507,8 +507,10 @@ def cmd_play(args: argparse.Namespace) -> None:
     if getattr(args, "sim", False):
         from simulator import create_simulator
         poly_map: list[bool] = _build_polychrome_map(dev)
+        zpb: int = getattr(args, "zpb", 1)
         sim = create_simulator(dev.zone_count or 1, effect_name,
-                               polychrome_map=poly_map)
+                               polychrome_map=poly_map,
+                               zones_per_bulb=zpb)
 
     frame_cb = sim.update if sim is not None else None
 
@@ -639,6 +641,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_play.add_argument(
         "--sim", action="store_true", default=False,
         help="Open a live simulator window showing the effect",
+    )
+    p_play.add_argument(
+        "--zpb", type=int, default=1,
+        help="Zones per bulb for the simulator display "
+             "(3 for LIFX string lights, default: 1)",
     )
 
     # Auto-add every effect's Param declarations as CLI flags.

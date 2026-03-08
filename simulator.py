@@ -101,6 +101,9 @@ SIM_MIN_WINDOW_WIDTH: int = 360
 """Minimum window width in pixels so the title bar and header text
 are always readable, even with very few zones."""
 
+DEFAULT_ZONES_PER_BULB: int = 1
+"""Default zones-per-bulb grouping (1 = show every zone)."""
+
 # BT.709 luma coefficients — same as effects/__init__.py.
 _LUMA_R: float = 0.2126
 _LUMA_G: float = 0.7152
@@ -232,6 +235,7 @@ if _TK_AVAILABLE:
             zone_count: int,
             effect_name: str,
             polychrome_map: Optional[list[bool]] = None,
+            zones_per_bulb: int = DEFAULT_ZONES_PER_BULB,
         ) -> None:
             """Create the simulator window.
 
@@ -243,26 +247,48 @@ if _TK_AVAILABLE:
                     full RGB); ``False`` means monochrome (render in
                     BT.709 grayscale).  If ``None``, all zones are
                     treated as color.
+                zones_per_bulb: Number of zones per physical bulb.
+                    When > 1, adjacent zones are grouped into one
+                    displayed rectangle using the middle zone's color.
+                    LIFX string lights use 3 zones per bulb.
             """
             self.zone_count: int = zone_count
             self.effect_name: str = effect_name
-            self._polychrome_map: list[bool] = (
+            self._zones_per_bulb: int = max(1, zones_per_bulb)
+
+            # Number of displayed bulbs (rectangles on screen).
+            self._bulb_count: int = (
+                (zone_count + self._zones_per_bulb - 1)
+                // self._zones_per_bulb
+            )
+
+            # Build per-bulb polychrome map by sampling the middle zone
+            # of each group.
+            zone_poly: list[bool] = (
                 polychrome_map if polychrome_map is not None
                 else [True] * zone_count
             )
+            self._polychrome_map: list[bool] = []
+            for b in range(self._bulb_count):
+                mid: int = b * self._zones_per_bulb + self._zones_per_bulb // 2
+                mid = min(mid, zone_count - 1)
+                self._polychrome_map.append(zone_poly[mid])
+
             self._queue: queue.Queue = queue.Queue()
             self._frame_times: list[float] = []
 
             # --- Compute adaptive zone width ---------------------------------
+            display_count: int = self._bulb_count
             max_strip: int = SIM_MAX_WINDOW_WIDTH - 2 * SIM_PADDING
             zone_w: int = min(
                 SIM_ZONE_WIDTH,
                 max(SIM_MIN_ZONE_WIDTH,
-                    (max_strip - (zone_count - 1) * SIM_ZONE_GAP) // zone_count),
+                    (max_strip - (display_count - 1) * SIM_ZONE_GAP)
+                    // display_count),
             )
 
             strip_width: int = (
-                zone_count * zone_w + (zone_count - 1) * SIM_ZONE_GAP
+                display_count * zone_w + (display_count - 1) * SIM_ZONE_GAP
             )
             canvas_width: int = max(
                 strip_width + 2 * SIM_PADDING,
@@ -288,10 +314,18 @@ if _TK_AVAILABLE:
             self._canvas.pack()
 
             # --- Header text -------------------------------------------------
+            if self._zones_per_bulb > 1:
+                header_text: str = (
+                    f"{effect_name}  |  {self._bulb_count} bulbs "
+                    f"({zone_count} zones, {self._zones_per_bulb} zpb)"
+                )
+            else:
+                header_text = f"{effect_name}  |  {zone_count} zones"
+
             self._header_id = self._canvas.create_text(
                 SIM_PADDING, SIM_PADDING,
                 anchor="nw",
-                text=f"{effect_name}  |  {zone_count} zones",
+                text=header_text,
                 fill=SIM_HEADER_COLOR,
                 font=("Menlo", 12),
             )
@@ -303,7 +337,7 @@ if _TK_AVAILABLE:
                 font=("Menlo", 12),
             )
 
-            # --- Zone rectangles (initially black) ---------------------------
+            # --- Bulb rectangles (initially black) ---------------------------
             # Center the strip horizontally when the window is wider
             # than the strip (e.g., when SIM_MIN_WINDOW_WIDTH kicks in).
             strip_x_offset: int = (canvas_width - strip_width) // 2
@@ -311,7 +345,7 @@ if _TK_AVAILABLE:
             y_bot: int = y_top + SIM_ZONE_HEIGHT
             self._rects: list[int] = []
 
-            for i in range(zone_count):
+            for i in range(display_count):
                 x0: int = strip_x_offset + i * (zone_w + SIM_ZONE_GAP)
                 x1: int = x0 + zone_w
                 rect_id: int = self._canvas.create_rectangle(
@@ -371,15 +405,20 @@ if _TK_AVAILABLE:
                             self._fps_id, text=f"{fps:.0f} fps",
                         )
 
-                # Update zone rectangles.  Monochrome zones get BT.709
-                # grayscale to match what the physical bulb displays.
-                num_colors: int = min(len(latest), len(self._rects))
-                for i in range(num_colors):
-                    if self._polychrome_map[i]:
-                        hex_color: str = hsbk_to_rgb(*latest[i])
+                # Update bulb rectangles.  When zones_per_bulb > 1,
+                # each rectangle shows the middle zone's color from its
+                # group.  Monochrome bulbs get BT.709 grayscale.
+                zpb: int = self._zones_per_bulb
+                for b in range(len(self._rects)):
+                    # Pick the middle zone of this bulb's group.
+                    mid: int = b * zpb + zpb // 2
+                    if mid >= len(latest):
+                        break
+                    if self._polychrome_map[b]:
+                        hex_color: str = hsbk_to_rgb(*latest[mid])
                     else:
-                        hex_color = hsbk_to_gray(*latest[i])
-                    self._canvas.itemconfig(self._rects[i], fill=hex_color)
+                        hex_color = hsbk_to_gray(*latest[mid])
+                    self._canvas.itemconfig(self._rects[b], fill=hex_color)
 
             # Reschedule.
             self._root.after(SIM_POLL_INTERVAL_MS, self._poll_queue)
@@ -412,6 +451,7 @@ def create_simulator(
     zone_count: int,
     effect_name: str,
     polychrome_map: Optional[list[bool]] = None,
+    zones_per_bulb: int = DEFAULT_ZONES_PER_BULB,
 ) -> Optional["SimulatorWindow"]:
     """Create a simulator window if tkinter is available.
 
@@ -425,6 +465,9 @@ def create_simulator(
         polychrome_map: Per-zone booleans — ``True`` for color zones,
             ``False`` for monochrome zones (rendered in BT.709
             grayscale).  If ``None``, all zones default to color.
+        zones_per_bulb: Number of zones per physical bulb.  When > 1,
+            adjacent zones are grouped into one displayed rectangle.
+            LIFX string lights use 3 zones per bulb.
 
     Returns:
         A :class:`SimulatorWindow` instance, or ``None`` if tkinter
@@ -439,4 +482,5 @@ def create_simulator(
         )
         return None
 
-    return SimulatorWindow(zone_count, effect_name, polychrome_map)
+    return SimulatorWindow(zone_count, effect_name, polychrome_map,
+                           zones_per_bulb)
