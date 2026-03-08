@@ -189,6 +189,7 @@ luma-converted brightness.  You can mix any device types freely.
 | `--group`   | *(none)* | Device group name (requires `--config`)   |
 | `--fps`     | 20      | Frames per second for the render loop     |
 | `--sim`     | off     | Open a live simulator window (see [Live Simulator](#live-simulator)) |
+| `--zpb`     | 1       | Zones per bulb — group adjacent zones into single displayed bulbs |
 
 You must specify either `--ip` or both `--config` and `--group` (not both).
 
@@ -875,14 +876,20 @@ what the engine is sending alongside real devices.
 # Preview cylon on your lights and in the simulator window
 python3 glowup.py play cylon --ip 10.0.0.62 --sim
 
+# Show 36 bulbs instead of 108 zones (LIFX strings have 3 zones per bulb)
+python3 glowup.py play cylon --ip 10.0.0.62 --sim --zpb 3
+
 # Works with virtual multizone groups too
 python3 glowup.py play aurora --config schedule.json --group office --sim
 ```
 
 The simulator window shows:
 
-- **Zone strip** — a row of colored rectangles, one per zone, updated
-  every frame with true RGB color converted from the LIFX HSBK values.
+- **Zone strip** — a row of colored rectangles, one per zone (or per
+  bulb when `--zpb` is set), updated every frame with true RGB color
+  converted from the LIFX HSBK values.  Monochrome (non-polychrome)
+  zones are rendered in grayscale using BT.709 luma weighting, matching
+  what the physical bulbs actually display.
 - **Header** — the effect name and zone count.
 - **FPS counter** — the actual display refresh rate (smoothed over 10
   frames).
@@ -911,11 +918,20 @@ with Homebrew Python:
 brew install tcl-tk python-tk@3.10
 ```
 
+### Zones Per Bulb (`--zpb`)
+
+LIFX string lights use 3 zones per physical bulb (108 zones = 36 bulbs).
+By default, the simulator shows one rectangle per zone.  Use `--zpb 3`
+to group zones into bulbs — the display shows the middle zone's color
+for each group, matching the visual appearance of the physical string.
+
 ### Adaptive Sizing
 
 Zone widths automatically shrink for large zone counts so the window
 fits on screen (capped at 1600px).  A 108-zone string light fits
 comfortably; a 200-zone virtual group will use narrower rectangles.
+Using `--zpb` reduces the rectangle count, producing wider, more
+readable bulbs.
 
 ---
 
