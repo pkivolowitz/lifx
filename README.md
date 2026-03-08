@@ -33,6 +33,13 @@ python3 glowup.py play flag --ip <device-ip> --country france
 python3 glowup.py play cylon --config schedule.json --group office
 ```
 
+## Caveat
+
+I have tested with string and monochrome lights. I *hope* this all works for
+you. Please report problems but remember, I do not own the other types. I'll do
+my best. Most of all, I would appreciate you fixing errors for the other LIFX
+products if you are willing and able. Thank you.
+
 ## Documentation
 
 See the **[User Manual](MANUAL.md)** for:
