@@ -32,7 +32,7 @@ Usage::
 
 from __future__ import annotations
 
-__version__: str = "1.0"
+__version__: str = "1.1"
 
 import queue
 import time
@@ -97,6 +97,11 @@ SIM_MAX_WINDOW_WIDTH: int = 1600
 SIM_MIN_ZONE_WIDTH: int = 3
 """Minimum zone width in pixels (avoids sub-pixel rendering)."""
 
+# BT.709 luma coefficients — same as effects/__init__.py.
+_LUMA_R: float = 0.2126
+_LUMA_G: float = 0.7152
+_LUMA_B: float = 0.0722
+
 
 # ---------------------------------------------------------------------------
 # HSBK → RGB conversion (display only)
@@ -153,6 +158,53 @@ def hsbk_to_rgb(hue: int, sat: int, bri: int, kelvin: int) -> str:
     return f"#{ri:02x}{gi:02x}{bi:02x}"
 
 
+def hsbk_to_gray(hue: int, sat: int, bri: int, kelvin: int) -> str:
+    """Convert a LIFX HSBK color to a grayscale hex string via BT.709 luma.
+
+    Mirrors the conversion that monochrome bulbs actually receive:
+    HSB→RGB, then BT.709 perceptual luminance (Y = 0.2126R + 0.7152G
+    + 0.0722B).  The result is a neutral gray at the computed brightness.
+
+    Args:
+        hue:    LIFX hue (0-65535).
+        sat:    LIFX saturation (0-65535).
+        bri:    LIFX brightness (0-65535).
+        kelvin: Color temperature (ignored for display).
+
+    Returns:
+        A hex color string ``"#RRGGBB"`` where R == G == B (grayscale).
+    """
+    # Normalize to [0, 1].
+    h: float = (hue / HSBK_MAX) * HUE_SEXTANTS
+    s: float = sat / HSBK_MAX
+    b: float = bri / HSBK_MAX
+
+    # HSB to RGB (standard algorithm).
+    c: float = b * s
+    x: float = c * (1.0 - abs(h % 2.0 - 1.0))
+    m: float = b - c
+
+    sextant: int = int(h) % HUE_SEXTANTS
+    if sextant == 0:
+        r, g, bl = c + m, x + m, m
+    elif sextant == 1:
+        r, g, bl = x + m, c + m, m
+    elif sextant == 2:
+        r, g, bl = m, c + m, x + m
+    elif sextant == 3:
+        r, g, bl = m, x + m, c + m
+    elif sextant == 4:
+        r, g, bl = x + m, m, c + m
+    else:
+        r, g, bl = c + m, m, x + m
+
+    # BT.709 perceptual luminance.
+    y: float = _LUMA_R * r + _LUMA_G * g + _LUMA_B * bl
+    gray: int = min(int(y * 255), 255)
+
+    return f"#{gray:02x}{gray:02x}{gray:02x}"
+
+
 # ---------------------------------------------------------------------------
 # Simulator window
 # ---------------------------------------------------------------------------
@@ -171,15 +223,29 @@ if _TK_AVAILABLE:
             effect_name: Name of the active effect (shown in header).
         """
 
-        def __init__(self, zone_count: int, effect_name: str) -> None:
+        def __init__(
+            self,
+            zone_count: int,
+            effect_name: str,
+            polychrome_map: Optional[list[bool]] = None,
+        ) -> None:
             """Create the simulator window.
 
             Args:
-                zone_count:  Number of zones to display.
-                effect_name: Effect name shown in the header.
+                zone_count:     Number of zones to display.
+                effect_name:    Effect name shown in the header.
+                polychrome_map: Per-zone list of booleans.  ``True``
+                    means the zone is on a color device (render in
+                    full RGB); ``False`` means monochrome (render in
+                    BT.709 grayscale).  If ``None``, all zones are
+                    treated as color.
             """
             self.zone_count: int = zone_count
             self.effect_name: str = effect_name
+            self._polychrome_map: list[bool] = (
+                polychrome_map if polychrome_map is not None
+                else [True] * zone_count
+            )
             self._queue: queue.Queue = queue.Queue()
             self._frame_times: list[float] = []
 
@@ -295,10 +361,14 @@ if _TK_AVAILABLE:
                             self._fps_id, text=f"{fps:.0f} fps",
                         )
 
-                # Update zone rectangles.
+                # Update zone rectangles.  Monochrome zones get BT.709
+                # grayscale to match what the physical bulb displays.
                 num_colors: int = min(len(latest), len(self._rects))
                 for i in range(num_colors):
-                    hex_color: str = hsbk_to_rgb(*latest[i])
+                    if self._polychrome_map[i]:
+                        hex_color: str = hsbk_to_rgb(*latest[i])
+                    else:
+                        hex_color = hsbk_to_gray(*latest[i])
                     self._canvas.itemconfig(self._rects[i], fill=hex_color)
 
             # Reschedule.
@@ -331,6 +401,7 @@ if _TK_AVAILABLE:
 def create_simulator(
     zone_count: int,
     effect_name: str,
+    polychrome_map: Optional[list[bool]] = None,
 ) -> Optional["SimulatorWindow"]:
     """Create a simulator window if tkinter is available.
 
@@ -339,8 +410,11 @@ def create_simulator(
     the non-simulator code path.
 
     Args:
-        zone_count:  Number of zones to display.
-        effect_name: Effect name shown in the header.
+        zone_count:     Number of zones to display.
+        effect_name:    Effect name shown in the header.
+        polychrome_map: Per-zone booleans — ``True`` for color zones,
+            ``False`` for monochrome zones (rendered in BT.709
+            grayscale).  If ``None``, all zones default to color.
 
     Returns:
         A :class:`SimulatorWindow` instance, or ``None`` if tkinter
@@ -355,4 +429,4 @@ def create_simulator(
         )
         return None
 
-    return SimulatorWindow(zone_count, effect_name)
+    return SimulatorWindow(zone_count, effect_name, polychrome_map)

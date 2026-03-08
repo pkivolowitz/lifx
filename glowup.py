@@ -379,6 +379,30 @@ def cmd_identify(args: argparse.Namespace) -> None:
     _print("Done.")
 
 
+def _build_polychrome_map(dev: Any) -> list[bool]:
+    """Build a per-zone list indicating color vs. monochrome capability.
+
+    For a :class:`VirtualMultizoneDevice`, each zone inherits the
+    polychrome status of its underlying physical device.  For a plain
+    :class:`LifxDevice`, all zones share the device's status.
+
+    Args:
+        dev: A device or virtual multizone device.
+
+    Returns:
+        A list of booleans, one per zone.  ``True`` = color,
+        ``False`` = monochrome (simulator renders in grayscale).
+    """
+    # VirtualMultizoneDevice exposes _zone_map with (device, zone_idx) tuples.
+    if hasattr(dev, "_zone_map"):
+        return [d.is_polychrome for d, _ in dev._zone_map]
+
+    # Single device: all zones share the same polychrome status.
+    zones: int = dev.zone_count if dev.zone_count else 1
+    poly: bool = bool(getattr(dev, "is_polychrome", True))
+    return [poly] * zones
+
+
 def cmd_play(args: argparse.Namespace) -> None:
     """Connect to a LIFX device (or group) and run the named effect.
 
@@ -482,7 +506,9 @@ def cmd_play(args: argparse.Namespace) -> None:
     sim = None
     if getattr(args, "sim", False):
         from simulator import create_simulator
-        sim = create_simulator(dev.zone_count or 1, effect_name)
+        poly_map: list[bool] = _build_polychrome_map(dev)
+        sim = create_simulator(dev.zone_count or 1, effect_name,
+                               polychrome_map=poly_map)
 
     frame_cb = sim.update if sim is not None else None
 
