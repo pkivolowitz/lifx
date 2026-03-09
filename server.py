@@ -30,6 +30,8 @@ Endpoints::
     POST /api/devices/{ip}/play          Start an effect
     POST /api/devices/{ip}/stop          Stop current effect
     POST /api/devices/{ip}/power         Turn device on/off
+    POST /api/devices/{ip}/identify      Pulse brightness to locate device
+    POST /api/devices/{ip}/nickname      Set a custom display name
     POST /api/discover                   Re-run device discovery
 
 Usage::
@@ -43,7 +45,7 @@ Usage::
 
 from __future__ import annotations
 
-__version__ = "1.1"
+__version__ = "1.2"
 
 import hmac
 import http.server
@@ -62,7 +64,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
-from effects import get_registry, create_effect
+from effects import get_registry, create_effect, HSBK_MAX, KELVIN_DEFAULT
 from engine import Controller
 from solar import SunTimes, sun_times
 from transport import LifxDevice, discover_devices
@@ -135,6 +137,18 @@ AUTH_RATE_WINDOW: int = 60
 
 # SSE stream timeout — close idle connections after this many seconds.
 SSE_TIMEOUT_SECONDS: float = 3600.0
+
+# Identify pulse duration (seconds).
+IDENTIFY_DURATION_SECONDS: float = 10.0
+
+# Seconds per full brightness cycle during identify.
+IDENTIFY_CYCLE_SECONDS: float = 3.0
+
+# Seconds between brightness updates during identify (20 fps).
+IDENTIFY_FRAME_INTERVAL: float = 0.05
+
+# Minimum brightness fraction during identify pulse (5%).
+IDENTIFY_MIN_BRI: float = 0.05
 
 
 # ---------------------------------------------------------------------------
@@ -219,13 +233,16 @@ class DeviceManager:
         controllers: Dict mapping device IP to :class:`Controller`.
     """
 
-    def __init__(self, known_ips: Optional[list[str]] = None) -> None:
+    def __init__(self, known_ips: Optional[list[str]] = None,
+                 nicknames: Optional[dict[str, str]] = None) -> None:
         """Initialize with empty device and controller maps.
 
         Args:
-            known_ips: Optional list of device IPs from config groups.
-                       Used as fallback when broadcast discovery fails
-                       (e.g. mesh routers that block broadcast).
+            known_ips:  Optional list of device IPs from config groups.
+                        Used as fallback when broadcast discovery fails
+                        (e.g. mesh routers that block broadcast).
+            nicknames:  Optional mapping of device IP to user-assigned
+                        display name, loaded from the config file.
         """
         self._devices: dict[str, LifxDevice] = {}
         self._controllers: dict[str, Controller] = {}
@@ -236,6 +253,8 @@ class DeviceManager:
         self._overrides: dict[str, Optional[str]] = {}
         # Known IPs from config groups for fallback direct discovery.
         self._known_ips: list[str] = known_ips or []
+        # User-assigned nicknames: IP → display name.
+        self._nicknames: dict[str, str] = nicknames or {}
 
     def discover(self) -> list[dict[str, Any]]:
         """Run LIFX discovery and cache results.
@@ -478,6 +497,63 @@ class DeviceManager:
         dev.set_power(on=on, duration_ms=DEFAULT_FADE_MS)
         return {"ip": ip, "power": "on" if on else "off"}
 
+    def identify(self, ip: str) -> None:
+        """Pulse a device's brightness for a fixed duration to locate it.
+
+        Runs in a background thread so the HTTP request returns immediately.
+        Stops any running effect first, then pulses warm white brightness
+        in a sine wave for :data:`IDENTIFY_DURATION_SECONDS`, then powers
+        the device off.
+
+        Args:
+            ip: Device IP address.
+
+        Raises:
+            KeyError: If the device IP is not discovered.
+        """
+        dev: Optional[LifxDevice] = self.get_device(ip)
+        if dev is None:
+            raise KeyError(f"Unknown device: {ip}")
+
+        # Stop any running effect so identify is visible.
+        ctrl: Optional[Controller] = self.get_controller(ip)
+        if ctrl is not None:
+            ctrl.stop(fade_ms=0)
+
+        def _pulse() -> None:
+            """Background pulse loop."""
+            try:
+                dev.set_power(on=True, duration_ms=0)
+                start: float = time_mod.monotonic()
+                while time_mod.monotonic() - start < IDENTIFY_DURATION_SECONDS:
+                    elapsed: float = time_mod.monotonic() - start
+                    phase: float = (
+                        math.sin(2.0 * math.pi * elapsed / IDENTIFY_CYCLE_SECONDS)
+                        + 1.0
+                    ) / 2.0
+                    bri_frac: float = (
+                        IDENTIFY_MIN_BRI + phase * (1.0 - IDENTIFY_MIN_BRI)
+                    )
+                    bri: int = int(bri_frac * HSBK_MAX)
+
+                    if dev.is_multizone:
+                        color = (0, 0, bri, KELVIN_DEFAULT)
+                        colors = [color] * dev.zone_count
+                        dev.set_zones(colors, duration_ms=0, rapid=True)
+                    else:
+                        dev.set_color(0, 0, bri, KELVIN_DEFAULT, duration_ms=0)
+
+                    time_mod.sleep(IDENTIFY_FRAME_INTERVAL)
+
+                dev.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
+            except Exception as exc:
+                logging.warning("Identify pulse failed for %s: %s", ip, exc)
+
+        thread: threading.Thread = threading.Thread(
+            target=_pulse, daemon=True, name=f"identify-{ip}",
+        )
+        thread.start()
+
     def get_colors(self, ip: str) -> Optional[list[dict[str, int]]]:
         """Get a snapshot of the current zone colors.
 
@@ -606,6 +682,45 @@ class DeviceManager:
         with self._lock:
             return self._overrides.get(ip)
 
+    # -- Nickname management ------------------------------------------------
+
+    def set_nickname(self, ip: str, nickname: str) -> None:
+        """Assign a custom display name to a device.
+
+        An empty nickname removes the override, reverting to the
+        protocol label.
+
+        Args:
+            ip:       Device IP address.
+            nickname: The custom name, or empty string to clear.
+        """
+        with self._lock:
+            if nickname:
+                self._nicknames[ip] = nickname
+            else:
+                self._nicknames.pop(ip, None)
+
+    def get_nickname(self, ip: str) -> Optional[str]:
+        """Look up a device's custom display name.
+
+        Args:
+            ip: Device IP address.
+
+        Returns:
+            The nickname, or ``None`` if none is set.
+        """
+        with self._lock:
+            return self._nicknames.get(ip)
+
+    def get_nicknames(self) -> dict[str, str]:
+        """Return a copy of the full nickname mapping.
+
+        Returns:
+            A dict mapping device IP to nickname.
+        """
+        with self._lock:
+            return dict(self._nicknames)
+
     # -- Internal helpers ---------------------------------------------------
 
     def _devices_as_list(self) -> list[dict[str, Any]]:
@@ -622,10 +737,12 @@ class DeviceManager:
             if ctrl is not None:
                 status: dict[str, Any] = ctrl.get_status()
                 current_effect = status.get("effect")
+            nickname: Optional[str] = self._nicknames.get(dev.ip)
             result.append({
                 "ip": dev.ip,
                 "mac": dev.mac_str,
                 "label": dev.label,
+                "nickname": nickname,
                 "product": dev.product_name,
                 "group": dev.group,
                 "zones": dev.zone_count,
@@ -1020,6 +1137,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     auth_token: str
     scheduler: Optional[SchedulerThread] = None
     config: dict[str, Any] = {}
+    config_path: Optional[str] = None
 
     # Silence per-request logging from BaseHTTPRequestHandler.
     def log_message(self, format: str, *args: Any) -> None:
@@ -1274,6 +1392,26 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_post_power(ip)
             return
 
+        # /api/devices/{ip}/identify
+        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
+                and parts[3] == "identify"):
+            ip = parts[2]
+            if not _validate_ip(ip):
+                self._send_json(400, {"error": "Invalid IP address"})
+                return
+            self._handle_post_identify(ip)
+            return
+
+        # /api/devices/{ip}/nickname
+        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
+                and parts[3] == "nickname"):
+            ip = parts[2]
+            if not _validate_ip(ip):
+                self._send_json(400, {"error": "Invalid IP address"})
+                return
+            self._handle_post_nickname(ip)
+            return
+
         self._send_json(404, {"error": "Not found"})
 
     # -- GET handlers -------------------------------------------------------
@@ -1449,6 +1587,76 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, result)
         except KeyError:
             self._send_json(404, {"error": "Device not found"})
+
+    def _handle_post_identify(self, ip: str) -> None:
+        """POST /api/devices/{ip}/identify — pulse brightness to locate device.
+
+        Starts a background thread that pulses the device's brightness
+        in a sine wave for :data:`IDENTIFY_DURATION_SECONDS`.  The HTTP
+        response returns immediately.
+        """
+        try:
+            self.device_manager.identify(ip)
+            logging.info("API: identifying %s", ip)
+            self._send_json(200, {"ip": ip, "identifying": True})
+        except KeyError:
+            self._send_json(404, {"error": "Device not found"})
+
+    def _handle_post_nickname(self, ip: str) -> None:
+        """POST /api/devices/{ip}/nickname — set a custom display name.
+
+        Request body::
+
+            {"nickname": "Porch Lights"}
+
+        An empty string or ``null`` clears the nickname.
+        """
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        nickname: Any = body.get("nickname")
+        if nickname is None:
+            nickname = ""
+        if not isinstance(nickname, str):
+            self._send_json(400, {"error": "'nickname' must be a string"})
+            return
+
+        nickname = nickname.strip()
+
+        self.device_manager.set_nickname(ip, nickname)
+
+        # Persist to config file.
+        self._save_nicknames()
+
+        logging.info(
+            "API: nickname for %s %s",
+            ip, f"set to '{nickname}'" if nickname else "cleared",
+        )
+        self._send_json(200, {"ip": ip, "nickname": nickname or None})
+
+    def _save_nicknames(self) -> None:
+        """Persist current nicknames to the config file.
+
+        Reads the config JSON, updates the ``nicknames`` key, and
+        writes it back atomically.
+        """
+        config_path: Optional[str] = self.config_path
+        if config_path is None:
+            return
+        try:
+            with open(config_path, "r") as f:
+                config: dict[str, Any] = json.load(f)
+            nicknames: dict[str, str] = self.device_manager.get_nicknames()
+            if nicknames:
+                config["nicknames"] = nicknames
+            else:
+                config.pop("nicknames", None)
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=4)
+                f.write("\n")
+        except Exception as exc:
+            logging.warning("Failed to save nicknames: %s", exc)
 
     # -- Helpers ------------------------------------------------------------
 
@@ -1755,8 +1963,9 @@ def main() -> None:
         datefmt=LOG_DATE_FORMAT,
     )
 
+    config_path: str = args.config
     try:
-        config: dict[str, Any] = _load_config(args.config)
+        config: dict[str, Any] = _load_config(config_path)
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
         logging.error("Configuration error: %s", exc)
         sys.exit(1)
@@ -1771,7 +1980,10 @@ def main() -> None:
     known_ips: list[str] = sorted(
         {ip for ips in groups.values() for ip in ips}
     )
-    dm: DeviceManager = DeviceManager(known_ips=known_ips)
+    nicknames: dict[str, str] = config.get("nicknames", {})
+    dm: DeviceManager = DeviceManager(
+        known_ips=known_ips, nicknames=nicknames,
+    )
     logging.info("Discovering LIFX devices...")
     devices: list[dict[str, Any]] = dm.discover()
     logging.info("Found %d device(s)", len(devices))
@@ -1799,6 +2011,7 @@ def main() -> None:
     GlowUpRequestHandler.auth_token = config["auth_token"]
     GlowUpRequestHandler.scheduler = scheduler
     GlowUpRequestHandler.config = config
+    GlowUpRequestHandler.config_path = config_path
 
     server: ThreadedHTTPServer = ThreadedHTTPServer(
         ("", port), GlowUpRequestHandler,

@@ -11,6 +11,10 @@ import SwiftUI
 /// Each row shows the device name, product type, group, current
 /// effect, and zone count.  Tapping a device navigates to its
 /// detail view.  Pull-to-refresh re-fetches the device list.
+///
+/// Swipe actions:
+/// - Leading swipe: identify (pulse brightness to locate device)
+/// - Trailing swipe: rename (set a custom display name)
 struct DeviceListView: View {
     @EnvironmentObject var apiClient: APIClient
 
@@ -26,11 +30,34 @@ struct DeviceListView: View {
     /// Controls presentation of the settings sheet.
     @State private var showSettings: Bool = false
 
+    /// Device being renamed (drives the rename alert).
+    @State private var renamingDevice: Device?
+
+    /// Text field content for the rename alert.
+    @State private var renameText: String = ""
+
     var body: some View {
         NavigationStack {
             List(devices) { device in
                 NavigationLink(value: device) {
                     DeviceRow(device: device)
+                }
+                .swipeActions(edge: .leading) {
+                    Button {
+                        Task { await identifyDevice(device) }
+                    } label: {
+                        Label("Identify", systemImage: "lightbulb.max")
+                    }
+                    .tint(.yellow)
+                }
+                .swipeActions(edge: .trailing) {
+                    Button {
+                        renameText = device.nickname ?? device.label ?? ""
+                        renamingDevice = device
+                    } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
+                    .tint(.blue)
                 }
             }
             .navigationTitle("Devices")
@@ -71,6 +98,31 @@ struct DeviceListView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView()
             }
+            .alert(
+                "Rename Device",
+                isPresented: Binding(
+                    get: { renamingDevice != nil },
+                    set: { if !$0 { renamingDevice = nil } }
+                )
+            ) {
+                TextField("Display name", text: $renameText)
+                Button("Save") {
+                    if let device = renamingDevice {
+                        Task { await saveNickname(device) }
+                    }
+                }
+                Button("Clear Name", role: .destructive) {
+                    if let device = renamingDevice {
+                        renameText = ""
+                        Task { await saveNickname(device) }
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    renamingDevice = nil
+                }
+            } message: {
+                Text("Enter a custom name for this device.")
+            }
             .task {
                 // Fetch devices on first appearance.
                 await refreshDevices()
@@ -89,6 +141,28 @@ struct DeviceListView: View {
         }
         isLoading = false
     }
+
+    /// Pulse a device's brightness to visually locate it.
+    private func identifyDevice(_ device: Device) async {
+        do {
+            try await apiClient.identify(ip: device.ip)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Save the current rename text as the device's nickname.
+    private func saveNickname(_ device: Device) async {
+        let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        renamingDevice = nil
+        do {
+            try await apiClient.setNickname(ip: device.ip, nickname: name)
+            // Refresh to show the updated name.
+            await refreshDevices()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 }
 
 /// A single row in the device list.
@@ -100,7 +174,7 @@ struct DeviceRow: View {
         VStack(alignment: .leading, spacing: 4) {
             // Device name and current effect.
             HStack {
-                Text(device.label ?? device.ip)
+                Text(device.displayName)
                     .font(.headline)
                 Spacer()
                 if let effect = device.currentEffect {

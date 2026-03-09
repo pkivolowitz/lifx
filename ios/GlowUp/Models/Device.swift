@@ -18,6 +18,9 @@ struct Device: Codable, Identifiable, Hashable {
     /// Human-readable device name assigned in the LIFX app.
     let label: String?
 
+    /// User-assigned custom display name (set from this app).
+    let nickname: String?
+
     /// Friendly product name (e.g., "String Light", "A19").
     let product: String?
 
@@ -36,9 +39,15 @@ struct Device: Codable, Identifiable, Hashable {
     /// Conform to ``Identifiable`` using the device IP.
     var id: String { ip }
 
+    /// The best available display name: nickname, then label, then IP.
+    var displayName: String {
+        if let nickname = nickname, !nickname.isEmpty { return nickname }
+        return label ?? ip
+    }
+
     /// Coding keys to match the server's snake_case JSON.
     enum CodingKeys: String, CodingKey {
-        case ip, mac, label, product, group, zones
+        case ip, mac, label, nickname, product, group, zones
         case isMultizone = "is_multizone"
         case currentEffect = "current_effect"
     }

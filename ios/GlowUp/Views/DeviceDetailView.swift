@@ -55,6 +55,12 @@ struct DeviceDetailView: View {
             Section {
                 LabeledContent("Product", value: device.product ?? "Unknown")
                 LabeledContent("IP", value: device.ip)
+                if let label = device.label, !label.isEmpty {
+                    LabeledContent("Label", value: label)
+                }
+                if let nickname = device.nickname, !nickname.isEmpty {
+                    LabeledContent("Nickname", value: nickname)
+                }
                 if let group = device.group, !group.isEmpty {
                     LabeledContent("Group", value: group)
                 }
@@ -122,6 +128,13 @@ struct DeviceDetailView: View {
                 }
                 .disabled(status?.effect == nil || !(status?.running ?? false))
 
+                // Identify — pulse brightness to locate the device.
+                Button {
+                    Task { await identifyDevice() }
+                } label: {
+                    Label("Identify", systemImage: "lightbulb.max")
+                }
+
                 // Power toggle.
                 Button {
                     Task { await togglePower() }
@@ -132,7 +145,7 @@ struct DeviceDetailView: View {
                 Text("Controls")
             }
         }
-        .navigationTitle(device.label ?? device.ip)
+        .navigationTitle(device.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             // Start SSE stream and fetch status on appearance.
@@ -205,6 +218,15 @@ struct DeviceDetailView: View {
             errorMessage = error.localizedDescription
         }
         isLoading = false
+    }
+
+    /// Pulse the device's brightness to visually locate it.
+    private func identifyDevice() async {
+        do {
+            try await apiClient.identify(ip: device.ip)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     /// Toggle device power off.

@@ -8,6 +8,12 @@
         "_comment": "Madison, WI — adjust to your location"
     },
 
+    "nicknames": {
+        "_comment": "Custom display names — set from the iPhone app or edit here",
+        "10.0.0.10": "Porch Lights",
+        "10.0.0.12": "Living Room Lamp"
+    },
+
     "groups": {
         "_comment": "Each group is a named list of device IPs or hostnames",
         "porch": [

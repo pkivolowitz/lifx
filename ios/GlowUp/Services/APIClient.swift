@@ -138,6 +138,34 @@ class APIClient: ObservableObject {
         )
     }
 
+    /// Pulse a device's brightness to visually locate it.
+    ///
+    /// The server pulses the device for ~10 seconds in the background.
+    /// This method returns immediately after the server acknowledges.
+    ///
+    /// - Parameter ip: Device IP address.
+    /// - Throws: ``APIError`` on failure.
+    func identify(ip: String) async throws {
+        let _: [String: AnyCodableValue] = try await post(
+            "/api/devices/\(ip)/identify",
+            body: EmptyBody()
+        )
+    }
+
+    /// Set or clear a custom display name for a device.
+    ///
+    /// - Parameters:
+    ///   - ip: Device IP address.
+    ///   - nickname: The custom name, or empty string to clear.
+    /// - Throws: ``APIError`` on failure.
+    func setNickname(ip: String, nickname: String) async throws {
+        struct NicknameBody: Codable { let nickname: String }
+        let _: [String: AnyCodableValue] = try await post(
+            "/api/devices/\(ip)/nickname",
+            body: NicknameBody(nickname: nickname)
+        )
+    }
+
     // MARK: - SSE streaming
 
     /// Build a URL request for the SSE color stream endpoint.
