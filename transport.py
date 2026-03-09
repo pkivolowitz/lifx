@@ -602,10 +602,11 @@ class LifxDevice:
         if timeout <= 0:
             raise ValueError(f"timeout must be > 0, got {timeout}")
 
-        deadline = time.time() + timeout
         for _attempt in range(retries):
             self._send(msg_type, payload, res=True)
-            while time.time() < deadline:
+            # Each attempt gets a fresh deadline so retries are genuine.
+            attempt_deadline = time.time() + timeout
+            while time.time() < attempt_deadline:
                 try:
                     data, (ip, _) = self.sock.recvfrom(MAX_UDP_PAYLOAD)
                     msg = _parse_message(data)

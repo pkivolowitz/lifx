@@ -34,6 +34,7 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
    - [aurora](#aurora)
    - [binclock](#binclock)
    - [flag](#flag)
+   - [fireworks](#fireworks)
 7. [Effect Developer Guide](#effect-developer-guide)
    - [Architecture Overview](#architecture-overview)
    - [Creating a New Effect](#creating-a-new-effect)
@@ -188,14 +189,33 @@ luma-converted brightness.  You can mix any device types freely.
 | `--config`  | *(none)* | Path to config file containing device groups |
 | `--group`   | *(none)* | Device group name (requires `--config`)   |
 | `--fps`     | 20      | Frames per second for the render loop     |
-| `--sim`     | off     | Open a live simulator window (see [Live Simulator](#live-simulator)) |
+| `--sim`     | off     | Open a live simulator window alongside the real lights               |
+| `--sim-only` | off    | Query device geometry then run the effect in the simulator only — no commands sent to the lights (see [Sim-Only Mode](#sim-only-mode)) |
 | `--zpb`     | 1       | Zones per bulb — group adjacent zones into single displayed bulbs |
 
 You must specify either `--ip` or both `--config` and `--group` (not both).
 
-All effect-specific parameters are auto-generated as `--flag` options.
-For example, the cylon effect accepts `--speed`, `--width`, `--hue`, etc.
-Any parameter not specified on the command line uses the effect's default.
+Effect-specific parameters are auto-generated as `--flag` options using
+hyphenated names (e.g. `--launch-rate`, `--burst-spread`).  Any parameter
+not specified on the command line uses the effect's default.
+
+**Getting help — three levels:**
+
+```bash
+# Top-level: subcommands and global options
+python3 glowup.py --help
+
+# play options only (no effect parameters — they vary per effect)
+python3 glowup.py play --help
+
+# Full parameter reference for one specific effect
+python3 glowup.py play fireworks --help
+python3 glowup.py play cylon --help
+```
+
+`play --help` intentionally omits effect parameters to keep the output
+readable.  Use `play <effect> --help` to see every parameter for that
+effect, its default value, and its valid range.
 
 **Examples:**
 
@@ -587,6 +607,45 @@ python3 glowup.py play flag --ip <device-ip> --country japan --speed 3
 python3 glowup.py play flag --ip <device-ip> --country us --direction right
 ```
 
+### fireworks
+
+**Fireworks display** — rockets launch from random ends of the string,
+trailing white-hot exhaust as they decelerate toward a random zenith.
+At the peak each rocket detonates: a gaussian bloom of saturated color
+expands outward in both directions and fades quadratically to black.
+
+Multiple rockets fly simultaneously. Where they share zones their
+brightness contributions are **additive** — overlapping bursts look
+brighter, never fighting for a single color slot. Hue is taken from
+whichever rocket contributes the most brightness to a given zone, so
+layers of color stack naturally.
+
+Designed for multizone string-light devices. On single-zone bulbs the
+effect degenerates to simple on/off flashes.
+
+| Parameter         | Default | Range       | Description                                          |
+|-------------------|---------|-------------|------------------------------------------------------|
+| `--max-rockets`   | 3       | 1–20        | Maximum simultaneous rockets in flight               |
+| `--launch-rate`   | 0.5     | 0.05–5.0   | Average new rockets launched per second              |
+| `--ascent-speed`  | 10.0    | 1.0–60.0   | Rocket travel speed in zones per second              |
+| `--trail-length`  | 8       | 1–30        | Exhaust trail length in zones                        |
+| `--burst-spread`  | 20      | 2–60        | Maximum burst radius in zones from zenith            |
+| `--burst-duration`| 1.8     | 0.2–8.0    | Seconds for the burst to fade completely to black    |
+| `--kelvin`        | 3500    | 1500–9000  | Color temperature in Kelvin                          |
+
+**Examples:**
+
+```bash
+# Default fireworks display
+python3 glowup.py play fireworks --ip <device-ip>
+
+# Rapid-fire with long trails and big bursts
+python3 glowup.py play fireworks --ip <device-ip> --launch-rate 2.0 --trail-length 12 --burst-spread 20
+
+# Slow, dramatic rockets with long fades
+python3 glowup.py play fireworks --ip <device-ip> --ascent-speed 4.0 --burst-duration 4.0 --max-rockets 5
+```
+
 ---
 
 ## Effect Developer Guide
@@ -960,11 +1019,45 @@ and never sends color or power commands.  You can safely run it from
 any machine on the LAN while the scheduler drives the lights from
 another.
 
+### Sim-Only Mode
+
+The `--sim-only` flag queries the real device (or group) to discover its
+zone count and polychrome capabilities, then immediately closes the
+connection.  From that point on, **no packets are sent to the lights**.
+The effect runs entirely inside the simulator window.
+
+This is useful when you want to:
+
+- Preview a new or modified effect without disturbing lights that are
+  already in use (e.g., the scheduler is running).
+- Tune parameters in advance and decide on values before deploying.
+- Develop effects on a machine that is not on the same LAN as the lights.
+
+```bash
+# Preview fireworks on your string light without touching it
+python3 glowup.py play fireworks --ip <device-ip> --sim-only
+
+# Preview across a virtual multizone group, 3 zones per bulb display
+python3 glowup.py play aurora --config schedule.json --group porch --sim-only --zpb 3
+
+# Tune parameters first, then deploy for real
+python3 glowup.py play cylon --ip <device-ip> --sim-only --speed 1.5 --width 8
+```
+
+The simulator title bar shows the effect name and zone count.  All
+effect parameters work identically to normal `play` mode.
+
+`--sim-only` requires tkinter.  If it is not available, the command
+exits with an error rather than silently doing nothing.
+
+`--sim-only` and `--sim` are mutually exclusive — `--sim-only` implies
+the simulator; adding `--sim` is redundant but harmless.
+
 ### macOS Accessibility Permission
 
 On macOS, the simulator window uses `osascript` to ask System Events
 to bring the Python process to the foreground.  The first time you
-run any simulator mode (`--sim` or `monitor`), macOS will prompt you
+run any simulator mode (`--sim`, `--sim-only`, or `monitor`), macOS will prompt you
 to grant **Accessibility** permission to your terminal application
 (Terminal, iTerm2, VS Code, etc.).  This is a standard macOS security
 gate for any program that activates another process's window.  The

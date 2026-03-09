@@ -17,7 +17,7 @@ declarations.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.7"
+__version__ = "1.9"
 
 import argparse
 import json
@@ -103,6 +103,83 @@ def _print(*args: Any, **kwargs: Any) -> None:
     if _quiet and kwargs.get("file") is not sys.stderr:
         return
     print(*args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Null device — geometry-only stub for --sim-only mode
+# ---------------------------------------------------------------------------
+
+class _NullDevice:
+    """Geometry-only device stub used by ``--sim-only``.
+
+    Mirrors the properties that :class:`Engine` and :class:`Controller`
+    read from a real device (zone count, label, etc.) but makes every
+    write method a silent no-op.  This guarantees that ``--sim-only``
+    never sends a single UDP packet to physical hardware after the
+    initial query.
+
+    Attributes:
+        zone_count:   Number of zones copied from the real device.
+        is_multizone: Always ``True`` so the engine uses the
+                      ``set_zones`` path (zone-accurate rendering).
+        is_polychrome: Always ``True`` (unused for the multizone path).
+        label:        Device or group label for display.
+        product_name: Human-readable product string.
+        product:      Non-``None`` so engine readiness checks pass.
+        ip:           Display-only address string.
+        mac_str:      Fixed ``"sim-only"`` sentinel.
+        group:        Empty string placeholder.
+        _pre_poly_map: Pre-computed per-zone polychrome list extracted
+                      from the real device before it was closed.  Used
+                      by :func:`_build_polychrome_map` to produce an
+                      accurate simulator colour map.
+    """
+
+    def __init__(
+        self,
+        zone_count: int,
+        label: str,
+        product_name: str,
+        ip: str,
+        pre_poly_map: list[bool],
+    ) -> None:
+        """Initialise with geometry copied from the real device.
+
+        Args:
+            zone_count:    Number of zones.
+            label:         Device / group label.
+            product_name:  Human-readable product string.
+            ip:            IP or group description (display only).
+            pre_poly_map:  Per-zone polychrome flags from the real
+                           device, extracted before it was closed.
+        """
+        self.zone_count: int = zone_count
+        self.is_multizone: bool = True
+        self.is_polychrome: bool = True
+        self.label: str = label
+        self.product_name: str = product_name
+        self.product: int = 0       # non-None so engine checks pass
+        self.ip: str = ip
+        self.mac_str: str = "sim-only"
+        self.group: str = ""
+        self._pre_poly_map: list[bool] = pre_poly_map
+
+    # All write methods are silent no-ops — no packets reach the lights.
+
+    def set_zones(self, *args: Any, **kwargs: Any) -> None:
+        """No-op — sim-only mode never writes to physical devices."""
+
+    def set_color(self, *args: Any, **kwargs: Any) -> None:
+        """No-op — sim-only mode never writes to physical devices."""
+
+    def set_power(self, *args: Any, **kwargs: Any) -> None:
+        """No-op — sim-only mode never writes to physical devices."""
+
+    def close(self) -> None:
+        """No-op — the real socket was closed before this stub was created."""
+
+    def query_all(self) -> None:
+        """No-op — geometry was already obtained from the real device."""
 
 
 # ---------------------------------------------------------------------------
@@ -496,17 +573,25 @@ def cmd_monitor(args: argparse.Namespace) -> None:
 def _build_polychrome_map(dev: Any) -> list[bool]:
     """Build a per-zone list indicating color vs. monochrome capability.
 
+    For a :class:`_NullDevice` (``--sim-only``), uses the pre-computed
+    map that was extracted from the real device before it was closed.
+
     For a :class:`VirtualMultizoneDevice`, each zone inherits the
     polychrome status of its underlying physical device.  For a plain
     :class:`LifxDevice`, all zones share the device's status.
 
     Args:
-        dev: A device or virtual multizone device.
+        dev: A device, virtual multizone device, or null device stub.
 
     Returns:
         A list of booleans, one per zone.  ``True`` = color,
         ``False`` = monochrome (simulator renders in grayscale).
     """
+    # _NullDevice carries a pre-computed map extracted before real device
+    # sockets were closed.
+    if hasattr(dev, "_pre_poly_map") and dev._pre_poly_map is not None:
+        return dev._pre_poly_map
+
     # VirtualMultizoneDevice exposes _zone_map with (device, zone_idx) tuples.
     if hasattr(dev, "_zone_map"):
         return [d.is_polychrome for d, _ in dev._zone_map]
@@ -541,6 +626,7 @@ def cmd_play(args: argparse.Namespace) -> None:
     has_ip: bool = bool(getattr(args, "ip", None))
     has_group: bool = bool(getattr(args, "config", None) and
                            getattr(args, "group", None))
+    sim_only: bool = bool(getattr(args, "sim_only", False))
 
     if not has_ip and not has_group:
         _print(
@@ -590,6 +676,27 @@ def cmd_play(args: argparse.Namespace) -> None:
         else:
             _print("  Monochrome bulb (BT.709 luma mode)", flush=True)
 
+    # --- Sim-only: extract geometry then close real sockets immediately --------
+    # From this point on, if sim_only is active, dev is a _NullDevice and
+    # no further packets will be sent to the physical lights.
+    if sim_only:
+        pre_poly: list[bool] = _build_polychrome_map(dev)
+        null_label: str = getattr(dev, "label", None) or "?"
+        null_product: str = getattr(dev, "product_name", None) or "?"
+        null_ip: str = getattr(dev, "ip", None) or "sim-only"
+        null_zones: int = dev.zone_count or 1
+        # Close real sockets — the null stub takes over from here.
+        dev.close()
+        dev = _NullDevice(
+            zone_count=null_zones,
+            label=null_label,
+            product_name=null_product,
+            ip=null_ip,
+            pre_poly_map=pre_poly,
+        )
+        _print("  Sim-only mode: no commands will be sent to the lights.",
+               flush=True)
+
     # --- Validate effect name -------------------------------------------------
     effect_name: str = args.effect
     registry: Dict[str, Any] = get_registry()
@@ -614,17 +721,29 @@ def cmd_play(args: argparse.Namespace) -> None:
             effect_params[pname] = val
 
     # --- Ensure device is powered on before sending colors --------------------
-    dev.set_power(on=True, duration_ms=0)
+    # Skipped in sim-only mode: _NullDevice.set_power is a no-op, but
+    # being explicit avoids confusing log output about powering on.
+    if not sim_only:
+        dev.set_power(on=True, duration_ms=0)
 
-    # --- Optional simulator window --------------------------------------------
+    # --- Optional simulator window (--sim or --sim-only) ----------------------
     sim = None
-    if getattr(args, "sim", False):
+    if getattr(args, "sim", False) or sim_only:
         from simulator import create_simulator
         poly_map: list[bool] = _build_polychrome_map(dev)
         zpb: int = getattr(args, "zpb", 1)
         sim = create_simulator(dev.zone_count or 1, effect_name,
                                polychrome_map=poly_map,
                                zones_per_bulb=zpb)
+        if sim is None and sim_only:
+            # No point continuing — sim-only has no other output channel.
+            _print(
+                "ERROR: --sim-only requires tkinter. "
+                "Install it (e.g. brew install python-tk) and retry.",
+                file=sys.stderr,
+            )
+            dev.close()
+            sys.exit(1)
 
     frame_cb = sim.update if sim is not None else None
 
@@ -668,10 +787,65 @@ def cmd_play(args: argparse.Namespace) -> None:
         stop_requested.wait()
 
     _print("\nStopping...")
-    ctrl.stop(fade_ms=DEFAULT_FADE_MS)
-    dev.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
+    # In sim-only mode dev is a _NullDevice; skip the fade and power-off
+    # so the intent is clear even though the no-ops would be harmless.
+    if sim_only:
+        ctrl.stop(fade_ms=0)
+    else:
+        ctrl.stop(fade_ms=DEFAULT_FADE_MS)
+        dev.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
     dev.close()
     _print("Done.")
+
+
+# ---------------------------------------------------------------------------
+# Layered effect help
+# ---------------------------------------------------------------------------
+
+def _print_effect_help(effect_name: str) -> None:
+    """Print parameters and usage for a single named effect then return.
+
+    Called when the user runs ``glowup.py play <effect> --help``.
+    Intentionally bypasses the quiet flag — help is always useful.
+
+    Args:
+        effect_name: The effect name as typed on the command line.
+    """
+    registry = get_registry()
+    if effect_name not in registry:
+        available: str = ", ".join(get_effect_names())
+        print(f"ERROR: Unknown effect '{effect_name}'.", file=sys.stderr)
+        print(f"Available effects: {available}", file=sys.stderr)
+        return
+
+    cls = registry[effect_name]
+    params = cls.get_param_defs()
+
+    print(f"\nEffect: {effect_name}")
+    print(f"  {cls.description}")
+
+    if params:
+        print("\nParameters:")
+        col: int = 20   # left-column width for the flag names
+        for pname, pdef in sorted(params.items()):
+            flag: str = f"--{pname}"
+            range_str: str = ""
+            if pdef.min is not None and pdef.max is not None:
+                range_str = f"  [{pdef.min}..{pdef.max}]"
+            elif pdef.choices:
+                range_str = f"  {pdef.choices}"
+            # First line: flag + description
+            print(f"  {flag:<{col}}  {pdef.description}")
+            # Second line: default + range, indented to align
+            print(f"  {'':>{col}}  default: {pdef.default}{range_str}")
+
+    print(f"\nUsage:")
+    print(f"  python3 glowup.py play {effect_name} --ip <device-ip> [parameters]")
+    print(f"  python3 glowup.py play {effect_name} "
+          f"--config <file> --group <name> [parameters]")
+    print(f"  python3 glowup.py play {effect_name} "
+          f"--ip <device-ip> --sim-only [parameters]")
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -751,9 +925,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # -- play ------------------------------------------------------------------
-    p_play = sub.add_parser("play", help="Run an effect on a device")
+    p_play = sub.add_parser(
+        "play",
+        help="Run an effect on a device",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Effect-specific parameters are hidden from this view.\n"
+            "To see all parameters for a specific effect:\n\n"
+            "  python3 glowup.py play <effect> --help\n\n"
+            "Example:\n"
+            "  python3 glowup.py play fireworks --help\n\n"
+            "To list all available effects:\n\n"
+            "  python3 glowup.py effects"
+        ),
+    )
     p_play.add_argument(
-        "effect", help="Effect name (use 'effects' command to list)",
+        "effect", help="Effect name (run 'effects' to list, or 'play <effect> --help')",
     )
     p_play.add_argument(
         "--ip", default=None,
@@ -776,14 +963,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Open a live simulator window showing the effect",
     )
     p_play.add_argument(
+        "--sim-only", dest="sim_only", action="store_true", default=False,
+        help=(
+            "Query device geometry then show the effect in the simulator "
+            "only — no color or power commands are sent to the lights"
+        ),
+    )
+    p_play.add_argument(
         "--zpb", type=int, default=1,
         help="Zones per bulb for the simulator display "
              "(3 for LIFX string lights, default: 1)",
     )
 
     # Auto-add every effect's Param declarations as CLI flags.
-    # A ``seen`` set prevents duplicate flags when multiple effects
-    # share a parameter name (e.g. "speed").
+    # Help text is suppressed here — users run "play <effect> --help"
+    # for the per-effect page.  A ``seen`` set prevents duplicate flags
+    # when multiple effects share a parameter name (e.g. "speed").
     seen: set = set()
     for _effect_name, effect_cls in get_registry().items():
         for pname, pdef in effect_cls.get_param_defs().items():
@@ -793,7 +988,7 @@ def build_parser() -> argparse.ArgumentParser:
 
             kwargs: Dict[str, Any] = {
                 "default": None,
-                "help": f"{pdef.description} (default: {pdef.default})",
+                "help": argparse.SUPPRESS,  # shown via "play <effect> --help"
             }
 
             # Infer argparse type from the Param's default value type
@@ -807,7 +1002,11 @@ def build_parser() -> argparse.ArgumentParser:
             if pdef.choices:
                 kwargs["choices"] = pdef.choices
 
-            p_play.add_argument(f"--{pname}", **kwargs)
+            p_play.add_argument(
+                f"--{pname.replace('_', '-')}",
+                dest=pname,
+                **kwargs,
+            )
 
     return parser
 
@@ -819,11 +1018,30 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     """Parse arguments and dispatch to the appropriate subcommand handler.
 
+    Help is layered:
+
+    * ``glowup.py --help``               — top-level command list.
+    * ``glowup.py play --help``          — play options (effect params hidden).
+    * ``glowup.py play <effect> --help`` — full parameter reference for one effect.
+
     If no subcommand is given, prints help and exits cleanly.
     Prints a copyright/license banner on startup unless ``-q``/``--quiet``
     is given.
     """
     global _quiet
+
+    # --- Intercept "play <effect> --help" before argparse consumes -h ---------
+    # sys.argv[1] == "play", sys.argv[2] is a non-flag token (the effect name),
+    # and -h or --help appears anywhere in the remaining arguments.
+    argv = sys.argv[1:]
+    if (
+        len(argv) >= 2
+        and argv[0] == "play"
+        and not argv[1].startswith("-")
+        and ("-h" in argv or "--help" in argv)
+    ):
+        _print_effect_help(argv[1])
+        sys.exit(0)
 
     parser: argparse.ArgumentParser = build_parser()
     args: argparse.Namespace = parser.parse_args()
