@@ -12,7 +12,7 @@ integration are performed by Perry Kivolowitz, the sole Human Author.
 
 - **Discovery** — finds all LIFX devices on your LAN via UDP broadcast
 - **Effects** — ships with 9 effects: aurora borealis, binary clock, fireworks, waving flag (199 countries), Larson scanner, Morse code, twinkling lights, standing wave, and color breathe
-- **Virtual multizone** — group any combination of devices into a single animation surface. A 108-zone string light and 4 single bulbs become a 112-zone strip. Effects animate across all devices as one.
+- **Virtual multizone** — group any combination of devices into a single animation surface. A 108-zone string light and 4 single bulbs become a 112-zone strip. Effects animate across all devices as one. LIFX limits a physical chain to 3 string lights; virtual multizone removes that ceiling — any number of independent strings can be combined.
 - **Identify** — pulse a bulb's brightness to figure out which physical lamp corresponds to which IP address
 - **Monochrome support** — color effects on white-only bulbs are automatically converted to perceptually correct brightness using BT.709 luma coefficients
 - **Scheduler** — daemon that runs effects on a timed schedule using symbolic times (sunrise, sunset, dawn, dusk) with offsets, supporting multiple independent device groups

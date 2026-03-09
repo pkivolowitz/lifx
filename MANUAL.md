@@ -73,6 +73,14 @@ them as one device.  Effects don't need any changes — they already
 render per-zone colors, and the virtual device routes each color back
 to the correct physical device, batching multizone updates efficiently.
 
+LIFX limits a single physical chain to 3 string lights (36 bulbs,
+108 zones — 12 bulbs × 3 zones × 3 strings).  The virtual multizone
+feature removes that ceiling entirely.  Each chain is an independent
+network device with its own IP address; the engine stitches them
+together in software.  Five separate 3-string chains scattered around
+a room become a single 180-bulb, 540-zone animation surface with no
+hardware modifications.
+
 Effects are **pure renderers** — they know nothing about devices or
 networking. Given a timestamp and a zone count, they return a list of
 colors. The engine handles framing, timing, and transport.
