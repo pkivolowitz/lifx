@@ -1187,28 +1187,6 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(404, {"error": f"Device not found: {ip}"})
             return
 
-        # Try to read colors from the engine's frame buffer first (zero
-        # UDP overhead, no socket contention with the animation loop).
-        # Fall back to a dedicated read-only LifxDevice only when no
-        # controller is running for this device.
-        ctrl: Optional[Controller] = self.device_manager.get_controller(ip)
-        use_engine: bool = ctrl is not None
-
-        tmp: Optional[LifxDevice] = None
-        if not use_engine:
-            # No controller — create a temporary device for direct queries.
-            tmp = LifxDevice(ip)
-            try:
-                tmp.query_version()
-                if tmp.is_multizone:
-                    tmp.query_zone_count()
-                else:
-                    tmp.zone_count = 1
-            except Exception:
-                tmp.close()
-                self._send_json(503, {"error": "Could not connect to device"})
-                return
-
         self._send_sse_headers()
 
         # Send an initial padding comment to flush Cloudflare's response
@@ -1219,46 +1197,33 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(padding.encode("utf-8"))
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
-            if tmp is not None:
-                tmp.close()
             return
 
         try:
             while True:
-                colors: Optional[list[tuple[int, int, int, int]]] = None
-
-                # Prefer the engine's in-memory frame buffer — zero UDP.
-                ctrl = self.device_manager.get_controller(ip)
+                # Read colors from the engine's in-memory frame buffer.
+                # Zero UDP overhead, zero socket contention.  When no
+                # effect is running the frame is None and we skip the
+                # event — the app shows "Connecting..." which is accurate.
+                ctrl: Optional[Controller] = self.device_manager.get_controller(ip)
                 if ctrl is not None:
                     colors = ctrl.get_last_frame()
-
-                # Fallback: direct device query (only when no effect running).
-                if colors is None and tmp is not None:
-                    if tmp.is_multizone:
-                        colors = tmp.query_zone_colors()
-                    else:
-                        state = tmp.query_light_state()
-                        if state is not None:
-                            h, s, b, k, _power = state
-                            colors = [(h, s, b, k)]
-
-                if colors is not None:
-                    payload: str = json.dumps({
-                        "zones": [
-                            {"h": h, "s": s, "b": b, "k": k}
-                            for h, s, b, k in colors
-                        ],
-                    })
-                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
-                    self.wfile.flush()
+                    if colors is not None:
+                        payload: str = json.dumps({
+                            "zones": [
+                                {"h": h, "s": s, "b": b, "k": k}
+                                for h, s, b, k in colors
+                            ],
+                        })
+                        self.wfile.write(
+                            f"data: {payload}\n\n".encode("utf-8"),
+                        )
+                        self.wfile.flush()
 
                 time_mod.sleep(SSE_POLL_INTERVAL)
         except (BrokenPipeError, ConnectionResetError, OSError):
             # Client disconnected — clean exit.
             pass
-        finally:
-            if tmp is not None:
-                tmp.close()
 
     # -- POST handlers ------------------------------------------------------
 
