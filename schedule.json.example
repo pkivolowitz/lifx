@@ -47,6 +47,7 @@
         },
         {
             "name": "porch morning welcome",
+            "days": "MTWRF",
             "group": "porch",
             "start": "sunrise-30m",
             "stop": "sunrise+30m",
@@ -58,6 +59,7 @@
         },
         {
             "name": "living room evening",
+            "days": "SU",
             "group": "living-room",
             "start": "sunset",
             "stop": "23:30",

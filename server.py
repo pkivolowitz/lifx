@@ -45,7 +45,7 @@ Usage::
 
 from __future__ import annotations
 
-__version__ = "1.2"
+__version__ = "1.3"
 
 import hmac
 import http.server
@@ -149,6 +149,15 @@ IDENTIFY_FRAME_INTERVAL: float = 0.05
 
 # Minimum brightness fraction during identify pulse (5%).
 IDENTIFY_MIN_BRI: float = 0.05
+
+# Day-of-week letter to weekday index (Monday=0 .. Sunday=6).
+# Matches Python's date.weekday() convention.
+DAY_LETTER_TO_WEEKDAY: dict[str, int] = {
+    "M": 0, "T": 1, "W": 2, "R": 3, "F": 4, "S": 5, "U": 6,
+}
+
+# All valid day letters (for validation).
+VALID_DAY_LETTERS: str = "MTWRFSU"
 
 
 # ---------------------------------------------------------------------------
@@ -857,6 +866,74 @@ def _parse_time_spec(
     return base_time
 
 
+def _entry_runs_on_day(spec: dict[str, Any], d: date) -> bool:
+    """Check whether a schedule entry runs on a given calendar date.
+
+    If the ``days`` key is absent or empty, the entry runs every day.
+    Otherwise it must be a string of day letters from ``MTWRFSU``
+    (Monday through Sunday, academic convention).
+
+    Args:
+        spec: Schedule entry dict (may contain a ``days`` key).
+        d:    Calendar date to check.
+
+    Returns:
+        ``True`` if the entry should run on date *d*.
+    """
+    days_str: str = spec.get("days", "")
+    if not days_str:
+        return True
+    # Convert the date's weekday (0=Mon .. 6=Sun) to our letter set.
+    weekday: int = d.weekday()
+    for letter, idx in DAY_LETTER_TO_WEEKDAY.items():
+        if idx == weekday:
+            return letter in days_str.upper()
+    return False
+
+
+def _validate_days(days_str: str) -> bool:
+    """Validate a day-of-week string.
+
+    Args:
+        days_str: String of day letters (e.g. ``"MTWRF"``).
+
+    Returns:
+        ``True`` if all characters are valid day letters with no repeats.
+    """
+    upper: str = days_str.upper()
+    return (
+        all(ch in VALID_DAY_LETTERS for ch in upper)
+        and len(upper) == len(set(upper))
+    )
+
+
+def _days_display(days_str: str) -> str:
+    """Format a days string for human display.
+
+    Returns smart labels for common patterns, otherwise the
+    letter string itself.
+
+    Args:
+        days_str: Day letter string (e.g. ``"MTWRF"``).
+
+    Returns:
+        A display string like ``"Weekdays"``, ``"Weekends"``, ``"Daily"``,
+        or the sorted letter string.
+    """
+    if not days_str:
+        return "Daily"
+    upper: str = days_str.upper()
+    # Sort into canonical order.
+    canonical: str = "".join(ch for ch in VALID_DAY_LETTERS if ch in upper)
+    if canonical == VALID_DAY_LETTERS:
+        return "Daily"
+    if canonical == "MTWRF":
+        return "Weekdays"
+    if canonical == "SU":
+        return "Weekends"
+    return canonical
+
+
 def _resolve_entries(
     specs: list[dict[str, Any]],
     lat: float,
@@ -883,6 +960,10 @@ def _resolve_entries(
 
     for spec in specs:
         if group_filter is not None and spec.get("group") != group_filter:
+            continue
+
+        # Day-of-week filter: skip entries that don't run on this date.
+        if not _entry_runs_on_day(spec, d):
             continue
 
         start: Optional[datetime] = _parse_time_spec(
@@ -1789,6 +1870,12 @@ def _load_config(config_path: str) -> dict[str, Any]:
                     f"Schedule entry '{label}' references unknown group "
                     f"'{entry['group']}'"
                 )
+            days: str = entry.get("days", "")
+            if days and not _validate_days(days):
+                raise ValueError(
+                    f"Schedule entry '{label}' has invalid 'days' value "
+                    f"'{days}' — use letters from MTWRFSU (no repeats)"
+                )
 
     return config
 
@@ -1907,13 +1994,17 @@ def _dry_run(config: dict[str, Any]) -> None:
                 if stop.date() != start.date()
                 else stop.strftime("%H:%M")
             )
+            days_str: str = ""
+            days_raw: str = spec.get("days", "")
+            if days_raw:
+                days_str = f"  ({_days_display(days_raw)})"
             params_str: str = ""
             if spec.get("params"):
                 params_str = f"  params: {spec['params']}"
             print(
                 f"  {spec.get('name', '?'):20s}  "
                 f"{start.strftime('%H:%M')} -> {stop_str}  "
-                f"[{spec['effect']}]{params_str}{status}"
+                f"[{spec['effect']}]{days_str}{params_str}{status}"
             )
         print()
 

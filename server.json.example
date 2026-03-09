@@ -49,6 +49,7 @@
         },
         {
             "name": "living room evening",
+            "days": "MTWRF",
             "group": "living-room",
             "start": "sunset",
             "stop": "23:30",
