@@ -81,6 +81,9 @@ SSE_POLL_INTERVAL: float = 1.0 / SSE_POLL_HZ
 # Device discovery timeout (seconds).
 DISCOVERY_TIMEOUT: float = 5.0
 
+# Number of broadcast discovery attempts before falling back to direct IPs.
+DISCOVERY_RETRIES: int = 3
+
 # Maximum allowed size of an HTTP request body (bytes).
 MAX_REQUEST_BODY: int = 65536
 
@@ -172,26 +175,43 @@ class DeviceManager:
         Returns:
             A list of JSON-serializable device info dicts.
         """
-        new_devices: list[LifxDevice] = discover_devices(
-            timeout=DISCOVERY_TIMEOUT,
-        )
+        # Try broadcast discovery with retries.  Mesh routers and
+        # congested networks often need multiple attempts.
+        new_devices: list[LifxDevice] = []
+        for attempt in range(1, DISCOVERY_RETRIES + 1):
+            new_devices = discover_devices(timeout=DISCOVERY_TIMEOUT)
+            if new_devices:
+                break
+            if attempt < DISCOVERY_RETRIES:
+                logging.info(
+                    "Broadcast discovery attempt %d/%d found 0 devices, retrying...",
+                    attempt, DISCOVERY_RETRIES,
+                )
 
-        # Fallback: if broadcast found nothing and we have known IPs
-        # from the config groups, query each IP directly.
-        if not new_devices and self._known_ips:
-            logging.info(
-                "Broadcast discovery found 0 devices, trying %d known IP(s)...",
-                len(self._known_ips),
-            )
-            for ip in self._known_ips:
-                try:
-                    found: list[LifxDevice] = discover_devices(
-                        timeout=DISCOVERY_TIMEOUT,
-                        target_ip=ip,
-                    )
-                    new_devices.extend(found)
-                except Exception as exc:
-                    logging.warning("Direct discovery %s failed: %s", ip, exc)
+        # Supplement with direct per-IP queries for any known IPs not
+        # already found.  This ensures devices hidden by mesh routers
+        # are always reachable when their IPs are in the config.
+        if self._known_ips:
+            found_ips: set[str] = {d.ip for d in new_devices}
+            missing_ips: list[str] = [
+                ip for ip in self._known_ips if ip not in found_ips
+            ]
+            if missing_ips:
+                logging.info(
+                    "Querying %d known IP(s) not found by broadcast...",
+                    len(missing_ips),
+                )
+                for ip in missing_ips:
+                    try:
+                        found: list[LifxDevice] = discover_devices(
+                            timeout=DISCOVERY_TIMEOUT,
+                            target_ip=ip,
+                        )
+                        new_devices.extend(found)
+                    except Exception as exc:
+                        logging.warning(
+                            "Direct discovery %s failed: %s", ip, exc,
+                        )
         new_map: dict[str, LifxDevice] = {d.ip: d for d in new_devices}
 
         with self._lock:
