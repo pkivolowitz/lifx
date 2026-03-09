@@ -106,13 +106,21 @@ struct DeviceDetailView: View {
                     Label("Change Effect", systemImage: "wand.and.stars")
                 }
 
+                // Restart button — replay the current/last effect.
+                Button {
+                    Task { await restartEffect() }
+                } label: {
+                    Label("Restart Effect", systemImage: "play.circle")
+                }
+                .disabled(status?.effect == nil)
+
                 // Stop button.
                 Button(role: .destructive) {
                     Task { await stopEffect() }
                 } label: {
                     Label("Stop Effect", systemImage: "stop.circle")
                 }
-                .disabled(status?.effect == nil)
+                .disabled(status?.effect == nil || !(status?.running ?? false))
 
                 // Power toggle.
                 Button {
@@ -165,6 +173,34 @@ struct DeviceDetailView: View {
         isLoading = true
         do {
             status = try await apiClient.stop(ip: device.ip)
+            // Clear the color strip — no effect means no live colors.
+            colorStream.zones = []
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+
+    /// Replay the last effect that was running.
+    private func restartEffect() async {
+        guard let effectName = status?.effect else { return }
+        isLoading = true
+        do {
+            // Rebuild params dict from status.
+            var params: [String: Any] = [:]
+            for (key, value) in status?.params ?? [:] {
+                switch value {
+                case .int(let v): params[key] = v
+                case .double(let v): params[key] = v
+                case .string(let v): params[key] = v
+                case .null: break
+                }
+            }
+            status = try await apiClient.play(
+                ip: device.ip,
+                effectName: effectName,
+                params: params
+            )
         } catch {
             errorMessage = error.localizedDescription
         }

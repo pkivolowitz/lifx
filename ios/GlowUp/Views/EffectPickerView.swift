@@ -20,6 +20,9 @@ struct EffectPickerView: View {
     /// Available effects fetched from the server.
     @State private var effects: [Effect] = []
 
+    /// Name of the currently running effect (if any).
+    @State private var currentEffect: String?
+
     /// Error message for display.
     @State private var errorMessage: String?
 
@@ -31,22 +34,31 @@ struct EffectPickerView: View {
             NavigationLink {
                 EffectConfigView(device: device, effect: effect)
             } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(effect.name)
-                        .font(.headline)
-                    if !effect.description.isEmpty {
-                        Text(effect.description)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(effect.name)
+                            .font(.headline)
+                        if !effect.description.isEmpty {
+                            Text(effect.description)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        // Show parameter count as a hint.
+                        let paramCount = effect.params.count
+                        if paramCount > 0 {
+                            Text(
+                                "\(paramCount) parameter\(paramCount == 1 ? "" : "s")"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        }
                     }
-                    // Show parameter count as a hint.
-                    let paramCount = effect.params.count
-                    if paramCount > 0 {
-                        Text(
-                            "\(paramCount) parameter\(paramCount == 1 ? "" : "s")"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                    Spacer()
+                    // Indicate the currently running effect.
+                    if effect.name == currentEffect {
+                        Image(systemName: "speaker.wave.2.fill")
+                            .foregroundStyle(.green)
+                            .font(.subheadline)
                     }
                 }
                 .padding(.vertical, 2)
@@ -71,11 +83,16 @@ struct EffectPickerView: View {
         }
     }
 
-    /// Fetch the effect list from the server.
+    /// Fetch the effect list and current device status from the server.
     private func loadEffects() async {
         isLoading = true
         do {
             effects = try await apiClient.fetchEffects()
+            // Fetch device status to highlight the running effect.
+            let status = try await apiClient.fetchStatus(ip: device.ip)
+            if status.running {
+                currentEffect = status.effect
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
