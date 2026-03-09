@@ -17,7 +17,7 @@ Usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "2.0"
+__version__ = "2.1"
 
 import argparse
 import json
@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
+from effects import get_registry
 from solar import SunTimes, sun_times
 
 # ---------------------------------------------------------------------------
@@ -295,6 +296,10 @@ def _build_command(
 ) -> list[str]:
     """Build the subprocess command list for running an effect on one device.
 
+    Validates that the effect name is registered and that all parameter
+    keys are declared by the effect's ``Param`` definitions, preventing
+    injection of arbitrary CLI flags.
+
     Args:
         spec:        Schedule entry dict with ``effect`` and ``params`` keys.
         ip:          Target device IP or hostname.
@@ -302,12 +307,34 @@ def _build_command(
 
     Returns:
         A list of strings suitable for :func:`subprocess.Popen`.
+
+    Raises:
+        ValueError: If the effect name is unknown or a parameter key
+                    is not declared by the effect.
     """
+    effect_name: str = spec["effect"]
+
+    # Validate effect name against the registry.
+    registry: dict[str, Any] = get_registry()
+    if effect_name not in registry:
+        raise ValueError(f"Unknown effect: {effect_name!r}")
+
+    # Validate parameter keys against the effect's declared Params.
+    effect_cls = registry[effect_name]
+    declared_params: set[str] = {
+        name for name, attr in vars(effect_cls).items()
+        if hasattr(attr, "default") and hasattr(attr, "validate")
+    }
+
     cmd: list[str] = [
-        sys.executable, main_script, "play", spec["effect"], "--ip", ip,
+        sys.executable, main_script, "play", effect_name, "--ip", ip,
     ]
 
     for key, value in spec.get("params", {}).items():
+        if key not in declared_params:
+            raise ValueError(
+                f"Effect {effect_name!r} has no parameter {key!r}"
+            )
         # Convert param names from config (underscores) to CLI flags (hyphens).
         flag: str = f"--{key.replace('_', '-')}"
         cmd.extend([flag, str(value)])
@@ -372,7 +399,12 @@ def _start_group(
         logging.info(
             "Starting '%s' on %s: %s", entry_name, ip, " ".join(cmd),
         )
-        proc: subprocess.Popen = subprocess.Popen(cmd)
+        proc: subprocess.Popen = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         state.procs.append(proc)
 
     state.current_entry_name = entry_name
@@ -405,7 +437,12 @@ def _restart_dead_procs(
                 entry_name, ip, proc.returncode,
             )
             cmd: list[str] = _build_command(spec, ip, main_script)
-            state.procs[i] = subprocess.Popen(cmd)
+            state.procs[i] = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
 
 # ---------------------------------------------------------------------------
