@@ -25,14 +25,9 @@ struct ColorStripView: View {
     var body: some View {
         GeometryReader { geometry in
             if zones.isEmpty {
-                // No data — show a placeholder.
+                // No data — show a black strip.
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(Color.gray.opacity(0.2))
-                    .overlay(
-                        Text("No color data")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    )
+                    .fill(Color.black)
             } else {
                 // Render each zone as a colored rectangle slice.
                 HStack(spacing: 0) {

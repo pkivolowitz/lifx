@@ -97,6 +97,20 @@ struct SettingsView: View {
                 Section {
                     LabeledContent("App Version", value: "1.0")
                     LabeledContent("Server Port", value: "8420")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("GlowUp")
+                            .font(.headline)
+                        Text("A modular effect engine for LIFX devices. Replaces the battery-draining phone app with a daemon that runs animated effects autonomously from a Raspberry Pi or Mac.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Copyright (c) 2026 Perry Kivolowitz")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        Text("Licensed under the MIT License")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.vertical, 4)
                 } header: {
                     Text("About")
                 }
