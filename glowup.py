@@ -16,7 +16,7 @@ declarations.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.5"
+__version__ = "1.6"
 
 import argparse
 import json
@@ -35,7 +35,7 @@ from effects import get_registry, get_effect_names, HSBK_MAX, KELVIN_DEFAULT
 # Named constants -- no magic numbers
 # ---------------------------------------------------------------------------
 
-DEFAULT_DISCOVERY_TIMEOUT: float = 3.0
+DEFAULT_DISCOVERY_TIMEOUT: float = 5.0
 """Seconds to wait for LIFX UDP discovery responses."""
 
 DEFAULT_FPS: int = 20

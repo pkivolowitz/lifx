@@ -14,7 +14,7 @@ Typical usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.2"
+__version__ = "1.3"
 
 import fcntl
 import math
@@ -51,6 +51,8 @@ SOURCE_ID_MAX: int = (1 << 32) - 1
 SOCKET_TIMEOUT: float = 2.0    # Default recv timeout for device sockets (seconds)
 DISCOVERY_INTERVAL: float = 0.5 # Seconds between broadcast discovery packets
 DISCOVERY_RECV_TIMEOUT: float = 0.3  # Recv timeout during discovery (seconds)
+DISCOVERY_WAKE_BURSTS: int = 3       # Rapid GetService packets before main loop
+DISCOVERY_WAKE_DELAY: float = 0.1    # Seconds between wake burst packets
 MAX_UDP_PAYLOAD: int = 1500     # Standard MTU-safe UDP receive buffer
 
 # Label / group payload sizes (from LIFX protocol spec)
@@ -892,6 +894,13 @@ def discover_devices(
 
     # Build a single broadcast GetService packet (reused for all sends)
     msg = _build_header(MSG_GET_SERVICE, 0, source_id, tagged=True, res=True)
+
+    # Wake burst: rapid-fire a few GetService packets to prod sleeping bulbs
+    # before the main discovery loop.  This helps on mesh routers (e.g.
+    # TP-Link Deco) that delay or filter initial broadcast forwarding.
+    for _ in range(DISCOVERY_WAKE_BURSTS):
+        sock.sendto(msg, (broadcast_addr, LIFX_PORT))
+        time.sleep(DISCOVERY_WAKE_DELAY)
 
     found: dict[str, tuple[str, bytes]] = {}  # mac_str -> (ip, mac_bytes)
     deadline = time.time() + timeout
