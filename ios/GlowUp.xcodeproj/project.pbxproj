@@ -25,6 +25,7 @@
 		A10016 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10016 /* Assets.xcassets */; };
 		A10017 /* ScheduleEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10017 /* ScheduleEntry.swift */; };
 		A10018 /* ScheduleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10018 /* ScheduleView.swift */; };
+		A10019 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10019 /* LoginView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -46,6 +47,7 @@
 		B10016 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B10017 /* ScheduleEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleEntry.swift; sourceTree = "<group>"; };
 		B10018 /* ScheduleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleView.swift; sourceTree = "<group>"; };
+		B10019 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		C10001 /* GlowUp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GlowUp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -113,6 +115,7 @@
 				B10014 /* EffectConfigView.swift */,
 				B10015 /* SettingsView.swift */,
 				B10018 /* ScheduleView.swift */,
+				B10019 /* LoginView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -219,6 +222,7 @@
 				A10015 /* SettingsView.swift in Sources */,
 				A10017 /* ScheduleEntry.swift in Sources */,
 				A10018 /* ScheduleView.swift in Sources */,
+				A10019 /* LoginView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

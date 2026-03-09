@@ -23,40 +23,18 @@ struct GlowUpApp: App {
     }
 }
 
-/// Root content view — shows Settings if not configured, otherwise
-/// the main device list.
+/// Root content view — shows the login screen until the user
+/// authenticates, then the main device list.
 struct ContentView: View {
     @EnvironmentObject var apiClient: APIClient
 
-    /// Controls presentation of the settings sheet.
-    @State private var showSettings: Bool = false
-
     var body: some View {
         Group {
-            if apiClient.isConfigured {
+            if apiClient.isAuthenticated {
                 DeviceListView()
             } else {
-                // First launch: show settings immediately.
-                VStack(spacing: 20) {
-                    Image(systemName: "lightbulb.led.wide")
-                        .font(.system(size: 60))
-                        .foregroundStyle(.orange)
-                    Text("Welcome to GlowUp")
-                        .font(.title)
-                        .fontWeight(.bold)
-                    Text("Configure your server connection to get started.")
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    Button("Configure Server") {
-                        showSettings = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
+                LoginView()
             }
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsView()
         }
     }
 }

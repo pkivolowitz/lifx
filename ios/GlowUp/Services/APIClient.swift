@@ -31,6 +31,13 @@ class APIClient: ObservableObject {
         !serverURL.isEmpty && !token.isEmpty
     }
 
+    /// Whether the user has authenticated this session.
+    ///
+    /// Starts ``false`` on every app launch so the login screen is
+    /// always presented first.  Set to ``true`` after a successful
+    /// connection test.
+    @Published var isAuthenticated: Bool = false
+
     /// Shared URL session for all API requests.
     private let session: URLSession
 

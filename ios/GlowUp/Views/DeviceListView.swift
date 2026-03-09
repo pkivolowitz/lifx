@@ -69,8 +69,17 @@ struct DeviceListView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        showSettings = true
+                    Menu {
+                        Button {
+                            showSettings = true
+                        } label: {
+                            Label("Settings", systemImage: "gear")
+                        }
+                        Button(role: .destructive) {
+                            apiClient.isAuthenticated = false
+                        } label: {
+                            Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
                     } label: {
                         Image(systemName: "gear")
                     }
