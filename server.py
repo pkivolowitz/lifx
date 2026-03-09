@@ -139,8 +139,14 @@ class DeviceManager:
         controllers: Dict mapping device IP to :class:`Controller`.
     """
 
-    def __init__(self) -> None:
-        """Initialize with empty device and controller maps."""
+    def __init__(self, known_ips: Optional[list[str]] = None) -> None:
+        """Initialize with empty device and controller maps.
+
+        Args:
+            known_ips: Optional list of device IPs from config groups.
+                       Used as fallback when broadcast discovery fails
+                       (e.g. mesh routers that block broadcast).
+        """
         self._devices: dict[str, LifxDevice] = {}
         self._controllers: dict[str, Controller] = {}
         self._lock: threading.Lock = threading.Lock()
@@ -148,9 +154,16 @@ class DeviceManager:
         # that was active when the phone took over.  The scheduler clears
         # the override when the active entry changes from this value.
         self._overrides: dict[str, Optional[str]] = {}
+        # Known IPs from config groups for fallback direct discovery.
+        self._known_ips: list[str] = known_ips or []
 
     def discover(self) -> list[dict[str, Any]]:
         """Run LIFX discovery and cache results.
+
+        First attempts broadcast discovery.  If that finds no devices
+        and known IPs are configured (from config groups), falls back
+        to direct per-IP queries — necessary on networks where mesh
+        routers block UDP broadcast between nodes.
 
         Existing controllers are preserved if their device is still
         present.  Devices that disappear have their controllers stopped
@@ -162,6 +175,23 @@ class DeviceManager:
         new_devices: list[LifxDevice] = discover_devices(
             timeout=DISCOVERY_TIMEOUT,
         )
+
+        # Fallback: if broadcast found nothing and we have known IPs
+        # from the config groups, query each IP directly.
+        if not new_devices and self._known_ips:
+            logging.info(
+                "Broadcast discovery found 0 devices, trying %d known IP(s)...",
+                len(self._known_ips),
+            )
+            for ip in self._known_ips:
+                try:
+                    found: list[LifxDevice] = discover_devices(
+                        timeout=DISCOVERY_TIMEOUT,
+                        target_ip=ip,
+                    )
+                    new_devices.extend(found)
+                except Exception as exc:
+                    logging.warning("Direct discovery %s failed: %s", ip, exc)
         new_map: dict[str, LifxDevice] = {d.ip: d for d in new_devices}
 
         with self._lock:
@@ -1553,7 +1583,12 @@ def main() -> None:
         sys.exit(0)
 
     # -- Device discovery ---------------------------------------------------
-    dm: DeviceManager = DeviceManager()
+    # Collect all unique IPs from config groups for fallback discovery.
+    groups: dict[str, list[str]] = config.get("groups", {})
+    known_ips: list[str] = sorted(
+        {ip for ips in groups.values() for ip in ips}
+    )
+    dm: DeviceManager = DeviceManager(known_ips=known_ips)
     logging.info("Discovering LIFX devices...")
     devices: list[dict[str, Any]] = dm.discover()
     logging.info("Found %d device(s)", len(devices))
@@ -1587,13 +1622,26 @@ def main() -> None:
     )
 
     # Graceful shutdown on SIGINT / SIGTERM.
+    # server.shutdown() must be called from a different thread than
+    # serve_forever() to avoid deadlock, so the signal handler sets
+    # an event and a watcher thread performs the actual shutdown.
     shutdown_event: threading.Event = threading.Event()
 
     def _handle_signal(signum: int, frame: Any) -> None:
-        """Signal handler for graceful shutdown."""
-        logging.info("Received signal %d, shutting down...", signum)
-        shutdown_event.set()
+        """Signal handler — just sets the event, avoids deadlock."""
+        if not shutdown_event.is_set():
+            logging.info("Received signal %d, shutting down...", signum)
+            shutdown_event.set()
+
+    def _shutdown_watcher() -> None:
+        """Background thread that waits for shutdown signal."""
+        shutdown_event.wait()
         server.shutdown()
+
+    watcher: threading.Thread = threading.Thread(
+        target=_shutdown_watcher, daemon=True,
+    )
+    watcher.start()
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
