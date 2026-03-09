@@ -34,7 +34,10 @@ from __future__ import annotations
 
 __version__: str = "1.1"
 
+import os
+import platform
 import queue
+import subprocess
 import time
 from typing import Optional
 
@@ -303,6 +306,28 @@ if _TK_AVAILABLE:
             self._root.title(SIM_WINDOW_TITLE)
             self._root.configure(bg=SIM_BG_COLOR)
             self._root.resizable(False, False)
+
+            # Raise window to front.  macOS ignores lift()/topmost for
+            # non-activated apps, so we use osascript to ask System Events
+            # to activate our process.  On first run, macOS will prompt
+            # for Accessibility permission — this is normal and required
+            # for any app that brings another process's window to front.
+            # The permission is granted once and remembered.
+            if platform.system() == "Darwin":
+                subprocess.Popen(
+                    ["osascript", "-e",
+                     "tell application \"System Events\" to set "
+                     "frontmost of the first process whose unix id is "
+                     f"{os.getpid()} to true"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                self._root.lift()
+                self._root.attributes("-topmost", True)
+                self._root.after_idle(
+                    lambda: self._root.attributes("-topmost", False),
+                )
 
             self._canvas: tk.Canvas = tk.Canvas(
                 self._root,

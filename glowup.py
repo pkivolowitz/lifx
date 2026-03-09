@@ -6,6 +6,7 @@ Usage::
     python3 glowup.py discover                    # find all LIFX devices
     python3 glowup.py effects                     # list available effects
     python3 glowup.py identify --ip <device-ip>   # pulse a device to locate it
+    python3 glowup.py monitor --ip <device-ip>           # monitor device in real time
     python3 glowup.py play cylon --ip <device-ip>    # run an effect on one device
     python3 glowup.py play cylon --config conf.json --group office  # virtual multizone
 
@@ -16,7 +17,7 @@ declarations.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.6"
+__version__ = "1.7"
 
 import argparse
 import json
@@ -55,6 +56,15 @@ IDENTIFY_MIN_BRI: float = 0.05
 
 SIM_STOP_CHECK_MS: int = 100
 """Interval in milliseconds between stop-event checks in simulator mode."""
+
+DEFAULT_MONITOR_POLL_HZ: float = 4.0
+"""Default polling rate in Hz for monitor mode."""
+
+MIN_MONITOR_POLL_HZ: float = 0.5
+"""Minimum polling rate for monitor mode (once every 2 seconds)."""
+
+MAX_MONITOR_POLL_HZ: float = 20.0
+"""Maximum polling rate for monitor mode."""
 
 # Minimum column widths for the discovery table display.
 # These prevent columns from collapsing when device labels are short.
@@ -379,6 +389,110 @@ def cmd_identify(args: argparse.Namespace) -> None:
     _print("Done.")
 
 
+def cmd_monitor(args: argparse.Namespace) -> None:
+    """Monitor a LIFX device in real time by polling its zone colors.
+
+    Connects to a multizone device, repeatedly queries its current
+    zone colors, and displays them in a live simulator window.  This
+    lets you watch what the lights are actually doing — whether driven
+    by the scheduler, a phone app, or anything else on the network.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments.  Expected attributes: ``ip`` (str),
+        ``hz`` (float), ``zpb`` (int).
+    """
+    if not args.ip:
+        _print("ERROR: --ip is required for monitor command.", file=sys.stderr)
+        sys.exit(1)
+
+    # --- Connect to device ---------------------------------------------------
+    _print(f"Connecting to {args.ip}...", flush=True)
+    try:
+        dev: LifxDevice = LifxDevice(args.ip)
+    except ValueError as exc:
+        _print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+    dev.query_all()
+
+    if dev.product is None:
+        _print(f"ERROR: No response from {args.ip}.", file=sys.stderr)
+        dev.close()
+        sys.exit(1)
+
+    _print(f"  {dev.label or '?'} — {dev.product_name or '?'}", flush=True)
+
+    if not dev.is_multizone:
+        _print("ERROR: Monitor mode requires a multizone device.", file=sys.stderr)
+        dev.close()
+        sys.exit(1)
+
+    _print(f"  {dev.zone_count} zones", flush=True)
+
+    # --- Create simulator window ---------------------------------------------
+    from simulator import create_simulator
+
+    poly_map: list[bool] = _build_polychrome_map(dev)
+    zpb: int = getattr(args, "zpb", 1)
+    sim = create_simulator(
+        dev.zone_count or 1, f"Monitor: {dev.label or args.ip}",
+        polychrome_map=poly_map, zones_per_bulb=zpb,
+    )
+    if sim is None:
+        _print("ERROR: Monitor mode requires tkinter.", file=sys.stderr)
+        dev.close()
+        sys.exit(1)
+
+    poll_interval: float = 1.0 / args.hz
+    _print(f"\nMonitoring at {args.hz:.1f} Hz (every {poll_interval:.2f}s)")
+    _print("Press Ctrl+C or close the window to stop.\n")
+
+    # --- Polling thread -------------------------------------------------------
+    stop_requested: threading.Event = threading.Event()
+
+    def _poll_loop() -> None:
+        """Background thread that queries zone colors and pushes to simulator."""
+        while not stop_requested.is_set():
+            colors = dev.query_zone_colors()
+            if colors is not None:
+                sim.update(colors)
+            stop_requested.wait(timeout=poll_interval)
+
+    poll_thread: threading.Thread = threading.Thread(
+        target=_poll_loop, daemon=True,
+    )
+    poll_thread.start()
+
+    # --- Signal handling ------------------------------------------------------
+    def _handle_signal(sig: int, frame: Any) -> None:
+        """Signal handler that unblocks the main thread."""
+        stop_requested.set()
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    # tkinter must run on the main thread (macOS requirement).
+    sim._root.protocol("WM_DELETE_WINDOW", lambda: stop_requested.set())
+
+    def _check_stop() -> None:
+        """Poll the stop event from the tkinter event loop."""
+        if stop_requested.is_set():
+            sim.stop()
+        else:
+            sim._root.after(SIM_STOP_CHECK_MS, _check_stop)
+
+    sim._root.after(SIM_STOP_CHECK_MS, _check_stop)
+    sim.run()  # blocks on mainloop (main thread)
+
+    # --- Cleanup --------------------------------------------------------------
+    _print("\nStopping...")
+    stop_requested.set()
+    poll_thread.join(timeout=2.0)
+    dev.close()
+    _print("Done.")
+
+
 def _build_polychrome_map(dev: Any) -> list[bool]:
     """Build a per-zone list indicating color vs. monochrome capability.
 
@@ -617,6 +731,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target device IP address or hostname",
     )
 
+    # -- monitor ---------------------------------------------------------------
+    p_mon = sub.add_parser(
+        "monitor",
+        help="Monitor a multizone device in real time",
+    )
+    p_mon.add_argument(
+        "--ip", required=True,
+        help="Target device IP address or hostname",
+    )
+    p_mon.add_argument(
+        "--hz", type=float, default=DEFAULT_MONITOR_POLL_HZ,
+        help=f"Polling rate in Hz (default: {DEFAULT_MONITOR_POLL_HZ})",
+    )
+    p_mon.add_argument(
+        "--zpb", type=int, default=1,
+        help="Zones per bulb for the simulator display "
+             "(3 for LIFX string lights, default: 1)",
+    )
+
     # -- play ------------------------------------------------------------------
     p_play = sub.add_parser("play", help="Run an effect on a device")
     p_play.add_argument(
@@ -709,6 +842,7 @@ def main() -> None:
         "discover": cmd_discover,
         "effects": cmd_effects,
         "identify": cmd_identify,
+        "monitor": cmd_monitor,
         "play": cmd_play,
     }
 

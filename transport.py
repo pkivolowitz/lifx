@@ -706,6 +706,107 @@ class LifxDevice:
             self.zone_count = struct.unpack_from("<H", payload, 0)[0]
         return self.zone_count
 
+    def _flush_socket(self) -> None:
+        """Drain any stale packets from the socket receive buffer.
+
+        Sets a very short timeout to non-blocking-read until the
+        buffer is empty, then restores the original timeout.
+        """
+        original_timeout: Optional[float] = self.sock.gettimeout()
+        self.sock.settimeout(0.0)  # non-blocking
+        try:
+            while True:
+                self.sock.recvfrom(MAX_UDP_PAYLOAD)
+        except (BlockingIOError, OSError):
+            pass
+        self.sock.settimeout(original_timeout)
+
+    def query_zone_colors(
+        self,
+    ) -> Optional[list[tuple[int, int, int, int]]]:
+        """Query the current HSBK colors of all zones.
+
+        Sends a ``GetExtendedColorZones`` (511) message and collects
+        all ``StateExtendedColorZones`` (512) response packets.
+        Devices with more than 82 zones respond with multiple packets
+        (e.g. 108 zones → packet 1: zones 0-81, packet 2: zones 82-107).
+        This method stitches them together into a single list.
+
+        The response layout per packet is::
+
+            zones_count  (u16)  — total number of zones on the device
+            zone_index   (u16)  — first zone index in this packet
+            colors_count (u8)   — number of HSBK entries following
+            colors       (HSBK × colors_count)
+
+        Returns:
+            A list of ``(hue, saturation, brightness, kelvin)`` tuples,
+            one per zone, or ``None`` on failure.
+        """
+        # Flush stale responses left by previous queries.
+        self._flush_socket()
+
+        self._send(MSG_GET_EXTENDED_COLOR_ZONES, res=True)
+
+        # Collect responses until we have all zones or time out.
+        total_zones: Optional[int] = None
+        zone_data: dict[int, tuple[int, int, int, int]] = {}
+        deadline: float = time.time() + SOCKET_TIMEOUT
+
+        while time.time() < deadline:
+            try:
+                data, _ = self.sock.recvfrom(MAX_UDP_PAYLOAD)
+            except socket.timeout:
+                break
+
+            msg = _parse_message(data)
+            if not msg or msg["type"] != MSG_STATE_EXTENDED_COLOR_ZONES:
+                continue
+
+            payload: bytes = msg["payload"]  # type: ignore[assignment]
+            if len(payload) < ZONE_COUNT_PAYLOAD_MIN:
+                continue
+
+            zones_count: int = struct.unpack_from("<H", payload, 0)[0]
+            zone_index: int = struct.unpack_from("<H", payload, 2)[0]
+            colors_count: int = struct.unpack_from("<B", payload, 4)[0]
+
+            if total_zones is None:
+                total_zones = zones_count
+
+            # Parse HSBK entries from this packet.
+            colors_offset: int = 5
+            needed: int = colors_offset + colors_count * HSBK_SIZE
+            if len(payload) < needed:
+                continue
+
+            for i in range(colors_count):
+                idx: int = zone_index + i
+                if idx >= zones_count:
+                    break
+                offset: int = colors_offset + i * HSBK_SIZE
+                hue, sat, bri, kelvin = struct.unpack_from(
+                    HSBK_FMT, payload, offset,
+                )
+                zone_data[idx] = (hue, sat, bri, kelvin)
+
+            # Stop early if we have all zones.
+            if len(zone_data) >= zones_count:
+                break
+
+        if total_zones is None or not zone_data:
+            return None
+
+        # Update cached zone_count.
+        self.zone_count = total_zones
+
+        # Build ordered list, filling any gaps with black.
+        colors: list[tuple[int, int, int, int]] = []
+        for i in range(total_zones):
+            colors.append(zone_data.get(i, (0, 0, 0, 0)))
+
+        return colors
+
     def query_light_state(
         self,
     ) -> Optional[tuple[int, int, int, int, int]]:

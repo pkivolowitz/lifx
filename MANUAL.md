@@ -933,6 +933,48 @@ comfortably; a 200-zone virtual group will use narrower rectangles.
 Using `--zpb` reduces the rectangle count, producing wider, more
 readable bulbs.
 
+### Monitor Mode
+
+The `monitor` subcommand turns the simulator into a read-only live
+display of a real device's current zone colors.  Unlike `play --sim`
+(which shows what the engine is *sending*), `monitor` queries the
+device for its *actual* state — whatever is driving the lights (the
+scheduler on a Pi, the LIFX phone app, or any other controller).
+
+```bash
+# Monitor a string light at 4 Hz (default)
+python3 glowup.py monitor --ip 10.0.0.62 --zpb 3
+
+# Higher polling rate for smoother updates
+python3 glowup.py monitor --ip 10.0.0.62 --zpb 3 --hz 10
+```
+
+| Flag    | Default | Description                                      |
+|---------|---------|--------------------------------------------------|
+| `--ip`  | —       | Device IP address (required)                     |
+| `--hz`  | 4.0     | Polling rate in Hz (0.5–20.0)                    |
+| `--zpb` | 1       | Zones per bulb (3 for LIFX string lights)        |
+
+Monitor mode is completely passive — it only reads the device state
+and never sends color or power commands.  You can safely run it from
+any machine on the LAN while the scheduler drives the lights from
+another.
+
+### macOS Accessibility Permission
+
+On macOS, the simulator window uses `osascript` to ask System Events
+to bring the Python process to the foreground.  The first time you
+run any simulator mode (`--sim` or `monitor`), macOS will prompt you
+to grant **Accessibility** permission to your terminal application
+(Terminal, iTerm2, VS Code, etc.).  This is a standard macOS security
+gate for any program that activates another process's window.  The
+permission is granted once and remembered — subsequent launches will
+not prompt again.
+
+If you prefer not to grant the permission, simply dismiss the dialog.
+The simulator will still work; the window just won't automatically
+come to the front on launch.
+
 ---
 
 ## Engine and Controller API
