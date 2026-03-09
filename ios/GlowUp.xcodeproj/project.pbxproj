@@ -7,21 +7,22 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10001 /* GlowUpApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10001; };
-		A10002 /* Device.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10002; };
-		A10003 /* Effect.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10003; };
-		A10004 /* DeviceStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10004; };
-		A10005 /* ZoneColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10005; };
-		A10006 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10006; };
-		A10007 /* SSEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10007; };
-		A10008 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10008; };
-		A10009 /* HSBKColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10009; };
-		A10010 /* ColorStripView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10010; };
-		A10011 /* DeviceListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10011; };
-		A10012 /* DeviceDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10012; };
-		A10013 /* EffectPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10013; };
-		A10014 /* EffectConfigView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10014; };
-		A10015 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10015; };
+		A10001 /* GlowUpApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10001 /* GlowUpApp.swift */; };
+		A10002 /* Device.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10002 /* Device.swift */; };
+		A10003 /* Effect.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10003 /* Effect.swift */; };
+		A10004 /* DeviceStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10004 /* DeviceStatus.swift */; };
+		A10005 /* ZoneColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10005 /* ZoneColor.swift */; };
+		A10006 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10006 /* APIClient.swift */; };
+		A10007 /* SSEClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10007 /* SSEClient.swift */; };
+		A10008 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10008 /* KeychainHelper.swift */; };
+		A10009 /* HSBKColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10009 /* HSBKColor.swift */; };
+		A10010 /* ColorStripView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10010 /* ColorStripView.swift */; };
+		A10011 /* DeviceListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10011 /* DeviceListView.swift */; };
+		A10012 /* DeviceDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10012 /* DeviceDetailView.swift */; };
+		A10013 /* EffectPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10013 /* EffectPickerView.swift */; };
+		A10014 /* EffectConfigView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10014 /* EffectConfigView.swift */; };
+		A10015 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10015 /* SettingsView.swift */; };
+		A10016 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10016 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +41,7 @@
 		B10013 /* EffectPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectPickerView.swift; sourceTree = "<group>"; };
 		B10014 /* EffectConfigView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffectConfigView.swift; sourceTree = "<group>"; };
 		B10015 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		B10016 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C10001 /* GlowUp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GlowUp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -66,6 +68,7 @@
 			isa = PBXGroup;
 			children = (
 				B10001 /* GlowUpApp.swift */,
+				B10016 /* Assets.xcassets */,
 				E10003 /* Models */,
 				E10004 /* Services */,
 				E10005 /* Views */,
@@ -129,7 +132,7 @@
 /* Begin PBXNativeTarget section */
 		F10001 /* GlowUp */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = G10003;
+			buildConfigurationList = G10003 /* Build configuration list for PBXNativeTarget "GlowUp" */;
 			buildPhases = (
 				F10002 /* Sources */,
 				D10001 /* Frameworks */,
@@ -159,7 +162,7 @@
 					};
 				};
 			};
-			buildConfigurationList = G10001;
+			buildConfigurationList = G10001 /* Build configuration list for PBXProject "GlowUp" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -182,6 +185,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10016 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -280,7 +284,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = RQ4G8SN343;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = GlowUp;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -293,7 +297,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.glowup.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kivolowitz.glowup;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -307,7 +311,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = RQ4G8SN343;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = GlowUp;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -320,7 +324,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.glowup.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kivolowitz.glowup;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -350,7 +354,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = H10001 /* Project object */;
 }

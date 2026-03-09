@@ -95,7 +95,30 @@ struct SettingsView: View {
 
                 // About section.
                 Section {
-                    LabeledContent("App Version", value: "1.0")
+                    VStack(spacing: 16) {
+                        Image("AppIconImage")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 120, height: 120)
+                            .clipShape(RoundedRectangle(cornerRadius: 27))
+                            .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
+
+                        Text("GlowUp")
+                            .font(.title2)
+                            .fontWeight(.bold)
+
+                        Text("v1.0")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        Text("A modular effect engine for LIFX devices.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+
                     LabeledContent("Server Port", value: "8420")
                 } header: {
                     Text("About")
@@ -104,14 +127,6 @@ struct SettingsView: View {
                 // License section.
                 Section {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("GlowUp")
-                            .font(.headline)
-                        Text("A modular effect engine for LIFX devices. Replaces the battery-draining phone app with a daemon that runs animated effects autonomously from a Raspberry Pi or Mac.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-
-                        Divider()
-
                         Text("License Information")
                             .font(.subheadline)
                             .fontWeight(.semibold)
