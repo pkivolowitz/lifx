@@ -30,25 +30,27 @@ struct DeviceDetailView: View {
 
     var body: some View {
         List {
-            // Live color strip section.
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    ColorStripView(zones: colorStream.zones)
-                    HStack {
-                        Circle()
-                            .fill(colorStream.isConnected ? .green : .gray)
-                            .frame(width: 8, height: 8)
-                        Text(
-                            colorStream.isConnected
-                            ? "Live · 4 Hz"
-                            : "Connecting..."
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            // Live color strip section — only shown when an effect is running.
+            if status?.running == true {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ColorStripView(zones: colorStream.zones)
+                        HStack {
+                            Circle()
+                                .fill(colorStream.isConnected ? .green : .gray)
+                                .frame(width: 8, height: 8)
+                            Text(
+                                colorStream.isConnected
+                                ? "Live · 4 Hz"
+                                : "Connecting..."
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
                     }
+                } header: {
+                    Text("Live Colors")
                 }
-            } header: {
-                Text("Live Colors")
             }
 
             // Device info section.
@@ -148,9 +150,11 @@ struct DeviceDetailView: View {
         .navigationTitle(device.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            // Start SSE stream and fetch status on appearance.
-            colorStream.connect(apiClient: apiClient, ip: device.ip)
+            // Fetch status first, then start SSE only if an effect is running.
             await refreshStatus()
+            if status?.running == true {
+                colorStream.connect(apiClient: apiClient, ip: device.ip)
+            }
         }
         .onDisappear {
             // Clean up the SSE connection when leaving.
@@ -186,8 +190,7 @@ struct DeviceDetailView: View {
         isLoading = true
         do {
             status = try await apiClient.stop(ip: device.ip)
-            // Clear the color strip — no effect means no live colors.
-            colorStream.zones = []
+            colorStream.disconnect()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -214,6 +217,9 @@ struct DeviceDetailView: View {
                 effectName: effectName,
                 params: params
             )
+            if status?.running == true {
+                colorStream.connect(apiClient: apiClient, ip: device.ip)
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

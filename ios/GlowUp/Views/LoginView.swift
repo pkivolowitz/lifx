@@ -116,10 +116,13 @@ struct LoginView: View {
                 Spacer()
 
                 // Footer.
-                Text("Credentials are stored in the iOS Keychain.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.bottom, 16)
+                VStack(spacing: 4) {
+                    Text("Credentials are stored in the iOS Keychain.")
+                    Text("\u{00A9} 2026 Perry Kivolowitz. MIT License.")
+                }
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .padding(.bottom, 16)
             }
             .onAppear {
                 // Pre-fill from Keychain via the API client.
