@@ -25,12 +25,15 @@ enum KeychainHelper {
 
     /// Save a string value to the Keychain.
     ///
-    /// If an entry already exists for the given account, it is updated.
+    /// If an entry already exists for the given account, it is deleted
+    /// first and then re-added.  Returns ``true`` on success.
     ///
     /// - Parameters:
     ///   - value: The string to store.
     ///   - account: The Keychain account identifier.
-    static func save(_ value: String, forAccount account: String) {
+    /// - Returns: ``true`` if the value was saved successfully.
+    @discardableResult
+    static func save(_ value: String, forAccount account: String) -> Bool {
         let data = Data(value.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -38,13 +41,17 @@ enum KeychainHelper {
             kSecAttrAccount as String: account,
         ]
 
-        // Delete any existing entry first.
-        SecItemDelete(query as CFDictionary)
+        // Delete any existing entry first (ignore "not found" errors).
+        let deleteStatus = SecItemDelete(query as CFDictionary)
+        if deleteStatus != errSecSuccess && deleteStatus != errSecItemNotFound {
+            return false
+        }
 
         // Add the new entry.
         var addQuery = query
         addQuery[kSecValueData as String] = data
-        SecItemAdd(addQuery as CFDictionary, nil)
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        return addStatus == errSecSuccess
     }
 
     /// Load a string value from the Keychain.
@@ -74,13 +81,16 @@ enum KeychainHelper {
     /// Delete a value from the Keychain.
     ///
     /// - Parameter account: The Keychain account identifier.
-    static func delete(forAccount account: String) {
+    /// - Returns: ``true`` if the item was deleted or did not exist.
+    @discardableResult
+    static func delete(forAccount account: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 
     // -- Convenience methods for the two values we store --
