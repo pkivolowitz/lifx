@@ -43,10 +43,11 @@ Usage::
 
 from __future__ import annotations
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import hmac
 import http.server
+import ipaddress
 import json
 import logging
 import math
@@ -57,6 +58,7 @@ import socketserver
 import sys
 import threading
 import time as time_mod
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -124,6 +126,81 @@ MAX_MINUTE: int = 59
 
 # API path prefix.
 API_PREFIX: str = "/api"
+
+# Maximum failed authentication attempts per IP before throttling.
+AUTH_RATE_LIMIT: int = 10
+
+# Time window for the auth rate limiter (seconds).
+AUTH_RATE_WINDOW: int = 60
+
+# SSE stream timeout — close idle connections after this many seconds.
+SSE_TIMEOUT_SECONDS: float = 3600.0
+
+
+# ---------------------------------------------------------------------------
+# Rate limiter
+# ---------------------------------------------------------------------------
+
+class _RateLimiter:
+    """Simple per-IP rate limiter for authentication failures.
+
+    Tracks failed auth attempts within a sliding time window.  When a
+    client exceeds :data:`AUTH_RATE_LIMIT` failures within
+    :data:`AUTH_RATE_WINDOW` seconds, further requests are rejected
+    with HTTP 429 until the window expires.
+    """
+
+    def __init__(self, limit: int = AUTH_RATE_LIMIT,
+                 window: int = AUTH_RATE_WINDOW) -> None:
+        self._limit: int = limit
+        self._window: int = window
+        self._failures: dict[str, list[float]] = defaultdict(list)
+        self._lock: threading.Lock = threading.Lock()
+
+    def record_failure(self, ip: str) -> None:
+        """Record a failed authentication attempt from *ip*."""
+        now: float = time_mod.time()
+        with self._lock:
+            self._failures[ip].append(now)
+
+    def is_blocked(self, ip: str) -> bool:
+        """Return ``True`` if *ip* has exceeded the failure limit."""
+        now: float = time_mod.time()
+        cutoff: float = now - self._window
+        with self._lock:
+            attempts: list[float] = self._failures.get(ip, [])
+            # Prune old entries.
+            attempts[:] = [t for t in attempts if t > cutoff]
+            return len(attempts) >= self._limit
+
+    def clear(self, ip: str) -> None:
+        """Clear failure history for *ip* (e.g. after a successful auth)."""
+        with self._lock:
+            self._failures.pop(ip, None)
+
+
+# Singleton rate limiter — shared across all handler threads.
+_rate_limiter: _RateLimiter = _RateLimiter()
+
+
+# ---------------------------------------------------------------------------
+# IP validation
+# ---------------------------------------------------------------------------
+
+def _validate_ip(ip_str: str) -> bool:
+    """Return ``True`` if *ip_str* is a valid IPv4 or IPv6 address.
+
+    Args:
+        ip_str: The string to validate.
+
+    Returns:
+        ``True`` if valid, ``False`` otherwise.
+    """
+    try:
+        ipaddress.ip_address(ip_str)
+        return True
+    except ValueError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -959,13 +1036,22 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     def _authenticate(self) -> bool:
         """Check the Authorization header for a valid bearer token.
 
-        Sends a 401 response if authentication fails.
+        Sends a 401 or 429 response if authentication fails.
+        Rate-limits clients that repeatedly fail authentication.
 
         Returns:
             ``True`` if the request is authenticated, ``False`` otherwise.
         """
+        client_ip: str = self.client_address[0]
+
+        # Check rate limit before processing the token.
+        if _rate_limiter.is_blocked(client_ip):
+            self._send_json(429, {"error": "Too many failed attempts"})
+            return False
+
         auth: Optional[str] = self.headers.get(AUTH_HEADER)
         if auth is None or not auth.startswith(BEARER_PREFIX):
+            _rate_limiter.record_failure(client_ip)
             self._send_json(401, {"error": "Missing or invalid token"})
             self.send_header("WWW-Authenticate", "Bearer")
             self.end_headers()
@@ -973,9 +1059,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         token: str = auth[len(BEARER_PREFIX):]
         if not hmac.compare_digest(token, self.auth_token):
+            _rate_limiter.record_failure(client_ip)
             self._send_json(401, {"error": "Invalid token"})
             return False
 
+        # Successful auth — clear any prior failures.
+        _rate_limiter.clear(client_ip)
         return True
 
     # -- JSON helpers -------------------------------------------------------
@@ -1018,7 +1107,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         return body
 
     def _send_json(self, code: int, data: Any) -> None:
-        """Send a JSON response.
+        """Send a JSON response with security headers.
 
         Args:
             code: HTTP status code.
@@ -1028,7 +1117,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_security_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -1039,8 +1128,23 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.send_header("X-Accel-Buffering", "no")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_security_headers()
         self.end_headers()
+
+    # -- Security headers ---------------------------------------------------
+
+    def _send_security_headers(self) -> None:
+        """Append standard security headers to the current response.
+
+        Called by :meth:`_send_json` and :meth:`_send_sse_headers` so
+        every response carries a consistent security posture.
+        """
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Strict-Transport-Security",
+                         "max-age=31536000; includeSubDomains")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Security-Policy", "default-src 'none'")
 
     # -- Routing ------------------------------------------------------------
 
@@ -1060,14 +1164,21 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         return None
 
     def do_OPTIONS(self) -> None:
-        """Handle CORS preflight requests."""
+        """Handle CORS preflight requests.
+
+        Requires authentication to prevent unauthenticated endpoint
+        enumeration.  The iOS app does not use CORS (native HTTP), so
+        this is only needed for browser-based clients.
+        """
+        if not self._authenticate():
+            return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods",
                          "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers",
                          "Authorization, Content-Type")
-        self.send_header("Access-Control-Max-Age", "86400")
+        self.send_header("Access-Control-Max-Age", "3600")
+        self._send_security_headers()
         self.end_headers()
 
     def do_GET(self) -> None:
@@ -1091,22 +1202,34 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         # /api/devices/{ip}/status
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "status"):
-            self._handle_get_device_status(parts[2])
+            ip: str = parts[2]
+            if not _validate_ip(ip):
+                self._send_json(400, {"error": "Invalid IP address"})
+                return
+            self._handle_get_device_status(ip)
             return
 
         # /api/devices/{ip}/colors
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "colors"):
-            self._handle_get_device_colors(parts[2])
+            ip = parts[2]
+            if not _validate_ip(ip):
+                self._send_json(400, {"error": "Invalid IP address"})
+                return
+            self._handle_get_device_colors(ip)
             return
 
         # /api/devices/{ip}/colors/stream
         if (len(parts) == 5 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "colors" and parts[4] == "stream"):
-            self._handle_get_device_colors_stream(parts[2])
+            ip = parts[2]
+            if not _validate_ip(ip):
+                self._send_json(400, {"error": "Invalid IP address"})
+                return
+            self._handle_get_device_colors_stream(ip)
             return
 
-        self._send_json(404, {"error": f"Not found: {path}"})
+        self._send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
         """Route POST requests to the appropriate handler."""
@@ -1124,22 +1247,34 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         # /api/devices/{ip}/play
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "play"):
-            self._handle_post_play(parts[2])
+            ip: str = parts[2]
+            if not _validate_ip(ip):
+                self._send_json(400, {"error": "Invalid IP address"})
+                return
+            self._handle_post_play(ip)
             return
 
         # /api/devices/{ip}/stop
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "stop"):
-            self._handle_post_stop(parts[2])
+            ip = parts[2]
+            if not _validate_ip(ip):
+                self._send_json(400, {"error": "Invalid IP address"})
+                return
+            self._handle_post_stop(ip)
             return
 
         # /api/devices/{ip}/power
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "power"):
-            self._handle_post_power(parts[2])
+            ip = parts[2]
+            if not _validate_ip(ip):
+                self._send_json(400, {"error": "Invalid IP address"})
+                return
+            self._handle_post_power(ip)
             return
 
-        self._send_json(404, {"error": f"Not found: {path}"})
+        self._send_json(404, {"error": "Not found"})
 
     # -- GET handlers -------------------------------------------------------
 
@@ -1159,14 +1294,14 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             status: dict[str, Any] = self.device_manager.get_status(ip)
             self._send_json(200, status)
         except KeyError:
-            self._send_json(404, {"error": f"Device not found: {ip}"})
+            self._send_json(404, {"error": "Device not found"})
 
     def _handle_get_device_colors(self, ip: str) -> None:
         """GET /api/devices/{ip}/colors — zone color snapshot."""
         try:
             colors = self.device_manager.get_colors(ip)
         except KeyError:
-            self._send_json(404, {"error": f"Device not found: {ip}"})
+            self._send_json(404, {"error": "Device not found"})
             return
 
         if colors is None:
@@ -1184,7 +1319,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         """
         dev: Optional[LifxDevice] = self.device_manager.get_device(ip)
         if dev is None:
-            self._send_json(404, {"error": f"Device not found: {ip}"})
+            self._send_json(404, {"error": "Device not found"})
             return
 
         self._send_sse_headers()
@@ -1199,8 +1334,14 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return
 
+        stream_start: float = time_mod.time()
         try:
             while True:
+                # Enforce maximum stream lifetime to prevent resource
+                # exhaustion from abandoned connections.
+                if time_mod.time() - stream_start > SSE_TIMEOUT_SECONDS:
+                    break
+
                 # Read colors from the engine's in-memory frame buffer.
                 # Zero UDP overhead, zero socket contention.  When no
                 # effect is running the frame is None and we skip the
@@ -1271,9 +1412,9 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             )
             self._send_json(200, status)
         except KeyError:
-            self._send_json(404, {"error": f"Device not found: {ip}"})
-        except ValueError as exc:
-            self._send_json(400, {"error": str(exc)})
+            self._send_json(404, {"error": "Device not found"})
+        except ValueError:
+            self._send_json(400, {"error": "Invalid effect or parameters"})
 
     def _handle_post_stop(self, ip: str) -> None:
         """POST /api/devices/{ip}/stop — stop the current effect."""
@@ -1284,7 +1425,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             # immediately resume — it clears at the next transition.
             self._send_json(200, status)
         except KeyError:
-            self._send_json(404, {"error": f"Device not found: {ip}"})
+            self._send_json(404, {"error": "Device not found"})
 
     def _handle_post_power(self, ip: str) -> None:
         """POST /api/devices/{ip}/power — turn device on/off.
@@ -1307,7 +1448,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             logging.info("API: power %s on %s", "on" if on else "off", ip)
             self._send_json(200, result)
         except KeyError:
-            self._send_json(404, {"error": f"Device not found: {ip}"})
+            self._send_json(404, {"error": "Device not found"})
 
     # -- Helpers ------------------------------------------------------------
 
