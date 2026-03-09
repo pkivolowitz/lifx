@@ -288,6 +288,10 @@ def _resolve_entries(
         if group_filter is not None and spec.get("group") != group_filter:
             continue
 
+        # Enabled filter: skip disabled entries (default: enabled).
+        if not spec.get("enabled", True):
+            continue
+
         # Day-of-week filter: skip entries that don't run on this date.
         if not _entry_runs_on_day(spec, d):
             continue

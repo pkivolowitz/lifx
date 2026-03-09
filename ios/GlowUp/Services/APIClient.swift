@@ -166,6 +166,31 @@ class APIClient: ObservableObject {
         )
     }
 
+    // MARK: - Schedule endpoints
+
+    /// Fetch the schedule with resolved times for today.
+    ///
+    /// - Returns: An array of ``ScheduleEntry``.
+    /// - Throws: ``APIError`` on failure.
+    func fetchSchedule() async throws -> [ScheduleEntry] {
+        let response: ScheduleResponse = try await get("/api/schedule")
+        return response.entries
+    }
+
+    /// Enable or disable a schedule entry.
+    ///
+    /// - Parameters:
+    ///   - index: The zero-based schedule entry index.
+    ///   - enabled: ``true`` to enable, ``false`` to disable.
+    /// - Throws: ``APIError`` on failure.
+    func setScheduleEnabled(index: Int, enabled: Bool) async throws {
+        struct EnabledBody: Codable { let enabled: Bool }
+        let _: [String: AnyCodableValue] = try await post(
+            "/api/schedule/\(index)/enabled",
+            body: EnabledBody(enabled: enabled)
+        )
+    }
+
     // MARK: - SSE streaming
 
     /// Build a URL request for the SSE color stream endpoint.

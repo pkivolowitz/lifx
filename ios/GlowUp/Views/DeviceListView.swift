@@ -30,6 +30,9 @@ struct DeviceListView: View {
     /// Controls presentation of the settings sheet.
     @State private var showSettings: Bool = false
 
+    /// Controls presentation of the schedule sheet.
+    @State private var showSchedule: Bool = false
+
     /// Device being renamed (drives the rename alert).
     @State private var renamingDevice: Device?
 
@@ -73,12 +76,19 @@ struct DeviceListView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await refreshDevices() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
+                    HStack(spacing: 16) {
+                        Button {
+                            showSchedule = true
+                        } label: {
+                            Image(systemName: "calendar")
+                        }
+                        Button {
+                            Task { await refreshDevices() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .disabled(isLoading)
                     }
-                    .disabled(isLoading)
                 }
             }
             .refreshable {
@@ -97,6 +107,9 @@ struct DeviceListView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
+            }
+            .sheet(isPresented: $showSchedule) {
+                ScheduleView()
             }
             .alert(
                 "Rename Device",

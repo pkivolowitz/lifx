@@ -32,6 +32,8 @@ Endpoints::
     POST /api/devices/{ip}/power         Turn device on/off
     POST /api/devices/{ip}/identify      Pulse brightness to locate device
     POST /api/devices/{ip}/nickname      Set a custom display name
+    GET  /api/schedule                   Schedule entries with resolved times
+    POST /api/schedule/{index}/enabled   Enable or disable a schedule entry
     POST /api/discover                   Re-run device discovery
 
 Usage::
@@ -45,7 +47,7 @@ Usage::
 
 from __future__ import annotations
 
-__version__ = "1.3"
+__version__ = "1.4"
 
 import hmac
 import http.server
@@ -962,6 +964,10 @@ def _resolve_entries(
         if group_filter is not None and spec.get("group") != group_filter:
             continue
 
+        # Enabled filter: skip disabled entries (default: enabled).
+        if not spec.get("enabled", True):
+            continue
+
         # Day-of-week filter: skip entries that don't run on this date.
         if not _entry_runs_on_day(spec, d):
             continue
@@ -1428,6 +1434,11 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_get_device_colors_stream(ip)
             return
 
+        # /api/schedule
+        if path == "/api/schedule":
+            self._handle_get_schedule()
+            return
+
         self._send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
@@ -1493,6 +1504,17 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_post_nickname(ip)
             return
 
+        # /api/schedule/{index}/enabled
+        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "schedule"
+                and parts[3] == "enabled"):
+            try:
+                index: int = int(parts[2])
+            except ValueError:
+                self._send_json(400, {"error": "Invalid schedule index"})
+                return
+            self._handle_post_schedule_enabled(index)
+            return
+
         self._send_json(404, {"error": "Not found"})
 
     # -- GET handlers -------------------------------------------------------
@@ -1506,6 +1528,80 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         """GET /api/effects — list effects with param metadata."""
         effects: dict[str, Any] = self.device_manager.list_effects()
         self._send_json(200, {"effects": effects})
+
+    def _handle_get_schedule(self) -> None:
+        """GET /api/schedule — schedule entries with resolved times.
+
+        Returns the schedule entries from the config, each enriched
+        with resolved start/stop times for today and an ``active``
+        flag indicating whether the entry is running right now.
+        """
+        config: dict[str, Any] = self.config
+        specs: list[dict[str, Any]] = config.get("schedule", [])
+        if not specs:
+            self._send_json(200, {"entries": []})
+            return
+
+        lat: float = config.get("location", {}).get("latitude", 0.0)
+        lon: float = config.get("location", {}).get("longitude", 0.0)
+
+        now: datetime = datetime.now(timezone.utc).astimezone()
+        utc_offset: timedelta = now.utcoffset()
+        today: date = now.date()
+
+        # Resolve times for today to determine active status and
+        # display times.  We resolve without group filter to get all.
+        sun: SunTimes = sun_times(lat, lon, today, utc_offset)
+
+        entries: list[dict[str, Any]] = []
+        for i, spec in enumerate(specs):
+            enabled: bool = spec.get("enabled", True)
+            days_raw: str = spec.get("days", "")
+
+            # Resolve start/stop for display.
+            start_resolved: Optional[datetime] = _parse_time_spec(
+                spec["start"], sun, today, utc_offset,
+            )
+            stop_resolved: Optional[datetime] = _parse_time_spec(
+                spec["stop"], sun, today, utc_offset,
+            )
+
+            start_str: Optional[str] = None
+            stop_str: Optional[str] = None
+            active: bool = False
+
+            if start_resolved is not None and stop_resolved is not None:
+                # Handle overnight entries.
+                if stop_resolved <= start_resolved:
+                    stop_resolved += timedelta(days=1)
+                start_str = start_resolved.strftime("%H:%M")
+                stop_str = stop_resolved.strftime("%H:%M")
+                if stop_resolved.date() != start_resolved.date():
+                    stop_str = stop_resolved.strftime("%H:%M (+1)")
+
+                # Active if enabled, runs today, and we're in the window.
+                if (enabled
+                        and _entry_runs_on_day(spec, today)
+                        and start_resolved <= now < stop_resolved):
+                    active = True
+
+            entry: dict[str, Any] = {
+                "index": i,
+                "name": spec.get("name", f"entry_{i}"),
+                "group": spec.get("group", ""),
+                "effect": spec.get("effect", ""),
+                "start": spec.get("start", ""),
+                "stop": spec.get("stop", ""),
+                "start_resolved": start_str,
+                "stop_resolved": stop_str,
+                "days": days_raw,
+                "days_display": _days_display(days_raw),
+                "enabled": enabled,
+                "active": active,
+            }
+            entries.append(entry)
+
+        self._send_json(200, {"entries": entries})
 
     def _handle_get_device_status(self, ip: str) -> None:
         """GET /api/devices/{ip}/status — device effect status."""
@@ -1717,10 +1813,55 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self._send_json(200, {"ip": ip, "nickname": nickname or None})
 
     def _save_nicknames(self) -> None:
-        """Persist current nicknames to the config file.
+        """Persist current nicknames to the config file."""
+        nicknames: dict[str, str] = self.device_manager.get_nicknames()
+        self._save_config_field("nicknames", nicknames or {})
 
-        Reads the config JSON, updates the ``nicknames`` key, and
-        writes it back atomically.
+    def _handle_post_schedule_enabled(self, index: int) -> None:
+        """POST /api/schedule/{index}/enabled — enable or disable an entry.
+
+        Request body::
+
+            {"enabled": false}
+
+        Persists the change to the config file so it survives restarts.
+        """
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        enabled: Any = body.get("enabled")
+        if not isinstance(enabled, bool):
+            self._send_json(400, {"error": "'enabled' must be a boolean"})
+            return
+
+        specs: list[dict[str, Any]] = self.config.get("schedule", [])
+        if index < 0 or index >= len(specs):
+            self._send_json(404, {"error": "Schedule entry not found"})
+            return
+
+        specs[index]["enabled"] = enabled
+        self._save_config_field("schedule", specs)
+
+        name: str = specs[index].get("name", f"entry_{index}")
+        logging.info(
+            "API: schedule entry '%s' %s",
+            name, "enabled" if enabled else "disabled",
+        )
+        self._send_json(200, {
+            "index": index,
+            "name": name,
+            "enabled": enabled,
+        })
+
+    def _save_config_field(self, key: str, value: Any) -> None:
+        """Persist a single config field to the config file.
+
+        Reads the config JSON, updates the given key, and writes back.
+
+        Args:
+            key:   Top-level config key to update.
+            value: The new value.
         """
         config_path: Optional[str] = self.config_path
         if config_path is None:
@@ -1728,16 +1869,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         try:
             with open(config_path, "r") as f:
                 config: dict[str, Any] = json.load(f)
-            nicknames: dict[str, str] = self.device_manager.get_nicknames()
-            if nicknames:
-                config["nicknames"] = nicknames
-            else:
-                config.pop("nicknames", None)
+            config[key] = value
             with open(config_path, "w") as f:
                 json.dump(config, f, indent=4)
                 f.write("\n")
         except Exception as exc:
-            logging.warning("Failed to save nicknames: %s", exc)
+            logging.warning("Failed to save config field '%s': %s", key, exc)
 
     # -- Helpers ------------------------------------------------------------
 
