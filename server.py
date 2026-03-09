@@ -1190,6 +1190,17 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         self._send_sse_headers()
 
+        # Send an initial padding comment to flush Cloudflare's response
+        # buffer.  Cloudflare Tunnel buffers small chunks; a ~4KB initial
+        # payload forces the proxy to begin streaming immediately.
+        padding: str = ": " + " " * 4096 + "\n\n"
+        try:
+            self.wfile.write(padding.encode("utf-8"))
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            tmp.close()
+            return
+
         try:
             while True:
                 if tmp.is_multizone:
