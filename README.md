@@ -81,16 +81,37 @@ See the **[User Manual](MANUAL.md)** for:
 
 See **[TUNNEL.md](TUNNEL.md)** for Cloudflare Tunnel setup.
 
-## Scheduler (Daemon)
+## Server (Recommended Deployment)
 
-The scheduler runs effects on a timed schedule with sunrise/sunset awareness:
+`server.py` is the recommended way to run GlowUp as a daemon. It provides a
+REST API for remote control (including the iPhone app), a built-in scheduler
+with sunrise/sunset awareness, and SSE-based live color streaming — all in a
+single process.
+
+```bash
+python3 server.py server.json       # run the server
+```
+
+See [server.json.example](server.json.example) for config format. Deploy as a
+systemd service with the included
+[glowup-server.service](glowup-server.service). The server configuration
+includes the schedule directly — no separate schedule file is needed.
+
+### Standalone Scheduler (Alternative)
+
+If you don't need the REST API or iPhone app — just timed effects on a cron-like
+schedule — `scheduler.py` is a lighter alternative. It spawns a separate process
+per device and requires no HTTP or authentication.
 
 ```bash
 python3 scheduler.py --dry-run schedule.json.example  # preview resolved times
-python3 scheduler.py /etc/glowup/schedule.json          # run as daemon
+python3 scheduler.py /etc/glowup/schedule.json        # run as daemon
 ```
 
-See [schedule.json.example](schedule.json.example) for config format. Deploy as a systemd service with the included [glowup-scheduler.service](glowup-scheduler.service).
+See [schedule.json.example](schedule.json.example) for config format. Deploy
+with [glowup-scheduler.service](glowup-scheduler.service). **Do not run both
+`server.py` and `scheduler.py` simultaneously** — they will conflict over device
+control.
 
 ## Architecture
 
@@ -104,8 +125,8 @@ See [schedule.json.example](schedule.json.example) for config format. Deploy as 
 | `glowup.py` | CLI entry point (discover, effects, identify, play) |
 | `simulator.py` | Live tkinter preview window (`--sim`, `--sim-only`), optional graceful fallback |
 | `solar.py` | Sunrise/sunset calculator (NOAA algorithm, no dependencies) |
-| `scheduler.py` | Orchestrator daemon with device groups and symbolic scheduling |
-| `server.py` | REST API daemon — subsumes scheduler, enables remote control |
+| `server.py` | REST API daemon with built-in scheduler — recommended deployment |
+| `scheduler.py` | Standalone scheduler alternative (no HTTP, no auth) |
 | `ios/GlowUp/` | Native SwiftUI iPhone app with asset catalog and app icon |
 | `test_virtual_multizone.py` | Mock-based tests for virtual multizone dispatch |
 
