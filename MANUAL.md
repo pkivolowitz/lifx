@@ -56,7 +56,9 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
     - [Phone Override Behavior](#phone-override-behavior)
     - [Installing the Server as a systemd Service](#installing-the-server-as-a-systemd-service)
 12. [GlowUp iOS App](#glowup-ios-app)
+    - [Connectivity Options](#connectivity-options)
     - [Building the App](#building-the-app)
+    - [Running on Your iPhone](#running-on-your-iphone)
     - [App Screens](#app-screens)
 13. [Cloudflare Tunnel (Remote Access)](#cloudflare-tunnel-remote-access)
 
@@ -1418,24 +1420,72 @@ sudo systemctl disable glowup-scheduler
 
 ## GlowUp iOS App
 
-The GlowUp iOS app provides remote control of LIFX devices from
-anywhere with a phone signal.  It communicates with `server.py` over
-HTTPS via a Cloudflare Tunnel.
+The GlowUp iOS app is a native SwiftUI remote control for your LIFX
+devices.  It communicates with `server.py` over HTTP(S) and provides
+live color monitoring, auto-generated parameter UI, and
+Keychain-secured authentication.
+
+### Connectivity Options
+
+The app connects to a running `server.py` instance.  There are
+several ways to make this work depending on your setup:
+
+| Method | Setup | Use Case |
+|--------|-------|----------|
+| **LAN (direct IP)** | Point the app at `http://<pi-ip>:8420` | Controlling lights from home — no tunnel, no account, simplest setup |
+| **Cloudflare Tunnel** | See [TUNNEL.md](TUNNEL.md) | Secure remote access from anywhere without opening router ports |
+| **Tailscale / WireGuard** | Install on Pi and phone | Private VPN mesh — works from anywhere, free for personal use |
+| **Port forwarding** | Forward 8420 on your router | Works remotely but exposes a port to the internet |
+
+For most users, **LAN mode is all you need** — your phone and the Pi
+are on the same WiFi, so just enter the Pi's local IP address as the
+server URL in the app's Settings screen.
 
 ### Building the App
 
 **Requirements:**
 
-- macOS with Xcode installed
-- Apple ID (free for simulator testing; $99/yr Apple Developer account
-  for deploying to a physical device for more than 7 days)
+- macOS with Xcode 16+ installed
+- Apple ID signed into Xcode (free tier works for simulator testing)
+- For deploying to a physical iPhone: a free Apple ID is sufficient for
+  7-day provisioning profiles; a $99/yr Apple Developer account removes
+  that expiration
 
 **Steps:**
 
-1. Open the project: `open ios/GlowUp.xcodeproj`
-2. In Xcode, select your Apple ID under Signing & Capabilities
-3. Select an iPhone simulator or your connected device
-4. Build and run (Cmd+R)
+1. Open the project:
+   ```bash
+   open ios/GlowUp.xcodeproj
+   ```
+2. In Xcode, select the **GlowUp** target, go to **Signing &
+   Capabilities**, check **Automatically manage signing**, and select
+   your Apple ID team
+3. If the bundle identifier `com.kivolowitz.glowup` is taken under your
+   team, change it to something unique (e.g.,
+   `com.yourname.glowup`)
+4. Select an iPhone simulator or your connected device as the run
+   destination
+5. Build and run (**Cmd+R**)
+
+### Running on Your iPhone
+
+To install on a physical device for the first time:
+
+1. Connect your iPhone to your Mac via USB
+2. On the phone, tap **Trust This Computer** when prompted
+3. On the phone, enable **Developer Mode**: Settings → Privacy &
+   Security → Developer Mode → toggle on and restart
+4. In Xcode, select your iPhone from the run destination dropdown (top
+   toolbar, next to the Play button)
+5. Build and run (**Cmd+R**) — Xcode will automatically create a
+   provisioning profile
+6. On first launch, you may need to trust the developer certificate on
+   the phone: **Settings → General → VPN & Device Management** → tap
+   your developer certificate → Trust
+
+After the first wired install, you can enable wireless debugging in
+Xcode: **Window → Devices and Simulators**, select your phone, and
+check **Connect via network**.
 
 ### App Screens
 
@@ -1444,8 +1494,8 @@ HTTPS via a Cloudflare Tunnel.
    latest state.
 
 2. **Device Detail** — Live color strip visualization (SSE-fed at 4 Hz),
-   current effect info, power toggle, stop button, and a link to
-   change the effect.
+   current effect info, power toggle, stop button, restart button, and
+   a link to change the effect.
 
 3. **Effect Picker** — Lists all registered effects with descriptions
    and parameter counts.
@@ -1456,7 +1506,9 @@ HTTPS via a Cloudflare Tunnel.
    the command.
 
 5. **Settings** — Server URL and API token configuration.  Token is
-   stored in the iOS Keychain.  Includes a "Test Connection" button.
+   stored in the iOS Keychain.  Includes a "Test Connection" button
+   and an About section displaying the app icon, version, and license
+   information.
 
 ---
 

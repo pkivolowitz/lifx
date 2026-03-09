@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.jpg" alt="GlowUp" width="200">
+</p>
+
 # GLOWUP — LIFX Effect Engine
 
 A modular effect engine for LIFX devices (string lights, beams, single color
@@ -19,10 +23,18 @@ integration are performed by Perry Kivolowitz, the sole Human Author.
 - **Extensible** — add a new effect by dropping a single Python file in `effects/`; it auto-registers and appears in the CLI
 
 - **REST API server** — HTTP daemon that wraps the entire engine for remote control from any HTTP client
-- **iPhone app** — native SwiftUI app with live color monitoring, auto-generated parameter UI, and Keychain-secured auth
+- **iPhone app** — native SwiftUI app with live color monitoring, auto-generated parameter UI, and Keychain-secured auth; works over LAN or remotely via tunnel/VPN
 - **Cloudflare Tunnel** — secure remote access from anywhere without opening router ports or running a VPN
 
 No cloud dependency. No external Python packages. Just UDP packets on your LAN — with optional secure remote access.
+
+### iPhone App
+
+The GlowUp iOS app connects to `server.py` running on your Pi or Mac.
+The simplest setup is LAN-only: point the app at `http://<pi-ip>:8420`
+and you're done. For remote access, use a Cloudflare Tunnel, Tailscale,
+or any VPN. See the [User Manual](MANUAL.md#glowup-ios-app) for build
+instructions and deployment to your phone.
 
 ## Quick Start
 
@@ -94,7 +106,7 @@ See [schedule.json.example](schedule.json.example) for config format. Deploy as 
 | `solar.py` | Sunrise/sunset calculator (NOAA algorithm, no dependencies) |
 | `scheduler.py` | Orchestrator daemon with device groups and symbolic scheduling |
 | `server.py` | REST API daemon — subsumes scheduler, enables remote control |
-| `ios/GlowUp/` | Native SwiftUI iPhone app |
+| `ios/GlowUp/` | Native SwiftUI iPhone app with asset catalog and app icon |
 | `test_virtual_multizone.py` | Mock-based tests for virtual multizone dispatch |
 
 ## Effects
