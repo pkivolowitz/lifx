@@ -202,15 +202,31 @@ class DeviceManager:
                     len(missing_ips),
                 )
                 for ip in missing_ips:
-                    try:
-                        found: list[LifxDevice] = discover_devices(
-                            timeout=DISCOVERY_TIMEOUT,
-                            target_ip=ip,
-                        )
-                        new_devices.extend(found)
-                    except Exception as exc:
+                    # Retry direct queries — flaky mesh routers may
+                    # drop the first UDP packet.
+                    for attempt in range(1, DISCOVERY_RETRIES + 1):
+                        try:
+                            found: list[LifxDevice] = discover_devices(
+                                timeout=DISCOVERY_TIMEOUT,
+                                target_ip=ip,
+                            )
+                            if found:
+                                new_devices.extend(found)
+                                break
+                            if attempt < DISCOVERY_RETRIES:
+                                logging.info(
+                                    "Direct query %s attempt %d/%d — no response, retrying...",
+                                    ip, attempt, DISCOVERY_RETRIES,
+                                )
+                        except Exception as exc:
+                            logging.warning(
+                                "Direct discovery %s failed: %s", ip, exc,
+                            )
+                            break
+                    else:
                         logging.warning(
-                            "Direct discovery %s failed: %s", ip, exc,
+                            "Device %s did not respond after %d attempts",
+                            ip, DISCOVERY_RETRIES,
                         )
         new_map: dict[str, LifxDevice] = {d.ip: d for d in new_devices}
 
