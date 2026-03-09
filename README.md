@@ -11,7 +11,7 @@ integration are performed by Perry Kivolowitz, the sole Human Author.
 ## What It Does
 
 - **Discovery** — finds all LIFX devices on your LAN via UDP broadcast
-- **Effects** — ships with 8 effects: aurora borealis, binary clock, waving flag (199 countries), Larson scanner, Morse code, twinkling lights, standing wave, and color breathe
+- **Effects** — ships with 9 effects: aurora borealis, binary clock, fireworks, waving flag (199 countries), Larson scanner, Morse code, twinkling lights, standing wave, and color breathe
 - **Virtual multizone** — group any combination of devices into a single animation surface. A 108-zone string light and 4 single bulbs become a 112-zone strip. Effects animate across all devices as one.
 - **Identify** — pulse a bulb's brightness to figure out which physical lamp corresponds to which IP address
 - **Monochrome support** — color effects on white-only bulbs are automatically converted to perceptually correct brightness using BT.709 luma coefficients
@@ -28,9 +28,18 @@ python3 glowup.py effects                         # list effects + params
 python3 glowup.py identify --ip <device-ip>       # pulse a bulb to locate it
 python3 glowup.py play aurora --ip <device-ip>    # run an effect
 python3 glowup.py play flag --ip <device-ip> --country france
+python3 glowup.py play fireworks --ip <device-ip> # string lights only
 
 # Virtual multizone — animate across a group of devices
 python3 glowup.py play cylon --config schedule.json --group office
+
+# Layered help — three levels
+python3 glowup.py --help                          # top-level commands
+python3 glowup.py play --help                     # play options only
+python3 glowup.py play fireworks --help           # full param reference for one effect
+
+# Preview an effect in the simulator without touching your lights
+python3 glowup.py play fireworks --ip <device-ip> --sim-only
 ```
 
 ## Caveat
@@ -44,10 +53,11 @@ products if you are willing and able. Thank you.
 
 See the **[User Manual](MANUAL.md)** for:
 - Full CLI reference (discover, effects, identify, play)
+- Layered help system (`--help` at top-level, play, and per-effect)
 - All effects with parameter tables
 - Virtual multizone setup and configuration
 - Effect developer guide (how to build your own)
-- Live simulator (`--sim` preview window)
+- Live simulator (`--sim` and `--sim-only` preview modes)
 - Engine, Controller, and VirtualMultizoneDevice API
 - Testing
 
@@ -72,7 +82,7 @@ See [schedule.json.example](schedule.json.example) for config format. Deploy as 
 | `effects/*.py` | Pure renderers — no I/O, no device knowledge |
 | `effects/flag_data.py` | 199-country flag color database |
 | `glowup.py` | CLI entry point (discover, effects, identify, play) |
-| `simulator.py` | Live tkinter preview window (`--sim`), optional graceful fallback |
+| `simulator.py` | Live tkinter preview window (`--sim`, `--sim-only`), optional graceful fallback |
 | `solar.py` | Sunrise/sunset calculator (NOAA algorithm, no dependencies) |
 | `scheduler.py` | Orchestrator daemon with device groups and symbolic scheduling |
 | `test_virtual_multizone.py` | Mock-based tests for virtual multizone dispatch |
@@ -85,6 +95,7 @@ See [schedule.json.example](schedule.json.example) for config format. Deploy as 
 | `binclock` | Display the current time in binary (per-group colors) |
 | `breathe` | All bulbs oscillate between two colors via sine wave |
 | `cylon` | Larson scanner — bright eye sweeps back and forth |
+| `fireworks` | Rockets launch from both ends, trail exhaust, detonate in expanding color halos (string lights) |
 | `flag` | Waving national flag with perspective ripple (199 countries) |
 | `morse` | Flashes a message in Morse code |
 | `twinkle` | Random zones sparkle and fade like Christmas lights |
