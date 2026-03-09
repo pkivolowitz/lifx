@@ -276,6 +276,9 @@ class Engine:
         self._stop_event: threading.Event = threading.Event()
         self._effect_start_time: float = 0.0
         self._frame_callback: Optional[Callable] = frame_callback
+        # Last rendered frame, stored for SSE streaming without UDP queries.
+        self._last_frame: Optional[list[tuple[int, int, int, int]]] = None
+        self._last_frame_lock: threading.Lock = threading.Lock()
 
     def start(self, effect: Effect) -> None:
         """Start or hot-swap the current effect.
@@ -404,6 +407,10 @@ class Engine:
                     # bring down the entire animation.
                     pass
 
+            # Store the last rendered frame for SSE streaming.
+            with self._last_frame_lock:
+                self._last_frame = colors
+
             # Notify the frame callback (e.g., simulator) with the last
             # rendered color list.  Wrapped in try/except so a callback
             # failure never crashes the render loop.
@@ -528,6 +535,18 @@ class Controller:
                     for dev in self.devices
                 ],
             }
+
+    def get_last_frame(self) -> Optional[list[tuple[int, int, int, int]]]:
+        """Return the most recently rendered frame of HSBK colors.
+
+        Thread-safe: reads a snapshot stored by the engine's render loop.
+        Returns ``None`` if no frame has been rendered yet.
+
+        Returns:
+            A list of ``(h, s, b, k)`` tuples, one per zone, or ``None``.
+        """
+        with self.engine._last_frame_lock:
+            return self.engine._last_frame
 
     def list_effects(self) -> dict[str, Any]:
         """Return available effects with their parameter definitions.

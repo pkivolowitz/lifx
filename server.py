@@ -266,6 +266,18 @@ class DeviceManager:
         with self._lock:
             return self._devices.get(ip)
 
+    def get_controller(self, ip: str) -> Optional[Controller]:
+        """Look up an existing Controller by IP (does not create one).
+
+        Args:
+            ip: Device IP address.
+
+        Returns:
+            The :class:`Controller`, or ``None`` if none exists.
+        """
+        with self._lock:
+            return self._controllers.get(ip)
+
     def get_or_create_controller(self, ip: str) -> Optional[Controller]:
         """Get or lazily create a Controller for a device.
 
@@ -1175,18 +1187,27 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(404, {"error": f"Device not found: {ip}"})
             return
 
-        # Create a dedicated read-only device for SSE queries.
-        tmp: LifxDevice = LifxDevice(ip)
-        try:
-            tmp.query_version()
-            if tmp.is_multizone:
-                tmp.query_zone_count()
-            else:
-                tmp.zone_count = 1
-        except Exception:
-            tmp.close()
-            self._send_json(503, {"error": "Could not connect to device"})
-            return
+        # Try to read colors from the engine's frame buffer first (zero
+        # UDP overhead, no socket contention with the animation loop).
+        # Fall back to a dedicated read-only LifxDevice only when no
+        # controller is running for this device.
+        ctrl: Optional[Controller] = self.device_manager.get_controller(ip)
+        use_engine: bool = ctrl is not None
+
+        tmp: Optional[LifxDevice] = None
+        if not use_engine:
+            # No controller — create a temporary device for direct queries.
+            tmp = LifxDevice(ip)
+            try:
+                tmp.query_version()
+                if tmp.is_multizone:
+                    tmp.query_zone_count()
+                else:
+                    tmp.zone_count = 1
+            except Exception:
+                tmp.close()
+                self._send_json(503, {"error": "Could not connect to device"})
+                return
 
         self._send_sse_headers()
 
@@ -1198,20 +1219,28 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(padding.encode("utf-8"))
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
-            tmp.close()
+            if tmp is not None:
+                tmp.close()
             return
 
         try:
             while True:
-                if tmp.is_multizone:
-                    colors = tmp.query_zone_colors()
-                else:
-                    state = tmp.query_light_state()
-                    if state is not None:
-                        h, s, b, k, _power = state
-                        colors = [(h, s, b, k)]
+                colors: Optional[list[tuple[int, int, int, int]]] = None
+
+                # Prefer the engine's in-memory frame buffer — zero UDP.
+                ctrl = self.device_manager.get_controller(ip)
+                if ctrl is not None:
+                    colors = ctrl.get_last_frame()
+
+                # Fallback: direct device query (only when no effect running).
+                if colors is None and tmp is not None:
+                    if tmp.is_multizone:
+                        colors = tmp.query_zone_colors()
                     else:
-                        colors = None
+                        state = tmp.query_light_state()
+                        if state is not None:
+                            h, s, b, k, _power = state
+                            colors = [(h, s, b, k)]
 
                 if colors is not None:
                     payload: str = json.dumps({
@@ -1228,7 +1257,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             # Client disconnected — clean exit.
             pass
         finally:
-            tmp.close()
+            if tmp is not None:
+                tmp.close()
 
     # -- POST handlers ------------------------------------------------------
 
