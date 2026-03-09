@@ -48,6 +48,17 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
 9. [Engine and Controller API](#engine-and-controller-api)
    - [VirtualMultizoneDevice](#virtualmultizonedevice)
 10. [Testing](#testing)
+11. [REST API Server](#rest-api-server)
+    - [Server Configuration](#server-configuration)
+    - [API Endpoints](#api-endpoints)
+    - [Authentication](#authentication)
+    - [Server-Sent Events (Live Colors)](#server-sent-events-live-colors)
+    - [Phone Override Behavior](#phone-override-behavior)
+    - [Installing the Server as a systemd Service](#installing-the-server-as-a-systemd-service)
+12. [GlowUp iOS App](#glowup-ios-app)
+    - [Building the App](#building-the-app)
+    - [App Screens](#app-screens)
+13. [Cloudflare Tunnel (Remote Access)](#cloudflare-tunnel-remote-access)
 
 ---
 
@@ -1261,3 +1272,199 @@ To add new tests, follow the same pattern: create `MockDevice` instances
 with the desired `zone_count`, `is_multizone`, and `is_polychrome` values,
 build a `VirtualMultizoneDevice`, call methods, and assert against the
 recorded calls.
+
+---
+
+## REST API Server
+
+The REST API server (`server.py`) exposes all GlowUp functionality over
+HTTP, enabling remote control from the iOS app or any HTTP client.  It
+replaces `scheduler.py` by managing effects directly through the
+`Controller` API instead of spawning subprocesses.
+
+```bash
+python3 server.py server.json              # start the server
+python3 server.py --dry-run server.json    # preview resolved schedule
+```
+
+### Server Configuration
+
+The server reads a JSON configuration file that combines server settings
+with the same schedule format used by `scheduler.py`:
+
+```json
+{
+    "port": 8420,
+    "auth_token": "your-secret-token-here",
+    "location": {
+        "latitude": 43.07,
+        "longitude": -89.40
+    },
+    "groups": {
+        "porch": ["10.0.0.62"]
+    },
+    "schedule": [
+        {
+            "name": "evening aurora",
+            "group": "porch",
+            "start": "sunset-30m",
+            "stop": "23:00",
+            "effect": "aurora",
+            "params": {"speed": 10.0, "brightness": 60}
+        }
+    ]
+}
+```
+
+Generate a secure token:
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+The `groups` and `schedule` sections are optional — the server works in
+API-only mode without them.
+
+### API Endpoints
+
+All endpoints require a bearer token in the `Authorization` header:
+
+```
+Authorization: Bearer your-secret-token-here
+```
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/devices` | List all discovered devices |
+| `GET` | `/api/effects` | List effects with full parameter metadata |
+| `GET` | `/api/devices/{ip}/status` | Current effect name, params, FPS |
+| `GET` | `/api/devices/{ip}/colors` | Snapshot of zone HSBK values |
+| `GET` | `/api/devices/{ip}/colors/stream` | SSE stream of zone colors at 4 Hz |
+| `POST` | `/api/devices/{ip}/play` | Start an effect (body: `{"effect":"name","params":{...}}`) |
+| `POST` | `/api/devices/{ip}/stop` | Stop current effect (fade to black) |
+| `POST` | `/api/devices/{ip}/power` | Power on/off (body: `{"on": true}`) |
+| `POST` | `/api/discover` | Re-run device discovery |
+
+**Examples:**
+
+```bash
+TOKEN="your-token"
+BASE="http://localhost:8420"
+
+# List devices
+curl -H "Authorization: Bearer $TOKEN" $BASE/api/devices
+
+# Play an effect
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"effect":"cylon","params":{"speed":2.0,"hue":120}}' \
+     $BASE/api/devices/10.0.0.62/play
+
+# Stop the effect
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+     $BASE/api/devices/10.0.0.62/stop
+```
+
+### Authentication
+
+Every request must include a valid bearer token.  The token is compared
+using `hmac.compare_digest()` for timing-safe validation.  Invalid or
+missing tokens receive a `401 Unauthorized` response.
+
+### Server-Sent Events (Live Colors)
+
+The `/api/devices/{ip}/colors/stream` endpoint opens a long-lived HTTP
+connection that pushes zone color updates at 4 Hz using the Server-Sent
+Events protocol:
+
+```
+data: {"zones": [{"h": 0, "s": 65535, "b": 32768, "k": 3500}, ...]}
+
+data: {"zones": [{"h": 100, "s": 65535, "b": 32768, "k": 3500}, ...]}
+```
+
+The stream creates a separate read-only device connection to avoid
+socket contention with the engine's animation loop (the same pattern
+used by monitor mode).
+
+### Phone Override Behavior
+
+When the phone app sends a `play` command, the server marks the device
+as "overridden" so the scheduler skips it.  The override persists until
+the next schedule transition, at which point the scheduler resumes
+control automatically.
+
+Sending `stop` from the phone keeps the override active (the device
+stays dark) until the next schedule transition.
+
+### Installing the Server as a systemd Service
+
+```bash
+sudo cp glowup-server.service /etc/systemd/system/
+sudo cp server.json /etc/glowup/server.json
+sudo systemctl daemon-reload
+sudo systemctl enable glowup-server
+sudo systemctl start glowup-server
+```
+
+If migrating from `scheduler.py`, disable the old service first:
+
+```bash
+sudo systemctl stop glowup-scheduler
+sudo systemctl disable glowup-scheduler
+```
+
+---
+
+## GlowUp iOS App
+
+The GlowUp iOS app provides remote control of LIFX devices from
+anywhere with a phone signal.  It communicates with `server.py` over
+HTTPS via a Cloudflare Tunnel.
+
+### Building the App
+
+**Requirements:**
+
+- macOS with Xcode installed
+- Apple ID (free for simulator testing; $99/yr Apple Developer account
+  for deploying to a physical device for more than 7 days)
+
+**Steps:**
+
+1. Open the project: `open ios/GlowUp.xcodeproj`
+2. In Xcode, select your Apple ID under Signing & Capabilities
+3. Select an iPhone simulator or your connected device
+4. Build and run (Cmd+R)
+
+### App Screens
+
+1. **Device List** — Shows all discovered devices with name, product
+   type, group, and current effect.  Pull-to-refresh fetches the
+   latest state.
+
+2. **Device Detail** — Live color strip visualization (SSE-fed at 4 Hz),
+   current effect info, power toggle, stop button, and a link to
+   change the effect.
+
+3. **Effect Picker** — Lists all registered effects with descriptions
+   and parameter counts.
+
+4. **Effect Config** — Auto-generated parameter UI built from the
+   server's `Param` metadata.  Sliders for numeric params, pickers
+   for choice params, text fields for strings.  Tap "Play" to send
+   the command.
+
+5. **Settings** — Server URL and API token configuration.  Token is
+   stored in the iOS Keychain.  Includes a "Test Connection" button.
+
+---
+
+## Cloudflare Tunnel (Remote Access)
+
+Cloudflare Tunnel creates an outbound-only encrypted connection from
+the Pi to Cloudflare's edge network.  The phone connects to
+`https://lights.yourdomain.com` — no ports are opened on the router
+and no dynamic DNS is needed.
+
+See [TUNNEL.md](TUNNEL.md) for complete setup instructions.

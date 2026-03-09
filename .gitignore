@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .claude/
 server.json
+.DS_Store
+xcuserdata/

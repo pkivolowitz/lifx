@@ -18,7 +18,11 @@ integration are performed by Perry Kivolowitz, the sole Human Author.
 - **Scheduler** — daemon that runs effects on a timed schedule using symbolic times (sunrise, sunset, dawn, dusk) with offsets, supporting multiple independent device groups
 - **Extensible** — add a new effect by dropping a single Python file in `effects/`; it auto-registers and appears in the CLI
 
-No cloud. No app. No account. No dependencies. Just UDP packets on your LAN.
+- **REST API server** — HTTP daemon that wraps the entire engine for remote control from any HTTP client
+- **iPhone app** — native SwiftUI app with live color monitoring, auto-generated parameter UI, and Keychain-secured auth
+- **Cloudflare Tunnel** — secure remote access from anywhere without opening router ports or running a VPN
+
+No cloud dependency. No external Python packages. Just UDP packets on your LAN — with optional secure remote access.
 
 ## Quick Start
 
@@ -59,7 +63,11 @@ See the **[User Manual](MANUAL.md)** for:
 - Effect developer guide (how to build your own)
 - Live simulator (`--sim` and `--sim-only` preview modes)
 - Engine, Controller, and VirtualMultizoneDevice API
+- REST API server reference
+- GlowUp iOS app
 - Testing
+
+See **[TUNNEL.md](TUNNEL.md)** for Cloudflare Tunnel setup.
 
 ## Scheduler (Daemon)
 
@@ -85,6 +93,8 @@ See [schedule.json.example](schedule.json.example) for config format. Deploy as 
 | `simulator.py` | Live tkinter preview window (`--sim`, `--sim-only`), optional graceful fallback |
 | `solar.py` | Sunrise/sunset calculator (NOAA algorithm, no dependencies) |
 | `scheduler.py` | Orchestrator daemon with device groups and symbolic scheduling |
+| `server.py` | REST API daemon — subsumes scheduler, enables remote control |
+| `ios/GlowUp/` | Native SwiftUI iPhone app |
 | `test_virtual_multizone.py` | Mock-based tests for virtual multizone dispatch |
 
 ## Effects
