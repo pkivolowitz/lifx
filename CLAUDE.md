@@ -19,7 +19,7 @@ A modular effect engine for LIFX string lights. Replaces the battery-draining ph
 - 3 zones per physical bulb on LIFX string lights
 - Extended multizone: up to 82 zones per packet, apply=0 stages, apply=1 commits
 - Fire-and-forget (rapid mode) for animation frames
-- MULTIZONE_PRODUCTS = {31, 32, 38, 123, 124, 125, 143, 144}
+- MULTIZONE_PRODUCTS: 19 IDs covering Z, Beam, Neon, String, Outdoor Neon, Indoor Neon, Permanent Outdoor (US + Intl variants); see transport.py for full annotated list
 - Broadcast address auto-detected per platform (macOS ifconfig, Linux ioctl)
 
 ## Adding a New Effect

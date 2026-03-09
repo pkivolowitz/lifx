@@ -113,7 +113,28 @@ KELVIN_MAX: int = 9000
 # ---------------------------------------------------------------------------
 
 #: Product IDs that support the extended multizone protocol.
-MULTIZONE_PRODUCTS: set[int] = {31, 32, 38, 123, 124, 125, 143, 144}
+#: Source: https://github.com/LIFX/products/blob/master/products.json
+MULTIZONE_PRODUCTS: set[int] = {
+    31,             # LIFX Z
+    32,             # LIFX Z
+    38,             # LIFX Beam
+    117,            # LIFX Z US
+    118,            # LIFX Z Intl
+    119,            # LIFX Beam US
+    120,            # LIFX Beam Intl
+    141,            # LIFX Neon US
+    142,            # LIFX Neon Intl
+    143,            # LIFX String US
+    144,            # LIFX String Intl
+    161,            # LIFX Outdoor Neon US
+    162,            # LIFX Outdoor Neon Intl
+    203,            # LIFX String US (gen2)
+    204,            # LIFX String Intl (gen2)
+    205,            # LIFX Indoor Neon US
+    206,            # LIFX Indoor Neon Intl
+    213,            # LIFX Permanent Outdoor US
+    214,            # LIFX Permanent Outdoor Intl
+}
 
 #: Product IDs for monochrome-only bulbs (brightness + kelvin, no hue/saturation).
 MONOCHROME_PRODUCTS: set[int] = {
