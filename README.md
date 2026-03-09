@@ -99,3 +99,7 @@ See [schedule.json.example](schedule.json.example) for config format. Deploy as 
 ## License
 
 MIT
+
+## Appreciation
+
+> If you find this software useful, please consider donating to a local foodbank. Even a can of soup makes a difference.
