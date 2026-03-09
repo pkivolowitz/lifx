@@ -316,6 +316,18 @@ The config file is JSON with three sections: `location`, `groups`, and
             }
         },
         {
+            "name": "porch weekday morning",
+            "days": "MTWRF",
+            "group": "porch",
+            "start": "sunrise-30m",
+            "stop": "sunrise+30m",
+            "effect": "flag",
+            "params": {
+                "country": "us",
+                "brightness": 70
+            }
+        },
+        {
             "name": "porch overnight clock",
             "group": "porch",
             "start": "23:00",
@@ -346,6 +358,24 @@ the same time. Use hostnames if you have DNS/mDNS set up, or raw IPs.
 | `stop`   | yes      | When to stop (fixed time or symbolic)            |
 | `effect` | yes      | Effect name (e.g., `"aurora"`, `"cylon"`)        |
 | `params` | no       | Effect parameter overrides (e.g., `{"speed": 5}`) |
+| `days`   | no       | Day-of-week filter (e.g., `"MTWRF"` for weekdays) |
+
+**Day-of-week filtering** — The `days` field restricts an entry to specific
+days using the academic letter convention:
+
+| Letter | Day       |
+|--------|-----------|
+| M      | Monday    |
+| T      | Tuesday   |
+| W      | Wednesday |
+| R      | Thursday  |
+| F      | Friday    |
+| S      | Saturday  |
+| U      | Sunday    |
+
+Examples: `"MTWRF"` = weekdays, `"SU"` = weekends, `"MWF"` = Mon/Wed/Fri.
+Omitting the field (or setting it to `""`) means every day. Letters can
+appear in any order but must not repeat.
 
 When multiple entries for the same group overlap, the first match in
 config file order wins (put higher-priority entries first).
@@ -1305,6 +1335,9 @@ with the same schedule format used by `scheduler.py`:
     "groups": {
         "porch": ["10.0.0.62"]
     },
+    "nicknames": {
+        "10.0.0.62": "Porch Lights"
+    },
     "schedule": [
         {
             "name": "evening aurora",
@@ -1313,10 +1346,23 @@ with the same schedule format used by `scheduler.py`:
             "stop": "23:00",
             "effect": "aurora",
             "params": {"speed": 10.0, "brightness": 60}
+        },
+        {
+            "name": "weekend cylon",
+            "days": "SU",
+            "group": "porch",
+            "start": "sunset",
+            "stop": "23:00",
+            "effect": "cylon",
+            "params": {"speed": 4.0}
         }
     ]
 }
 ```
+
+The `nicknames` section maps device IPs to custom display names shown
+in the iPhone app.  Nicknames can also be set from the app itself
+(swipe left on a device row) and are persisted back to this file.
 
 Generate a secure token:
 
