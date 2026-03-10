@@ -175,6 +175,13 @@ struct DeviceDetailView: View {
                 } label: {
                     Label("Power Off", systemImage: "power")
                 }
+
+                // Deep reset — clears stale zone colors from device firmware.
+                Button(role: .destructive) {
+                    Task { await resetDevice() }
+                } label: {
+                    Label("Reset Lights", systemImage: "arrow.counterclockwise.circle")
+                }
             } header: {
                 Text("Controls")
             }
@@ -287,5 +294,18 @@ struct DeviceDetailView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Deep-reset device: stop effects, clear firmware state, blank zones.
+    private func resetDevice() async {
+        isLoading = true
+        do {
+            try await apiClient.reset(ip: device.ip)
+            colorStream.disconnect()
+            await refreshStatus()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
     }
 }

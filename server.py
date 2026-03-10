@@ -396,11 +396,13 @@ class DeviceManager:
         ctrl: Optional[Controller] = self.get_or_create_controller(ip)
         if ctrl is None:
             raise KeyError(f"Unknown device: {ip}")
-        # Power on the device before playing.
+        # Power on and clear any firmware effect before playing.
         dev: Optional[LifxDevice] = self.get_device(ip)
         if dev is not None:
             try:
                 dev.set_power(on=True, duration_ms=0)
+                if dev.is_multizone:
+                    dev.clear_firmware_effect()
             except Exception:
                 pass
         ctrl.play(effect_name, **params)
@@ -472,6 +474,11 @@ class DeviceManager:
     def set_power(self, ip: str, on: bool) -> dict[str, Any]:
         """Turn a device on or off.
 
+        When powering off, writes black to all zones first so the LIFX
+        firmware doesn't retain stale colors in non-volatile memory.
+        Without this, the device shows old effect colors the next time
+        it powers on — even hours or days later.
+
         Args:
             ip: Device IP address.
             on: ``True`` to power on, ``False`` to power off.
@@ -485,8 +492,76 @@ class DeviceManager:
         dev: Optional[LifxDevice] = self.get_device(ip)
         if dev is None:
             raise KeyError(f"Unknown device: {ip}")
+
+        # Blank all zones before powering off so the firmware's stored
+        # state is clean.  Without this, the device flashes stale colors
+        # the next time it powers on.
+        if not on and dev.is_multizone and dev.zone_count:
+            blank: list[tuple[int, int, int, int]] = [
+                (0, 0, 0, KELVIN_DEFAULT)
+            ] * dev.zone_count
+            dev.set_zones(blank, duration_ms=0, rapid=False)
+
         dev.set_power(on=on, duration_ms=DEFAULT_FADE_MS)
         return {"ip": ip, "power": "on" if on else "off"}
+
+    def reset(self, ip: str) -> dict[str, Any]:
+        """Deep-reset a device: stop effects, clear firmware state, blank zones.
+
+        This is the nuclear option for cleaning a device that has stale
+        zone colors or a firmware-level multizone effect running inside
+        the hardware.  Steps:
+
+        1. Stop any running software effect (immediate, no fade).
+        2. Disable any firmware-level multizone effect (type 508 OFF).
+        3. Power on the device (so zone writes are accepted).
+        4. Write black to all zones with acknowledgment (non-rapid).
+        5. Power off.
+
+        Args:
+            ip: Device IP address.
+
+        Returns:
+            A dict confirming the reset.
+
+        Raises:
+            KeyError: If the device IP is not configured.
+        """
+        dev: Optional[LifxDevice] = self.get_device(ip)
+        if dev is None:
+            raise KeyError(f"Unknown device: {ip}")
+
+        # 1. Stop any running software effect immediately.
+        ctrl: Optional[Controller] = self.get_controller(ip)
+        if ctrl is not None:
+            ctrl.stop(fade_ms=0)
+
+        # 2. Clear any firmware-level multizone effect.
+        if dev.is_multizone:
+            try:
+                dev.clear_firmware_effect()
+                logging.info("Reset %s: firmware effect cleared", ip)
+            except Exception as exc:
+                logging.warning(
+                    "Reset %s: clear_firmware_effect failed: %s", ip, exc,
+                )
+
+        # 3. Power on so zone writes are accepted.
+        dev.set_power(on=True, duration_ms=0)
+        time_mod.sleep(0.1)  # Brief delay for device to wake up.
+
+        # 4. Blank all zones with acknowledged writes.
+        if dev.is_multizone and dev.zone_count:
+            blank: list[tuple[int, int, int, int]] = [
+                (0, 0, 0, KELVIN_DEFAULT)
+            ] * dev.zone_count
+            dev.set_zones(blank, duration_ms=0, rapid=False)
+
+        # 5. Power off.
+        dev.set_power(on=False, duration_ms=0)
+
+        logging.info("Reset %s: device cleaned and powered off", ip)
+        return {"ip": ip, "reset": True}
 
     def identify(
         self,
@@ -1519,6 +1594,16 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_post_resume(ip)
             return
 
+        # /api/devices/{ip}/reset
+        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
+                and parts[3] == "reset"):
+            ip = parts[2]
+            if not _validate_ip(ip):
+                self._send_json(400, {"error": "Invalid IP address"})
+                return
+            self._handle_post_reset(ip)
+            return
+
         # /api/devices/{ip}/nickname
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "nickname"):
@@ -1797,6 +1882,22 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             )
             status: dict[str, Any] = self.device_manager.get_status(ip)
             self._send_json(200, status)
+        except KeyError:
+            self._send_json(404, {"error": "Device not found"})
+
+    def _handle_post_reset(self, ip: str) -> None:
+        """POST /api/devices/{ip}/reset — deep-reset device hardware.
+
+        Stops all software effects, disables any firmware-level multizone
+        effect, blanks all zones with acknowledged writes, and powers off.
+        This clears stale zone colors stored in the device's non-volatile
+        memory.
+        """
+        try:
+            result: dict[str, Any] = self.device_manager.reset(ip)
+            # Clear any phone override since the device is now clean.
+            self.device_manager.clear_override(ip)
+            self._send_json(200, result)
         except KeyError:
             self._send_json(404, {"error": "Device not found"})
 

@@ -159,6 +159,18 @@ class APIClient: ObservableObject {
         )
     }
 
+    /// Deep-reset device hardware: stop effects, clear firmware state,
+    /// blank all zones, and power off.
+    ///
+    /// - Parameter ip: Device IP address.
+    /// - Throws: ``APIError`` on failure.
+    func reset(ip: String) async throws {
+        let _: [String: AnyCodableValue] = try await post(
+            "/api/devices/\(ip)/reset",
+            body: EmptyBody()
+        )
+    }
+
     /// Set or clear a custom display name for a device.
     ///
     /// - Parameters:

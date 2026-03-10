@@ -85,9 +85,14 @@ MSG_SET_COLOR_ZONES: int = 501
 MSG_GET_COLOR_ZONES: int = 502
 MSG_STATE_ZONE: int = 503
 MSG_STATE_MULTI_ZONE: int = 506
+MSG_SET_MULTIZONE_EFFECT: int = 508
 MSG_SET_EXTENDED_COLOR_ZONES: int = 510
 MSG_GET_EXTENDED_COLOR_ZONES: int = 511
 MSG_STATE_EXTENDED_COLOR_ZONES: int = 512
+
+# Multizone firmware effect types (for SetMultiZoneEffect, type 508).
+MULTIZONE_EFFECT_OFF: int = 0
+MULTIZONE_EFFECT_MOVE: int = 1
 
 # Apply flags for extended multizone set
 APPLY_NO: int = 0     # Stage colors, don't render yet
@@ -921,6 +926,40 @@ class LifxDevice:
                 self.fire_and_forget(MSG_SET_EXTENDED_COLOR_ZONES, payload)
             else:
                 self._send(MSG_SET_EXTENDED_COLOR_ZONES, payload, ack=True)
+
+    def clear_firmware_effect(self) -> None:
+        """Disable any firmware-level multizone effect on this device.
+
+        LIFX multizone devices can run an internal effect (e.g. MOVE)
+        that cycles zone colors autonomously inside the firmware.  This
+        persists through power cycles and fights with software-rendered
+        zone writes, causing visible strobing.
+
+        Sends ``SetMultiZoneEffect`` (type 508) with ``type=OFF`` to
+        disable any active firmware effect.  Safe to call on devices
+        that don't have a firmware effect running — it's a no-op.
+        """
+        # SetMultiZoneEffect payload (LIFX LAN protocol):
+        #   instance_id: u32  (0 = any)
+        #   type:        u8   (0 = OFF, 1 = MOVE)
+        #   reserved:    u16
+        #   speed:       u32  (ms per cycle, irrelevant for OFF)
+        #   duration:    u64  (ns, 0 = forever, irrelevant for OFF)
+        #   reserved:    u32
+        #   reserved:    u32
+        #   parameters:  32 bytes (all zeros for OFF)
+        payload: bytes = struct.pack(
+            "<I B HI Q II 32s",
+            0,                  # instance_id
+            MULTIZONE_EFFECT_OFF,  # type = OFF
+            0,                  # reserved
+            0,                  # speed
+            0,                  # duration
+            0,                  # reserved
+            0,                  # reserved
+            b'\x00' * 32,      # parameters
+        )
+        self._send(MSG_SET_MULTIZONE_EFFECT, payload, ack=True)
 
     def set_power(self, on: bool, duration_ms: int = 0) -> None:
         """Turn the device on or off.
