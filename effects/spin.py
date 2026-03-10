@@ -42,7 +42,7 @@ class Spin(Effect):
     Adjacent bulbs are offset so the whole string shimmers.
     """
 
-    name: str = "spin"
+    name: str = "_spin"
     description: str = "Rotate colors within each polychrome bulb"
 
     speed = Param(2.0, min=0.2, max=30.0,

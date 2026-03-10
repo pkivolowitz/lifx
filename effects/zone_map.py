@@ -60,7 +60,7 @@ class ZoneMap(Effect):
     up in each phase.
     """
 
-    name: str = "zone_map"
+    name: str = "_zone_map"
     description: str = "Diagnostic R/G/B strobe cycling through zone offsets within each bulb"
 
     stride = Param(DEFAULT_STRIDE, min=2, max=16,

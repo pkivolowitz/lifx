@@ -44,6 +44,9 @@ struct Effect: Identifiable {
     /// Parameter definitions keyed by parameter name.
     let params: [String: EffectParam]
 
+    /// Whether this effect is hidden by default (name starts with ``_``).
+    let hidden: Bool
+
     /// Conform to ``Identifiable`` using the effect name.
     var id: String { name }
 }
@@ -63,6 +66,9 @@ struct EffectListResponse: Codable {
 
         /// Parameter definitions keyed by name.
         let params: [String: EffectParam]
+
+        /// Whether this effect is hidden by default (name starts with ``_``).
+        let hidden: Bool
     }
 
     /// Convert to a sorted array of ``Effect`` for display.
@@ -71,7 +77,8 @@ struct EffectListResponse: Codable {
             Effect(
                 name: name,
                 description: detail.description,
-                params: detail.params
+                params: detail.params,
+                hidden: detail.hidden
             )
         }
         .sorted { $0.name < $1.name }

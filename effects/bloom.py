@@ -57,7 +57,7 @@ class Bloom(Effect):
     back out from outer to inner.
     """
 
-    name: str = "bloom"
+    name: str = "_bloom"
     description: str = "Bulbs grow and shrink using polychrome concentric zones"
 
     speed = Param(4.0, min=0.5, max=30.0,

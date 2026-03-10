@@ -29,8 +29,16 @@ struct EffectPickerView: View {
     /// Whether effects are being loaded.
     @State private var isLoading: Bool = true
 
+    /// Whether to show hidden (diagnostic) effects whose names start with ``_``.
+    @State private var showHidden: Bool = false
+
+    /// Effects filtered by the current hidden-visibility toggle.
+    private var visibleEffects: [Effect] {
+        showHidden ? effects : effects.filter { !$0.hidden }
+    }
+
     var body: some View {
-        List(effects) { effect in
+        List(visibleEffects) { effect in
             NavigationLink {
                 EffectConfigView(device: device, effect: effect)
             } label: {
@@ -65,10 +73,18 @@ struct EffectPickerView: View {
             }
         }
         .navigationTitle("Effects")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Toggle(isOn: $showHidden) {
+                    Label("Show Hidden", systemImage: "eye.slash")
+                }
+                .toggleStyle(.switch)
+            }
+        }
         .overlay {
             if isLoading {
                 ProgressView("Loading effects...")
-            } else if effects.isEmpty {
+            } else if visibleEffects.isEmpty {
                 ContentUnavailableView(
                     "No Effects",
                     systemImage: "sparkles",

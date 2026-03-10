@@ -42,7 +42,7 @@ class PolychromeTest(Effect):
     corresponds to each zone index.
     """
 
-    name: str = "polychrome_test"
+    name: str = "_polychrome_test"
     description: str = "Static R/G/B pattern to reveal zone positions within each bulb"
 
     zones_per_bulb = Param(ZONES_PER_BULB_DEFAULT, min=1, max=16,

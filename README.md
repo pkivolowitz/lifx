@@ -146,9 +146,11 @@ control.
 | `morse` | Flashes a message in Morse code |
 | `twinkle` | Random zones sparkle and fade like Christmas lights |
 | `wave` | Standing wave — bulbs vibrate with fixed nodes |
-| `bloom` | Polychrome bloom exploiting concentric zone architecture |
-| `crossfade` | A/B comparison between HSB and Lab interpolation |
-| `zone_map` | Diagnostic — visualize physical zone layout |
+| `_bloom` | Polychrome bloom exploiting concentric zone architecture |
+| `_spin` | Rotate colors within each polychrome bulb |
+| `_crossfade` | A/B comparison between HSB and Lab interpolation |
+| `_zone_map` | Diagnostic — visualize physical zone layout |
+| `_polychrome_test` | Static R/G/B pattern to reveal zone positions |
 
 ## Requirements
 

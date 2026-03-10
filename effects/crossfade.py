@@ -105,7 +105,7 @@ class Crossfade(Effect):
     takes over.  One full loop = 6 transitions, then repeats.
     """
 
-    name: str = "crossfade"
+    name: str = "_crossfade"
     description: str = "A/B test: HSB flat vs Lab staggered color transitions"
 
     speed = Param(2.0, min=0.5, max=30.0,

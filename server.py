@@ -606,6 +606,7 @@ class DeviceManager:
             result[name] = {
                 "description": cls.description,
                 "params": params,
+                "hidden": name.startswith("_"),
             }
         return result
 

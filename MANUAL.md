@@ -1120,6 +1120,13 @@ the network, device objects, or anything outside their render function.
 4. Implement `render(self, t: float, zone_count: int) -> list[HSBK]`.
 5. That's it — the effect auto-registers and appears in the CLI.
 
+> **Hidden effects:** Effects whose name starts with `_` (e.g.,
+> `_polychrome_test`, `_zone_map`, `_crossfade`, `_bloom`, `_spin`) are hidden from the
+> iOS app by default.  Users can reveal them with the "Show Hidden"
+> toggle on the effect list screen.  Use this convention for diagnostic
+> and test effects that would otherwise clutter the list.  Hidden
+> effects are experimental and may be removed at any time.
+
 No imports in `__init__.py` are needed. The framework auto-discovers all
 `.py` files in the `effects/` directory via `pkgutil.iter_modules` and
 imports them at startup. The `EffectMeta` metaclass automatically
@@ -1331,7 +1338,7 @@ two colors. No phantom red, no magenta, no perceptual discontinuities.
 
 #### A/B Validation
 
-The difference was validated empirically using the `crossfade` diagnostic
+The difference was validated empirically using the `_crossfade` diagnostic
 effect, which alternates between HSB and Lab interpolation on the same
 color pattern. Viewing through a diffuser, the Lab transitions were
 unanimously smoother, and the French flag's blue/white boundary artifact
