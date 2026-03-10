@@ -396,13 +396,23 @@ class DeviceManager:
         ctrl: Optional[Controller] = self.get_or_create_controller(ip)
         if ctrl is None:
             raise KeyError(f"Unknown device: {ip}")
-        # Power on and clear any firmware effect before playing.
+        # Power on and clear stale persistent state before playing.
+        #
+        # LIFX multizone devices have a persistent "committed" color
+        # state separate from the live zone overlay written by set_zones.
+        # If the committed state has colors from a previous effect, any
+        # dropped UDP frame causes the device to briefly show those old
+        # colors (visible as strobing).
+        #
+        # set_color (type 102) updates the committed state.  Writing
+        # black here ensures dropped frames fall back to black instead
+        # of old effect colors.
         dev: Optional[LifxDevice] = self.get_device(ip)
         if dev is not None:
             try:
                 dev.set_power(on=True, duration_ms=0)
                 if dev.is_multizone:
-                    dev.clear_firmware_effect()
+                    dev.set_color(0, 0, 0, KELVIN_DEFAULT, duration_ms=0)
             except Exception:
                 pass
         ctrl.play(effect_name, **params)
@@ -550,7 +560,11 @@ class DeviceManager:
         dev.set_power(on=True, duration_ms=0)
         time_mod.sleep(0.1)  # Brief delay for device to wake up.
 
-        # 4. Blank all zones with acknowledged writes.
+        # 4. Clear the persistent committed state with set_color (type 102)
+        # and also blank zones with set_zones (type 510).  set_color
+        # updates the device's persistent fallback state; set_zones
+        # only updates the live overlay.
+        dev.set_color(0, 0, 0, KELVIN_DEFAULT, duration_ms=0)
         if dev.is_multizone and dev.zone_count:
             blank: list[tuple[int, int, int, int]] = [
                 (0, 0, 0, KELVIN_DEFAULT)
