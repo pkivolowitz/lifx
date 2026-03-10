@@ -396,11 +396,15 @@ class DeviceManager:
         ctrl: Optional[Controller] = self.get_or_create_controller(ip)
         if ctrl is None:
             raise KeyError(f"Unknown device: {ip}")
-        # Power on the device before playing.
+        # Power on and clear the persistent committed state before playing.
+        # set_color (type 102) updates the committed state so dropped
+        # frames fall back to black instead of stale old effect colors.
         dev: Optional[LifxDevice] = self.get_device(ip)
         if dev is not None:
             try:
                 dev.set_power(on=True, duration_ms=0)
+                if dev.is_multizone:
+                    dev.set_color(0, 0, 0, KELVIN_DEFAULT, duration_ms=0)
             except Exception:
                 pass
         ctrl.play(effect_name, **params)
