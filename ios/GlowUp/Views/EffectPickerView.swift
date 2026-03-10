@@ -38,49 +38,48 @@ struct EffectPickerView: View {
     }
 
     var body: some View {
-        List(visibleEffects) { effect in
-            NavigationLink {
-                EffectConfigView(device: device, effect: effect)
-            } label: {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(effect.name)
-                            .font(.headline)
-                        if !effect.description.isEmpty {
-                            Text(effect.description)
+        List {
+            ForEach(visibleEffects) { effect in
+                NavigationLink {
+                    EffectConfigView(device: device, effect: effect)
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(effect.name)
+                                .font(.headline)
+                            if !effect.description.isEmpty {
+                                Text(effect.description)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            // Show parameter count as a hint.
+                            let paramCount = effect.params.count
+                            if paramCount > 0 {
+                                Text(
+                                    "\(paramCount) parameter\(paramCount == 1 ? "" : "s")"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                            }
+                        }
+                        Spacer()
+                        // Indicate the currently running effect.
+                        if effect.name == currentEffect {
+                            Image(systemName: "speaker.wave.2.fill")
+                                .foregroundStyle(.green)
                                 .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        // Show parameter count as a hint.
-                        let paramCount = effect.params.count
-                        if paramCount > 0 {
-                            Text(
-                                "\(paramCount) parameter\(paramCount == 1 ? "" : "s")"
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
                         }
                     }
-                    Spacer()
-                    // Indicate the currently running effect.
-                    if effect.name == currentEffect {
-                        Image(systemName: "speaker.wave.2.fill")
-                            .foregroundStyle(.green)
-                            .font(.subheadline)
-                    }
+                    .padding(.vertical, 2)
                 }
-                .padding(.vertical, 2)
+            }
+
+            // Toggle for revealing hidden diagnostic/test effects.
+            Section {
+                Toggle("Show Hidden Effects", isOn: $showHidden)
             }
         }
         .navigationTitle("Effects")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Toggle(isOn: $showHidden) {
-                    Label("Show Hidden", systemImage: "eye.slash")
-                }
-                .toggleStyle(.switch)
-            }
-        }
         .overlay {
             if isLoading {
                 ProgressView("Loading effects...")
