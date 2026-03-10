@@ -22,6 +22,7 @@ Architecture::
 
 Endpoints::
 
+    GET  /api/status                     Server readiness and version
     GET  /api/devices                    List discovered devices
     GET  /api/effects                    List effects with param metadata
     GET  /api/devices/{ip}/status        Current effect and params
@@ -47,7 +48,7 @@ Usage::
 
 from __future__ import annotations
 
-__version__ = "1.4"
+__version__ = "1.5"
 
 import hmac
 import http.server
@@ -266,6 +267,8 @@ class DeviceManager:
         self._known_ips: list[str] = known_ips or []
         # User-assigned nicknames: IP → display name.
         self._nicknames: dict[str, str] = nicknames or {}
+        # Readiness flag: False until initial discovery completes.
+        self._ready: bool = False
 
     def discover(self) -> list[dict[str, Any]]:
         """Run LIFX discovery and cache results.
@@ -358,8 +361,14 @@ class DeviceManager:
                     old_dev.close()
 
             self._devices = new_map
+            self._ready = True
 
         return self._devices_as_list()
+
+    @property
+    def ready(self) -> bool:
+        """Return ``True`` once initial discovery has completed."""
+        return self._ready
 
     def get_device(self, ip: str) -> Optional[LifxDevice]:
         """Look up a cached device by IP.
@@ -1394,6 +1403,11 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         path: str = self.path.split("?")[0]  # strip query string
         parts: list[str] = path.strip("/").split("/")
 
+        # /api/status
+        if path == "/api/status":
+            self._handle_get_status()
+            return
+
         # /api/devices
         if path == "/api/devices":
             self._handle_get_devices()
@@ -1518,6 +1532,22 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self._send_json(404, {"error": "Not found"})
 
     # -- GET handlers -------------------------------------------------------
+
+    def _handle_get_status(self) -> None:
+        """GET /api/status — server readiness and version.
+
+        Returns a status object indicating whether initial device
+        discovery has completed.  Clients can poll this endpoint on
+        connect and show a "discovering devices" message until
+        ``ready`` becomes ``true``.
+        """
+        ready: bool = self.device_manager.ready
+        status: str = "ready" if ready else "discovering"
+        self._send_json(200, {
+            "status": status,
+            "ready": ready,
+            "version": __version__,
+        })
 
     def _handle_get_devices(self) -> None:
         """GET /api/devices — list all discovered devices."""
@@ -2220,7 +2250,7 @@ def main() -> None:
         _dry_run(config)
         sys.exit(0)
 
-    # -- Device discovery ---------------------------------------------------
+    # -- Device manager (no discovery yet) ------------------------------------
     # Collect all unique IPs from config groups for fallback discovery.
     groups: dict[str, list[str]] = config.get("groups", {})
     known_ips: list[str] = sorted(
@@ -2230,32 +2260,17 @@ def main() -> None:
     dm: DeviceManager = DeviceManager(
         known_ips=known_ips, nicknames=nicknames,
     )
-    logging.info("Discovering LIFX devices...")
-    devices: list[dict[str, Any]] = dm.discover()
-    logging.info("Found %d device(s)", len(devices))
-    for dev_info in devices:
-        logging.info(
-            "  %s — %s (%s) [%s zones]",
-            dev_info.get("label", "?"),
-            dev_info.get("product", "?"),
-            dev_info.get("ip", "?"),
-            dev_info.get("zones", "?"),
-        )
 
-    # -- Scheduler thread ---------------------------------------------------
-    scheduler: Optional[SchedulerThread] = None
-    if config.get("schedule"):
-        scheduler = SchedulerThread(config, dm)
-        scheduler.start()
-    else:
-        logging.info("No schedule configured — API-only mode")
-
-    # -- HTTP server --------------------------------------------------------
+    # -- HTTP server (bind immediately) -------------------------------------
+    # Start accepting connections BEFORE discovery so the Cloudflare
+    # tunnel (or any health-check) never sees "connection refused".
+    # API requests arriving before discovery completes see an empty
+    # device list — harmless and self-correcting.
     port: int = config.get("port", DEFAULT_PORT)
 
     GlowUpRequestHandler.device_manager = dm
     GlowUpRequestHandler.auth_token = config["auth_token"]
-    GlowUpRequestHandler.scheduler = scheduler
+    GlowUpRequestHandler.scheduler = None          # patched after start
     GlowUpRequestHandler.config = config
     GlowUpRequestHandler.config_path = config_path
 
@@ -2293,10 +2308,41 @@ def main() -> None:
         "API base: http://localhost:%d/api/", port,
     )
 
+    # -- Background discovery -----------------------------------------------
+    # Run discovery in a daemon thread so the HTTP server is already
+    # accepting connections while we wait for devices to respond.
+    def _background_startup() -> None:
+        """Discover devices, then start the scheduler."""
+        logging.info("Discovering LIFX devices...")
+        devices: list[dict[str, Any]] = dm.discover()
+        logging.info("Found %d device(s)", len(devices))
+        for dev_info in devices:
+            logging.info(
+                "  %s — %s (%s) [%s zones]",
+                dev_info.get("label", "?"),
+                dev_info.get("product", "?"),
+                dev_info.get("ip", "?"),
+                dev_info.get("zones", "?"),
+            )
+
+        # Start the scheduler now that devices are available.
+        if config.get("schedule"):
+            scheduler: SchedulerThread = SchedulerThread(config, dm)
+            GlowUpRequestHandler.scheduler = scheduler
+            scheduler.start()
+        else:
+            logging.info("No schedule configured — API-only mode")
+
+    startup_thread: threading.Thread = threading.Thread(
+        target=_background_startup, daemon=True, name="startup-discovery",
+    )
+    startup_thread.start()
+
     try:
         server.serve_forever()
     finally:
         logging.info("Shutting down...")
+        scheduler: Optional[SchedulerThread] = GlowUpRequestHandler.scheduler
         if scheduler is not None:
             scheduler.stop()
             scheduler.join(timeout=5.0)

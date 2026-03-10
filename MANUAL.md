@@ -1892,6 +1892,7 @@ Authorization: Bearer your-secret-token-here
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/api/status` | Server readiness and version |
 | `GET` | `/api/devices` | List all discovered devices |
 | `GET` | `/api/effects` | List effects with full parameter metadata |
 | `GET` | `/api/devices/{ip}/status` | Current effect name, params, FPS |
@@ -1921,6 +1922,29 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 curl -X POST -H "Authorization: Bearer $TOKEN" \
      $BASE/api/devices/10.0.0.62/stop
 ```
+
+### Server Readiness
+
+The server binds its HTTP port immediately on startup, then runs device
+discovery in the background.  This eliminates the "connection refused"
+window that caused 502 errors from reverse proxies (e.g. Cloudflare
+Tunnel) during restart.
+
+Clients should query `GET /api/status` on connect:
+
+```json
+{"status": "discovering", "ready": false, "version": "1.5"}
+```
+
+Once discovery completes the response changes to:
+
+```json
+{"status": "ready", "ready": true, "version": "1.5"}
+```
+
+While `ready` is `false`, other endpoints work normally but return empty
+device lists.  The iOS app uses this to show a "Discovering devices..."
+indicator instead of an empty screen.
 
 ### Authentication
 
