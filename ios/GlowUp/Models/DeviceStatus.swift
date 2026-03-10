@@ -20,4 +20,7 @@ struct DeviceStatus: Codable {
 
     /// Target frames per second of the render loop.
     let fps: Int
+
+    /// Whether the user has overridden the schedule on this device.
+    let overridden: Bool
 }

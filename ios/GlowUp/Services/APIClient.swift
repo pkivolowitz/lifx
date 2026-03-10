@@ -120,6 +120,17 @@ class APIClient: ObservableObject {
         return try await post("/api/devices/\(ip)/stop", body: EmptyBody())
     }
 
+    /// Resume the schedule on a device by clearing its phone override.
+    ///
+    /// The scheduler will resume control on its next poll cycle.
+    ///
+    /// - Parameter ip: Device IP address.
+    /// - Returns: The updated ``DeviceStatus``.
+    /// - Throws: ``APIError`` on failure.
+    func resume(ip: String) async throws -> DeviceStatus {
+        return try await post("/api/devices/\(ip)/resume", body: EmptyBody())
+    }
+
     /// Turn a device on or off.
     ///
     /// - Parameters:

@@ -1919,6 +1919,7 @@ Authorization: Bearer your-secret-token-here
 | `GET` | `/api/devices/{ip}/colors/stream` | SSE stream of zone colors at 4 Hz |
 | `POST` | `/api/devices/{ip}/play` | Start an effect (body: `{"effect":"name","params":{...}}`) |
 | `POST` | `/api/devices/{ip}/stop` | Stop current effect (fade to black) |
+| `POST` | `/api/devices/{ip}/resume` | Clear phone override, resume schedule |
 | `POST` | `/api/devices/{ip}/power` | Power on/off (body: `{"on": true}`) |
 
 **Examples:**
@@ -1988,13 +1989,24 @@ used by monitor mode).
 
 ### Phone Override Behavior
 
-When the phone app sends a `play` command, the server marks the device
-as "overridden" so the scheduler skips it.  The override persists until
-the next schedule transition, at which point the scheduler resumes
-control automatically.
+When the phone app sends a `play` or `stop` command, the server marks
+the device as "overridden" so the scheduler skips it.  The iOS app
+shows an orange "Schedule paused on this device" banner on the device
+detail screen while an override is active.
 
-Sending `stop` from the phone keeps the override active (the device
-stays dark) until the next schedule transition.
+Overrides are cleared in two ways:
+
+- **Manual resume:** Tap "Resume Schedule" in the app (calls
+  `POST /api/devices/{ip}/resume`).  The scheduler picks up on its
+  next poll cycle.
+- **Schedule transition:** When the active schedule entry changes
+  (e.g., from "evening" to "night"), overrides that were set against
+  the outgoing entry are cleared automatically.  Overrides set after
+  a server restart or against a different entry are preserved.
+
+The `GET /api/devices/{ip}/status` and `GET /api/devices` responses
+include an `"overridden"` boolean field so the app can display the
+override state.
 
 ### Installing the Server as a systemd Service
 

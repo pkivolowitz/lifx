@@ -53,6 +53,38 @@ struct DeviceDetailView: View {
                 }
             }
 
+            // Schedule override banner — shown when manual control has
+            // paused the schedule on this device.
+            if status?.overridden == true {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            "Schedule paused on this device",
+                            systemImage: "calendar.badge.exclamationmark"
+                        )
+                        .font(.subheadline)
+                        .foregroundStyle(.orange)
+
+                        Text(
+                            "Playing or stopping an effect pauses the schedule. "
+                            + "Tap Resume to hand control back to the scheduler."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                        Button {
+                            Task { await resumeSchedule() }
+                        } label: {
+                            Label("Resume Schedule", systemImage: "calendar.badge.clock")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
             // Device info section.
             Section {
                 LabeledContent("Product", value: device.product ?? "Unknown")
@@ -233,6 +265,17 @@ struct DeviceDetailView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Clear the phone override so the scheduler resumes control.
+    private func resumeSchedule() async {
+        isLoading = true
+        do {
+            status = try await apiClient.resume(ip: device.ip)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
     }
 
     /// Toggle device power off.

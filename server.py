@@ -36,6 +36,7 @@ Endpoints::
     GET  /api/devices/{ip}/colors/stream SSE stream at 4 Hz
     POST /api/devices/{ip}/play          Start an effect
     POST /api/devices/{ip}/stop          Stop current effect
+    POST /api/devices/{ip}/resume        Clear phone override, resume schedule
     POST /api/devices/{ip}/power         Turn device on/off
     POST /api/devices/{ip}/identify      Pulse brightness to locate device
     POST /api/devices/{ip}/nickname      Set a custom display name
@@ -440,8 +441,12 @@ class DeviceManager:
                 raise KeyError(f"Unknown device: {ip}")
             ctrl: Optional[Controller] = self._controllers.get(ip)
 
+        overridden: bool = self.is_overridden(ip)
+
         if ctrl is not None:
-            return ctrl.get_status()
+            result: dict[str, Any] = ctrl.get_status()
+            result["overridden"] = overridden
+            return result
 
         # No controller yet — return idle status.
         dev: LifxDevice = self._devices[ip]
@@ -450,6 +455,7 @@ class DeviceManager:
             "effect": None,
             "params": {},
             "fps": 0,
+            "overridden": overridden,
             "devices": [{
                 "ip": dev.ip,
                 "mac": dev.mac_str,
@@ -730,6 +736,7 @@ class DeviceManager:
                 "zones": dev.zone_count,
                 "is_multizone": dev.is_multizone,
                 "current_effect": current_effect,
+                "overridden": self.is_overridden(dev.ip),
             })
         return result
 
@@ -1086,23 +1093,44 @@ class SchedulerThread(threading.Thread):
                 )
 
                 if active_name != prev_name:
-                    # Schedule transition — clear overrides for all
-                    # devices in this group so the scheduler resumes.
+                    # Schedule transition — clear overrides only for
+                    # devices whose override was set against the
+                    # outgoing entry.  Overrides set against a
+                    # different entry (or after a server restart when
+                    # prev was None) survive so the user's manual
+                    # selection is not stomped by the scheduler's
+                    # initial catch-up poll.
                     for ip in ips:
                         if self._dm.is_overridden(ip):
-                            logging.info(
-                                "[%s] Clearing phone override on %s "
-                                "(schedule transition)",
-                                group_name, ip,
+                            override_entry: Optional[str] = (
+                                self._dm.get_override_entry(ip)
                             )
-                            self._dm.clear_override(ip)
+                            if override_entry == prev_name:
+                                logging.info(
+                                    "[%s] Clearing phone override on "
+                                    "%s (schedule transition from "
+                                    "'%s' to '%s')",
+                                    group_name, ip,
+                                    prev_name, active_name,
+                                )
+                                self._dm.clear_override(ip)
+                            else:
+                                logging.info(
+                                    "[%s] Preserving phone override "
+                                    "on %s (override entry '%s' != "
+                                    "outgoing '%s')",
+                                    group_name, ip,
+                                    override_entry, prev_name,
+                                )
 
-                    # Stop previous effect on all devices in group.
+                    # Stop previous effect on non-overridden devices.
                     if prev_name is not None:
                         logging.info(
                             "[%s] Stopping '%s'", group_name, prev_name,
                         )
                         for ip in ips:
+                            if self._dm.is_overridden(ip):
+                                continue
                             try:
                                 self._dm.stop(ip)
                             except (KeyError, Exception) as exc:
@@ -1111,7 +1139,7 @@ class SchedulerThread(threading.Thread):
                                     group_name, ip, exc,
                                 )
 
-                    # Start new effect.
+                    # Start new effect on non-overridden devices.
                     if active is not None:
                         effect: str = active["effect"]
                         params: dict[str, Any] = active.get("params", {})
@@ -1120,6 +1148,8 @@ class SchedulerThread(threading.Thread):
                             group_name, active_name, effect,
                         )
                         for ip in ips:
+                            if self._dm.is_overridden(ip):
+                                continue
                             try:
                                 self._dm.play(ip, effect, params)
                             except (KeyError, ValueError, Exception) as exc:
@@ -1465,6 +1495,16 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_post_identify(ip)
             return
 
+        # /api/devices/{ip}/resume
+        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
+                and parts[3] == "resume"):
+            ip = parts[2]
+            if not _validate_ip(ip):
+                self._send_json(400, {"error": "Invalid IP address"})
+                return
+            self._handle_post_resume(ip)
+            return
+
         # /api/devices/{ip}/nickname
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "nickname"):
@@ -1719,6 +1759,26 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             logging.info("API: stopped effect on %s", ip)
             # Keep the override active so the scheduler doesn't
             # immediately resume — it clears at the next transition.
+            self._send_json(200, status)
+        except KeyError:
+            self._send_json(404, {"error": "Device not found"})
+
+    def _handle_post_resume(self, ip: str) -> None:
+        """POST /api/devices/{ip}/resume — clear phone override.
+
+        Clears the manual override for this device so the scheduler
+        can resume control on its next poll cycle.
+        """
+        try:
+            if ip not in self.device_manager._devices:
+                raise KeyError(ip)
+            was_overridden: bool = self.device_manager.is_overridden(ip)
+            self.device_manager.clear_override(ip)
+            logging.info(
+                "API: resume schedule on %s (was overridden: %s)",
+                ip, was_overridden,
+            )
+            status: dict[str, Any] = self.device_manager.get_status(ip)
             self._send_json(200, status)
         except KeyError:
             self._send_json(404, {"error": "Device not found"})
