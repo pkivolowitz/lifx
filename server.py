@@ -70,7 +70,7 @@ import threading
 import time as time_mod
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from effects import get_registry, create_effect, HSBK_MAX, KELVIN_DEFAULT
 from engine import Controller
@@ -488,7 +488,12 @@ class DeviceManager:
         dev.set_power(on=on, duration_ms=DEFAULT_FADE_MS)
         return {"ip": ip, "power": "on" if on else "off"}
 
-    def identify(self, ip: str) -> None:
+    def identify(
+        self,
+        ip: str,
+        *,
+        on_complete: Optional[Callable[[], None]] = None,
+    ) -> None:
         """Pulse a device's brightness for a fixed duration to locate it.
 
         Runs in a background thread so the HTTP request returns immediately.
@@ -497,7 +502,9 @@ class DeviceManager:
         the device off.
 
         Args:
-            ip: Device IP address.
+            ip:          Device IP address.
+            on_complete: Optional callback invoked when the pulse finishes
+                         (e.g. to clear a phone override).
 
         Raises:
             KeyError: If the device IP is not configured.
@@ -539,6 +546,9 @@ class DeviceManager:
                 dev.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
             except Exception as exc:
                 logging.warning("Identify pulse failed for %s: %s", ip, exc)
+            finally:
+                if on_complete is not None:
+                    on_complete()
 
         thread: threading.Thread = threading.Thread(
             target=_pulse, daemon=True, name=f"identify-{ip}",
@@ -1759,10 +1769,13 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     def _handle_post_stop(self, ip: str) -> None:
         """POST /api/devices/{ip}/stop — stop the current effect."""
         try:
+            # Set override if not already set so the scheduler doesn't
+            # immediately restart the effect on its next poll cycle.
+            if not self.device_manager.is_overridden(ip):
+                active_entry: Optional[str] = self._get_active_entry_for_ip(ip)
+                self.device_manager.mark_override(ip, active_entry)
             status: dict[str, Any] = self.device_manager.stop(ip)
             logging.info("API: stopped effect on %s", ip)
-            # Keep the override active so the scheduler doesn't
-            # immediately resume — it clears at the next transition.
             self._send_json(200, status)
         except KeyError:
             self._send_json(404, {"error": "Device not found"})
@@ -1804,6 +1817,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             return
 
         try:
+            # Powering off from the phone should pause the scheduler on
+            # this device, otherwise it will restart the effect immediately.
+            if not on and not self.device_manager.is_overridden(ip):
+                active_entry: Optional[str] = self._get_active_entry_for_ip(ip)
+                self.device_manager.mark_override(ip, active_entry)
+
             result: dict[str, Any] = self.device_manager.set_power(ip, on)
             logging.info("API: power %s on %s", "on" if on else "off", ip)
             self._send_json(200, result)
@@ -1816,10 +1835,19 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         Starts a background thread that pulses the device's brightness
         in a sine wave for :data:`IDENTIFY_DURATION_SECONDS`.  The HTTP
         response returns immediately.
+
+        Sets a phone override for the duration of the pulse so the
+        scheduler doesn't restart an effect while identify is running.
+        The override is cleared automatically when the pulse finishes.
         """
         try:
-            self.device_manager.identify(ip)
-            logging.info("API: identifying %s", ip)
+            # Override so the scheduler doesn't fight with the pulse.
+            active_entry: Optional[str] = self._get_active_entry_for_ip(ip)
+            self.device_manager.mark_override(ip, active_entry)
+            self.device_manager.identify(ip, on_complete=lambda: (
+                self.device_manager.clear_override(ip)
+            ))
+            logging.info("API: identifying %s (override set)", ip)
             self._send_json(200, {"ip": ip, "identifying": True})
         except KeyError:
             self._send_json(404, {"error": "Device not found"})
