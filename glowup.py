@@ -299,7 +299,21 @@ def cmd_discover(args: argparse.Namespace) -> None:
     devices: list = discover_devices(timeout=args.timeout, target_ip=args.ip)
 
     if not devices:
-        _print("No LIFX devices found.")
+        _print("No LIFX devices found.\n")
+        _print("This does not necessarily mean your lights are absent — LIFX")
+        _print("UDP discovery can be unreliable depending on your network.")
+        _print("Common causes:\n")
+        _print("  • Mesh routers (e.g. TP-Link Deco) may filter broadcast")
+        _print("    packets between wireless nodes. Try --ip <device-ip> to")
+        _print("    query a specific device directly.")
+        _print("  • Devices may be powered off or unreachable on a different")
+        _print("    subnet or VLAN.")
+        _print("  • Increasing --timeout (default 5s) can help on congested")
+        _print("    networks.")
+        _print("  • The LIFX app on your phone can confirm whether devices")
+        _print("    are online.")
+        _print("  • Check your router's admin page for connected devices and")
+        _print("    their IP addresses, then add them to server.json groups.")
         return
 
     # Build a list of plain-dict rows for tabular display
