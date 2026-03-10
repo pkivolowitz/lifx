@@ -38,6 +38,7 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
    - [rule30](#rule30)
    - [rule_trio](#rule_trio)
    - [newtons_cradle](#newtons_cradle)
+   - [embers](#embers)
 7. [Effect Developer Guide](#effect-developer-guide)
    - [Architecture Overview](#architecture-overview)
    - [Creating a New Effect](#creating-a-new-effect)
@@ -1076,6 +1077,66 @@ python3 glowup.py play newtons_cradle --ip <device-ip> --num-balls 7 --hue 20 --
 
 # Maximum LIFX bulb separation (3 zones = one physical bulb)
 python3 glowup.py play newtons_cradle --ip <device-ip> --gap 3
+```
+
+---
+
+### embers
+
+#### Background
+
+Embers simulates a column of rising, cooling embers using a 1D heat
+diffusion and convection model.  Heat is randomly injected at the
+bottom of the string and undergoes three physical processes each frame:
+
+1. **Convection** — the heat buffer shifts upward periodically,
+   simulating buoyancy.  Hot embers visibly rise along the string.
+
+2. **Diffusion + cooling** — each cell averages with its neighbours
+   and is multiplied by a cooling factor:
+   `T'[i] = (T[i-1] + T[i] + T[i+1]) / 3 × cooling`
+
+3. **Turbulence** — random per-cell perturbation adds flicker and
+   prevents the gradient from settling into a static equilibrium.
+
+Occasional large heat bursts create visible "puffs" that travel up
+the string as they cool and fade.
+
+#### Color Gradient
+
+Temperature maps to a physically motivated ember gradient:
+
+| Temperature | Color |
+|-------------|-------|
+| 0.0 – 0.05 | Black (cold/dead) |
+| 0.05 – 0.30 | Deep red (first glow) |
+| 0.30 – 0.60 | Red → orange |
+| 0.60 – 1.0 | Orange → bright yellow-white (hottest) |
+
+#### Parameters
+
+| Parameter      | Default | Range       | Description |
+|----------------|---------|-------------|-------------|
+| `--intensity`  | 0.7     | 0.0–1.0    | Probability of heat injection per frame |
+| `--cooling`    | 0.98    | 0.80–0.999 | Cooling factor per step (lower = faster fade) |
+| `--turbulence` | 0.08    | 0.0–0.3    | Random per-cell flicker amplitude |
+| `--brightness` | 100     | 0–100      | Overall brightness percent |
+| `--kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin |
+
+#### Examples
+
+```bash
+# Default — embers rising from one end
+python3 glowup.py play embers --ip <device-ip> --zpb 3
+
+# Slow burn — embers cool quickly, barely reach the top
+python3 glowup.py play embers --ip <device-ip> --zpb 3 --cooling 0.93
+
+# Roaring fire — high intensity, long-lived embers
+python3 glowup.py play embers --ip <device-ip> --zpb 3 --intensity 0.9 --cooling 0.99
+
+# Calm glow — low turbulence, gentle injection
+python3 glowup.py play embers --ip <device-ip> --zpb 3 --intensity 0.4 --turbulence 0.02
 ```
 
 ---
