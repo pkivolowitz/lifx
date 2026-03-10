@@ -356,17 +356,16 @@ class Engine:
                 self.effect.on_stop()
                 self.effect = None
 
-        # Fade all zones to black so the lights don't freeze on the last frame.
-        # Only set_zones is used here (overlay layer).  The persistent
-        # committed state is NOT touched — clearing it to black would cause
-        # every dropped UDP frame to flash black.  Use the explicit /reset
-        # endpoint to clear stale committed colors when needed.
+        # Snap the overlay to black immediately.  The caller (glowup.py)
+        # handles the visual fade via set_power(on=False, duration_ms=...).
+        # Using duration_ms=0 here prevents conflicts with any in-progress
+        # transition from the render loop's non-zero duration.
         if fade_ms > 0:
             for dev in self.devices:
                 if dev.zone_count:
                     if dev.is_multizone:
                         off = [(0, 0, 0, KELVIN_DEFAULT)] * dev.zone_count
-                        dev.set_zones(off, duration_ms=fade_ms, rapid=False)
+                        dev.set_zones(off, duration_ms=0, rapid=False)
                     else:
                         # Single bulb (color or monochrome): fade to black.
                         dev.set_color(0, 0, 0, KELVIN_DEFAULT,
