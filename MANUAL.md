@@ -35,6 +35,8 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
    - [binclock](#binclock)
    - [flag](#flag)
    - [fireworks](#fireworks)
+   - [rule30](#rule30)
+   - [rule_trio](#rule_trio)
 7. [Effect Developer Guide](#effect-developer-guide)
    - [Architecture Overview](#architecture-overview)
    - [Creating a New Effect](#creating-a-new-effect)
@@ -696,6 +698,253 @@ python3 glowup.py play fireworks --ip <device-ip> --launch-rate 2.0 --trail-leng
 
 # Slow, dramatic rockets with long fades
 python3 glowup.py play fireworks --ip <device-ip> --ascent-speed 4.0 --burst-duration 4.0 --max-rockets 5
+```
+
+---
+
+### rule30
+
+**Wolfram elementary 1-D cellular automaton** — each zone on the strip is one
+cell.  Every frame the simulation advances by one or more generations using the
+selected Wolfram rule, mapping live cells to a coloured zone and dead cells to
+a dim background.
+
+The strip is treated as a **periodic ring**: the leftmost cell's left neighbour
+is the rightmost cell and vice versa, so no edge starvation occurs.
+
+#### How it works
+
+An elementary CA is defined by its neighbourhood: the state of a cell in the
+next generation depends solely on its current state and the states of its
+immediate left and right neighbours.  Those three binary values form an 8-bit
+index into a lookup table.  The lookup table for rule *N* is simply the
+binary representation of *N*.
+
+**Rule 30** produces visually chaotic, pseudo-random output from a single live
+seed cell — it is so unpredictable that Wolfram used it as the random-number
+generator in Mathematica for many years.
+
+**Notable rules**
+
+| Rule | Character                                              |
+|------|--------------------------------------------------------|
+| 30   | Chaotic / pseudo-random.  Default.                    |
+| 90   | Sierpiński triangle — self-similar fractal.            |
+| 110  | Turing-complete.  Complex glider-like structures.      |
+| 184  | Traffic-flow model.  Waves propagate rightward.        |
+
+| Parameter     | Default | Range      | Description                                                        |
+|---------------|---------|------------|--------------------------------------------------------------------|
+| `--rule`      | 30      | 0–255      | Wolfram elementary CA rule number                                  |
+| `--speed`     | 8.0     | 0.5–120    | Generations per second                                             |
+| `--hue`       | 200.0   | 0–360      | Live-cell hue in degrees (200 = teal)                              |
+| `--brightness`| 100     | 1–100      | Live-cell brightness as percent                                    |
+| `--bg`        | 0       | 0–30       | Dead-cell background brightness as percent                         |
+| `--seed`      | 0       | 0–2        | Initial seed: 0 = single centre cell, 1 = random, 2 = all alive   |
+| `--kelvin`    | 3500    | 1500–9000  | Color temperature in Kelvin                                        |
+
+**Examples:**
+
+```bash
+# Default: Rule 30, teal, from a single centre cell
+python3 glowup.py play rule30 --ip <device-ip>
+
+# Sierpiński fractal in green
+python3 glowup.py play rule30 --ip <device-ip> --rule 90 --hue 120
+
+# Fast chaotic shimmer with dim background glow
+python3 glowup.py play rule30 --ip <device-ip> --speed 30 --bg 4
+
+# Rule 110 with random seed
+python3 glowup.py play rule30 --ip <device-ip> --rule 110 --seed 1
+```
+
+---
+
+### rule_trio
+
+**Three independent Wolfram cellular automata with perceptual colour blending.**
+Three separate CA simulations run simultaneously on the same zone strip.  Each
+CA has its own rule number, speed, and primary colour.  At every zone the
+outputs of all three are combined:
+
+| Active CAs at zone | Result                                              |
+|--------------------|-----------------------------------------------------|
+| 0 (none)           | Background brightness (`--bg`)                      |
+| 1                  | Pure primary of that CA                             |
+| 2                  | CIELAB midpoint of the two active primaries         |
+| 3 (all)            | CIELAB centroid — equal ⅓ weight to each primary    |
+
+Colour blending is performed through **CIELAB space** (via `lerp_color`) so
+transitions are perceptually uniform with no brightness dips or muddy
+intermediates.
+
+Because each CA can run at a slightly different speed (controlled by `--drift-b`
+and `--drift-c`) the three patterns continuously slide relative to one another.
+The interference creates a slowly shifting, never-repeating macro-scale colour
+structure riding on top of the underlying cellular chaos.
+
+On **LIFX string lights** (3 zones per physical bulb) two blending layers
+operate simultaneously: software blending from this effect, and optical blending
+inside each glass bulb.  This dual-layer smoothing makes aggressive gap-filling
+unnecessary; the default `--gap-fill 3` (one bulb radius) is usually ideal.
+
+#### Parameters
+
+| Parameter      | Default | Range      | Description                                                                  |
+|----------------|---------|------------|------------------------------------------------------------------------------|
+| `--rule-a`     | 30      | 0–255      | Wolfram rule for CA A                                                        |
+| `--rule-b`     | 30      | 0–255      | Wolfram rule for CA B                                                        |
+| `--rule-c`     | 30      | 0–255      | Wolfram rule for CA C                                                        |
+| `--speed`      | 8.0     | 0.5–120    | Base generations per second for CA A                                         |
+| `--drift-b`    | 1.31    | 0.1–8.0    | Speed multiplier for CA B (irrational default avoids phase lock-in)          |
+| `--drift-c`    | 1.73    | 0.1–8.0    | Speed multiplier for CA C (irrational default avoids phase lock-in)          |
+| `--palette`    | 0       | 0–50       | Colour preset (see table below); 0 = use `--hue-a/b/c` and `--sat`          |
+| `--hue-a`      | 0.0     | 0–360      | CA A primary hue in degrees (custom palette only)                            |
+| `--hue-b`      | 120.0   | 0–360      | CA B primary hue in degrees (custom palette only)                            |
+| `--hue-c`      | 240.0   | 0–360      | CA C primary hue in degrees (custom palette only)                            |
+| `--sat`        | 80      | 0–100      | Primary saturation as percent (custom palette only)                          |
+| `--brightness` | 90      | 1–100      | Primary brightness as percent                                                |
+| `--bg`         | 0       | 0–20       | Dead-cell background brightness as percent                                   |
+| `--gap-fill`   | 3       | 0–12       | Gap-fill radius in zones; 0 disables; multiples of 3 align to bulb edges    |
+| `--kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin                                                  |
+
+#### Gap fill
+
+When `--gap-fill N` is non-zero, a post-processing pass fills dead zones by
+searching up to *N* zones left and right for the nearest live neighbours and
+blending between them through CIELAB:
+
+- **Both sides found** — CIELAB blend weighted by distance (closer wins).
+- **One side only** — fades from the neighbour colour toward background with
+  distance.
+- **Neither side** — zone stays at background brightness.
+
+On LIFX string lights, use multiples of 3 to respect bulb boundaries:
+`--gap-fill 3` fills up to one bulb, `--gap-fill 6` two bulbs, etc.
+
+#### Palettes
+
+Palettes are coordinated sets of three primary hues plus a saturation value.
+When `--palette N` is non-zero it overrides `--hue-a`, `--hue-b`, `--hue-c`,
+and `--sat`.
+
+**Nature & elements**
+
+| # | Name          | Primaries                                    | Sat |
+|---|---------------|----------------------------------------------|-----|
+| 1 | pastels       | Soft pink (340°), lavender (270°), mint (150°) | 45% |
+| 2 | earth         | Amber (35°), terracotta (18°), sage (130°)   | 70% |
+| 3 | water         | Ocean blue (220°), cyan (185°), seafoam (165°) | 85% |
+| 4 | fire          | Red (0°), orange (30°), amber (55°)          | 95% |
+| 6 | marble        | Blue-gray (210°), warm-white (42°), cool-white (185°) | 12% |
+| 8 | aurora        | Emerald (145°), teal (178°), deep purple (268°) | 85% |
+|10 | forest        | Deep green (130°), moss (95°), bark brown (28°) | 72% |
+|11 | deep sea      | Midnight blue (232°), bioluminescent teal (172°), violet (262°) | 90% |
+|39 | tropical      | Hot teal (175°), coral (15°), sunny yellow (55°) | 90% |
+|40 | coral reef    | Coral orange (18°), teal (175°), deep blue (230°) | 88% |
+|41 | galaxy        | Deep violet (268°), midnight blue (235°), pale blue (215°) | 78% |
+|42 | autumn        | Burnt orange (22°), burgundy (355°), golden yellow (48°) | 85% |
+|43 | winter        | Ice blue (205°), silver (215°), pale lavender (270°) | 35% |
+|44 | desert        | Sand (45°), rust orange (18°), warm brown (28°) | 68% |
+|45 | arctic        | Pale blue (200°), ice white (210°), steel gray (215°) | 20% |
+
+*Marble (6) at 12% saturation looks nearly white; the CA's alive/dead spatial
+structure creates the veining.  Arctic (45) at 20% reads as frost breath
+patterns.*
+
+**Artists**
+
+| #  | Name          | Primaries                                    | Sat | Inspiration                              |
+|----|---------------|----------------------------------------------|-----|------------------------------------------|
+|  5 | van gogh      | Cobalt blue (225°), warm gold (48°), ice blue (195°) | 88% | *Starry Night* — swirling contrast       |
+|  7 | sunset        | Warm orange (20°), deep magenta (330°), soft violet (275°) | 88% | Turner atmospheric skies |
+| 13 | monet         | Soft lilac (280°), water green (160°), dusty rose (340°) | 55% | *Water Lilies* — hazy impressionism      |
+| 14 | klimt         | Deep gold (45°), teal (175°), burgundy (350°) | 85% | *The Kiss* — opulent gilded contrasts    |
+| 15 | rothko        | Deep crimson (355°), burnt sienna (22°), muted orange (32°) | 82% | Colour field — warm moody cluster |
+| 16 | hokusai       | Deep navy (225°), slate blue (210°), pale blue-gray (200°) | 80% | *The Great Wave* — layered ocean blues |
+| 17 | turner        | Golden amber (42°), hazy orange (28°), pale sky blue (200°) | 75% | Luminous atmospheric haze               |
+| 18 | mondrian      | Red (5°), cobalt blue (230°), golden yellow (52°) | 100% | Primary colour grid — bold, uncompromising |
+| 19 | warhol        | Hot pink (330°), lime green (88°), turquoise (178°) | 100% | Pop art — saturated, flat, electric    |
+| 20 | rembrandt     | Warm umber (28°), antique gold (44°), dark amber (35°) | 78% | Chiaroscuro — all warm, all depth      |
+
+*Mondrian (18) and Warhol (19) run at full saturation; `--brightness 60`
+tones them down if the output is too intense.  Rothko (15) keeps all three
+primaries within a 37° warm arc — CIELAB blends between them stay emotionally
+consistent rather than going muddy.*
+
+**Holidays**
+
+| #  | Name          | Primaries                                    | Sat |
+|----|---------------|----------------------------------------------|-----|
+| 21 | christmas     | Red (5°), deep green (125°), gold (48°)      | 92% |
+| 22 | halloween     | Orange (25°), deep purple (270°), yellow (58°) | 95% |
+| 23 | hanukkah      | Royal blue (228°), sky blue (205°), gold (48°) | 80% |
+| 24 | valentines    | Rose red (355°), hot pink (340°), blush (15°) | 80% |
+| 25 | easter        | Soft purple (280°), pale yellow (60°), light green (140°) | 45% |
+| 26 | independence  | Red (5°), white-blue (218°), blue (238°)     | 90% |
+| 27 | st patricks   | Shamrock green (130°), gold (50°), light green (145°) | 85% |
+| 28 | thanksgiving  | Burnt orange (22°), warm brown (30°), deep gold (45°) | 80% |
+| 29 | new year      | Champagne gold (48°), silver (218°), midnight blue (240°) | 65% |
+| 30 | mardi gras    | Deep purple (270°), gold (50°), green (130°) | 90% |
+| 31 | diwali        | Deep gold (45°), magenta (310°), saffron (30°) | 90% |
+
+**School colors**
+
+| #  | School        | Primaries                                    | Sat |
+|----|---------------|----------------------------------------------|-----|
+| 32 | michigan      | Maize (50°), cobalt blue (230°), sky blue (210°) | 88% |
+| 33 | alabama       | Crimson (350°), silver (215°), gold (48°)    | 82% |
+| 34 | lsu           | Purple (270°), gold (48°), pale gold (52°)   | 90% |
+| 35 | texas         | Burnt orange (22°), warm brown (28°), gold (45°) | 80% |
+| 36 | ohio state    | Scarlet (5°), silver (215°), gold (48°)      | 82% |
+| 37 | notre dame    | Gold (48°), navy (225°), green (130°)        | 88% |
+| 38 | ucla          | Blue (228°), gold (50°), sky blue (210°)     | 85% |
+
+**Moods & aesthetics**
+
+| #  | Name          | Primaries                                    | Sat | Character                                |
+|----|---------------|----------------------------------------------|-----|------------------------------------------|
+|  9 | neon          | Hot pink (310°), electric cyan (183°), acid green (90°) | 100% | Club lighting — maximum intensity |
+| 12 | cherry blossom | Pale pink (348°), blush (15°), soft lavender (290°) | 38% | Gentle, floral, Japanese spring |
+| 46 | vaporwave     | Hot pink (310°), purple (270°), electric cyan (185°) | 95% | Retrowave — 80s neon nostalgia          |
+| 47 | cyberpunk     | Neon green (130°), electric blue (225°), magenta (300°) | 100% | High-contrast dystopian city lights  |
+| 48 | cottagecore   | Sage green (130°), blush pink (350°), warm cream (45°) | 48% | Soft, domestic, garden-morning light  |
+| 49 | gothic        | Deep burgundy (350°), deep purple (270°), dark rose (340°) | 78% | Brooding — all hues cluster near red |
+| 50 | lo-fi         | Warm amber (35°), dusty rose (348°), muted sage (130°) | 52% | Relaxed, cozy, late-night study vibes |
+
+#### Examples
+
+```bash
+# Water palette — default settings
+python3 glowup.py play rule_trio --ip <device-ip> --palette 3
+
+# Van Gogh with Rule 90 (fractal) on CA A for structured cobalt regions
+python3 glowup.py play rule_trio --ip <device-ip> --palette 5 --rule-a 90
+
+# Halloween at high speed — frantic orange-purple chaos
+python3 glowup.py play rule_trio --ip <device-ip> --palette 22 --speed 20
+
+# Mardi Gras with wider gap fill (2-bulb radius)
+python3 glowup.py play rule_trio --ip <device-ip> --palette 30 --gap-fill 6
+
+# Hokusai wave — all three CAs on Rule 90 for deep fractal blue layering
+python3 glowup.py play rule_trio --ip <device-ip> --palette 16 --rule-a 90 --rule-b 90 --rule-c 90
+
+# Rothko — slow drift, very moody
+python3 glowup.py play rule_trio --ip <device-ip> --palette 15 --speed 3 --drift-b 1.1 --drift-c 1.2
+
+# Mondrian pop art — dial brightness down from the default 90
+python3 glowup.py play rule_trio --ip <device-ip> --palette 18 --brightness 60
+
+# Custom palette: coral, turquoise, gold
+python3 glowup.py play rule_trio --ip <device-ip> --hue-a 15 --hue-b 178 --hue-c 48 --sat 85
+
+# Michigan colors for game day
+python3 glowup.py play rule_trio --ip <device-ip> --palette 32 --speed 6
+
+# Gothic — slow, dim background glow, maximum menace
+python3 glowup.py play rule_trio --ip <device-ip> --palette 49 --speed 4 --bg 3
 ```
 
 ---
