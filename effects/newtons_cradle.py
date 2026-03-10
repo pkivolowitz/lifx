@@ -236,10 +236,17 @@ class NewtonsCradle(Effect):
     ) -> tuple[int, float]:
         """Compute ball width and swing amplitude, resolving AUTO values.
 
-        When both are AUTO the two are solved jointly so the full arc
-        (rest row + swing on each end) fits the strip:
+        When both are AUTO the layout is solved in two passes:
 
-            zone_count ≥ (n + 2) × bw + (n − 1) × gap   [swing = bw]
+        1. Primary: divide the strip evenly between balls and two swing arms
+           (treating swing = bw as a baseline):
+
+               bw = (zone_count − (n−1)×gap) ÷ (n + 2)
+
+        2. Secondary: distribute leftover zones (floor-division remainder)
+           to the two swing arms so the pendulum travels as far as the
+           strip permits — important on short 36-zone strips where the
+           primary quotient is small.
 
         When only one is AUTO it is derived from the fixed value.
 
@@ -256,10 +263,16 @@ class NewtonsCradle(Effect):
         gap_total: int = (n - 1) * gap
 
         if bw == AUTO and sw == AUTO:
-            # Solve for bw given swing = bw:
-            # zone_count ≥ (n + 2) * bw + gap_total
+            # Primary solve: allocate equal space to each ball and each swing
+            # arm — i.e. treat swing = bw and divide the strip evenly:
+            #   zone_count ≥ (n + 2) × bw + gap_total
             bw = max(MIN_BALL_WIDTH, (zone_count - gap_total) // (n + 2))
-            sw = float(bw)
+            # Secondary pass: floor-division leaves leftover zones unused.
+            # Distribute them across the two swing arms so the pendulum
+            # travels as far as the strip allows — critical on short strips
+            # (e.g. 36 zones) where the primary quotient is small.
+            leftover: int = zone_count - (n * bw + gap_total + 2 * bw)
+            sw = float(bw) + max(0, leftover) // 2
         elif bw == AUTO:
             bw = max(MIN_BALL_WIDTH,
                      (zone_count - gap_total - 2 * int(sw)) // n)
