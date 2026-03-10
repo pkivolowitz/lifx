@@ -404,7 +404,9 @@ class DeviceManager:
             except Exception:
                 pass
         ctrl.play(effect_name, **params)
-        return ctrl.get_status()
+        result: dict[str, Any] = ctrl.get_status()
+        result["overridden"] = self.is_overridden(ip)
+        return result
 
     def stop(self, ip: str) -> dict[str, Any]:
         """Stop the current effect on a device.
@@ -422,7 +424,9 @@ class DeviceManager:
         if ctrl is None:
             raise KeyError(f"Unknown device: {ip}")
         ctrl.stop(fade_ms=DEFAULT_FADE_MS)
-        return ctrl.get_status()
+        result: dict[str, Any] = ctrl.get_status()
+        result["overridden"] = self.is_overridden(ip)
+        return result
 
     def get_status(self, ip: str) -> dict[str, Any]:
         """Get the current effect status for a device.
