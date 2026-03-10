@@ -39,6 +39,7 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
    - [rule_trio](#rule_trio)
    - [newtons_cradle](#newtons_cradle)
    - [embers](#embers)
+   - [jacobs_ladder](#jacobs_ladder)
 7. [Effect Developer Guide](#effect-developer-guide)
    - [Architecture Overview](#architecture-overview)
    - [Creating a New Effect](#creating-a-new-effect)
@@ -1137,6 +1138,73 @@ python3 glowup.py play embers --ip <device-ip> --zpb 3 --intensity 0.9 --cooling
 
 # Calm glow — low turbulence, gentle injection
 python3 glowup.py play embers --ip <device-ip> --zpb 3 --intensity 0.4 --turbulence 0.02
+```
+
+---
+
+### jacobs_ladder
+
+#### Background
+
+Jacob's Ladder is a classic Frankenstein laboratory prop — two vertical
+conductors with an electric arc that forms at the bottom, rises to the
+top, breaks, and reforms.  This effect recreates that look on a string
+light.
+
+#### How It Works
+
+Pairs of bright electrode nodes connected by a flickering blue-white
+arc drift along the string.  When an arc reaches the far end it breaks
+off and a new one spawns at the entry end.  Multiple arc pairs can
+coexist, and at least one is always visible.
+
+The electrode gap is modulated by smooth noise — a random walk toward
+random targets, eased with a step factor — so the gap breathes apart
+and together without ever collapsing or stretching too far.
+
+#### Arc Dynamics
+
+Each arc has several layers of intensity variation:
+
+- **Per-arc flicker** — the entire arc's brightness varies randomly
+  each frame across a wide range (0.15–0.85), creating dramatic dips
+  where the arc nearly dies and moments where it blazes bright.
+- **Surges** — 10% chance per frame of a full-intensity blaze that
+  also lights up the electrodes to maximum.
+- **Crackle** — 12% chance per bulb per frame of an individual bright
+  white spike within the arc body, simulating electrical breakdown
+  points.
+- **Per-bulb flicker** — each bulb within the arc has independent
+  random intensity (0.25–1.0), giving the arc visible internal
+  structure.
+- **Sine profile** — the arc is brightest in the center and tapers
+  toward the electrodes.
+
+#### Parameters
+
+| Parameter      | Default | Range       | Description |
+|----------------|---------|-------------|-------------|
+| `--speed`      | 0.15    | 0.02–1.0   | Arc drift speed in bulbs per frame |
+| `--arcs`       | 2       | 1–5        | Target number of simultaneous arc pairs |
+| `--gap`        | 4       | 2–12       | Base gap between electrodes in bulbs |
+| `--reverse`    | 0       | 0–1        | Drift direction: 0 = forward, 1 = reverse |
+| `--brightness` | 100     | 0–100      | Overall brightness percent |
+| `--kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin |
+
+#### Examples
+
+```bash
+# Default — two arcs drifting along the string
+python3 glowup.py play jacobs_ladder --ip <device-ip> --zpb 3
+
+# Slow creep with wide electrode gaps
+python3 glowup.py play jacobs_ladder --ip <device-ip> --zpb 3 --speed 0.06 --gap 6
+
+# Busy lab — many arcs, fast drift
+python3 glowup.py play jacobs_ladder --ip <device-ip> --zpb 3 --arcs 4 --speed 0.25
+
+# Reverse direction
+python3 glowup.py play jacobs_ladder --ip <device-ip> --zpb 3 --reverse 1
 ```
 
 ---

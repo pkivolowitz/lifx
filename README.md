@@ -15,7 +15,7 @@ integration are performed by Perry Kivolowitz, the sole Human Author.
 ## What It Does
 
 - **Discovery** — finds all LIFX devices on your LAN via UDP broadcast
-- **Effects** — ships with 18 effects including aurora borealis, binary clock, fireworks, embers, Newton's Cradle, cellular automata (rule30, rule_trio), waving flag (199 countries), Larson scanner, Morse code, twinkling lights, standing wave, color breathe, and polychrome-aware diagnostics
+- **Effects** — ships with 20 effects including aurora borealis, binary clock, fireworks, embers, Newton's Cradle, cellular automata (rule30, rule_trio), waving flag (199 countries), Larson scanner, Morse code, twinkling lights, standing wave, color breathe, and polychrome-aware diagnostics
 - **Virtual multizone** — group any combination of devices into a single animation surface. A 108-zone string light and 4 single bulbs become a 112-zone strip. Effects animate across all devices as one. LIFX limits a physical chain to 3 string lights; virtual multizone removes that ceiling — any number of independent strings can be combined.
 - **Identify** — pulse a bulb's brightness to figure out which physical lamp corresponds to which IP address
 - **Monochrome support** — color effects on white-only bulbs are automatically converted to perceptually correct brightness using BT.709 luma coefficients
@@ -147,6 +147,7 @@ control.
 | `twinkle` | Random zones sparkle and fade like Christmas lights |
 | `wave` | Standing wave — bulbs vibrate with fixed nodes |
 | `embers` | Rising embers — 1D heat diffusion with convection and cooling gradient |
+| `jacobs_ladder` | Rising electric arcs between electrode pairs (Frankenstein lab) |
 | `newtons_cradle` | Newton's Cradle with Phong-shaded spheres and specular highlights |
 | `rule30` | Wolfram elementary cellular automaton (rules 30/90/110) |
 | `rule_trio` | Three independent CAs with CIELAB blending and 50 palette presets |
