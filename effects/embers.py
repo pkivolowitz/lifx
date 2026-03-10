@@ -113,9 +113,9 @@ class Embers(Effect):
     kelvin = Param(KELVIN_DEFAULT, min=KELVIN_MIN, max=KELVIN_MAX,
                    description="Color temperature in Kelvin")
 
-    def __init__(self) -> None:
+    def __init__(self, **overrides: dict) -> None:
         """Initialise the embers effect with an empty heat buffer."""
-        super().__init__()
+        super().__init__(**overrides)
         self._heat: list[float] = []
 
     def render(self, t: float, zone_count: int) -> list[HSBK]:
