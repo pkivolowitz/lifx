@@ -10,24 +10,27 @@ displacement(x, t) = sin(nodes * π * x / L) * sin(2π * t / speed)
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.1"
+__version__ = "1.2"
 
 import math
+import os
+import sys
 
 from . import (
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
-    pct_to_u16,
+    hue_to_u16, pct_to_u16,
 )
+
+# Import colorspace module from project root.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from colorspace import lerp_color
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 TWO_PI: float = 2.0 * math.pi
-
-# Halfway point of the HSBK hue range for shortest-path interpolation.
-HUE_HALFWAY: int = HSBK_MAX // 2
 
 # Brightness split: nodes dim to this fraction of max, antinodes add the rest.
 # 30% base + 70% displacement-scaled = 100% at full displacement.
@@ -78,11 +81,11 @@ class Wave(Effect):
         Returns:
             A list of *zone_count* HSBK tuples.
         """
-        h1: float = self.hue1 * HSBK_MAX / 360.0
-        h2: float = self.hue2 * HSBK_MAX / 360.0
-        s1: int = pct_to_u16(self.sat1)
-        s2: int = pct_to_u16(self.sat2)
         max_bri: int = pct_to_u16(self.brightness)
+
+        # Build endpoint HSBK tuples for the two colors.
+        color1: HSBK = (hue_to_u16(self.hue1), pct_to_u16(self.sat1), max_bri, self.kelvin)
+        color2: HSBK = (hue_to_u16(self.hue2), pct_to_u16(self.sat2), max_bri, self.kelvin)
 
         # Temporal oscillation swings the entire pattern between -1 and +1.
         temporal: float = math.sin(TWO_PI * t / self.speed)
@@ -105,20 +108,15 @@ class Wave(Effect):
             # -1 = pure color1, 0 = midpoint, +1 = pure color2.
             blend: float = (displacement + 1.0) / 2.0
 
-            # Hue interpolation via shortest path around the color wheel.
-            diff: float = h2 - h1
-            if diff > HUE_HALFWAY:
-                diff -= HSBK_MAX
-            elif diff < -HUE_HALFWAY:
-                diff += HSBK_MAX
-            hue: int = int(h1 + diff * blend) % (HSBK_MAX + 1)
-
-            sat: int = int(s1 + (s2 - s1) * blend)
+            # Interpolate hue and saturation via the global color method
+            # (Lab or HSB, selected by --lerp).
+            blended: HSBK = lerp_color(color1, color2, blend)
 
             # Brightness peaks at antinodes (large displacement), dims at
-            # nodes where displacement is near zero.
+            # nodes where displacement is near zero.  Override the blended
+            # brightness with displacement-based modulation.
             bri: int = int(max_bri * (BRI_BASE_FRAC + BRI_DISP_FRAC * abs(displacement)))
 
-            colors.append((hue, sat, bri, self.kelvin))
+            colors.append((blended[0], blended[1], bri, self.kelvin))
 
         return colors

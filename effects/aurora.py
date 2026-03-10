@@ -8,15 +8,21 @@ mimicking the northern lights.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import math
+import os
+import sys
 
 from . import (
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
-    pct_to_u16,
+    hue_to_u16, pct_to_u16,
 )
+
+# Import colorspace module from project root.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from colorspace import lerp_color
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -29,6 +35,13 @@ HUE_GREEN: float = 120.0
 HUE_TEAL: float = 170.0
 HUE_BLUE: float = 220.0
 HUE_PURPLE: float = 280.0
+
+# Precomputed palette HSBK tuples — full saturation, full brightness.
+# Brightness is overridden per-zone by the intensity wave computation.
+PALETTE_PURPLE: HSBK = (hue_to_u16(HUE_PURPLE), HSBK_MAX, HSBK_MAX, KELVIN_DEFAULT)
+PALETTE_BLUE: HSBK = (hue_to_u16(HUE_BLUE), HSBK_MAX, HSBK_MAX, KELVIN_DEFAULT)
+PALETTE_GREEN: HSBK = (hue_to_u16(HUE_GREEN), HSBK_MAX, HSBK_MAX, KELVIN_DEFAULT)
+PALETTE_TEAL: HSBK = (hue_to_u16(HUE_TEAL), HSBK_MAX, HSBK_MAX, KELVIN_DEFAULT)
 
 # Palette blend boundaries — divide [0, 1] into three color bands.
 BAND_1: float = 0.33   # purple → blue
@@ -121,22 +134,22 @@ class Aurora(Effect):
             hue_blend: float = (hue_wave + hue_wave2 + HUE_OFFSET) / HUE_SCALE
             hue_blend = max(0.0, min(1.0, hue_blend))
 
-            # Map blend factor to the aurora palette:
+            # Map blend factor to the aurora palette via lerp_color:
             #   0.0 = purple, 0.33 = blue, 0.66 = green, 1.0 = teal
-            if hue_blend < BAND_1:
-                f: float = hue_blend / BAND_1
-                hue_deg: float = HUE_PURPLE + (HUE_BLUE - HUE_PURPLE) * f
-            elif hue_blend < BAND_2:
-                f = (hue_blend - BAND_1) / (BAND_2 - BAND_1)
-                hue_deg = HUE_BLUE + (HUE_GREEN - HUE_BLUE) * f
-            else:
-                f = (hue_blend - BAND_2) / BAND_3
-                hue_deg = HUE_GREEN + (HUE_TEAL - HUE_GREEN) * f
-
-            hue: int = int(hue_deg * HSBK_MAX / 360.0) % (HSBK_MAX + 1)
-            sat: int = HSBK_MAX
             bri: int = int(bg_b + (max_bri - bg_b) * intensity)
 
-            colors.append((hue, sat, bri, self.kelvin))
+            if hue_blend < BAND_1:
+                f: float = hue_blend / BAND_1
+                blended: HSBK = lerp_color(PALETTE_PURPLE, PALETTE_BLUE, f)
+            elif hue_blend < BAND_2:
+                f = (hue_blend - BAND_1) / (BAND_2 - BAND_1)
+                blended = lerp_color(PALETTE_BLUE, PALETTE_GREEN, f)
+            else:
+                f = (hue_blend - BAND_2) / BAND_3
+                blended = lerp_color(PALETTE_GREEN, PALETTE_TEAL, f)
+
+            # Override brightness with intensity-based computation;
+            # lerp_color handles hue and saturation perceptually.
+            colors.append((blended[0], blended[1], bri, self.kelvin))
 
         return colors

@@ -18,9 +18,10 @@ Usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.3"
+__version__ = "1.4"
 
 import math
+import os
 import sys
 from typing import Any
 
@@ -30,6 +31,10 @@ from . import (
     hue_to_u16, pct_to_u16,
 )
 from .flag_data import StripeColor, get_flag, get_country_names
+
+# Import colorspace module from project root.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from colorspace import lerp_color
 
 
 # ---------------------------------------------------------------------------
@@ -133,9 +138,6 @@ Lower values = heavier smoothing (less flicker, more lag).  At 20 fps,
 eliminate single-bulb flicker at stripe boundaries without visible lag.
 """
 
-HSBK_WRAP: int = HSBK_MAX + 1
-"""Full hue circle for circular interpolation (65536)."""
-
 # --- Fallback -------------------------------------------------------------
 
 FALLBACK_COUNTRY: str = "us"
@@ -206,30 +208,6 @@ def _fbm(x: float) -> float:
 # Internal helpers -- temporal smoothing
 # ---------------------------------------------------------------------------
 
-def _lerp_hue(prev: int, curr: int, alpha: float) -> int:
-    """Interpolate between two LIFX hue values on the shortest arc.
-
-    Hue wraps at 65536, so naively averaging 1000 and 64000 would land
-    in the middle of the circle instead of crossing the seam.  This
-    function always takes the shortest path.
-
-    Args:
-        prev:  Previous frame's hue (0-65535).
-        curr:  Current frame's hue (0-65535).
-        alpha: Blend factor (0 = all prev, 1 = all curr).
-
-    Returns:
-        Blended hue in ``[0, 65535]``.
-    """
-    diff: int = curr - prev
-    half: int = HSBK_WRAP // 2
-    if diff > half:
-        diff -= HSBK_WRAP
-    elif diff < -half:
-        diff += HSBK_WRAP
-    return int(prev + alpha * diff) % HSBK_WRAP
-
-
 def _smooth_frame(
     prev: list[HSBK],
     curr: list[HSBK],
@@ -237,8 +215,10 @@ def _smooth_frame(
 ) -> list[HSBK]:
     """Blend the current frame toward the previous using an EMA.
 
-    Hue is interpolated circularly; saturation, brightness, and kelvin
-    are interpolated linearly.
+    Interpolation passes through CIELAB perceptual color space to avoid
+    the muddy intermediates and brightness dips of naive HSB blending.
+    This is critical at stripe boundaries where the z-buffer jitters
+    between two flag colors.
 
     Args:
         prev:  Previous frame's zone colors.
@@ -250,13 +230,7 @@ def _smooth_frame(
     """
     result: list[HSBK] = []
     for i in range(len(curr)):
-        p: HSBK = prev[i]
-        c: HSBK = curr[i]
-        h: int = _lerp_hue(p[0], c[0], alpha)
-        s: int = int(p[1] + alpha * (c[1] - p[1]))
-        b: int = int(p[2] + alpha * (c[2] - p[2]))
-        k: int = int(p[3] + alpha * (c[3] - p[3]))
-        result.append((h, s, b, k))
+        result.append(lerp_color(prev[i], curr[i], alpha))
     return result
 
 

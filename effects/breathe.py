@@ -8,9 +8,11 @@ shortest path around the color wheel.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import math
+import os
+import sys
 
 from . import (
     Effect, Param, HSBK,
@@ -18,16 +20,16 @@ from . import (
     hue_to_u16, pct_to_u16,
 )
 
+# Import colorspace module from project root.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from colorspace import lerp_color
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 # Full sine cycle in radians.
 TWO_PI: float = 2.0 * math.pi
-
-# Halfway point of the HSBK hue range — used to decide the shorter
-# interpolation path around the color wheel.
-HUE_HALFWAY: int = HSBK_MAX // 2
 
 
 class Breathe(Effect):
@@ -73,22 +75,12 @@ class Breathe(Effect):
         # 0.0 = pure color1, 1.0 = pure color2.
         blend: float = (s + 1.0) / 2.0
 
-        h1: float = self.hue1 * HSBK_MAX / 360.0
-        h2: float = self.hue2 * HSBK_MAX / 360.0
-        s1: int = pct_to_u16(self.sat1)
-        s2: int = pct_to_u16(self.sat2)
         bri: int = pct_to_u16(self.brightness)
 
-        # Interpolate hue via shortest path around the color wheel.
-        # If the gap exceeds half the wheel, wrap through zero instead.
-        diff: float = h2 - h1
-        if diff > HUE_HALFWAY:
-            diff -= HSBK_MAX
-        elif diff < -HUE_HALFWAY:
-            diff += HSBK_MAX
-        hue: int = int(h1 + diff * blend) % (HSBK_MAX + 1)
+        # Build endpoint HSBK tuples and interpolate via the global
+        # color method (Lab or HSB, selected by --lerp).
+        color1: HSBK = (hue_to_u16(self.hue1), pct_to_u16(self.sat1), bri, self.kelvin)
+        color2: HSBK = (hue_to_u16(self.hue2), pct_to_u16(self.sat2), bri, self.kelvin)
+        color: HSBK = lerp_color(color1, color2, blend)
 
-        sat: int = int(s1 + (s2 - s1) * blend)
-
-        color: HSBK = (hue, sat, bri, self.kelvin)
         return [color] * zone_count

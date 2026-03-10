@@ -2174,6 +2174,14 @@ def _build_parser() -> "argparse.ArgumentParser":
         action="store_true",
         help="Print resolved schedule and exit without running",
     )
+    parser.add_argument(
+        "--lerp",
+        type=str,
+        default=None,
+        choices=["lab", "hsb"],
+        help="Color interpolation method: lab (perceptually uniform) "
+             "or hsb (cheap). Overrides config file. Default: lab",
+    )
     return parser
 
 
@@ -2197,6 +2205,16 @@ def main() -> None:
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
         logging.error("Configuration error: %s", exc)
         sys.exit(1)
+
+    # -- Color interpolation method -----------------------------------------
+    # CLI --lerp overrides config "lerp" key; default is "lab".
+    from colorspace import set_lerp_method
+    lerp_method: str = (
+        args.lerp
+        or config.get("lerp", "lab")
+    )
+    set_lerp_method(lerp_method)
+    logging.info("Color interpolation: %s", lerp_method)
 
     if args.dry_run:
         _dry_run(config)

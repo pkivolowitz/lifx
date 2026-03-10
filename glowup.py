@@ -31,6 +31,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from transport import LifxDevice, discover_devices
 from engine import Controller, VirtualMultizoneDevice
 from effects import get_registry, get_effect_names, HSBK_MAX, KELVIN_DEFAULT
+from colorspace import set_lerp_method
 
 # ---------------------------------------------------------------------------
 # Named constants -- no magic numbers
@@ -512,9 +513,11 @@ def cmd_monitor(args: argparse.Namespace) -> None:
 
     poly_map: list[bool] = _build_polychrome_map(dev)
     zpb: int = getattr(args, "zpb", 1)
+    zoom_val: int = getattr(args, "zoom", 1)
     sim = create_simulator(
         dev.zone_count or 1, f"Monitor: {dev.label or args.ip}",
         polychrome_map=poly_map, zones_per_bulb=zpb,
+        zoom=zoom_val,
     )
     if sim is None:
         _print("ERROR: Monitor mode requires tkinter.", file=sys.stderr)
@@ -727,6 +730,12 @@ def cmd_play(args: argparse.Namespace) -> None:
         _print("  Sim-only mode: no commands will be sent to the lights.",
                flush=True)
 
+    # --- Set color interpolation method ---------------------------------------
+    lerp_method: str = getattr(args, "lerp", "lab")
+    set_lerp_method(lerp_method)
+    if not args.quiet:
+        _print(f"Color interpolation: {lerp_method}", flush=True)
+
     # --- Validate effect name -------------------------------------------------
     effect_name: str = args.effect
     registry: Dict[str, Any] = get_registry()
@@ -762,9 +771,11 @@ def cmd_play(args: argparse.Namespace) -> None:
         from simulator import create_simulator
         poly_map: list[bool] = _build_polychrome_map(dev)
         zpb: int = getattr(args, "zpb", 1)
+        zoom_val: int = getattr(args, "zoom", 1)
         sim = create_simulator(dev.zone_count or 1, effect_name,
                                polychrome_map=poly_map,
-                               zones_per_bulb=zpb)
+                               zones_per_bulb=zpb,
+                               zoom=zoom_val)
         if sim is None and sim_only:
             # No point continuing — sim-only has no other output channel.
             _print(
@@ -955,6 +966,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Zones per bulb for the simulator display "
              "(3 for LIFX string lights, default: 1)",
     )
+    p_mon.add_argument(
+        "--zoom", type=int, default=1,
+        help="Simulator zoom factor 1-10 (nearest-neighbor scaling, default: 1)",
+    )
 
     # -- play ------------------------------------------------------------------
     p_play = sub.add_parser(
@@ -1012,6 +1027,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--zpb", type=int, default=1,
         help="Zones per bulb for the simulator display "
              "(3 for LIFX string lights, default: 1)",
+    )
+    p_play.add_argument(
+        "--zoom", type=int, default=1,
+        help="Simulator zoom factor 1-10 (nearest-neighbor scaling, default: 1)",
+    )
+    p_play.add_argument(
+        "--lerp", type=str, default="lab",
+        choices=["lab", "hsb"],
+        help="Color interpolation method: lab (perceptually uniform, "
+             "heavier CPU) or hsb (cheap, default: lab)",
     )
 
     # Auto-add every effect's Param declarations as CLI flags.
