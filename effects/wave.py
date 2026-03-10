@@ -36,6 +36,7 @@ TWO_PI: float = 2.0 * math.pi
 # 30% base + 70% displacement-scaled = 100% at full displacement.
 BRI_BASE_FRAC: float = 0.3
 BRI_DISP_FRAC: float = 0.7
+DEFAULT_ZPB: int = 1
 
 
 class Wave(Effect):
@@ -64,6 +65,8 @@ class Wave(Effect):
                  description="Color 2 saturation percent")
     brightness = Param(100, min=0, max=100,
                        description="Overall brightness percent")
+    zones_per_bulb = Param(DEFAULT_ZPB, min=1, max=16,
+                           description="Zones per physical bulb (3 for string lights)")
     drift = Param(0.0, min=-360.0, max=360.0,
                   description="Spatial drift in degrees per second (0 = standing wave)")
     kelvin = Param(KELVIN_DEFAULT, min=KELVIN_MIN, max=KELVIN_MAX,
