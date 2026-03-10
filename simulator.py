@@ -107,6 +107,12 @@ are always readable, even with very few zones."""
 DEFAULT_ZONES_PER_BULB: int = 1
 """Default zones-per-bulb grouping (1 = show every zone)."""
 
+DEFAULT_ZOOM: int = 1
+"""Default zoom factor (1 = no scaling)."""
+
+MAX_ZOOM: int = 10
+"""Maximum allowed zoom factor."""
+
 # BT.709 luma coefficients — same as effects/__init__.py.
 _LUMA_R: float = 0.2126
 _LUMA_G: float = 0.7152
@@ -239,6 +245,7 @@ if _TK_AVAILABLE:
             effect_name: str,
             polychrome_map: Optional[list[bool]] = None,
             zones_per_bulb: int = DEFAULT_ZONES_PER_BULB,
+            zoom: int = DEFAULT_ZOOM,
         ) -> None:
             """Create the simulator window.
 
@@ -254,10 +261,14 @@ if _TK_AVAILABLE:
                     When > 1, adjacent zones are grouped into one
                     displayed rectangle using the middle zone's color.
                     LIFX string lights use 3 zones per bulb.
+                zoom: Integer scale factor (1-10).  All zone
+                    dimensions are multiplied by this value.
+                    Nearest-neighbor scaling (sharp pixel edges).
             """
             self.zone_count: int = zone_count
             self.effect_name: str = effect_name
             self._zones_per_bulb: int = max(1, zones_per_bulb)
+            self._zoom: int = max(1, min(zoom, MAX_ZOOM))
 
             # Number of displayed bulbs (rectangles on screen).
             self._bulb_count: int = (
@@ -280,25 +291,37 @@ if _TK_AVAILABLE:
             self._queue: queue.Queue = queue.Queue()
             self._frame_times: list[float] = []
 
+            # --- Apply zoom to dimensions ------------------------------------
+            z: int = self._zoom
+            zone_width_base: int = SIM_ZONE_WIDTH * z
+            zone_height: int = SIM_ZONE_HEIGHT * z
+            zone_gap: int = SIM_ZONE_GAP * z
+            padding: int = SIM_PADDING * z
+            header_height: int = SIM_HEADER_HEIGHT * z
+            font_size: int = max(12, 12 * z)
+            max_window: int = SIM_MAX_WINDOW_WIDTH * z
+            min_zone_w: int = SIM_MIN_ZONE_WIDTH * z
+            min_window: int = SIM_MIN_WINDOW_WIDTH * z
+
             # --- Compute adaptive zone width ---------------------------------
             display_count: int = self._bulb_count
-            max_strip: int = SIM_MAX_WINDOW_WIDTH - 2 * SIM_PADDING
+            max_strip: int = max_window - 2 * padding
             zone_w: int = min(
-                SIM_ZONE_WIDTH,
-                max(SIM_MIN_ZONE_WIDTH,
-                    (max_strip - (display_count - 1) * SIM_ZONE_GAP)
+                zone_width_base,
+                max(min_zone_w,
+                    (max_strip - (display_count - 1) * zone_gap)
                     // display_count),
             )
 
             strip_width: int = (
-                display_count * zone_w + (display_count - 1) * SIM_ZONE_GAP
+                display_count * zone_w + (display_count - 1) * zone_gap
             )
             canvas_width: int = max(
-                strip_width + 2 * SIM_PADDING,
-                SIM_MIN_WINDOW_WIDTH,
+                strip_width + 2 * padding,
+                min_window,
             )
             canvas_height: int = (
-                SIM_HEADER_HEIGHT + SIM_ZONE_HEIGHT + 2 * SIM_PADDING
+                header_height + zone_height + 2 * padding
             )
 
             # --- Build the window --------------------------------------------
@@ -348,30 +371,30 @@ if _TK_AVAILABLE:
                 header_text = f"{effect_name}  |  {zone_count} zones"
 
             self._header_id = self._canvas.create_text(
-                SIM_PADDING, SIM_PADDING,
+                padding, padding,
                 anchor="nw",
                 text=header_text,
                 fill=SIM_HEADER_COLOR,
-                font=("Menlo", 12),
+                font=("Menlo", font_size),
             )
             self._fps_id = self._canvas.create_text(
-                canvas_width - SIM_PADDING, SIM_PADDING,
+                canvas_width - padding, padding,
                 anchor="ne",
                 text="-- fps",
                 fill=SIM_HEADER_COLOR,
-                font=("Menlo", 12),
+                font=("Menlo", font_size),
             )
 
             # --- Bulb rectangles (initially black) ---------------------------
             # Center the strip horizontally when the window is wider
             # than the strip (e.g., when SIM_MIN_WINDOW_WIDTH kicks in).
             strip_x_offset: int = (canvas_width - strip_width) // 2
-            y_top: int = SIM_HEADER_HEIGHT + SIM_PADDING
-            y_bot: int = y_top + SIM_ZONE_HEIGHT
+            y_top: int = header_height + padding
+            y_bot: int = y_top + zone_height
             self._rects: list[int] = []
 
             for i in range(display_count):
-                x0: int = strip_x_offset + i * (zone_w + SIM_ZONE_GAP)
+                x0: int = strip_x_offset + i * (zone_w + zone_gap)
                 x1: int = x0 + zone_w
                 rect_id: int = self._canvas.create_rectangle(
                     x0, y_top, x1, y_bot,
@@ -477,6 +500,7 @@ def create_simulator(
     effect_name: str,
     polychrome_map: Optional[list[bool]] = None,
     zones_per_bulb: int = DEFAULT_ZONES_PER_BULB,
+    zoom: int = DEFAULT_ZOOM,
 ) -> Optional["SimulatorWindow"]:
     """Create a simulator window if tkinter is available.
 
@@ -493,6 +517,9 @@ def create_simulator(
         zones_per_bulb: Number of zones per physical bulb.  When > 1,
             adjacent zones are grouped into one displayed rectangle.
             LIFX string lights use 3 zones per bulb.
+        zoom: Integer scale factor (1-10).  Multiplies all zone
+            dimensions for a larger window with sharp pixel edges
+            (nearest-neighbor scaling).
 
     Returns:
         A :class:`SimulatorWindow` instance, or ``None`` if tkinter
@@ -508,4 +535,4 @@ def create_simulator(
         return None
 
     return SimulatorWindow(zone_count, effect_name, polychrome_map,
-                           zones_per_bulb)
+                           zones_per_bulb, zoom)
