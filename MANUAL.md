@@ -1002,16 +1002,31 @@ set `--gap 0` for a fully packed row where shading alone draws the boundaries.
 
 #### Auto-Layout
 
-When `--ball-width 0` (default) and `--swing 0` (default), the effect auto-sizes so
-the full cradle — rest row plus swing arc on each end — fits the strip:
+When `--ball-width 0` (default) and `--swing 0` (default), the effect auto-sizes in
+two passes so the pendulum uses the full strip.
+
+**Pass 1 — ball width** (treating swing = ball_width as a baseline):
 
 ```
-zone_count ≥ (n + 2) × ball_width + (n − 1) × gap
-→  ball_width = (zone_count − (n−1)×gap) ÷ (n + 2)
+ball_width = (zone_count − (n−1)×gap) ÷ (n + 2)     [floor division]
 ```
 
-This means a 108-zone strip with 5 balls and gap=1 gives balls approximately 16 zones
-wide each, with a 16-zone swing arc on each side.
+**Pass 2 — swing boost** (distribute the floor-division remainder to the swing arms):
+
+```
+leftover = zone_count − (n × bw + (n−1)×gap + 2 × bw)
+swing    = ball_width + leftover ÷ 2
+```
+
+This is important on the standard **36-zone / 12-bulb LIFX string light**.  Pass 1
+alone gives `bw = 4, swing = 4`, leaving 4 zones unused and producing a short arc.
+Pass 2 redistributes those 4 zones to give `swing = 6`, so the pendulum travels from
+zone 2 to zone 34 — the full usable strip — with no wasted space.
+
+| Strip size | Balls | Gap | ball_width | swing |
+|------------|-------|-----|-----------|-------|
+| 36 zones (12 bulbs) | 5 | 1 | 4 | **6** |
+| 108 zones (36 bulbs) | 5 | 1 | 14 | **17** |
 
 #### Parameters
 
