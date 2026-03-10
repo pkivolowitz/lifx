@@ -298,6 +298,15 @@ class Engine:
                 f"Expected an Effect instance, got {type(effect).__name__}."
             )
 
+        # Clear the persistent committed state to black on every device
+        # before starting the render loop.  The extended multizone protocol
+        # (type 510) writes to a temporary overlay; if a UDP frame is lost
+        # the firmware briefly reveals the committed layer.  Ensuring it is
+        # black makes those glitches invisible.
+        for dev in self.devices:
+            if dev.is_multizone and dev.zone_count:
+                dev.set_color(0, 0, 0, KELVIN_DEFAULT, duration_ms=0)
+
         with self._lock:
             # Cleanly shut down the previous effect before swapping.
             if self.effect is not None:
@@ -373,6 +382,10 @@ class Engine:
         """
         # Pre-compute the target interval to avoid division every frame.
         interval: float = 1.0 / self.fps
+        # Transition duration = 2× frame interval.  This keeps the firmware
+        # mid-interpolation when the next frame arrives, so a single dropped
+        # UDP packet never exposes the committed layer.
+        transition_ms: int = int(2000.0 / self.fps)
 
         while self.running and not self._stop_event.is_set():
             frame_start: float = time.time()
@@ -396,7 +409,8 @@ class Engine:
                 try:
                     colors = effect.render(t, dev.zone_count)
                     if dev.is_multizone:
-                        dev.set_zones(colors, duration_ms=0, rapid=True)
+                        dev.set_zones(colors, duration_ms=transition_ms,
+                                      rapid=True)
                     elif dev.is_polychrome:
                         # Single color bulb: apply the first rendered color.
                         h, s, b, k = colors[0]
