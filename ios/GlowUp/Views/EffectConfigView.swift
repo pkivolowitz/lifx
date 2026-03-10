@@ -125,7 +125,14 @@ struct EffectConfigView: View {
         }
     }
 
-    /// A segmented picker for choice-based parameters.
+    /// Maximum number of choices before switching from segmented to menu style.
+    private let segmentedThreshold = 5
+
+    /// A picker for choice-based parameters.
+    ///
+    /// Uses segmented style for small choice sets (e.g., direction: left/right)
+    /// and menu (dropdown) style for larger ones (e.g., palette presets).
+    @ViewBuilder
     private func choicePicker(
         name: String,
         choices: [String]
@@ -134,12 +141,16 @@ struct EffectConfigView: View {
             get: { paramValues[name]?.stringValue ?? choices[0] },
             set: { paramValues[name] = .string($0) }
         )
-        return Picker(name, selection: binding) {
+        let picker = Picker(name, selection: binding) {
             ForEach(choices, id: \.self) { choice in
                 Text(choice).tag(choice)
             }
         }
-        .pickerStyle(.segmented)
+        if choices.count <= segmentedThreshold {
+            picker.pickerStyle(.segmented)
+        } else {
+            picker.pickerStyle(.menu)
+        }
     }
 
     /// A slider for numeric parameters with min/max bounds.

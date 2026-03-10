@@ -19,71 +19,71 @@ the three patterns continuously slide relative to one another, producing a
 slowly shifting macro-scale colour interference pattern on top of the
 underlying cellular chaos.
 
-Palette presets (--palette 1..50)
+Palette presets (--palette NAME)
 ----------------------------------
 All three primaries and the saturation are set from a coordinated scheme;
 --hue-a/b/c and --sat are ignored when a palette is active.
 
 Nature & elements
-   0  custom          use --hue-a / --hue-b / --hue-c and --sat
-   1  pastels         soft pink, lavender, mint
-   2  earth           amber, terracotta, sage
-   3  water           ocean blue, cyan, seafoam
-   4  fire            red, orange, amber
-   6  marble          cool/warm near-whites (the veins do the work)
-   8  aurora          emerald, teal, deep purple
-  10  forest          deep green, moss, bark brown
-  11  deep sea        midnight blue, bioluminescent teal, violet
-  39  tropical        hot teal, coral, sunny yellow
-  40  coral reef      coral orange, teal, deep blue
-  41  galaxy          deep violet, midnight blue, pale blue
-  42  autumn          burnt orange, burgundy, golden yellow
-  43  winter          ice blue, silver, pale lavender
-  44  desert          sand, rust orange, warm brown
-  45  arctic          pale blue, ice white, steel gray
+  custom          use --hue-a / --hue-b / --hue-c and --sat
+  pastels         soft pink, lavender, mint
+  earth           amber, terracotta, sage
+  water           ocean blue, cyan, seafoam
+  fire            red, orange, amber
+  marble          cool/warm near-whites (the veins do the work)
+  aurora          emerald, teal, deep purple
+  forest          deep green, moss, bark brown
+  deep sea        midnight blue, bioluminescent teal, violet
+  tropical        hot teal, coral, sunny yellow
+  coral reef      coral orange, teal, deep blue
+  galaxy          deep violet, midnight blue, pale blue
+  autumn          burnt orange, burgundy, golden yellow
+  winter          ice blue, silver, pale lavender
+  desert          sand, rust orange, warm brown
+  arctic          pale blue, ice white, steel gray
 
 Artists
-   5  van gogh        cobalt blue, warm gold, ice blue
-   7  sunset          warm orange, deep magenta, violet  (Turner)
-  13  monet           soft lilac, water green, dusty rose
-  14  klimt           deep gold, teal, burgundy
-  15  rothko          deep crimson, burnt sienna, muted orange
-  16  hokusai         deep navy, slate blue, pale blue-gray
-  17  turner          golden amber, hazy orange, pale sky blue
-  18  mondrian        red, cobalt blue, golden yellow
-  19  warhol          hot pink, lime green, turquoise
-  20  rembrandt       warm umber, antique gold, dark amber
+  van gogh        cobalt blue, warm gold, ice blue
+  sunset          warm orange, deep magenta, violet  (Turner)
+  monet           soft lilac, water green, dusty rose
+  klimt           deep gold, teal, burgundy
+  rothko          deep crimson, burnt sienna, muted orange
+  hokusai         deep navy, slate blue, pale blue-gray
+  turner          golden amber, hazy orange, pale sky blue
+  mondrian        red, cobalt blue, golden yellow
+  warhol          hot pink, lime green, turquoise
+  rembrandt       warm umber, antique gold, dark amber
 
 Holidays
-  21  christmas       red, deep green, gold
-  22  halloween       orange, deep purple, yellow
-  23  hanukkah        royal blue, sky blue, gold
-  24  valentines      rose red, hot pink, blush
-  25  easter          soft purple, pale yellow, light green
-  26  independence    red, white-blue, blue
-  27  st patricks     shamrock green, gold, light green
-  28  thanksgiving    burnt orange, warm brown, deep gold
-  29  new year        champagne gold, silver, midnight blue
-  30  mardi gras      deep purple, gold, green
-  31  diwali          deep gold, magenta, saffron
+  christmas       red, deep green, gold
+  halloween       orange, deep purple, yellow
+  hanukkah        royal blue, sky blue, gold
+  valentines      rose red, hot pink, blush
+  easter          soft purple, pale yellow, light green
+  independence    red, white-blue, blue
+  st patricks     shamrock green, gold, light green
+  thanksgiving    burnt orange, warm brown, deep gold
+  new year        champagne gold, silver, midnight blue
+  mardi gras      deep purple, gold, green
+  diwali          deep gold, magenta, saffron
 
 School colors
-  32  michigan        maize, cobalt blue, sky blue
-  33  alabama         crimson, silver, gold
-  34  lsu             purple, gold, pale gold
-  35  texas           burnt orange, warm brown, gold
-  36  ohio state      scarlet, silver, gold
-  37  notre dame      gold, navy, green
-  38  ucla            blue, gold, sky blue
+  michigan        maize, cobalt blue, sky blue
+  alabama         crimson, silver, gold
+  lsu             purple, gold, pale gold
+  texas           burnt orange, warm brown, gold
+  ohio state      scarlet, silver, gold
+  notre dame      gold, navy, green
+  ucla            blue, gold, sky blue
 
 Moods & aesthetics
-   9  neon            hot pink, electric cyan, acid green
-  12  cherry blossom  pale pink, blush, soft lavender
-  46  vaporwave       hot pink, purple, electric cyan
-  47  cyberpunk       neon green, electric blue, magenta
-  48  cottagecore     sage green, blush pink, warm cream
-  49  gothic          deep burgundy, deep purple, dark rose
-  50  lo-fi           warm amber, dusty rose, muted sage
+  neon            hot pink, electric cyan, acid green
+  cherry blossom  pale pink, blush, soft lavender
+  vaporwave       hot pink, purple, electric cyan
+  cyberpunk       neon green, electric blue, magenta
+  cottagecore     sage green, blush pink, warm cream
+  gothic          deep burgundy, deep purple, dark rose
+  lo-fi           warm amber, dusty rose, muted sage
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
@@ -111,9 +111,6 @@ PATTERN_COUNT: int = 8
 # Sentinel: CA rule table has not been built yet.
 RULE_UNINITIALISED: int = -1
 
-# Palette index meaning "use user-specified hues".
-PALETTE_CUSTOM: int = 0
-
 # Blend factor for equal two-colour mix.
 BLEND_HALF: float = 0.5
 
@@ -130,63 +127,66 @@ GAP_FADE_DIVISOR: int = 1
 # Palette presets: (hue_a_deg, hue_b_deg, hue_c_deg, saturation_0_to_100)
 # ---------------------------------------------------------------------------
 
-PALETTES: dict[int, tuple[float, float, float, int]] = {
+PALETTES: dict[str, tuple[float, float, float, int]] = {
     # ---- Nature & elements ----                   hue_a   hue_b   hue_c  sat
-     1: (340.0, 270.0, 150.0, 45),   # pastels:       pink, lavender, mint
-     2: ( 35.0,  18.0, 130.0, 70),   # earth:         amber, terracotta, sage
-     3: (220.0, 185.0, 165.0, 85),   # water:         ocean, cyan, seafoam
-     4: (  0.0,  30.0,  55.0, 95),   # fire:          red, orange, amber
-     6: (210.0,  42.0, 185.0, 12),   # marble:        near-whites; veins carry the sat
-     8: (145.0, 178.0, 268.0, 85),   # aurora:        emerald, teal, deep purple
-    10: (130.0,  95.0,  28.0, 72),   # forest:        deep green, moss, bark brown
-    11: (232.0, 172.0, 262.0, 90),   # deep sea:      midnight blue, bioluminescent teal, violet
-    39: (175.0,  15.0,  55.0, 90),   # tropical:      hot teal, coral, sunny yellow
-    40: ( 18.0, 175.0, 230.0, 88),   # coral reef:    coral orange, teal, deep blue
-    41: (268.0, 235.0, 215.0, 78),   # galaxy:        deep violet, midnight blue, pale blue
-    42: ( 22.0, 355.0,  48.0, 85),   # autumn:        burnt orange, burgundy, golden yellow
-    43: (205.0, 215.0, 270.0, 35),   # winter:        ice blue, silver, pale lavender
-    44: ( 45.0,  18.0,  28.0, 68),   # desert:        sand, rust orange, warm brown
-    45: (200.0, 210.0, 215.0, 20),   # arctic:        pale blue, ice white, steel gray
+    "pastels":        (340.0, 270.0, 150.0, 45),   # pink, lavender, mint
+    "earth":          ( 35.0,  18.0, 130.0, 70),   # amber, terracotta, sage
+    "water":          (220.0, 185.0, 165.0, 85),   # ocean, cyan, seafoam
+    "fire":           (  0.0,  30.0,  55.0, 95),   # red, orange, amber
+    "marble":         (210.0,  42.0, 185.0, 12),   # near-whites; veins carry the sat
+    "aurora":         (145.0, 178.0, 268.0, 85),   # emerald, teal, deep purple
+    "forest":         (130.0,  95.0,  28.0, 72),   # deep green, moss, bark brown
+    "deep sea":       (232.0, 172.0, 262.0, 90),   # midnight blue, bioluminescent teal, violet
+    "tropical":       (175.0,  15.0,  55.0, 90),   # hot teal, coral, sunny yellow
+    "coral reef":     ( 18.0, 175.0, 230.0, 88),   # coral orange, teal, deep blue
+    "galaxy":         (268.0, 235.0, 215.0, 78),   # deep violet, midnight blue, pale blue
+    "autumn":         ( 22.0, 355.0,  48.0, 85),   # burnt orange, burgundy, golden yellow
+    "winter":         (205.0, 215.0, 270.0, 35),   # ice blue, silver, pale lavender
+    "desert":         ( 45.0,  18.0,  28.0, 68),   # sand, rust orange, warm brown
+    "arctic":         (200.0, 210.0, 215.0, 20),   # pale blue, ice white, steel gray
     # ---- Artists ----
-     5: (225.0,  48.0, 195.0, 88),   # van gogh:      cobalt blue, warm gold, ice blue
-     7: ( 20.0, 330.0, 275.0, 88),   # sunset/turner: warm orange, deep magenta, soft violet
-    13: (280.0, 160.0, 340.0, 55),   # monet:         soft lilac, water green, dusty rose
-    14: ( 45.0, 175.0, 350.0, 85),   # klimt:         deep gold, teal, burgundy
-    15: (355.0,  22.0,  32.0, 82),   # rothko:        deep crimson, burnt sienna, muted orange
-    16: (225.0, 210.0, 200.0, 80),   # hokusai:       deep navy, slate blue, pale blue-gray
-    17: ( 42.0,  28.0, 200.0, 75),   # turner:        golden amber, hazy orange, pale sky blue
-    18: (  5.0, 230.0,  52.0,100),   # mondrian:      red, cobalt blue, golden yellow
-    19: (330.0,  88.0, 178.0,100),   # warhol:        hot pink, lime green, turquoise
-    20: ( 28.0,  44.0,  35.0, 78),   # rembrandt:     warm umber, antique gold, dark amber
+    "van gogh":       (225.0,  48.0, 195.0, 88),   # cobalt blue, warm gold, ice blue
+    "sunset":         ( 20.0, 330.0, 275.0, 88),   # warm orange, deep magenta, soft violet
+    "monet":          (280.0, 160.0, 340.0, 55),   # soft lilac, water green, dusty rose
+    "klimt":          ( 45.0, 175.0, 350.0, 85),   # deep gold, teal, burgundy
+    "rothko":         (355.0,  22.0,  32.0, 82),   # deep crimson, burnt sienna, muted orange
+    "hokusai":        (225.0, 210.0, 200.0, 80),   # deep navy, slate blue, pale blue-gray
+    "turner":         ( 42.0,  28.0, 200.0, 75),   # golden amber, hazy orange, pale sky blue
+    "mondrian":       (  5.0, 230.0,  52.0,100),   # red, cobalt blue, golden yellow
+    "warhol":         (330.0,  88.0, 178.0,100),   # hot pink, lime green, turquoise
+    "rembrandt":      ( 28.0,  44.0,  35.0, 78),   # warm umber, antique gold, dark amber
     # ---- Holidays ----
-    21: (  5.0, 125.0,  48.0, 92),   # christmas:     red, deep green, gold
-    22: ( 25.0, 270.0,  58.0, 95),   # halloween:     orange, deep purple, yellow
-    23: (228.0, 205.0,  48.0, 80),   # hanukkah:      royal blue, sky blue, gold
-    24: (355.0, 340.0,  15.0, 80),   # valentines:    rose red, hot pink, blush
-    25: (280.0,  60.0, 140.0, 45),   # easter:        soft purple, pale yellow, light green
-    26: (  5.0, 218.0, 238.0, 90),   # independence:  red, white-blue, blue
-    27: (130.0,  50.0, 145.0, 85),   # st patricks:   shamrock green, gold, light green
-    28: ( 22.0,  30.0,  45.0, 80),   # thanksgiving:  burnt orange, warm brown, deep gold
-    29: ( 48.0, 218.0, 240.0, 65),   # new year:      champagne gold, silver, midnight blue
-    30: (270.0,  50.0, 130.0, 90),   # mardi gras:    deep purple, gold, green
-    31: ( 45.0, 310.0,  30.0, 90),   # diwali:        deep gold, magenta, saffron
+    "christmas":      (  5.0, 125.0,  48.0, 92),   # red, deep green, gold
+    "halloween":      ( 25.0, 270.0,  58.0, 95),   # orange, deep purple, yellow
+    "hanukkah":       (228.0, 205.0,  48.0, 80),   # royal blue, sky blue, gold
+    "valentines":     (355.0, 340.0,  15.0, 80),   # rose red, hot pink, blush
+    "easter":         (280.0,  60.0, 140.0, 45),   # soft purple, pale yellow, light green
+    "independence":   (  5.0, 218.0, 238.0, 90),   # red, white-blue, blue
+    "st patricks":    (130.0,  50.0, 145.0, 85),   # shamrock green, gold, light green
+    "thanksgiving":   ( 22.0,  30.0,  45.0, 80),   # burnt orange, warm brown, deep gold
+    "new year":       ( 48.0, 218.0, 240.0, 65),   # champagne gold, silver, midnight blue
+    "mardi gras":     (270.0,  50.0, 130.0, 90),   # deep purple, gold, green
+    "diwali":         ( 45.0, 310.0,  30.0, 90),   # deep gold, magenta, saffron
     # ---- School colors ----
-    32: ( 50.0, 230.0, 210.0, 88),   # michigan:      maize, cobalt blue, sky blue
-    33: (350.0, 215.0,  48.0, 82),   # alabama:       crimson, silver, gold
-    34: (270.0,  48.0,  52.0, 90),   # lsu:           purple, gold, pale gold
-    35: ( 22.0,  28.0,  45.0, 80),   # texas:         burnt orange, warm brown, gold
-    36: (  5.0, 215.0,  48.0, 82),   # ohio state:    scarlet, silver, gold
-    37: ( 48.0, 225.0, 130.0, 88),   # notre dame:    gold, navy, green
-    38: (228.0,  50.0, 210.0, 85),   # ucla:          blue, gold, sky blue
+    "michigan":       ( 50.0, 230.0, 210.0, 88),   # maize, cobalt blue, sky blue
+    "alabama":        (350.0, 215.0,  48.0, 82),   # crimson, silver, gold
+    "lsu":            (270.0,  48.0,  52.0, 90),   # purple, gold, pale gold
+    "texas":          ( 22.0,  28.0,  45.0, 80),   # burnt orange, warm brown, gold
+    "ohio state":     (  5.0, 215.0,  48.0, 82),   # scarlet, silver, gold
+    "notre dame":     ( 48.0, 225.0, 130.0, 88),   # gold, navy, green
+    "ucla":           (228.0,  50.0, 210.0, 85),   # blue, gold, sky blue
     # ---- Moods & aesthetics ----
-     9: (310.0, 183.0,  90.0,100),   # neon:          hot pink, electric cyan, acid green
-    12: (348.0,  15.0, 290.0, 38),   # cherry blossom: pale pink, blush, soft lavender
-    46: (310.0, 270.0, 185.0, 95),   # vaporwave:     hot pink, purple, electric cyan
-    47: (130.0, 225.0, 300.0,100),   # cyberpunk:     neon green, electric blue, magenta
-    48: (130.0, 350.0,  45.0, 48),   # cottagecore:   sage green, blush pink, warm cream
-    49: (350.0, 270.0, 340.0, 78),   # gothic:        deep burgundy, deep purple, dark rose
-    50: ( 35.0, 348.0, 130.0, 52),   # lo-fi:         warm amber, dusty rose, muted sage
+    "neon":           (310.0, 183.0,  90.0,100),   # hot pink, electric cyan, acid green
+    "cherry blossom": (348.0,  15.0, 290.0, 38),   # pale pink, blush, soft lavender
+    "vaporwave":      (310.0, 270.0, 185.0, 95),   # hot pink, purple, electric cyan
+    "cyberpunk":      (130.0, 225.0, 300.0,100),   # neon green, electric blue, magenta
+    "cottagecore":    (130.0, 350.0,  45.0, 48),   # sage green, blush pink, warm cream
+    "gothic":         (350.0, 270.0, 340.0, 78),   # deep burgundy, deep purple, dark rose
+    "lo-fi":          ( 35.0, 348.0, 130.0, 52),   # warm amber, dusty rose, muted sage
 }
+
+# Sorted palette names for the choices list, with "custom" first.
+PALETTE_NAMES: dict[str, None] = {"custom": None, **{k: None for k in sorted(PALETTES)}}
 
 
 # ---------------------------------------------------------------------------
@@ -289,11 +289,11 @@ class RuleTrio(Effect):
 
     Quick-start examples
     --------------------
-    ``--palette 1``  Pastel pink, lavender and mint.
-    ``--palette 2``  Amber, terracotta, sage — warm earth tones.
-    ``--palette 3``  Ocean, cyan, seafoam — cool water tones.
-    ``--palette 4``  Red, orange, amber — fire.
-    Custom: ``--hue-a 30 --hue-b 180 --hue-c 300 --sat 70``
+    ``--palette pastels``  Soft pink, lavender and mint.
+    ``--palette earth``    Amber, terracotta, sage — warm earth tones.
+    ``--palette water``    Ocean, cyan, seafoam — cool water tones.
+    ``--palette fire``     Red, orange, amber — fire.
+    Custom: ``--palette custom --hue-a 30 --hue-b 180 --hue-c 300 --sat 70``
     """
 
     name: str = "rule_trio"
@@ -338,22 +338,9 @@ class RuleTrio(Effect):
     )
 
     palette = Param(
-        0, min=0, max=50,
-        description=(
-            "Colour preset 0-50 (0=custom; non-zero overrides --hue-a/b/c and --sat). "
-            "Nature: 1=pastels 2=earth 3=water 4=fire 6=marble 8=aurora 10=forest "
-            "11=deep sea 39=tropical 40=coral reef 41=galaxy 42=autumn 43=winter "
-            "44=desert 45=arctic. "
-            "Artists: 5=van gogh 7=sunset 13=monet 14=klimt 15=rothko 16=hokusai "
-            "17=turner 18=mondrian 19=warhol 20=rembrandt. "
-            "Holidays: 21=christmas 22=halloween 23=hanukkah 24=valentines 25=easter "
-            "26=independence 27=st patricks 28=thanksgiving 29=new year 30=mardi gras "
-            "31=diwali. "
-            "Schools: 32=michigan 33=alabama 34=lsu 35=texas 36=ohio state "
-            "37=notre dame 38=ucla. "
-            "Aesthetics: 9=neon 12=cherry blossom 46=vaporwave 47=cyberpunk "
-            "48=cottagecore 49=gothic 50=lo-fi."
-        ),
+        "custom",
+        description="Colour preset (non-custom overrides --hue-a/b/c and --sat)",
+        choices=sorted(PALETTE_NAMES.keys()),
     )
     hue_a = Param(
         0.0, min=0.0, max=360.0,
@@ -615,10 +602,10 @@ class RuleTrio(Effect):
             Three HSBK tuples — one per CA primary.
         """
         bri_u16:    int   = pct_to_u16(self.brightness)
-        palette_idx: int  = int(self.palette)
+        palette_key: str  = str(self.palette)
 
-        if palette_idx in PALETTES:
-            ha, hb, hc, sat_pct = PALETTES[palette_idx]
+        if palette_key in PALETTES:
+            ha, hb, hc, sat_pct = PALETTES[palette_key]
             sat_u16: int = pct_to_u16(sat_pct)
         else:
             ha      = float(self.hue_a)
