@@ -15,7 +15,7 @@ Inspired by the classic Frankenstein laboratory prop.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import math
 import random
@@ -44,8 +44,21 @@ GAP_MIN_BULBS: int = 2
 GAP_MAX_FRAC: float = 0.4
 
 # Flicker: per-frame random brightness variation for the arc.
-FLICKER_MIN: float = 0.6
-FLICKER_MAX: float = 1.0
+# Wide range creates dramatic dips (nearly dead) and blazes.
+FLICKER_MIN: float = 0.15
+FLICKER_MAX: float = 0.85
+
+# Surge: probability per arc per frame of a full-intensity blaze.
+SURGE_PROBABILITY: float = 0.10
+SURGE_INTENSITY: float = 1.0
+
+# Crackle: probability per bulb per frame of a bright white spike.
+CRACKLE_PROBABILITY: float = 0.12
+CRACKLE_SAT_FRAC: float = 0.05   # Nearly pure white.
+
+# Per-bulb flicker range within the arc body.
+BULB_FLICKER_MIN: float = 0.25
+BULB_FLICKER_MAX: float = 1.0
 
 # Default zones per bulb.
 DEFAULT_ZPB: int = 1
@@ -217,7 +230,12 @@ class JacobsLadder(Effect):
             right: float = arc.right_edge()
 
             # Per-arc flicker: random brightness multiplier.
-            flicker: float = random.uniform(FLICKER_MIN, FLICKER_MAX)
+            # Occasional surges blast the arc to full intensity.
+            is_surge: bool = random.random() < SURGE_PROBABILITY
+            if is_surge:
+                flicker: float = SURGE_INTENSITY
+            else:
+                flicker = random.uniform(FLICKER_MIN, FLICKER_MAX)
 
             for b in range(bulb_count):
                 fb: float = float(b)
@@ -227,6 +245,7 @@ class JacobsLadder(Effect):
                 d_right: float = abs(fb - right)
 
                 # Electrode glow: bright within ~1 bulb of each electrode.
+                # Electrodes pulse with the arc during surges.
                 electrode_intensity: float = 0.0
                 if d_left < 1.5:
                     electrode_intensity = max(electrode_intensity,
@@ -234,9 +253,12 @@ class JacobsLadder(Effect):
                 if d_right < 1.5:
                     electrode_intensity = max(electrode_intensity,
                                               1.0 - d_right / 1.5)
+                if electrode_intensity > 0 and is_surge:
+                    electrode_intensity = 1.0
 
                 # Arc glow: between the two electrodes.
                 arc_intensity: float = 0.0
+                is_crackle: bool = False
                 if left <= fb <= right:
                     # Intensity peaks in the middle, tapers toward electrodes.
                     span: float = right - left
@@ -246,8 +268,13 @@ class JacobsLadder(Effect):
                         arc_intensity = math.sin(normalized * math.pi)
                         # Apply per-arc flicker.
                         arc_intensity *= flicker
-                        # Additional per-bulb flicker within the arc.
-                        arc_intensity *= random.uniform(0.7, 1.0)
+                        # Per-bulb flicker: wide range for organic look.
+                        arc_intensity *= random.uniform(BULB_FLICKER_MIN,
+                                                        BULB_FLICKER_MAX)
+                        # Crackle: random bright white spike on individual bulbs.
+                        if random.random() < CRACKLE_PROBABILITY:
+                            arc_intensity = 1.0
+                            is_crackle = True
 
                 # Combine: electrodes are brighter and whiter than the arc.
                 if electrode_intensity > 0:
@@ -255,7 +282,7 @@ class JacobsLadder(Effect):
                     sat: float = ELECTRODE_SAT_FRAC
                 elif arc_intensity > 0:
                     intensity = arc_intensity * 0.85
-                    sat = ARC_SAT_FRAC
+                    sat = CRACKLE_SAT_FRAC if is_crackle else ARC_SAT_FRAC
                 else:
                     continue
 
