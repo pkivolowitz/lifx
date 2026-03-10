@@ -759,6 +759,13 @@ def cmd_play(args: argparse.Namespace) -> None:
         if val is not None:
             effect_params[pname] = val
 
+    # Map the global --zpb flag to the effect's zones_per_bulb Param.
+    # The CLI uses the short name for convenience; the effect declares
+    # the full name for clarity.
+    if "zones_per_bulb" in param_defs:
+        zpb_val: int = getattr(args, "zpb", 1)
+        effect_params["zones_per_bulb"] = zpb_val
+
     # --- Ensure device is powered on before sending colors --------------------
     # Skipped in sim-only mode: _NullDevice.set_power is a no-op, but
     # being explicit avoids confusing log output about powering on.
