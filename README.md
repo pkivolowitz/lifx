@@ -15,7 +15,7 @@ integration are performed by Perry Kivolowitz, the sole Human Author.
 ## What It Does
 
 - **Discovery** — finds all LIFX devices on your LAN via UDP broadcast
-- **Effects** — ships with 9 effects: aurora borealis, binary clock, fireworks, waving flag (199 countries), Larson scanner, Morse code, twinkling lights, standing wave, and color breathe
+- **Effects** — ships with 12 effects: aurora borealis, binary clock, fireworks, waving flag (199 countries), Larson scanner, Morse code, twinkling lights, standing wave, color breathe, polychrome bloom, crossfade comparison, and zone map diagnostic
 - **Virtual multizone** — group any combination of devices into a single animation surface. A 108-zone string light and 4 single bulbs become a 112-zone strip. Effects animate across all devices as one. LIFX limits a physical chain to 3 string lights; virtual multizone removes that ceiling — any number of independent strings can be combined.
 - **Identify** — pulse a bulb's brightness to figure out which physical lamp corresponds to which IP address
 - **Monochrome support** — color effects on white-only bulbs are automatically converted to perceptually correct brightness using BT.709 luma coefficients
@@ -25,6 +25,8 @@ integration are performed by Perry Kivolowitz, the sole Human Author.
 - **REST API server** — HTTP daemon that wraps the entire engine for remote control from any HTTP client
 - **iPhone app** — native SwiftUI app with live color monitoring, auto-generated parameter UI, and Keychain-secured auth; works over LAN or remotely via tunnel/VPN
 - **Cloudflare Tunnel** — secure remote access from anywhere without opening router ports or running a VPN
+
+- **CIELAB color interpolation** — blends between colors in the perceptually uniform CIELAB color space, eliminating the phantom hue artifacts that plague naive HSB interpolation (e.g., red bleeding into a blue/white flag boundary). Switchable at runtime via `--lerp lab|hsb` for hardware flexibility.
 
 No cloud dependency. No external Python packages. Just UDP packets on your LAN — with optional secure remote access.
 
@@ -120,6 +122,7 @@ control.
 | `transport.py` | LIFX LAN protocol v2: discovery, persistent UDP, extended multizone |
 | `engine.py` | Threaded frame loop with thread-safe public API |
 | `effects/__init__.py` | Effect base class, Param system, auto-registration |
+| `colorspace.py` | CIELAB/HSB color interpolation with runtime method dispatch |
 | `effects/*.py` | Pure renderers — no I/O, no device knowledge |
 | `effects/flag_data.py` | 199-country flag color database |
 | `glowup.py` | CLI entry point (discover, effects, identify, play) |
@@ -143,6 +146,9 @@ control.
 | `morse` | Flashes a message in Morse code |
 | `twinkle` | Random zones sparkle and fade like Christmas lights |
 | `wave` | Standing wave — bulbs vibrate with fixed nodes |
+| `bloom` | Polychrome bloom exploiting concentric zone architecture |
+| `crossfade` | A/B comparison between HSB and Lab interpolation |
+| `zone_map` | Diagnostic — visualize physical zone layout |
 
 ## Requirements
 

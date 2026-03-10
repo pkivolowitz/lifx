@@ -42,6 +42,7 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
    - [The Param System](#the-param-system)
    - [Color Model (HSBK)](#color-model-hsbk)
    - [Utility Functions](#utility-functions)
+   - [Color Interpolation (`--lerp`)](#color-interpolation---lerp)
    - [Lifecycle Hooks](#lifecycle-hooks)
    - [Complete Example](#complete-example)
 8. [Live Simulator](#live-simulator)
@@ -884,6 +885,116 @@ These helpers let you declare user-facing parameters in intuitive units
 (degrees, percentages) while producing the raw u16 values the protocol
 requires.
 
+### Color Interpolation (`--lerp`)
+
+When an effect blends between two colors — a stripe boundary on a flag,
+the midpoint of a breathing cycle, the antinode of a standing wave — it
+must interpolate from one HSBK tuple to another. The choice of *where*
+that interpolation happens (which color space) makes a dramatic visible
+difference.
+
+GlowUp ships two interpolation backends, selectable at runtime:
+
+```bash
+python3 glowup.py play flag --ip 10.0.0.62 --lerp lab    # default — perceptually uniform
+python3 glowup.py play flag --ip 10.0.0.62 --lerp hsb    # lightweight fallback
+```
+
+The `--lerp` switch is available on the `play` subcommand and in the
+server configuration (`"lerp": "lab"` or `"lerp": "hsb"` in the config
+JSON). The default is `lab`.
+
+#### The Problem with HSB Interpolation
+
+HSB (Hue, Saturation, Brightness) represents hue as an angle on a color
+wheel. Interpolating between two hues means walking around the wheel, and
+the "shortest path" algorithm picks the shorter arc. This is mathematically
+correct but perceptually wrong.
+
+Consider the French flag: blue (240°) next to white (0° hue, 0%
+saturation). The shortest path from 240° to 0° passes through 300° —
+*magenta and red*. A border bulb at the blue/white stripe boundary
+visibly dips through red where no red should exist. The same artifact
+appears anywhere two colors are separated by an unlucky arc on the
+HSB wheel.
+
+This was first noticed during live testing with a sheet of white paper
+held in front of the string lights as a diffuser, isolating color
+transitions from the distraction of individual bulb geometry.
+
+#### CIELAB: Perceptually Uniform Interpolation
+
+The solution is to interpolate in CIELAB (CIE 1976 L\*a\*b\*), a color
+space designed by the International Commission on Illumination
+specifically so that equal numeric distances correspond to equal
+*perceived* color differences. A straight line between any two colors in
+Lab space traces the most natural-looking transition a human can perceive.
+
+The conversion pipeline:
+
+```
+HSBK → sRGB → linear RGB → CIE XYZ (D65) → CIELAB
+                    ↓ interpolate in L*a*b*
+CIELAB → CIE XYZ (D65) → linear RGB → sRGB → HSBK
+```
+
+Each step uses published standards:
+- **sRGB gamma**: IEC 61966-2-1 piecewise transfer function (not a simple
+  power curve — there's a linear segment near black)
+- **XYZ transform**: BT.709 / sRGB primaries with D65 reference white
+- **Lab nonlinearity**: Cube-root compression with linear extension below
+  the threshold (δ = 6/29)
+
+The blue-to-white interpolation in Lab passes through lighter, less
+saturated blue — exactly what a human would paint if asked to blend those
+two colors. No phantom red, no magenta, no perceptual discontinuities.
+
+#### A/B Validation
+
+The difference was validated empirically using the `crossfade` diagnostic
+effect, which alternates between HSB and Lab interpolation on the same
+color pattern. Viewing through a diffuser, the Lab transitions were
+unanimously smoother, and the French flag's blue/white boundary artifact
+was completely eliminated.
+
+#### Performance
+
+Lab interpolation is more expensive than HSB — there's a full color space
+round-trip per call. Benchmarked cost per `lerp_color()` call:
+
+| Platform          | Lab       | HSB      | Overhead   |
+|-------------------|-----------|----------|------------|
+| Mac (Apple Silicon) | 4.4 µs  | ~0.5 µs  | 0.9% of 50ms frame budget (108 zones) |
+| Raspberry Pi 5    | 58.8 µs   | ~7 µs   | 12.7% of 50ms frame budget (108 zones) |
+
+Both are well within the real-time animation budget. Users on
+significantly slower hardware (original Pi, Pi Zero) can fall back to
+`--lerp hsb` to eliminate the overhead entirely.
+
+#### Using lerp_color in Custom Effects
+
+All color blending in effect code should go through `lerp_color()`:
+
+```python
+from colorspace import lerp_color
+
+# Blend 30% of the way from color1 to color2.
+blended: HSBK = lerp_color(color1, color2, 0.3)
+```
+
+The function signature is identical regardless of which backend is active.
+Effect code never needs to know whether Lab or HSB is running — the
+`--lerp` switch handles it globally.
+
+If your effect overrides brightness after blending (common for
+intensity-based effects like aurora and wave), extract hue and saturation
+from the blended result and substitute your own brightness:
+
+```python
+blended = lerp_color(color1, color2, blend_factor)
+colors.append((blended[0], blended[1], my_brightness, self.kelvin))
+```
+
 ### Lifecycle Hooks
 
 Override these optional methods for effects that need setup or teardown:
@@ -1034,6 +1145,24 @@ LIFX string lights use 3 zones per physical bulb (108 zones = 36 bulbs).
 By default, the simulator shows one rectangle per zone.  Use `--zpb 3`
 to group zones into bulbs — the display shows the middle zone's color
 for each group, matching the visual appearance of the physical string.
+
+### Zoom (`--zoom`)
+
+The `--zoom` flag scales all simulator dimensions by an integer factor
+(1–10). Zone widths, heights, padding, and header font size are all
+multiplied, producing a proportionally larger window with sharp pixel
+edges (nearest-neighbor scaling, no interpolation blur).
+
+```bash
+# Double-size simulator window
+python3 glowup.py play aurora --ip 10.0.0.62 --sim --zoom 2
+
+# Monitor mode also supports zoom
+python3 glowup.py monitor --ip 10.0.0.62 --zoom 3
+```
+
+Useful for presentations, demos, and high-DPI displays where the
+default window is too small to read comfortably.
 
 ### Adaptive Sizing
 
