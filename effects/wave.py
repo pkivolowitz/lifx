@@ -10,7 +10,7 @@ displacement(x, t) = sin(nodes * π * x / L) * sin(2π * t / speed)
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.2"
+__version__ = "1.4"
 
 import math
 import os
@@ -64,6 +64,8 @@ class Wave(Effect):
                  description="Color 2 saturation percent")
     brightness = Param(100, min=0, max=100,
                        description="Overall brightness percent")
+    drift = Param(0.0, min=-360.0, max=360.0,
+                  description="Spatial drift in degrees per second (0 = standing wave)")
     kelvin = Param(KELVIN_DEFAULT, min=KELVIN_MIN, max=KELVIN_MAX,
                    description="Color temperature in Kelvin")
 
@@ -90,16 +92,26 @@ class Wave(Effect):
         # Temporal oscillation swings the entire pattern between -1 and +1.
         temporal: float = math.sin(TWO_PI * t / self.speed)
 
+        # Spatial drift: convert degrees/second to radians accumulated so far.
+        drift_rad: float = math.radians(self.drift) * t
+
+        zpb: int = self.zones_per_bulb
+        bulb_count: int = max(1, zone_count // zpb)
+
         colors: list[HSBK] = []
         for i in range(zone_count):
+            # Use bulb index so all zones within a polychrome bulb share
+            # the same wave position (--zpb awareness).
+            bulb_index: int = i // zpb
+
             # Normalized position along the string (0.0 to 1.0).
-            x: float = i / (zone_count - 1) if zone_count > 1 else 0.0
+            x: float = bulb_index / (bulb_count - 1) if bulb_count > 1 else 0.0
 
             # Spatial component: sin(nodes * π * x) creates fixed nodes
-            # where the string doesn't move.  For a single-zone device
+            # where the string doesn't move.  For a single-bulb device
             # x=0 is always a node (sin(0)=0), so force full antinode
             # amplitude so the temporal oscillation drives the output.
-            spatial: float = 1.0 if zone_count == 1 else math.sin(self.nodes * math.pi * x)
+            spatial: float = 1.0 if bulb_count == 1 else math.sin(self.nodes * math.pi * x + drift_rad)
 
             # Combined displacement: -1.0 to +1.0.
             displacement: float = spatial * temporal
