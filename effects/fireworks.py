@@ -17,7 +17,7 @@ On single-zone bulbs the effect degenerates to simple on-off flashes.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.1"
+__version__ = "1.2"
 
 import math
 import random
@@ -64,9 +64,13 @@ BURST_BRIGHTNESS_BOOST: float = 2.5
 BURST_SIGMA_START: float = 5.0
 BURST_SIGMA_DIVISOR: float = 2.0
 
-# Total hue variation across a burst, in degrees.
-# Zones to the left of zenith shift negatively; right shifts positively.
-BURST_HUE_RANGE: float = 120.0
+# Temporal color evolution of a burst (simulates star cooling).
+# At ignition the stars are white-hot; they peak at their chemical color
+# then cool through warm orange toward burnout.
+BURST_WHITE_PHASE: float = 0.08    # fraction of burst spent white-hot
+BURST_COLOR_PEAK: float = 0.35     # fraction at which chemical color is purest
+BURST_COOL_HUE: float = 25.0      # hue degrees of the cooling tail (warm orange)
+BURST_COOL_START: float = 0.6      # fraction at which cooling toward orange begins
 
 # Brightness threshold below which we skip writing a zone (performance).
 BURST_MIN_BRIGHTNESS: float = 0.005
@@ -267,9 +271,10 @@ class Fireworks(Effect):
         the head.
 
         The burst phase uses a gaussian bloom centred on the zenith that
-        expands outward while fading quadratically.  Zone hue varies
-        linearly with signed distance from zenith so left/right sparks
-        appear in complementary colors.
+        expands outward while fading quadratically.  All stars in the
+        shell share the same hue at any instant — color evolves temporally
+        from white-hot flash through peak chemical color to warm orange
+        cooldown, mimicking real pyrotechnic star combustion.
 
         Args:
             rocket:     The rocket to evaluate.
@@ -330,9 +335,44 @@ class Fireworks(Effect):
                 )
                 two_sigma_sq: float = 2.0 * sigma * sigma
 
+                # Temporal color evolution — all stars in the shell share
+                # the same hue at any given instant, evolving over time:
+                #   1. White-hot flash (low saturation)
+                #   2. Peak chemical color (full saturation)
+                #   3. Cooling toward warm orange as stars burn out
+                if burst_frac < BURST_WHITE_PHASE:
+                    # Initial flash — white-hot.
+                    zone_hue: float = rocket.burst_hue
+                    zone_sat: float = HEAD_SATURATION
+                elif burst_frac < BURST_COLOR_PEAK:
+                    # Ramp up to full chemical color.
+                    ramp: float = (
+                        (burst_frac - BURST_WHITE_PHASE)
+                        / (BURST_COLOR_PEAK - BURST_WHITE_PHASE)
+                    )
+                    zone_hue = rocket.burst_hue
+                    zone_sat = HEAD_SATURATION + (BURST_SATURATION - HEAD_SATURATION) * ramp
+                elif burst_frac < BURST_COOL_START:
+                    # Holding at peak chemical color.
+                    zone_hue = rocket.burst_hue
+                    zone_sat = BURST_SATURATION
+                else:
+                    # Cooling: hue drifts toward warm orange, saturation drops.
+                    cool_frac: float = (
+                        (burst_frac - BURST_COOL_START)
+                        / (1.0 - BURST_COOL_START)
+                    )
+                    # Shortest-path hue drift toward BURST_COOL_HUE.
+                    diff: float = BURST_COOL_HUE - rocket.burst_hue
+                    if diff > 180.0:
+                        diff -= 360.0
+                    elif diff < -180.0:
+                        diff += 360.0
+                    zone_hue = (rocket.burst_hue + diff * cool_frac) % 360.0
+                    zone_sat = BURST_SATURATION * (1.0 - 0.5 * cool_frac)
+
                 for z in range(zone_count):
-                    signed_dist: float = float(z - rocket.zenith)
-                    dist_sq: float = signed_dist * signed_dist
+                    dist_sq: float = float(z - rocket.zenith) ** 2
 
                     # Gaussian falloff from zenith; boosted so fringe zones
                     # are pushed well above the visibility threshold.
@@ -342,14 +382,7 @@ class Fireworks(Effect):
                     if bri < BURST_MIN_BRIGHTNESS:
                         continue
 
-                    # Hue shifts left/right of zenith in opposite directions
-                    # so each arm of the burst shows complementary colors.
-                    hue_shift: float = (
-                        signed_dist * BURST_HUE_RANGE / max(self.burst_spread, 1)
-                    )
-                    zone_hue: float = (rocket.burst_hue + hue_shift) % 360.0
-
-                    contrib[z] = (zone_hue, BURST_SATURATION, bri)
+                    contrib[z] = (zone_hue, zone_sat, bri)
 
         return contrib
 
