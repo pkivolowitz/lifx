@@ -348,16 +348,14 @@ class Engine:
                 self.effect = None
 
         # Fade all zones to black so the lights don't freeze on the last frame.
-        # For multizone devices, also clear the persistent committed state
-        # via set_color (type 102).  set_zones only updates the live overlay;
-        # set_color updates the persistent fallback.  Without this, the
-        # device reverts to stale colors from a previous effect when the
-        # zone overlay expires.
+        # Only set_zones is used here (overlay layer).  The persistent
+        # committed state is NOT touched — clearing it to black would cause
+        # every dropped UDP frame to flash black.  Use the explicit /reset
+        # endpoint to clear stale committed colors when needed.
         if fade_ms > 0:
             for dev in self.devices:
                 if dev.zone_count:
                     if dev.is_multizone:
-                        dev.set_color(0, 0, 0, KELVIN_DEFAULT, duration_ms=0)
                         off = [(0, 0, 0, KELVIN_DEFAULT)] * dev.zone_count
                         dev.set_zones(off, duration_ms=fade_ms, rapid=False)
                     else:
