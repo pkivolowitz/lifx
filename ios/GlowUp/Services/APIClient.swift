@@ -50,23 +50,12 @@ class APIClient: ObservableObject {
 
     // MARK: - Device endpoints
 
-    /// Fetch all discovered devices.
+    /// Fetch all configured devices.
     ///
     /// - Returns: An array of ``Device`` from the server.
     /// - Throws: ``APIError`` on failure.
     func fetchDevices() async throws -> [Device] {
         let response: DeviceListResponse = try await get("/api/devices")
-        return response.devices
-    }
-
-    /// Re-run device discovery on the server.
-    ///
-    /// - Returns: The updated array of ``Device``.
-    /// - Throws: ``APIError`` on failure.
-    func discover() async throws -> [Device] {
-        let response: DeviceListResponse = try await post(
-            "/api/discover", body: EmptyBody()
-        )
         return response.devices
     }
 

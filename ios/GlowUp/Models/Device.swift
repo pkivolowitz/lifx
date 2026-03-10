@@ -6,7 +6,7 @@
 
 import Foundation
 
-/// A discovered LIFX device as reported by the server's
+/// A configured LIFX device as reported by the server's
 /// ``GET /api/devices`` endpoint.
 struct Device: Codable, Identifiable, Hashable {
     /// Device IP address (used as the unique identifier).
@@ -55,6 +55,6 @@ struct Device: Codable, Identifiable, Hashable {
 
 /// Wrapper for the ``GET /api/devices`` JSON response.
 struct DeviceListResponse: Codable {
-    /// List of discovered devices.
+    /// List of configured devices.
     let devices: [Device]
 }

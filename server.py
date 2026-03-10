@@ -1,10 +1,16 @@
 """GlowUp REST API server — remote control daemon for LIFX devices.
 
-Provides an HTTP API for discovering, querying, and controlling LIFX
-devices from anywhere.  Designed to be the single daemon running on a
-Raspberry Pi (or Mac), this server subsumes the role of the standalone
-scheduler by managing effects directly through the :class:`Controller`
-API instead of spawning subprocesses.
+Provides an HTTP API for querying and controlling LIFX devices from
+anywhere.  Designed to be the single daemon running on a Raspberry Pi
+(or Mac), this server subsumes the role of the standalone scheduler by
+managing effects directly through the :class:`Controller` API instead
+of spawning subprocesses.
+
+The server does **not** perform broadcast discovery.  All device IPs
+must be listed in the ``groups`` section of the configuration file.
+Direct per-IP queries are both faster and more reliable than broadcast
+discovery, which requires multiple retries with long timeouts and is
+defeated by mesh routers that filter broadcast packets between nodes.
 
 Architecture::
 
@@ -23,7 +29,7 @@ Architecture::
 Endpoints::
 
     GET  /api/status                     Server readiness and version
-    GET  /api/devices                    List discovered devices
+    GET  /api/devices                    List configured devices
     GET  /api/effects                    List effects with param metadata
     GET  /api/devices/{ip}/status        Current effect and params
     GET  /api/devices/{ip}/colors        Snapshot of zone HSBK values
@@ -35,8 +41,6 @@ Endpoints::
     POST /api/devices/{ip}/nickname      Set a custom display name
     GET  /api/schedule                   Schedule entries with resolved times
     POST /api/schedule/{index}/enabled   Enable or disable a schedule entry
-    POST /api/discover                   Re-run device discovery
-
 Usage::
 
     python3 server.py server.json
@@ -48,7 +52,7 @@ Usage::
 
 from __future__ import annotations
 
-__version__ = "1.5"
+__version__ = "1.6"
 
 import hmac
 import http.server
@@ -70,7 +74,7 @@ from typing import Any, Optional
 from effects import get_registry, create_effect, HSBK_MAX, KELVIN_DEFAULT
 from engine import Controller
 from solar import SunTimes, sun_times
-from transport import LifxDevice, discover_devices
+from transport import LifxDevice
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -84,12 +88,6 @@ SSE_POLL_HZ: float = 4.0
 
 # Computed interval between SSE polls (seconds).
 SSE_POLL_INTERVAL: float = 1.0 / SSE_POLL_HZ
-
-# Device discovery timeout (seconds).
-DISCOVERY_TIMEOUT: float = 5.0
-
-# Number of broadcast discovery attempts before falling back to direct IPs.
-DISCOVERY_RETRIES: int = 3
 
 # Maximum allowed size of an HTTP request body (bytes).
 MAX_REQUEST_BODY: int = 65536
@@ -234,7 +232,14 @@ def _validate_ip(ip_str: str) -> bool:
 # ---------------------------------------------------------------------------
 
 class DeviceManager:
-    """Manage discovered LIFX devices and one Controller per device.
+    """Manage LIFX devices loaded from the configuration file.
+
+    The server does not perform broadcast discovery.  All device IPs
+    come from the ``groups`` section of the config file.  Each device
+    is contacted directly via a single UDP query — much faster and more
+    reliable than broadcast discovery, which requires multiple retries
+    with long timeouts and is defeated by mesh routers that filter
+    broadcast packets between nodes.
 
     Thread-safe: all public methods acquire the internal lock before
     modifying shared state.  The :class:`Controller` instances themselves
@@ -245,14 +250,14 @@ class DeviceManager:
         controllers: Dict mapping device IP to :class:`Controller`.
     """
 
-    def __init__(self, known_ips: Optional[list[str]] = None,
+    def __init__(self, device_ips: list[str],
                  nicknames: Optional[dict[str, str]] = None) -> None:
-        """Initialize with empty device and controller maps.
+        """Initialize with the device IPs from the config file.
 
         Args:
-            known_ips:  Optional list of device IPs from config groups.
-                        Used as fallback when broadcast discovery fails
-                        (e.g. mesh routers that block broadcast).
+            device_ips: List of device IPs extracted from the config
+                        ``groups`` section.  These are the *only* devices
+                        the server will manage.
             nicknames:  Optional mapping of device IP to user-assigned
                         display name, loaded from the config file.
         """
@@ -263,99 +268,55 @@ class DeviceManager:
         # that was active when the phone took over.  The scheduler clears
         # the override when the active entry changes from this value.
         self._overrides: dict[str, Optional[str]] = {}
-        # Known IPs from config groups for fallback direct discovery.
-        self._known_ips: list[str] = known_ips or []
+        # Device IPs from config groups — the only source of devices.
+        self._device_ips: list[str] = device_ips
         # User-assigned nicknames: IP → display name.
         self._nicknames: dict[str, str] = nicknames or {}
-        # Readiness flag: False until initial discovery completes.
+        # Readiness flag: False until initial load completes.
         self._ready: bool = False
 
-    def discover(self) -> list[dict[str, Any]]:
-        """Run LIFX discovery and cache results.
+    def load_devices(self) -> list[dict[str, Any]]:
+        """Query each configured device IP and cache the results.
 
-        First attempts broadcast discovery.  If that finds no devices
-        and known IPs are configured (from config groups), falls back
-        to direct per-IP queries — necessary on networks where mesh
-        routers block UDP broadcast between nodes.
-
-        Existing controllers are preserved if their device is still
-        present.  Devices that disappear have their controllers stopped
-        and sockets closed.
+        Creates a :class:`LifxDevice` for every IP in the config,
+        queries its metadata (version, label, group, zone count),
+        and populates the internal device map.  Unreachable devices
+        are logged as warnings but do not prevent the server from
+        starting.
 
         Returns:
             A list of JSON-serializable device info dicts.
         """
-        # Try broadcast discovery with retries.  Mesh routers and
-        # congested networks often need multiple attempts.
-        new_devices: list[LifxDevice] = []
-        for attempt in range(1, DISCOVERY_RETRIES + 1):
-            new_devices = discover_devices(timeout=DISCOVERY_TIMEOUT)
-            if new_devices:
-                break
-            if attempt < DISCOVERY_RETRIES:
-                logging.info(
-                    "Broadcast discovery attempt %d/%d found 0 devices, retrying...",
-                    attempt, DISCOVERY_RETRIES,
-                )
-
-        # Supplement with direct per-IP queries for any known IPs not
-        # already found.  This ensures devices hidden by mesh routers
-        # are always reachable when their IPs are in the config.
-        if self._known_ips:
-            found_ips: set[str] = {d.ip for d in new_devices}
-            missing_ips: list[str] = [
-                ip for ip in self._known_ips if ip not in found_ips
-            ]
-            if missing_ips:
-                logging.info(
-                    "Querying %d known IP(s) not found by broadcast...",
-                    len(missing_ips),
-                )
-                for ip in missing_ips:
-                    # Retry direct queries — flaky mesh routers may
-                    # drop the first UDP packet.
-                    for attempt in range(1, DISCOVERY_RETRIES + 1):
-                        try:
-                            found: list[LifxDevice] = discover_devices(
-                                timeout=DISCOVERY_TIMEOUT,
-                                target_ip=ip,
-                            )
-                            if found:
-                                new_devices.extend(found)
-                                break
-                            if attempt < DISCOVERY_RETRIES:
-                                logging.info(
-                                    "Direct query %s attempt %d/%d — no response, retrying...",
-                                    ip, attempt, DISCOVERY_RETRIES,
-                                )
-                        except Exception as exc:
-                            logging.warning(
-                                "Direct discovery %s failed: %s", ip, exc,
-                            )
-                            break
-                    else:
-                        logging.warning(
-                            "Device %s did not respond after %d attempts",
-                            ip, DISCOVERY_RETRIES,
-                        )
-        new_map: dict[str, LifxDevice] = {d.ip: d for d in new_devices}
+        new_map: dict[str, LifxDevice] = {}
+        for ip in self._device_ips:
+            try:
+                dev: LifxDevice = LifxDevice(ip)
+                dev.query_all()
+                if dev.product is not None:
+                    new_map[dev.ip] = dev
+                    logging.info(
+                        "  loaded %s — %s (%s) [%s zones]",
+                        dev.label or "?", dev.product_name or "?",
+                        dev.ip, dev.zone_count or "?",
+                    )
+                else:
+                    logging.warning("Device %s responded but returned no product info", ip)
+                    dev.close()
+            except Exception as exc:
+                logging.warning("Device %s unreachable: %s", ip, exc)
 
         with self._lock:
-            # Close sockets for devices that are gone.
+            # Close sockets for devices no longer in the config.
             gone_ips: set[str] = set(self._devices) - set(new_map)
             for ip in gone_ips:
                 self._stop_and_remove(ip)
 
-            # For newly discovered devices, close any duplicate sockets
-            # from the old map (discovery creates new LifxDevice instances
-            # with their own sockets).
+            # Replace old device objects with freshly queried ones.
             for ip, new_dev in new_map.items():
                 old_dev: Optional[LifxDevice] = self._devices.get(ip)
                 if old_dev is not None and old_dev is not new_dev:
-                    # A controller may reference the old device — update it.
                     ctrl: Optional[Controller] = self._controllers.get(ip)
                     if ctrl is not None:
-                        # Stop the old controller; the caller can re-play.
                         ctrl.stop(fade_ms=0)
                         del self._controllers[ip]
                     old_dev.close()
@@ -367,7 +328,7 @@ class DeviceManager:
 
     @property
     def ready(self) -> bool:
-        """Return ``True`` once initial discovery has completed."""
+        """Return ``True`` once initial device loading has completed."""
         return self._ready
 
     def get_device(self, ip: str) -> Optional[LifxDevice]:
@@ -428,7 +389,7 @@ class DeviceManager:
             A status dict for the device.
 
         Raises:
-            KeyError: If the device IP is not discovered.
+            KeyError: If the device IP is not configured.
             ValueError: If the effect name is invalid.
         """
         ctrl: Optional[Controller] = self.get_or_create_controller(ip)
@@ -454,7 +415,7 @@ class DeviceManager:
             A status dict for the device.
 
         Raises:
-            KeyError: If the device IP is not discovered.
+            KeyError: If the device IP is not configured.
         """
         ctrl: Optional[Controller] = self.get_or_create_controller(ip)
         if ctrl is None:
@@ -472,7 +433,7 @@ class DeviceManager:
             A status dict, or a minimal dict if no controller exists.
 
         Raises:
-            KeyError: If the device IP is not discovered.
+            KeyError: If the device IP is not configured.
         """
         with self._lock:
             if ip not in self._devices:
@@ -509,7 +470,7 @@ class DeviceManager:
             A dict confirming the action.
 
         Raises:
-            KeyError: If the device IP is not discovered.
+            KeyError: If the device IP is not configured.
         """
         dev: Optional[LifxDevice] = self.get_device(ip)
         if dev is None:
@@ -529,7 +490,7 @@ class DeviceManager:
             ip: Device IP address.
 
         Raises:
-            KeyError: If the device IP is not discovered.
+            KeyError: If the device IP is not configured.
         """
         dev: Optional[LifxDevice] = self.get_device(ip)
         if dev is None:
@@ -587,7 +548,7 @@ class DeviceManager:
             A list of ``{h, s, b, k}`` dicts, or ``None`` on failure.
 
         Raises:
-            KeyError: If the device IP is not discovered.
+            KeyError: If the device IP is not configured.
         """
         dev: Optional[LifxDevice] = self.get_device(ip)
         if dev is None:
@@ -649,7 +610,7 @@ class DeviceManager:
         return result
 
     def devices_as_list(self) -> list[dict[str, Any]]:
-        """Return discovered devices as a JSON-serializable list.
+        """Return configured devices as a JSON-serializable list.
 
         Returns:
             A list of device info dicts.
@@ -1463,11 +1424,6 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         path: str = self.path.split("?")[0]
         parts: list[str] = path.strip("/").split("/")
 
-        # /api/discover
-        if path == "/api/discover":
-            self._handle_post_discover()
-            return
-
         # /api/devices/{ip}/play
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "play"):
@@ -1537,12 +1493,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         """GET /api/status — server readiness and version.
 
         Returns a status object indicating whether initial device
-        discovery has completed.  Clients can poll this endpoint on
-        connect and show a "discovering devices" message until
+        loading has completed.  Clients can poll this endpoint on
+        connect and show a "loading devices" message until
         ``ready`` becomes ``true``.
         """
         ready: bool = self.device_manager.ready
-        status: str = "ready" if ready else "discovering"
+        status: str = "ready" if ready else "loading"
         self._send_json(200, {
             "status": status,
             "ready": ready,
@@ -1550,7 +1506,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         })
 
     def _handle_get_devices(self) -> None:
-        """GET /api/devices — list all discovered devices."""
+        """GET /api/devices — list all configured devices."""
         devices: list[dict[str, Any]] = self.device_manager.devices_as_list()
         self._send_json(200, {"devices": devices})
 
@@ -1712,12 +1668,6 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             pass
 
     # -- POST handlers ------------------------------------------------------
-
-    def _handle_post_discover(self) -> None:
-        """POST /api/discover — re-run device discovery."""
-        logging.info("API: re-running device discovery")
-        devices: list[dict[str, Any]] = self.device_manager.discover()
-        self._send_json(200, {"devices": devices})
 
     def _handle_post_play(self, ip: str) -> None:
         """POST /api/devices/{ip}/play — start an effect.
@@ -1965,9 +1915,11 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 def _load_config(config_path: str) -> dict[str, Any]:
     """Load and validate the server configuration file.
 
-    The config must contain ``port``, ``auth_token``, and ``location``
-    sections.  The ``groups`` and ``schedule`` sections are optional
-    (server works without a schedule — API-only mode).
+    The config must contain ``port``, ``auth_token``, and ``groups``
+    sections.  The ``groups`` section provides all device IPs — the
+    server does not perform broadcast discovery.  The ``schedule``
+    and ``location`` sections are optional (server works without a
+    schedule in API-only mode).
 
     Args:
         config_path: Path to the JSON configuration file.
@@ -2008,15 +1960,21 @@ def _load_config(config_path: str) -> dict[str, Any]:
                 "Config location must have 'latitude' and 'longitude'"
             )
 
-    # Validate groups and schedule if present.
-    if "groups" in config:
-        groups: dict[str, list[str]] = config["groups"]
-        for group_name, ips in groups.items():
-            if group_name.startswith("_"):
-                continue
-            if not isinstance(ips, list) or not ips:
-                raise ValueError(
-                    f"Group '{group_name}' must be a non-empty list"
+    # Validate groups — required, since the server has no other source
+    # of device IPs (broadcast discovery has been removed).
+    if "groups" not in config or not config["groups"]:
+        raise ValueError(
+            "Config must contain a non-empty 'groups' section with "
+            "device IPs.  The server does not perform broadcast "
+            "discovery — all devices must be listed explicitly."
+        )
+    groups: dict[str, list[str]] = config["groups"]
+    for group_name, ips in groups.items():
+        if group_name.startswith("_"):
+            continue
+        if not isinstance(ips, list) or not ips:
+            raise ValueError(
+                f"Group '{group_name}' must be a non-empty list"
                 )
 
     if "schedule" in config:
@@ -2250,22 +2208,24 @@ def main() -> None:
         _dry_run(config)
         sys.exit(0)
 
-    # -- Device manager (no discovery yet) ------------------------------------
-    # Collect all unique IPs from config groups for fallback discovery.
-    groups: dict[str, list[str]] = config.get("groups", {})
-    known_ips: list[str] = sorted(
+    # -- Device manager -------------------------------------------------------
+    # Extract all unique IPs from config groups.  The server does not
+    # perform broadcast discovery — these IPs are the only devices it
+    # will manage.
+    groups: dict[str, list[str]] = config["groups"]
+    device_ips: list[str] = sorted(
         {ip for ips in groups.values() for ip in ips}
     )
     nicknames: dict[str, str] = config.get("nicknames", {})
     dm: DeviceManager = DeviceManager(
-        known_ips=known_ips, nicknames=nicknames,
+        device_ips=device_ips, nicknames=nicknames,
     )
 
     # -- HTTP server (bind immediately) -------------------------------------
-    # Start accepting connections BEFORE discovery so the Cloudflare
-    # tunnel (or any health-check) never sees "connection refused".
-    # API requests arriving before discovery completes see an empty
-    # device list — harmless and self-correcting.
+    # Start accepting connections BEFORE device loading so the
+    # Cloudflare tunnel (or any health-check) never sees "connection
+    # refused".  API requests arriving before loading completes see
+    # an empty device list — harmless and self-correcting.
     port: int = config.get("port", DEFAULT_PORT)
 
     GlowUpRequestHandler.device_manager = dm
@@ -2308,22 +2268,14 @@ def main() -> None:
         "API base: http://localhost:%d/api/", port,
     )
 
-    # -- Background discovery -----------------------------------------------
-    # Run discovery in a daemon thread so the HTTP server is already
-    # accepting connections while we wait for devices to respond.
+    # -- Background device loading -------------------------------------------
+    # Load devices in a daemon thread so the HTTP server is already
+    # accepting connections while we query each device.
     def _background_startup() -> None:
-        """Discover devices, then start the scheduler."""
-        logging.info("Discovering LIFX devices...")
-        devices: list[dict[str, Any]] = dm.discover()
-        logging.info("Found %d device(s)", len(devices))
-        for dev_info in devices:
-            logging.info(
-                "  %s — %s (%s) [%s zones]",
-                dev_info.get("label", "?"),
-                dev_info.get("product", "?"),
-                dev_info.get("ip", "?"),
-                dev_info.get("zones", "?"),
-            )
+        """Load devices from config IPs, then start the scheduler."""
+        logging.info("Loading %d device(s) from config...", len(device_ips))
+        devices: list[dict[str, Any]] = dm.load_devices()
+        logging.info("Loaded %d device(s)", len(devices))
 
         # Start the scheduler now that devices are available.
         if config.get("schedule"):
@@ -2334,7 +2286,7 @@ def main() -> None:
             logging.info("No schedule configured — API-only mode")
 
     startup_thread: threading.Thread = threading.Thread(
-        target=_background_startup, daemon=True, name="startup-discovery",
+        target=_background_startup, daemon=True, name="startup-loader",
     )
     startup_thread.start()
 

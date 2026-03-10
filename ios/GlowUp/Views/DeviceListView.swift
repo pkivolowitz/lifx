@@ -6,7 +6,7 @@
 
 import SwiftUI
 
-/// Main screen: lists all discovered LIFX devices.
+/// Main screen: lists all configured LIFX devices.
 ///
 /// Each row shows the device name, product type, group, current
 /// effect, and zone count.  Tapping a device navigates to its

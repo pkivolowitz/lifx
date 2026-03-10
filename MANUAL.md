@@ -1879,8 +1879,21 @@ Generate a secure token:
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-The `groups` and `schedule` sections are optional — the server works in
-API-only mode without them.
+The `groups` section is **required** — it is the server's only source of
+device IPs.  The server does not perform broadcast discovery; instead it
+queries each configured IP directly at startup.  This is both faster and
+more reliable than broadcast discovery, which requires multiple retries
+with long timeouts and is defeated by mesh routers that filter broadcast
+packets between nodes.
+
+The `schedule` section is optional — the server works in API-only mode
+without it.
+
+> **Tip:** Because the server relies on IP addresses to reach each
+> device, LIFX bulbs should be given **static IP addresses** or
+> **DHCP address reservations** in your router.  If a device's IP
+> changes (e.g. after a power outage or DHCP lease renewal), the
+> server will no longer be able to reach it at the configured address.
 
 ### API Endpoints
 
@@ -1893,7 +1906,7 @@ Authorization: Bearer your-secret-token-here
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/status` | Server readiness and version |
-| `GET` | `/api/devices` | List all discovered devices |
+| `GET` | `/api/devices` | List all configured devices |
 | `GET` | `/api/effects` | List effects with full parameter metadata |
 | `GET` | `/api/devices/{ip}/status` | Current effect name, params, FPS |
 | `GET` | `/api/devices/{ip}/colors` | Snapshot of zone HSBK values |
@@ -1901,7 +1914,6 @@ Authorization: Bearer your-secret-token-here
 | `POST` | `/api/devices/{ip}/play` | Start an effect (body: `{"effect":"name","params":{...}}`) |
 | `POST` | `/api/devices/{ip}/stop` | Stop current effect (fade to black) |
 | `POST` | `/api/devices/{ip}/power` | Power on/off (body: `{"on": true}`) |
-| `POST` | `/api/discover` | Re-run device discovery |
 
 **Examples:**
 
@@ -1925,26 +1937,26 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 
 ### Server Readiness
 
-The server binds its HTTP port immediately on startup, then runs device
-discovery in the background.  This eliminates the "connection refused"
-window that caused 502 errors from reverse proxies (e.g. Cloudflare
-Tunnel) during restart.
+The server binds its HTTP port immediately on startup, then loads
+devices from config IPs in the background.  This eliminates the
+"connection refused" window that caused 502 errors from reverse
+proxies (e.g. Cloudflare Tunnel) during restart.
 
 Clients should query `GET /api/status` on connect:
 
 ```json
-{"status": "discovering", "ready": false, "version": "1.5"}
+{"status": "loading", "ready": false, "version": "1.6"}
 ```
 
-Once discovery completes the response changes to:
+Once device loading completes the response changes to:
 
 ```json
-{"status": "ready", "ready": true, "version": "1.5"}
+{"status": "ready", "ready": true, "version": "1.6"}
 ```
 
 While `ready` is `false`, other endpoints work normally but return empty
-device lists.  The iOS app uses this to show a "Discovering devices..."
-indicator instead of an empty screen.
+device lists.  The iOS app uses this to show a loading indicator instead
+of an empty screen.
 
 ### Authentication
 
@@ -2068,7 +2080,7 @@ check **Connect via network**.
 
 ### App Screens
 
-1. **Device List** — Shows all discovered devices with name, product
+1. **Device List** — Shows all configured devices with name, product
    type, group, and current effect.  Pull-to-refresh fetches the
    latest state.
 
