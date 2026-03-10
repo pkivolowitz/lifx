@@ -627,10 +627,17 @@ def cmd_play(args: argparse.Namespace) -> None:
     has_group: bool = bool(getattr(args, "config", None) and
                            getattr(args, "group", None))
     sim_only: bool = bool(getattr(args, "sim_only", False))
+    virtual_zones: int = getattr(args, "zones", None) or 0
 
-    if not has_ip and not has_group:
+    # --zones implies --sim-only (no device needed).
+    if virtual_zones > 0:
+        sim_only = True
+        args.sim_only = True
+
+    if not has_ip and not has_group and virtual_zones <= 0:
         _print(
-            "ERROR: Specify either --ip or both --config and --group.",
+            "ERROR: Specify either --ip or both --config and --group.\n"
+            "       For device-free simulator mode, use --zones <count>.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -642,8 +649,30 @@ def cmd_play(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
+    # --- Device-free simulator mode ------------------------------------------
+    # When --zones is specified, skip all network I/O and create a
+    # _NullDevice directly with the requested geometry.
+    if virtual_zones > 0:
+        if has_ip or has_group:
+            _print(
+                "ERROR: --zones is for device-free mode; "
+                "do not combine with --ip or --config/--group.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        poly_map: list[bool] = [True] * virtual_zones
+        dev = _NullDevice(
+            zone_count=virtual_zones,
+            label="virtual",
+            product_name="Virtual Device",
+            ip="sim-only",
+            pre_poly_map=poly_map,
+        )
+        _print(f"Virtual device: {virtual_zones} zones (device-free mode)",
+               flush=True)
+
     # --- Connect to device(s) ------------------------------------------------
-    if has_group:
+    elif has_group:
         # Virtual multizone: load group, connect all devices, wrap.
         ips: list[str] = _load_group(args.config, args.group)
         _print(f"Connecting to group '{args.group}' ({len(ips)} devices)...",
@@ -679,7 +708,8 @@ def cmd_play(args: argparse.Namespace) -> None:
     # --- Sim-only: extract geometry then close real sockets immediately --------
     # From this point on, if sim_only is active, dev is a _NullDevice and
     # no further packets will be sent to the physical lights.
-    if sim_only:
+    # Skip when --zones was used — dev is already a _NullDevice.
+    if sim_only and virtual_zones <= 0:
         pre_poly: list[bool] = _build_polychrome_map(dev)
         null_label: str = getattr(dev, "label", None) or "?"
         null_product: str = getattr(dev, "product_name", None) or "?"
@@ -845,6 +875,8 @@ def _print_effect_help(effect_name: str) -> None:
           f"--config <file> --group <name> [parameters]")
     print(f"  python3 glowup.py play {effect_name} "
           f"--ip <device-ip> --sim-only [parameters]")
+    print(f"  python3 glowup.py play {effect_name} "
+          f"--zones 36 --zpb 3 [parameters]")
     print()
 
 
@@ -967,6 +999,13 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Query device geometry then show the effect in the simulator "
             "only — no color or power commands are sent to the lights"
+        ),
+    )
+    p_play.add_argument(
+        "--zones", type=int, default=None,
+        help=(
+            "Zone count for device-free simulator mode (implies --sim-only). "
+            "Example: --zones 36 --zpb 3 for a 12-bulb string light"
         ),
     )
     p_play.add_argument(
