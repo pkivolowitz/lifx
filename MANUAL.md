@@ -37,6 +37,7 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
    - [fireworks](#fireworks)
    - [rule30](#rule30)
    - [rule_trio](#rule_trio)
+   - [newtons_cradle](#newtons_cradle)
 7. [Effect Developer Guide](#effect-developer-guide)
    - [Architecture Overview](#architecture-overview)
    - [Creating a New Effect](#creating-a-new-effect)
@@ -945,6 +946,121 @@ python3 glowup.py play rule_trio --ip <device-ip> --palette 32 --speed 6
 
 # Gothic — slow, dim background glow, maximum menace
 python3 glowup.py play rule_trio --ip <device-ip> --palette 49 --speed 4 --bg 3
+```
+
+---
+
+### newtons_cradle
+
+#### Background
+
+Newton's Cradle is a physics desk toy — a row of steel balls hanging from strings.
+Lift the rightmost ball, release it, and it strikes the row; the leftmost ball flies
+out, swings back, and the cycle repeats indefinitely.
+
+This effect has personal history.  The author first wrote a Newton's Cradle simulation
+on the **Commodore Amiga in 1985** — a program that appeared on **Fish Disk #1**, the
+very first disk in Fred Fish's legendary freely distributable software library.  The
+original Amiga version featured per-pixel sphere shading, which was remarkable for the
+hardware of the era.  This LIFX implementation carries that tradition forward: each ball
+is rendered as a lit 3-D sphere using a full Phong illumination model.
+
+#### How It Works
+
+Five steel-coloured balls hang in a row.  The rightmost ball swings to the right and
+returns; immediately the leftmost ball swings to the left and returns.  The middle balls
+remain stationary throughout — exactly as physics demands.
+
+The animation phase is driven by a sinusoidal pendulum model:
+
+- **Phase 0 → 0.5:** right ball swings out and returns.
+- **Phase 0.5 → 1.0:** left ball swings out and returns.
+- Maximum speed occurs at the moment of collision (phase = 0 and 0.5); speed tapers
+  to zero at the ends of the arc — physically correct simple-harmonic motion.
+
+#### Ball Shading (Phong Illumination)
+
+Each ball is rendered as a 3-D sphere cross-section under a Phong illumination model:
+
+```
+I = I_a · ambient
+  + I_d · max(0, N · L)              (Lambertian diffuse)
+  + I_s · max(0, R · V)^shininess    (Phong specular)
+```
+
+The light source sits at **25° from vertical toward the upper-left**, giving a classic
+studio-lighting look.  The surface normal at each zone is derived from the unit-circle
+sphere cross-section: `N = (x_rel, √(1 − x_rel²))`.
+
+The specular highlight blends toward pure white via CIELAB interpolation (`lerp_color`)
+so the colour transition from ball surface to hot-spot is perceptually smooth on any hue.
+
+**Ball edges are naturally dark**: at `x_rel = ±1` the normal is horizontal, so the
+upper-left light contributes nothing; only ambient (10%) brightness remains.  This dark
+edge visually separates adjacent balls without requiring a physical gap between them —
+set `--gap 0` for a fully packed row where shading alone draws the boundaries.
+
+#### Auto-Layout
+
+When `--ball-width 0` (default) and `--swing 0` (default), the effect auto-sizes so
+the full cradle — rest row plus swing arc on each end — fits the strip:
+
+```
+zone_count ≥ (n + 2) × ball_width + (n − 1) × gap
+→  ball_width = (zone_count − (n−1)×gap) ÷ (n + 2)
+```
+
+This means a 108-zone strip with 5 balls and gap=1 gives balls approximately 16 zones
+wide each, with a 16-zone swing arc on each side.
+
+#### Parameters
+
+| Parameter      | Default | Range       | Description |
+|----------------|---------|-------------|-------------|
+| `--num-balls`  | 5       | 2–10        | Number of balls in the cradle |
+| `--ball-width` | 0       | 0–30        | Zones per ball; 0 = auto-size to fill strip |
+| `--gap`        | 1       | 0–9         | Zones between adjacent balls at rest; 0 = pure shading separation |
+| `--swing`      | 0       | 0–80        | Swing arc beyond row end in zones; 0 = auto = one ball-width |
+| `--speed`      | 1.5     | 0.3–10.0    | Full period in seconds (right-swing + left-swing = one cycle) |
+| `--hue`        | 200     | 0–360       | Base hue in degrees (200 = steel-teal, 45 = gold, 0 = red) |
+| `--sat`        | 15      | 0–100       | Base saturation percent (0 = pure gray / brushed steel) |
+| `--brightness` | 90      | 1–100       | Maximum ball brightness percent |
+| `--shininess`  | 25      | 1–100       | Specular exponent: 8=matte, 25=brushed metal, 60=chrome, 100=mirror |
+| `--kelvin`     | 4000    | 1500–9000   | Color temperature in Kelvin |
+
+#### Shading Presets
+
+| Look               | Invocation |
+|--------------------|-----------|
+| Brushed steel      | `--sat 0` |
+| Gold balls         | `--sat 80 --hue 45` |
+| Blue titanium      | `--hue 200 --sat 30` |
+| Copper             | `--hue 20 --sat 60` |
+| Matte rubber       | `--shininess 8` |
+| Mirror chrome      | `--shininess 60 --sat 5` |
+| Slow-motion        | `--speed 3.0` |
+| Touching balls     | `--gap 0` |
+
+#### Examples
+
+```bash
+# Default — brushed steel-teal balls, auto-sized to the strip
+python3 glowup.py play newtons_cradle --ip <device-ip>
+
+# Pure brushed steel (no hue, just brightness gradients)
+python3 glowup.py play newtons_cradle --ip <device-ip> --sat 0
+
+# Gold balls with mirror chrome highlight
+python3 glowup.py play newtons_cradle --ip <device-ip> --hue 45 --sat 80 --shininess 60
+
+# Tight pack: balls touching, shading alone separates them
+python3 glowup.py play newtons_cradle --ip <device-ip> --gap 0
+
+# Slow-motion with 7 copper-toned balls
+python3 glowup.py play newtons_cradle --ip <device-ip> --num-balls 7 --hue 20 --sat 60 --speed 3.0
+
+# Maximum LIFX bulb separation (3 zones = one physical bulb)
+python3 glowup.py play newtons_cradle --ip <device-ip> --gap 3
 ```
 
 ---
