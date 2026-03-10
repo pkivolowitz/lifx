@@ -1,10 +1,17 @@
 """Embers effect — convection simulation of rising, cooling embers.
 
 Heat is randomly injected at the bottom of the string (zone 0).  Each
-frame, the temperature field is diffused using a simple 1D averaging
-kernel and multiplied by a cooling factor:
+frame, the temperature field undergoes two steps:
 
-    T'[i] = (T[i-1] + T[i] + T[i+1]) / 3 × cooling
+1. **Convection** — heat shifts upward by one cell, simulating buoyancy.
+   A fractional drift rate controls how many frames between shifts.
+
+2. **Diffusion + cooling** — each cell averages with its neighbours and
+   is multiplied by a cooling factor:
+       T'[i] = (T[i-1] + T[i] + T[i+1]) / 3 × cooling
+
+Random per-cell turbulence adds flicker, and occasional large bursts
+create visible "puffs" that travel up the string.
 
 Temperature maps to a color gradient:
     0.0 → black  (cold/dead)
@@ -19,7 +26,7 @@ cooling and dimming as they drift upward.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import random
 
@@ -47,6 +54,17 @@ THRESH_ORANGE: float = 0.60    # Below this → red-to-orange ramp.
 
 # Default zones per bulb (1 = per-zone, 3 = polychrome string lights).
 DEFAULT_ZPB: int = 1
+
+# Convection: shift the heat buffer upward every this many frames.
+CONVECTION_FRAMES: int = 3
+
+# Turbulence: maximum random perturbation added/subtracted per cell per frame.
+TURBULENCE_AMPLITUDE: float = 0.08
+
+# Burst: probability per frame of a large heat injection (a visible puff).
+BURST_PROBABILITY: float = 0.06
+BURST_HEAT: float = 0.9       # Heat injected at a random low position.
+BURST_RADIUS: int = 2         # How many cells around the burst center.
 
 
 def _temp_to_hsbk(temp: float, max_bri: int, kelvin: int) -> HSBK:
@@ -104,8 +122,10 @@ class Embers(Effect):
 
     intensity = Param(0.7, min=0.0, max=1.0,
                       description="Probability of heat injection per frame")
-    cooling = Param(0.96, min=0.80, max=0.999,
+    cooling = Param(0.98, min=0.80, max=0.999,
                     description="Cooling factor per diffusion step (lower = faster fade)")
+    turbulence = Param(0.08, min=0.0, max=0.3,
+                       description="Random per-cell flicker amplitude")
     brightness = Param(100, min=0, max=100,
                        description="Overall brightness percent")
     zones_per_bulb = Param(DEFAULT_ZPB, min=1, max=16,
@@ -117,12 +137,14 @@ class Embers(Effect):
         """Initialise the embers effect with an empty heat buffer."""
         super().__init__(**overrides)
         self._heat: list[float] = []
+        self._frame: int = 0
 
     def render(self, t: float, zone_count: int) -> list[HSBK]:
         """Produce one frame of the embers convection simulation.
 
-        Each call diffuses the temperature field, injects new heat at
-        the bottom, and maps temperatures to the ember color gradient.
+        Each call performs convection (upward shift), diffusion with
+        cooling, turbulence, heat injection, and occasional bursts,
+        then maps temperature to the ember color gradient.
 
         Args:
             t:          Seconds elapsed since effect started.
@@ -133,6 +155,7 @@ class Embers(Effect):
         """
         zpb: int = self.zones_per_bulb
         bulb_count: int = max(1, zone_count // zpb)
+        self._frame += 1
 
         # Lazily initialise or resize the heat buffer to match bulb count.
         if len(self._heat) != bulb_count:
@@ -140,21 +163,42 @@ class Embers(Effect):
 
         heat: list[float] = self._heat
 
-        # --- Inject heat at the bottom ------------------------------------
+        # --- 1. Convection: shift heat upward periodically ----------------
+        # Every CONVECTION_FRAMES frames, move each cell's heat up by one
+        # position.  This simulates buoyancy — hot air rises.
+        if self._frame % CONVECTION_FRAMES == 0:
+            for i in range(bulb_count - 1, 0, -1):
+                heat[i] = heat[i - 1]
+            heat[0] = 0.0
+
+        # --- 2. Inject heat at the bottom ---------------------------------
         if random.random() < self.intensity:
             heat[0] = min(heat[0] + random.uniform(0.5, 1.0), 1.0)
 
-        # --- Diffuse: average each cell with its neighbours ---------------
+        # --- 3. Occasional burst: a puff of heat at a random low position -
+        if random.random() < BURST_PROBABILITY:
+            center: int = random.randint(0, max(0, bulb_count // 3))
+            for j in range(max(0, center - BURST_RADIUS),
+                           min(bulb_count, center + BURST_RADIUS + 1)):
+                heat[j] = min(heat[j] + BURST_HEAT, 1.0)
+
+        # --- 4. Diffusion + cooling: smooth and decay ---------------------
         new_heat: list[float] = [0.0] * bulb_count
         for i in range(bulb_count):
             below: float = heat[i - 1] if i > 0 else 0.0
             above: float = heat[i + 1] if i < bulb_count - 1 else 0.0
             new_heat[i] = (below + heat[i] + above) / 3.0 * self.cooling
 
+        # --- 5. Turbulence: random per-cell flicker -----------------------
+        turb: float = self.turbulence
+        if turb > 0.0:
+            for i in range(bulb_count):
+                new_heat[i] += random.uniform(-turb, turb)
+
         # Clamp to [0, 1].
         self._heat = [max(0.0, min(1.0, h)) for h in new_heat]
 
-        # --- Map temperature to color and expand to zones -----------------
+        # --- 6. Map temperature to color and expand to zones --------------
         max_bri: int = pct_to_u16(self.brightness)
         colors: list[HSBK] = []
         for i in range(zone_count):
