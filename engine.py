@@ -398,7 +398,7 @@ class Engine:
                 try:
                     colors = effect.render(t, dev.zone_count)
                     if dev.is_multizone:
-                        dev.set_zones(colors, duration_ms=0, rapid=False)
+                        dev.set_zones(colors, duration_ms=0, rapid=True)
                     elif dev.is_polychrome:
                         # Single color bulb: apply the first rendered color.
                         h, s, b, k = colors[0]
