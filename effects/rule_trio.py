@@ -319,7 +319,7 @@ class RuleTrio(Effect):
     )
 
     speed = Param(
-        8.0, min=0.5, max=120.0,
+        1.5, min=0.5, max=120.0,
         description="Base generations per second for CA A",
     )
     drift_b = Param(

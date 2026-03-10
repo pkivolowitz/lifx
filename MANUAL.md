@@ -797,10 +797,10 @@ unnecessary; the default `--gap-fill 3` (one bulb radius) is usually ideal.
 | `--rule-a`     | 30      | 0–255      | Wolfram rule for CA A                                                        |
 | `--rule-b`     | 30      | 0–255      | Wolfram rule for CA B                                                        |
 | `--rule-c`     | 30      | 0–255      | Wolfram rule for CA C                                                        |
-| `--speed`      | 8.0     | 0.5–120    | Base generations per second for CA A                                         |
+| `--speed`      | 1.5     | 0.5–120    | Base generations per second for CA A                                         |
 | `--drift-b`    | 1.31    | 0.1–8.0    | Speed multiplier for CA B (irrational default avoids phase lock-in)          |
 | `--drift-c`    | 1.73    | 0.1–8.0    | Speed multiplier for CA C (irrational default avoids phase lock-in)          |
-| `--palette`    | 0       | 0–50       | Colour preset (see table below); 0 = use `--hue-a/b/c` and `--sat`          |
+| `--palette`    | custom  | 51 presets | Colour preset (see table below); "custom" = use `--hue-a/b/c` and `--sat`   |
 | `--hue-a`      | 0.0     | 0–360      | CA A primary hue in degrees (custom palette only)                            |
 | `--hue-b`      | 120.0   | 0–360      | CA B primary hue in degrees (custom palette only)                            |
 | `--hue-c`      | 240.0   | 0–360      | CA C primary hue in degrees (custom palette only)                            |
@@ -827,125 +827,124 @@ On LIFX string lights, use multiples of 3 to respect bulb boundaries:
 #### Palettes
 
 Palettes are coordinated sets of three primary hues plus a saturation value.
-When `--palette N` is non-zero it overrides `--hue-a`, `--hue-b`, `--hue-c`,
-and `--sat`.
+When `--palette NAME` is anything other than "custom" it overrides `--hue-a`,
+`--hue-b`, `--hue-c`, and `--sat`.
 
 **Nature & elements**
 
-| # | Name          | Primaries                                    | Sat |
-|---|---------------|----------------------------------------------|-----|
-| 1 | pastels       | Soft pink (340°), lavender (270°), mint (150°) | 45% |
-| 2 | earth         | Amber (35°), terracotta (18°), sage (130°)   | 70% |
-| 3 | water         | Ocean blue (220°), cyan (185°), seafoam (165°) | 85% |
-| 4 | fire          | Red (0°), orange (30°), amber (55°)          | 95% |
-| 6 | marble        | Blue-gray (210°), warm-white (42°), cool-white (185°) | 12% |
-| 8 | aurora        | Emerald (145°), teal (178°), deep purple (268°) | 85% |
-|10 | forest        | Deep green (130°), moss (95°), bark brown (28°) | 72% |
-|11 | deep sea      | Midnight blue (232°), bioluminescent teal (172°), violet (262°) | 90% |
-|39 | tropical      | Hot teal (175°), coral (15°), sunny yellow (55°) | 90% |
-|40 | coral reef    | Coral orange (18°), teal (175°), deep blue (230°) | 88% |
-|41 | galaxy        | Deep violet (268°), midnight blue (235°), pale blue (215°) | 78% |
-|42 | autumn        | Burnt orange (22°), burgundy (355°), golden yellow (48°) | 85% |
-|43 | winter        | Ice blue (205°), silver (215°), pale lavender (270°) | 35% |
-|44 | desert        | Sand (45°), rust orange (18°), warm brown (28°) | 68% |
-|45 | arctic        | Pale blue (200°), ice white (210°), steel gray (215°) | 20% |
+| Name          | Primaries                                    | Sat |
+|---------------|----------------------------------------------|-----|
+| pastels       | Soft pink (340°), lavender (270°), mint (150°) | 45% |
+| earth         | Amber (35°), terracotta (18°), sage (130°)   | 70% |
+| water         | Ocean blue (220°), cyan (185°), seafoam (165°) | 85% |
+| fire          | Red (0°), orange (30°), amber (55°)          | 95% |
+| marble        | Blue-gray (210°), warm-white (42°), cool-white (185°) | 12% |
+| aurora        | Emerald (145°), teal (178°), deep purple (268°) | 85% |
+| forest        | Deep green (130°), moss (95°), bark brown (28°) | 72% |
+| deep sea      | Midnight blue (232°), bioluminescent teal (172°), violet (262°) | 90% |
+| tropical      | Hot teal (175°), coral (15°), sunny yellow (55°) | 90% |
+| coral reef    | Coral orange (18°), teal (175°), deep blue (230°) | 88% |
+| galaxy        | Deep violet (268°), midnight blue (235°), pale blue (215°) | 78% |
+| autumn        | Burnt orange (22°), burgundy (355°), golden yellow (48°) | 85% |
+| winter        | Ice blue (205°), silver (215°), pale lavender (270°) | 35% |
+| desert        | Sand (45°), rust orange (18°), warm brown (28°) | 68% |
+| arctic        | Pale blue (200°), ice white (210°), steel gray (215°) | 20% |
 
-*Marble (6) at 12% saturation looks nearly white; the CA's alive/dead spatial
-structure creates the veining.  Arctic (45) at 20% reads as frost breath
-patterns.*
+*Marble at 12% saturation looks nearly white; the CA's alive/dead spatial
+structure creates the veining.  Arctic at 20% reads as frost breath patterns.*
 
 **Artists**
 
-| #  | Name          | Primaries                                    | Sat | Inspiration                              |
-|----|---------------|----------------------------------------------|-----|------------------------------------------|
-|  5 | van gogh      | Cobalt blue (225°), warm gold (48°), ice blue (195°) | 88% | *Starry Night* — swirling contrast       |
-|  7 | sunset        | Warm orange (20°), deep magenta (330°), soft violet (275°) | 88% | Turner atmospheric skies |
-| 13 | monet         | Soft lilac (280°), water green (160°), dusty rose (340°) | 55% | *Water Lilies* — hazy impressionism      |
-| 14 | klimt         | Deep gold (45°), teal (175°), burgundy (350°) | 85% | *The Kiss* — opulent gilded contrasts    |
-| 15 | rothko        | Deep crimson (355°), burnt sienna (22°), muted orange (32°) | 82% | Colour field — warm moody cluster |
-| 16 | hokusai       | Deep navy (225°), slate blue (210°), pale blue-gray (200°) | 80% | *The Great Wave* — layered ocean blues |
-| 17 | turner        | Golden amber (42°), hazy orange (28°), pale sky blue (200°) | 75% | Luminous atmospheric haze               |
-| 18 | mondrian      | Red (5°), cobalt blue (230°), golden yellow (52°) | 100% | Primary colour grid — bold, uncompromising |
-| 19 | warhol        | Hot pink (330°), lime green (88°), turquoise (178°) | 100% | Pop art — saturated, flat, electric    |
-| 20 | rembrandt     | Warm umber (28°), antique gold (44°), dark amber (35°) | 78% | Chiaroscuro — all warm, all depth      |
+| Name          | Primaries                                    | Sat | Inspiration                              |
+|---------------|----------------------------------------------|-----|------------------------------------------|
+| van gogh      | Cobalt blue (225°), warm gold (48°), ice blue (195°) | 88% | *Starry Night* — swirling contrast       |
+| sunset        | Warm orange (20°), deep magenta (330°), soft violet (275°) | 88% | Turner atmospheric skies |
+| monet         | Soft lilac (280°), water green (160°), dusty rose (340°) | 55% | *Water Lilies* — hazy impressionism      |
+| klimt         | Deep gold (45°), teal (175°), burgundy (350°) | 85% | *The Kiss* — opulent gilded contrasts    |
+| rothko        | Deep crimson (355°), burnt sienna (22°), muted orange (32°) | 82% | Colour field — warm moody cluster |
+| hokusai       | Deep navy (225°), slate blue (210°), pale blue-gray (200°) | 80% | *The Great Wave* — layered ocean blues |
+| turner        | Golden amber (42°), hazy orange (28°), pale sky blue (200°) | 75% | Luminous atmospheric haze               |
+| mondrian      | Red (5°), cobalt blue (230°), golden yellow (52°) | 100% | Primary colour grid — bold, uncompromising |
+| warhol        | Hot pink (330°), lime green (88°), turquoise (178°) | 100% | Pop art — saturated, flat, electric    |
+| rembrandt     | Warm umber (28°), antique gold (44°), dark amber (35°) | 78% | Chiaroscuro — all warm, all depth      |
 
-*Mondrian (18) and Warhol (19) run at full saturation; `--brightness 60`
-tones them down if the output is too intense.  Rothko (15) keeps all three
-primaries within a 37° warm arc — CIELAB blends between them stay emotionally
-consistent rather than going muddy.*
+*Mondrian and Warhol run at full saturation; `--brightness 60` tones them down
+if the output is too intense.  Rothko keeps all three primaries within a 37°
+warm arc — CIELAB blends between them stay emotionally consistent rather than
+going muddy.*
 
 **Holidays**
 
-| #  | Name          | Primaries                                    | Sat |
-|----|---------------|----------------------------------------------|-----|
-| 21 | christmas     | Red (5°), deep green (125°), gold (48°)      | 92% |
-| 22 | halloween     | Orange (25°), deep purple (270°), yellow (58°) | 95% |
-| 23 | hanukkah      | Royal blue (228°), sky blue (205°), gold (48°) | 80% |
-| 24 | valentines    | Rose red (355°), hot pink (340°), blush (15°) | 80% |
-| 25 | easter        | Soft purple (280°), pale yellow (60°), light green (140°) | 45% |
-| 26 | independence  | Red (5°), white-blue (218°), blue (238°)     | 90% |
-| 27 | st patricks   | Shamrock green (130°), gold (50°), light green (145°) | 85% |
-| 28 | thanksgiving  | Burnt orange (22°), warm brown (30°), deep gold (45°) | 80% |
-| 29 | new year      | Champagne gold (48°), silver (218°), midnight blue (240°) | 65% |
-| 30 | mardi gras    | Deep purple (270°), gold (50°), green (130°) | 90% |
-| 31 | diwali        | Deep gold (45°), magenta (310°), saffron (30°) | 90% |
+| Name          | Primaries                                    | Sat |
+|---------------|----------------------------------------------|-----|
+| christmas     | Red (5°), deep green (125°), gold (48°)      | 92% |
+| halloween     | Orange (25°), deep purple (270°), yellow (58°) | 95% |
+| hanukkah      | Royal blue (228°), sky blue (205°), gold (48°) | 80% |
+| valentines    | Rose red (355°), hot pink (340°), blush (15°) | 80% |
+| easter        | Soft purple (280°), pale yellow (60°), light green (140°) | 45% |
+| independence  | Red (5°), white-blue (218°), blue (238°)     | 90% |
+| st patricks   | Shamrock green (130°), gold (50°), light green (145°) | 85% |
+| thanksgiving  | Burnt orange (22°), warm brown (30°), deep gold (45°) | 80% |
+| new year      | Champagne gold (48°), silver (218°), midnight blue (240°) | 65% |
+| mardi gras    | Deep purple (270°), gold (50°), green (130°) | 90% |
+| diwali        | Deep gold (45°), magenta (310°), saffron (30°) | 90% |
 
 **School colors**
 
-| #  | School        | Primaries                                    | Sat |
-|----|---------------|----------------------------------------------|-----|
-| 32 | michigan      | Maize (50°), cobalt blue (230°), sky blue (210°) | 88% |
-| 33 | alabama       | Crimson (350°), silver (215°), gold (48°)    | 82% |
-| 34 | lsu           | Purple (270°), gold (48°), pale gold (52°)   | 90% |
-| 35 | texas         | Burnt orange (22°), warm brown (28°), gold (45°) | 80% |
-| 36 | ohio state    | Scarlet (5°), silver (215°), gold (48°)      | 82% |
-| 37 | notre dame    | Gold (48°), navy (225°), green (130°)        | 88% |
-| 38 | ucla          | Blue (228°), gold (50°), sky blue (210°)     | 85% |
+| School        | Primaries                                    | Sat |
+|---------------|----------------------------------------------|-----|
+| michigan      | Maize (50°), cobalt blue (230°), sky blue (210°) | 88% |
+| alabama       | Crimson (350°), silver (215°), gold (48°)    | 82% |
+| lsu           | Purple (270°), gold (48°), pale gold (52°)   | 90% |
+| texas         | Burnt orange (22°), warm brown (28°), gold (45°) | 80% |
+| ohio state    | Scarlet (5°), silver (215°), gold (48°)      | 82% |
+| notre dame    | Gold (48°), navy (225°), green (130°)        | 88% |
+| ucla          | Blue (228°), gold (50°), sky blue (210°)     | 85% |
 
 **Moods & aesthetics**
 
-| #  | Name          | Primaries                                    | Sat | Character                                |
-|----|---------------|----------------------------------------------|-----|------------------------------------------|
-|  9 | neon          | Hot pink (310°), electric cyan (183°), acid green (90°) | 100% | Club lighting — maximum intensity |
-| 12 | cherry blossom | Pale pink (348°), blush (15°), soft lavender (290°) | 38% | Gentle, floral, Japanese spring |
-| 46 | vaporwave     | Hot pink (310°), purple (270°), electric cyan (185°) | 95% | Retrowave — 80s neon nostalgia          |
-| 47 | cyberpunk     | Neon green (130°), electric blue (225°), magenta (300°) | 100% | High-contrast dystopian city lights  |
-| 48 | cottagecore   | Sage green (130°), blush pink (350°), warm cream (45°) | 48% | Soft, domestic, garden-morning light  |
-| 49 | gothic        | Deep burgundy (350°), deep purple (270°), dark rose (340°) | 78% | Brooding — all hues cluster near red |
-| 50 | lo-fi         | Warm amber (35°), dusty rose (348°), muted sage (130°) | 52% | Relaxed, cozy, late-night study vibes |
+| Name          | Primaries                                    | Sat | Character                                |
+|---------------|----------------------------------------------|-----|------------------------------------------|
+| neon          | Hot pink (310°), electric cyan (183°), acid green (90°) | 100% | Club lighting — maximum intensity |
+| cherry blossom | Pale pink (348°), blush (15°), soft lavender (290°) | 38% | Gentle, floral, Japanese spring |
+| vaporwave     | Hot pink (310°), purple (270°), electric cyan (185°) | 95% | Retrowave — 80s neon nostalgia          |
+| cyberpunk     | Neon green (130°), electric blue (225°), magenta (300°) | 100% | High-contrast dystopian city lights  |
+| cottagecore   | Sage green (130°), blush pink (350°), warm cream (45°) | 48% | Soft, domestic, garden-morning light  |
+| gothic        | Deep burgundy (350°), deep purple (270°), dark rose (340°) | 78% | Brooding — all hues cluster near red |
+| lo-fi         | Warm amber (35°), dusty rose (348°), muted sage (130°) | 52% | Relaxed, cozy, late-night study vibes |
 
 #### Examples
 
 ```bash
 # Water palette — default settings
-python3 glowup.py play rule_trio --ip <device-ip> --palette 3
+python3 glowup.py play rule_trio --ip <device-ip> --palette water
 
 # Van Gogh with Rule 90 (fractal) on CA A for structured cobalt regions
-python3 glowup.py play rule_trio --ip <device-ip> --palette 5 --rule-a 90
+python3 glowup.py play rule_trio --ip <device-ip> --palette "van gogh" --rule-a 90
 
 # Halloween at high speed — frantic orange-purple chaos
-python3 glowup.py play rule_trio --ip <device-ip> --palette 22 --speed 20
+python3 glowup.py play rule_trio --ip <device-ip> --palette halloween --speed 20
 
 # Mardi Gras with wider gap fill (2-bulb radius)
-python3 glowup.py play rule_trio --ip <device-ip> --palette 30 --gap-fill 6
+python3 glowup.py play rule_trio --ip <device-ip> --palette "mardi gras" --gap-fill 6
 
 # Hokusai wave — all three CAs on Rule 90 for deep fractal blue layering
-python3 glowup.py play rule_trio --ip <device-ip> --palette 16 --rule-a 90 --rule-b 90 --rule-c 90
+python3 glowup.py play rule_trio --ip <device-ip> --palette hokusai --rule-a 90 --rule-b 90 --rule-c 90
 
 # Rothko — slow drift, very moody
-python3 glowup.py play rule_trio --ip <device-ip> --palette 15 --speed 3 --drift-b 1.1 --drift-c 1.2
+python3 glowup.py play rule_trio --ip <device-ip> --palette rothko --speed 3 --drift-b 1.1 --drift-c 1.2
 
 # Mondrian pop art — dial brightness down from the default 90
-python3 glowup.py play rule_trio --ip <device-ip> --palette 18 --brightness 60
+python3 glowup.py play rule_trio --ip <device-ip> --palette mondrian --brightness 60
 
 # Custom palette: coral, turquoise, gold
-python3 glowup.py play rule_trio --ip <device-ip> --hue-a 15 --hue-b 178 --hue-c 48 --sat 85
+python3 glowup.py play rule_trio --ip <device-ip> --palette custom --hue-a 15 --hue-b 178 --hue-c 48 --sat 85
 
 # Michigan colors for game day
-python3 glowup.py play rule_trio --ip <device-ip> --palette 32 --speed 6
+python3 glowup.py play rule_trio --ip <device-ip> --palette michigan --speed 6
 
 # Gothic — slow, dim background glow, maximum menace
-python3 glowup.py play rule_trio --ip <device-ip> --palette 49 --speed 4 --bg 3
+python3 glowup.py play rule_trio --ip <device-ip> --palette gothic --speed 4 --bg 3
 ```
 
 ---
