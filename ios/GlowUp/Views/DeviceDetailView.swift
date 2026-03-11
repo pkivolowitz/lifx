@@ -152,7 +152,7 @@ struct DeviceDetailView: View {
                 } label: {
                     Label("Restart Effect", systemImage: "play.circle")
                 }
-                .disabled(status?.effect == nil || (status?.running ?? false))
+                .disabled(status?.effect == nil)
 
                 // Stop button.
                 Button(role: .destructive) {

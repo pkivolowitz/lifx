@@ -477,6 +477,8 @@ class Controller:
                                      frame_callback=frame_callback)
         self.devices: list[LifxDevice] = list(devices)  # defensive copy
         self._current_effect_name: Optional[str] = None
+        self._last_effect_name: Optional[str] = None
+        self._last_params: dict[str, Any] = {}
 
     def play(self, effect_name: str, **params: Any) -> None:
         """Start playing an effect by name.
@@ -498,6 +500,8 @@ class Controller:
         # and raises ValueError with a helpful message if not.
         effect: Effect = create_effect(effect_name, **params)
         self._current_effect_name = effect_name
+        self._last_effect_name = effect_name
+        self._last_params = dict(params)
         self.engine.start(effect)
 
     def stop(self, fade_ms: int = DEFAULT_FADE_MS) -> None:
@@ -546,10 +550,18 @@ class Controller:
         """
         with self.engine._lock:
             effect: Optional[Effect] = self.engine.effect
+            # Report live params if running, otherwise recall the last
+            # played effect so the client can restart it.
+            if effect is not None:
+                effect_name: Optional[str] = self._current_effect_name
+                params: dict[str, Any] = effect.get_params()
+            else:
+                effect_name = self._last_effect_name
+                params = self._last_params
             return {
                 "running": self.engine.running,
-                "effect": self._current_effect_name,
-                "params": effect.get_params() if effect else {},
+                "effect": effect_name,
+                "params": params,
                 "fps": self.engine.fps,
                 "devices": [
                     {
