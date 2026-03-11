@@ -510,6 +510,16 @@ class Controller:
         self.engine.stop(fade_ms=fade_ms)
         self._current_effect_name = None
 
+    def set_power(self, on: bool, duration_ms: int = 0) -> None:
+        """Turn all devices on or off.
+
+        Args:
+            on:          ``True`` to power on, ``False`` to power off.
+            duration_ms: Firmware transition duration in milliseconds.
+        """
+        for dev in self.devices:
+            dev.set_power(on=on, duration_ms=duration_ms)
+
     def update_params(self, **kwargs: Any) -> None:
         """Update parameters on the running effect.
 

@@ -411,7 +411,11 @@ class DeviceManager:
         return result
 
     def stop(self, ip: str) -> dict[str, Any]:
-        """Stop the current effect on a device.
+        """Stop the current effect on a device and power it off.
+
+        Mirrors the glowup.py CLI behaviour: stop the engine (which snaps
+        the overlay to black), then power off the device so it does not
+        remain lit on the committed firmware layer.
 
         Args:
             ip: Device IP address.
@@ -426,6 +430,7 @@ class DeviceManager:
         if ctrl is None:
             raise KeyError(f"Unknown device: {ip}")
         ctrl.stop(fade_ms=DEFAULT_FADE_MS)
+        ctrl.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
         result: dict[str, Any] = ctrl.get_status()
         result["overridden"] = self.is_overridden(ip)
         return result
