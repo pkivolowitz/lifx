@@ -212,9 +212,36 @@ struct EffectConfigView: View {
         }
     }
 
-    /// Initialize parameter values from effect defaults.
+    /// UserDefaults key for persisted parameter values, scoped per effect.
+    private var savedParamsKey: String {
+        "effect_params_\(effect.name)"
+    }
+
+    /// Initialize parameter values from saved state, falling back to
+    /// server-reported defaults for any parameter not previously saved.
     private func initializeParams() {
+        let saved = UserDefaults.standard.dictionary(forKey: savedParamsKey) ?? [:]
+
         for (name, param) in effect.params {
+            // Restore saved value if present and type-compatible.
+            if let savedVal = saved[name] {
+                if let v = savedVal as? Int, param.type == "int" {
+                    paramValues[name] = .int(v)
+                    continue
+                }
+                if let v = savedVal as? Double {
+                    paramValues[name] = param.type == "int"
+                        ? .int(Int(v))
+                        : .double(v)
+                    continue
+                }
+                if let v = savedVal as? String {
+                    paramValues[name] = .string(v)
+                    continue
+                }
+            }
+
+            // Fall back to server default.
             switch param.`default` {
             case .int(let v):
                 paramValues[name] = .int(v)
@@ -228,10 +255,26 @@ struct EffectConfigView: View {
         }
     }
 
+    /// Persist current parameter values to UserDefaults.
+    private func saveParams() {
+        var dict: [String: Any] = [:]
+        for (name, value) in paramValues {
+            switch value {
+            case .int(let v): dict[name] = v
+            case .double(let v): dict[name] = v
+            case .string(let v): dict[name] = v
+            }
+        }
+        UserDefaults.standard.set(dict, forKey: savedParamsKey)
+    }
+
     /// Send the play command to the server with configured parameters.
     private func playEffect() async {
         isPlaying = true
         errorMessage = nil
+
+        // Persist the user's parameter choices for next time.
+        saveParams()
 
         // Build the params dict for the API call.
         var apiParams: [String: Any] = [:]
