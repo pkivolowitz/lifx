@@ -22,7 +22,7 @@ pulse timing are tracked across frames.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.2"
+__version__ = "1.3"
 
 import math
 import random
@@ -423,17 +423,17 @@ class Sonar(Effect):
         peak_bri: float = pct_to_u16(self.brightness) / float(HSBK_MAX)
 
         # Paint wavefronts and their tails.
+        # Brightness fades linearly by spatial distance from the head,
+        # not by trail-entry index (which is frame-rate dependent).
+        tail_bulbs: float = max(0.01, self.tail / zpb)
+
         for wf in self._wavefronts:
-            # The head is the brightest; trail fades linearly.
-            # trail[0] is oldest, trail[-1] is most recent, wf.pos is head.
             all_points: list[float] = wf.trail + [wf.pos]
-            n: int = len(all_points)
-            for step, bulb_pos in enumerate(all_points):
-                # Brightness fraction: 0 at oldest, 1 at head.
-                if n > 1:
-                    frac: float = step / (n - 1)
-                else:
-                    frac = 1.0
+            head: float = wf.pos
+            for bulb_pos in all_points:
+                # Fraction 1.0 at head, 0.0 at tail_bulbs away.
+                dist: float = abs(bulb_pos - head)
+                frac: float = max(0.0, 1.0 - dist / tail_bulbs)
                 bri: float = frac * peak_bri
 
                 # Map bulb position to zone range.
