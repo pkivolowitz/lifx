@@ -8,8 +8,8 @@ source it is absorbed (its tail continues to fade).
 The wavefront is intense white.  The trailing tail fades linearly
 from white to black over a configurable number of zones.
 
-Obstacle count scales with string length: 1 obstacle per 12 bulbs
-(36 zones with the default 3 zones-per-bulb), minimum 1.
+Obstacle count scales with string length: 1 obstacle per 24 bulbs
+(72 zones with the default 3 zones-per-bulb), minimum 1.
 
 Each source is limited to one live (non-absorbed) pulse at a time;
 a new wavefront is emitted only after the previous one from that
@@ -22,7 +22,7 @@ pulse timing are tracked across frames.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.1"
+__version__ = "1.2"
 
 import math
 import random
@@ -42,7 +42,7 @@ from . import (
 DEFAULT_ZPB: int = 3
 
 # Minimum bulbs before adding a second obstacle.
-BULBS_PER_OBSTACLE: int = 12
+BULBS_PER_OBSTACLE: int = 24
 
 # Obstacle width in bulbs (visual thickness).
 OBSTACLE_WIDTH_BULBS: int = 1
@@ -329,11 +329,13 @@ class Sonar(Effect):
             # Record current position in trail before moving.
             wf.trail.append(wf.pos)
 
-            # Trim trail to tail length (in zones, convert to bulb steps).
+            # Trim trail by spatial distance: keep only entries within
+            # `tail` zones (converted to bulbs) of the current head.
             zpb: int = max(1, int(self.zones_per_bulb))
-            max_trail: int = max(1, self.tail // zpb + 2)
-            if len(wf.trail) > max_trail:
-                wf.trail = wf.trail[-max_trail:]
+            max_dist: float = self.tail / zpb
+            while (len(wf.trail) > 1
+                   and abs(wf.trail[0] - wf.pos) > max_dist):
+                wf.trail.pop(0)
 
             # Move.
             wf.pos += wf.direction * wf.speed * dt
