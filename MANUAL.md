@@ -40,6 +40,8 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
    - [newtons_cradle](#newtons_cradle)
    - [embers](#embers)
    - [jacobs_ladder](#jacobs_ladder)
+   - [spin](#spin)
+   - [sonar](#sonar)
 7. [Effect Developer Guide](#effect-developer-guide)
    - [Architecture Overview](#architecture-overview)
    - [Creating a New Effect](#creating-a-new-effect)
@@ -1259,6 +1261,65 @@ python3 glowup.py play spin --ip <device-ip> --zpb 3 --palette mondrian
 
 ---
 
+### sonar
+
+Sonar simulates a radar / sonar display on a string light.  Wavefronts
+radiate outward from sources positioned at the ends of the string and
+between drifting obstacles.  When a wavefront hits an obstacle it
+reflects; when it returns to its source it is absorbed and its tail
+continues to fade.
+
+#### How It Works
+
+1. **Obstacles** — red-orange markers meander slowly across the middle
+   of the string.  One obstacle is placed per 24 bulbs (minimum 1).
+
+2. **Sources** — emitting points sit at each end of the string and
+   midway between adjacent obstacles.  Each source is limited to one
+   live pulse at a time.
+
+3. **Wavefronts** — bright white pulses travel outward at the
+   configured speed.  As the wavefront passes each bulb it deposits a
+   particle that decays over time, producing a fading tail.
+
+4. **Reflection & absorption** — a wavefront that reaches an obstacle
+   reverses direction; when it returns to its source it is absorbed.
+
+Obstacle count scales with string length: 1 per 24 bulbs (72 zones at
+the default 3 zones-per-bulb), minimum 1.
+
+#### Parameters
+
+| Parameter | Default | Range | Description |
+|---|---|---|---|
+| `speed` | 8.0 | 0.3–20.0 | Wavefront travel speed in bulbs per second |
+| `decay` | 2.0 | 0.1–10.0 | Particle decay time in seconds (tail lifetime) |
+| `pulse_interval` | 2.0 | 0.5–15.0 | Seconds between pulse emissions |
+| `obstacle_speed` | 0.5 | 0.0–3.0 | Obstacle drift speed in bulbs per second |
+| `obstacle_hue` | 15.0 | 0–360 | Obstacle color hue in degrees |
+| `obstacle_brightness` | 80 | 10–100 | Obstacle brightness as percent |
+| `brightness` | 100 | 10–100 | Wavefront peak brightness as percent |
+| `kelvin` | 6500 | 1500–9000 | Wavefront color temperature |
+| `zones_per_bulb` | 3 | 1–10 | Zones per physical bulb |
+
+#### Examples
+
+```bash
+# Default sonar — one obstacle drifting on a 36-bulb string
+python3 glowup.py play sonar --ip <device-ip> --zpb 3
+
+# Long tails — slow pulses with extended decay
+python3 glowup.py play sonar --ip <device-ip> --zpb 3 --speed 4 --decay 5
+
+# Fast radar sweep — quick pulses, short tails
+python3 glowup.py play sonar --ip <device-ip> --zpb 3 --speed 16 --decay 0.5 --pulse_interval 1
+
+# Frozen obstacles — set obstacle speed to zero
+python3 glowup.py play sonar --ip <device-ip> --zpb 3 --obstacle_speed 0
+```
+
+---
+
 ## Effect Developer Guide
 
 ### Architecture Overview
@@ -2286,12 +2347,15 @@ check **Connect via network**.
 ### App Screens
 
 1. **Device List** — Shows all configured devices with name, product
-   type, group, and current effect.  Pull-to-refresh fetches the
-   latest state.
+   type, group, and current effect.  Virtual multizone groups are
+   prefixed with "Group:" and display a group icon with member count.
+   Pull-to-refresh fetches the latest state.
 
 2. **Device Detail** — Live color strip visualization (SSE-fed at 4 Hz),
    current effect info, power toggle, stop button, restart button, and
-   a link to change the effect.
+   a link to change the effect.  Virtual groups show the combined zone
+   count, member device IPs, and type "Virtual Group" (see screenshot
+   below).
 
 3. **Effect Picker** — Lists all registered effects with descriptions
    and parameter counts.
@@ -2299,12 +2363,25 @@ check **Connect via network**.
 4. **Effect Config** — Auto-generated parameter UI built from the
    server's `Param` metadata.  Sliders for numeric params, pickers
    for choice params, text fields for strings.  Tap "Play" to send
-   the command.
+   the command.  **Save as Defaults** pushes the current parameter
+   values to the server so the scheduler uses them — no need to edit
+   `server.json` by hand.  Parameter values persist across app
+   sessions.
 
 5. **Settings** — Server URL and API token configuration.  Token is
    stored in the iOS Keychain.  Includes a "Test Connection" button
    and an About section displaying the app icon, version, and license
    information.
+
+#### Virtual Group Detail
+
+The screenshot below shows the Device Detail screen for a virtual
+multizone group named "porch" — two physical string lights (10.0.0.23
+and 10.0.0.62) combined into a single 144-zone animation surface.
+
+<p align="center">
+  <img src="multizone.PNG" alt="Virtual multizone group detail" width="300">
+</p>
 
 ---
 

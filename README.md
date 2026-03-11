@@ -15,7 +15,7 @@ integration are performed by Perry Kivolowitz, the sole Human Author.
 ## What It Does
 
 - **Discovery** — finds all LIFX devices on your LAN via UDP broadcast
-- **Effects** — ships with 20 effects including aurora borealis, binary clock, fireworks, embers, Newton's Cradle, cellular automata (rule30, rule_trio), waving flag (199 countries), Larson scanner, Morse code, twinkling lights, standing wave, color breathe, and polychrome-aware diagnostics
+- **Effects** — ships with 21 effects including aurora borealis, binary clock, fireworks, embers, Newton's Cradle, cellular automata (rule30, rule_trio), waving flag (199 countries), Larson scanner, Morse code, twinkling lights, standing wave, color breathe, and polychrome-aware diagnostics
 - **Virtual multizone** — group any combination of devices into a single animation surface. A 108-zone string light and 4 single bulbs become a 112-zone strip. Effects animate across all devices as one. LIFX limits a physical chain to 3 string lights; virtual multizone removes that ceiling — any number of independent strings can be combined.
 - **Identify** — pulse a bulb's brightness to figure out which physical lamp corresponds to which IP address
 - **Monochrome support** — color effects on white-only bulbs are automatically converted to perceptually correct brightness using BT.709 luma coefficients
@@ -37,6 +37,10 @@ The simplest setup is LAN-only: point the app at `http://<pi-ip>:8420`
 and you're done. For remote access, use a Cloudflare Tunnel, Tailscale,
 or any VPN. See the [User Manual](MANUAL.md#glowup-ios-app) for build
 instructions and deployment to your phone.
+
+<p align="center">
+  <img src="multizone.PNG" alt="Virtual multizone group in iOS app" width="300">
+</p>
 
 ## Quick Start
 
@@ -151,6 +155,7 @@ control.
 | `newtons_cradle` | Newton's Cradle with Phong-shaded spheres and specular highlights |
 | `rule30` | Wolfram elementary cellular automaton (rules 30/90/110) |
 | `rule_trio` | Three independent CAs with CIELAB blending and 50 palette presets |
+| `sonar` | Sonar pulses radiate outward and reflect off drifting obstacles |
 | `spin` | Colors migrate through concentric rings of each bulb (50 palette presets) |
 | `_bloom` | Polychrome bloom exploiting concentric zone architecture |
 | `_crossfade` | A/B comparison between HSB and Lab interpolation |
