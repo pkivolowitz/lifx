@@ -121,7 +121,7 @@ class Sonar(Effect):
     name: str = "sonar"
     description: str = "Sonar pulses reflect off drifting obstacles"
 
-    speed = Param(1.5, min=0.3, max=10.0,
+    speed = Param(8.0, min=0.3, max=20.0,
                   description="Wavefront travel speed in bulbs per second")
     decay = Param(2.0, min=0.1, max=10.0,
                   description="Particle decay time in seconds (tail lifetime)")
