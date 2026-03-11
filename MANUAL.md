@@ -1246,6 +1246,11 @@ python3 glowup.py play spin --ip <device-ip> --zpb 3 --palette christmas --speed
 python3 glowup.py play spin --ip <device-ip> --zpb 3 --base-hue 0 --hue-spread 30 --bulb-offset 10
 ```
 
+> **Tip:** Spin looks best with palettes whose colors are widely separated
+> on the color wheel — the concentric rings make the transitions between
+> dissimilar hues really visible.  Try `mondrian` (red/blue/yellow),
+> `cyberpunk` (green/blue/magenta), or `tropical` (teal/coral/yellow).
+
 ---
 
 ## Effect Developer Guide
