@@ -22,7 +22,7 @@ pulse timing are tracked across frames.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "2.0"
+__version__ = "2.1"
 
 import math
 import random
@@ -69,21 +69,8 @@ OBSTACLE_DIRECTION_INTERVAL: float = 4.0
 MIN_OBSTACLES: int = 1
 
 
-class _Particle:
-    """A decaying brightness particle dropped by a wavefront.
-
-    Attributes:
-        bulb:       Bulb position where the particle was dropped.
-        brightness: Current brightness fraction (1.0 → 0.0).
-    """
-
-    def __init__(self, bulb: float, brightness: float) -> None:
-        self.bulb: float = bulb
-        self.brightness: float = brightness
-
-
 class _Wavefront:
-    """A single traveling wavefront that drops decaying particles.
+    """A traveling wavefront that stamps bulbs as it passes.
 
     Attributes:
         pos:       Current position in bulb units.
@@ -93,6 +80,7 @@ class _Wavefront:
         alive:     False once fully absorbed or off-string.
         reflected: True after bouncing off an obstacle.
         absorbed:  True after returning to source post-reflection.
+        last_bulb: Last integer bulb index stamped (prevents re-stamping).
     """
 
     def __init__(self, source: float, direction: int, speed: float) -> None:
@@ -103,6 +91,7 @@ class _Wavefront:
         self.alive: bool = True
         self.reflected: bool = False
         self.absorbed: bool = False
+        self.last_bulb: int = -1
 
 
 class _Obstacle:
@@ -160,7 +149,7 @@ class Sonar(Effect):
         super().__init__(**overrides)
         self._obstacles: list[_Obstacle] = []
         self._wavefronts: list[_Wavefront] = []
-        self._particles: list[_Particle] = []
+        self._bulb_brightness: dict[int, float] = {}
         self._sources: list[float] = []
         self._last_pulse_t: float = -999.0
         self._initialized: bool = False
@@ -326,7 +315,10 @@ class Sonar(Effect):
                 )
 
     def _update_wavefronts(self, dt: float, bulb_count: int) -> None:
-        """Move wavefronts, drop particles, handle reflection/absorption.
+        """Move wavefronts, stamp bulbs, handle reflection/absorption.
+
+        When a wavefront enters a new bulb, that bulb's brightness is
+        reset to 1.0.  This is the only place bulbs get stamped.
 
         Args:
             dt:         Time delta since last frame.
@@ -339,12 +331,15 @@ class Sonar(Effect):
             if not wf.alive:
                 continue
 
-            # Drop a particle at the current position.
-            if not wf.absorbed:
-                self._particles.append(_Particle(wf.pos, 1.0))
-
             # Move.
             wf.pos += wf.direction * wf.speed * dt
+
+            # Stamp the bulb under the wavefront head.
+            bulb_idx: int = int(wf.pos)
+            if not wf.absorbed and 0 <= bulb_idx < bulb_count:
+                if bulb_idx != wf.last_bulb:
+                    self._bulb_brightness[bulb_idx] = 1.0
+                    wf.last_bulb = bulb_idx
 
             if wf.absorbed:
                 wf.alive = False
@@ -382,16 +377,22 @@ class Sonar(Effect):
         # Prune dead wavefronts.
         self._wavefronts = [wf for wf in self._wavefronts if wf.alive]
 
-    def _update_particles(self, dt: float) -> None:
-        """Decay all particles and remove dead ones.
+    def _decay_bulbs(self, dt: float) -> None:
+        """Decay all stamped bulbs and remove dead ones.
 
         Args:
             dt: Time delta since last frame.
         """
         decay_rate: float = dt / max(0.01, self.decay)
-        for p in self._particles:
-            p.brightness -= decay_rate
-        self._particles = [p for p in self._particles if p.brightness > 0.0]
+        dead: list[int] = []
+        for bulb_idx, bri in self._bulb_brightness.items():
+            bri -= decay_rate
+            if bri <= 0.0:
+                dead.append(bulb_idx)
+            else:
+                self._bulb_brightness[bulb_idx] = bri
+        for bulb_idx in dead:
+            del self._bulb_brightness[bulb_idx]
 
     def render(self, t: float, zone_count: int) -> list[HSBK]:
         """Produce one frame of the sonar effect.
@@ -426,9 +427,9 @@ class Sonar(Effect):
         # Emit new pulses.
         self._emit_pulses(t, bulb_count)
 
-        # Advance wavefronts and decay particles.
+        # Advance wavefronts and decay bulbs.
         self._update_wavefronts(dt, bulb_count)
-        self._update_particles(dt)
+        self._decay_bulbs(dt)
 
         # --- Render to zone buffer ---
         brightness_buf: list[float] = [0.0] * zone_count
@@ -441,10 +442,10 @@ class Sonar(Effect):
             for z in range(max(0, zone_start), min(zone_count, zone_end)):
                 brightness_buf[z] = min(1.0, brightness_buf[z] + peak_bri)
 
-        # Paint decaying particles.
-        for p in self._particles:
-            bri: float = p.brightness * peak_bri
-            zone_start: int = int(p.bulb * zpb)
+        # Paint decaying bulbs.
+        for bulb_idx, bri_frac in self._bulb_brightness.items():
+            bri: float = bri_frac * peak_bri
+            zone_start: int = bulb_idx * zpb
             zone_end: int = zone_start + zpb
             for z in range(max(0, zone_start), min(zone_count, zone_end)):
                 brightness_buf[z] = min(1.0, brightness_buf[z] + bri)
