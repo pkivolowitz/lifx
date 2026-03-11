@@ -28,7 +28,7 @@ Typical usage::
 
 from __future__ import annotations
 
-__version__ = "1.4"
+__version__ = "1.5"
 
 import threading
 import time
@@ -78,17 +78,33 @@ class VirtualMultizoneDevice:
     a :class:`LifxDevice`, so no engine changes are needed.
     """
 
-    def __init__(self, devices: list[LifxDevice]) -> None:
+    def __init__(
+        self,
+        devices: list[LifxDevice],
+        name: str = "",
+        owns_devices: bool = True,
+    ) -> None:
         """Initialize with a list of connected, queried devices.
 
         Builds a zone map that records which physical device and zone index
         each virtual zone corresponds to.  Multizone devices expand to
         their full zone count; single-bulb devices occupy one zone.
 
+        The order of *devices* determines the virtual zone layout — the
+        first device's zones come first.  For grouped string lights this
+        means the list order defines left-to-right position on the canvas.
+
         Args:
-            devices: :class:`LifxDevice` instances, each already connected
-                     and queried via :meth:`LifxDevice.query_all`.  The list
-                     order determines the zone assignment.
+            devices:      :class:`LifxDevice` instances, each already
+                          connected and queried via
+                          :meth:`LifxDevice.query_all`.  The list order
+                          determines the zone assignment.
+            name:         Optional group name (used for display and as the
+                          device identifier in the server API).
+            owns_devices: If ``True`` (default), :meth:`close` closes all
+                          member device sockets.  Set to ``False`` when
+                          the caller manages device lifetimes separately
+                          (e.g., the server stores devices individually).
 
         Raises:
             ValueError: If *devices* is empty.
@@ -97,6 +113,7 @@ class VirtualMultizoneDevice:
             raise ValueError("VirtualMultizoneDevice requires at least one device.")
 
         self._devices: list[LifxDevice] = list(devices)
+        self._owns_devices: bool = owns_devices
         self.is_multizone: bool = True
 
         # Build the zone map: list of (device, zone_index) tuples.
@@ -116,12 +133,16 @@ class VirtualMultizoneDevice:
         self.zone_count: int = len(self._zone_map)
 
         # Synthesize display properties for status reporting.
-        self.ip: str = f"group({len(devices)} devices)"
-        self.label: str = "Virtual group"
+        if name:
+            self.ip: str = f"group:{name}"
+            self.label: str = name
+        else:
+            self.ip: str = f"group({len(devices)} devices)"
+            self.label: str = "Virtual group"
         self.product_name: str = f"{self.zone_count}-zone virtual multizone"
         self.mac_str: str = "virtual"
         self.product: int = 0  # non-None so engine query checks pass
-        self.group: str = ""
+        self.group: str = name
 
     @property
     def is_polychrome(self) -> bool:
@@ -214,10 +235,22 @@ class VirtualMultizoneDevice:
         for dev in self._devices:
             dev.set_power(on=on, duration_ms=duration_ms)
 
-    def close(self) -> None:
-        """Close all wrapped device sockets."""
+    def clear_firmware_effect(self) -> None:
+        """Clear firmware-level effects on all multizone member devices."""
         for dev in self._devices:
-            dev.close()
+            if dev.is_multizone:
+                dev.clear_firmware_effect()
+
+    def close(self) -> None:
+        """Close all wrapped device sockets.
+
+        Only closes sockets if this instance owns the devices (see
+        *owns_devices* constructor parameter).  When the server manages
+        device lifetimes separately, this is a no-op.
+        """
+        if self._owns_devices:
+            for dev in self._devices:
+                dev.close()
 
     def get_device_list(self) -> list[LifxDevice]:
         """Return the list of wrapped devices (for status reporting).

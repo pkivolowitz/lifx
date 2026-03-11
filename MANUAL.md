@@ -355,6 +355,17 @@ for resolving symbolic times (sunrise, sunset, etc.).
 is managed independently — multiple groups can run different effects at
 the same time. Use hostnames if you have DNS/mDNS set up, or raw IPs.
 
+Groups with two or more devices are automatically combined into a
+**virtual multizone device** — a single unified zone canvas spanning
+all member devices.  Effects render across the combined zone count
+as if all the lights were one long strip.
+
+> **IP order matters:** The order of IPs in the group array determines
+> the left-to-right zone layout on the virtual canvas.  The first IP's
+> zones come first (leftmost), the second IP's zones follow, and so on.
+> If an animation runs in the wrong direction, swap the IPs in the
+> array and restart the server.
+
 **`schedule`** — Ordered list of schedule entries. Each entry specifies:
 
 | Field    | Required | Description                                      |
@@ -2060,6 +2071,13 @@ queries each configured IP directly at startup.  This is both faster and
 more reliable than broadcast discovery, which requires multiple retries
 with long timeouts and is defeated by mesh routers that filter broadcast
 packets between nodes.
+
+Groups with two or more devices automatically appear as a virtual
+multizone device in the API and the iOS app, identified by
+`group:<name>` (e.g., `group:porch`).  The individual member devices
+also appear for independent control.  The scheduler plays effects on
+the virtual device so the animation spans all member devices as a
+unified canvas.
 
 The `schedule` section is optional — the server works in API-only mode
 without it.

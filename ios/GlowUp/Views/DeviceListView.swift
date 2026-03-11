@@ -211,17 +211,28 @@ struct DeviceRow: View {
 
             // Product type, group, and zone count.
             HStack {
-                if let product = device.product {
-                    Text(product)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                if let group = device.group, !group.isEmpty {
-                    Text("·")
-                        .foregroundStyle(.secondary)
-                    Text(group)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                if device.isVirtualGroup {
+                    // Virtual group: show member count.
+                    let count = device.memberIps?.count ?? 0
+                    Label(
+                        "\(count) devices",
+                        systemImage: "rectangle.3.group"
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                } else {
+                    if let product = device.product {
+                        Text(product)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let group = device.group, !group.isEmpty {
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                        Text(group)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 if let zones = device.zones, zones > 1 {

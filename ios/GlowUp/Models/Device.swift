@@ -6,13 +6,18 @@
 
 import Foundation
 
-/// A configured LIFX device as reported by the server's
-/// ``GET /api/devices`` endpoint.
+/// A configured LIFX device or virtual group as reported by the
+/// server's ``GET /api/devices`` endpoint.
+///
+/// Virtual groups combine multiple physical devices into a single
+/// unified zone canvas.  They are identified by ``group:<name>``
+/// instead of an IP address.
 struct Device: Codable, Identifiable, Hashable {
-    /// Device IP address (used as the unique identifier).
+    /// Device identifier: an IP address for physical devices, or
+    /// ``group:<name>`` for virtual multizone groups.
     let ip: String
 
-    /// MAC address as a colon-separated hex string.
+    /// MAC address as a colon-separated hex string ("virtual" for groups).
     let mac: String
 
     /// Human-readable device name assigned in the LIFX app.
@@ -36,8 +41,17 @@ struct Device: Codable, Identifiable, Hashable {
     /// Name of the currently running effect, if any.
     let currentEffect: String?
 
-    /// Conform to ``Identifiable`` using the device IP.
+    /// Whether this entry represents a virtual multizone group.
+    let isGroup: Bool?
+
+    /// IP addresses of member devices (groups only).
+    let memberIps: [String]?
+
+    /// Conform to ``Identifiable`` using the device identifier.
     var id: String { ip }
+
+    /// True if this is a virtual multizone group.
+    var isVirtualGroup: Bool { isGroup ?? false }
 
     /// The best available display name: nickname, then label, then IP.
     var displayName: String {
@@ -50,6 +64,8 @@ struct Device: Codable, Identifiable, Hashable {
         case ip, mac, label, nickname, product, group, zones
         case isMultizone = "is_multizone"
         case currentEffect = "current_effect"
+        case isGroup = "is_group"
+        case memberIps = "member_ips"
     }
 }
 

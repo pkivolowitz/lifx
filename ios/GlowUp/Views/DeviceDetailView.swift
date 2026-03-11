@@ -88,7 +88,22 @@ struct DeviceDetailView: View {
             // Device info section.
             Section {
                 LabeledContent("Product", value: device.product ?? "Unknown")
-                LabeledContent("IP", value: device.ip)
+                if device.isVirtualGroup {
+                    LabeledContent("Type", value: "Virtual Group")
+                    if let members = device.memberIps {
+                        ForEach(
+                            Array(members.enumerated()),
+                            id: \.offset
+                        ) { index, memberIp in
+                            LabeledContent(
+                                "Device \(index + 1)",
+                                value: memberIp
+                            )
+                        }
+                    }
+                } else {
+                    LabeledContent("IP", value: device.ip)
+                }
                 if let label = device.label, !label.isEmpty {
                     LabeledContent("Label", value: label)
                 }

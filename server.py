@@ -54,12 +54,13 @@ Usage::
 
 from __future__ import annotations
 
-__version__ = "1.7"
+__version__ = "1.8"
 
 import hmac
 import http.server
 import ipaddress
 import json
+from urllib.parse import unquote
 import logging
 import math
 import os
@@ -74,7 +75,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from effects import get_registry, create_effect, HSBK_MAX, KELVIN_DEFAULT
-from engine import Controller
+from engine import Controller, VirtualMultizoneDevice
 from solar import SunTimes, sun_times
 from transport import LifxDevice
 
@@ -111,6 +112,10 @@ DEFAULT_CONFIG_PATH: str = "/etc/glowup/server.json"
 
 # Filename for user-saved effect parameter defaults (co-located with config).
 EFFECT_DEFAULTS_FILENAME: str = "effect_defaults.json"
+
+# Prefix used to distinguish group identifiers from IP addresses in
+# the API path and internal device dictionaries.
+GROUP_PREFIX: str = "group:"
 
 # Logging format matching scheduler.py.
 LOG_FORMAT: str = "%(asctime)s %(levelname)s %(message)s"
@@ -232,6 +237,35 @@ def _validate_ip(ip_str: str) -> bool:
         return False
 
 
+def _is_group_id(device_id: str) -> bool:
+    """Return ``True`` if *device_id* is a group identifier."""
+    return device_id.startswith(GROUP_PREFIX)
+
+
+def _group_name_from_id(device_id: str) -> str:
+    """Extract the group name from a ``group:name`` identifier."""
+    return device_id[len(GROUP_PREFIX):]
+
+
+def _group_id_from_name(group_name: str) -> str:
+    """Build a ``group:name`` identifier from a group name."""
+    return GROUP_PREFIX + group_name
+
+
+def _validate_device_id(device_id: str) -> bool:
+    """Return ``True`` if *device_id* is a valid IP or group identifier.
+
+    Args:
+        device_id: IP address string or ``group:name`` identifier.
+
+    Returns:
+        ``True`` if valid, ``False`` otherwise.
+    """
+    if _is_group_id(device_id):
+        return len(device_id) > len(GROUP_PREFIX)
+    return _validate_ip(device_id)
+
+
 # ---------------------------------------------------------------------------
 # Device manager
 # ---------------------------------------------------------------------------
@@ -257,7 +291,8 @@ class DeviceManager:
 
     def __init__(self, device_ips: list[str],
                  nicknames: Optional[dict[str, str]] = None,
-                 config_dir: Optional[str] = None) -> None:
+                 config_dir: Optional[str] = None,
+                 groups: Optional[dict[str, list[str]]] = None) -> None:
         """Initialize with the device IPs from the config file.
 
         Args:
@@ -268,16 +303,20 @@ class DeviceManager:
                         display name, loaded from the config file.
             config_dir: Directory containing the config file, used to
                         locate ``effect_defaults.json``.
+            groups:     Group name → IP list mapping from the config.
+                        Multi-device groups are exposed as virtual
+                        multizone devices with a unified zone canvas.
         """
         self._devices: dict[str, LifxDevice] = {}
         self._controllers: dict[str, Controller] = {}
         self._lock: threading.Lock = threading.Lock()
-        # Override tracking: maps device IP to the schedule entry name
-        # that was active when the phone took over.  The scheduler clears
-        # the override when the active entry changes from this value.
+        # Override tracking: maps device ID (IP or group:name) to the
+        # schedule entry name that was active when the phone took over.
         self._overrides: dict[str, Optional[str]] = {}
         # Device IPs from config groups — the only source of devices.
         self._device_ips: list[str] = device_ips
+        # Group config: group name → ordered list of member IPs.
+        self._group_config: dict[str, list[str]] = groups or {}
         # User-assigned nicknames: IP → display name.
         self._nicknames: dict[str, str] = nicknames or {}
         # User-saved effect parameter defaults: effect name → {param: value}.
@@ -299,6 +338,12 @@ class DeviceManager:
         and populates the internal device map.  Unreachable devices
         are logged as warnings but do not prevent the server from
         starting.
+
+        After loading individual devices, creates a
+        :class:`VirtualMultizoneDevice` for every multi-device group
+        in the config.  The virtual device combines member zones into
+        a single unified canvas.  The order of IPs in the group array
+        determines the zone layout (first IP's zones come first).
 
         Returns:
             A list of JSON-serializable device info dicts.
@@ -338,6 +383,39 @@ class DeviceManager:
                     old_dev.close()
 
             self._devices = new_map
+
+            # Build VirtualMultizoneDevices for multi-device groups.
+            for group_name, ips in self._group_config.items():
+                if len(ips) < 2:
+                    continue
+                member_devs: list[LifxDevice] = [
+                    self._devices[ip] for ip in ips
+                    if ip in self._devices
+                ]
+                if len(member_devs) < 2:
+                    logging.warning(
+                        "Group '%s' has fewer than 2 reachable devices "
+                        "(%d/%d) — skipping virtual device",
+                        group_name, len(member_devs), len(ips),
+                    )
+                    continue
+                group_id: str = _group_id_from_name(group_name)
+                # Stop any existing controller for this group.
+                old_ctrl: Optional[Controller] = self._controllers.get(
+                    group_id,
+                )
+                if old_ctrl is not None:
+                    old_ctrl.stop(fade_ms=0)
+                    del self._controllers[group_id]
+                vdev: VirtualMultizoneDevice = VirtualMultizoneDevice(
+                    member_devs, name=group_name, owns_devices=False,
+                )
+                self._devices[group_id] = vdev
+                logging.info(
+                    "  group '%s' — %d devices, %d zones",
+                    group_name, len(member_devs), vdev.zone_count,
+                )
+
             self._ready = True
 
         return self._devices_as_list()
@@ -665,23 +743,31 @@ class DeviceManager:
     def get_colors(self, ip: str) -> Optional[list[dict[str, int]]]:
         """Get a snapshot of the current zone colors.
 
-        Creates a temporary :class:`LifxDevice` for the read-only query
-        to avoid socket contention with the engine's device.
+        For individual devices, creates a temporary :class:`LifxDevice`
+        for the read-only query to avoid socket contention with the
+        engine's device.
+
+        For virtual groups, queries each member device and concatenates
+        the results in group order.
 
         Args:
-            ip: Device IP address.
+            ip: Device IP or group identifier.
 
         Returns:
             A list of ``{h, s, b, k}`` dicts, or ``None`` on failure.
 
         Raises:
-            KeyError: If the device IP is not configured.
+            KeyError: If the device/group is not configured.
         """
-        dev: Optional[LifxDevice] = self.get_device(ip)
+        dev = self.get_device(ip)
         if dev is None:
             raise KeyError(f"Unknown device: {ip}")
 
-        # Use a temporary device to avoid socket contention.
+        # Virtual group: query each member device and concatenate.
+        if isinstance(dev, VirtualMultizoneDevice):
+            return self._get_group_colors(dev)
+
+        # Individual device: use a temporary device to avoid contention.
         tmp: LifxDevice = LifxDevice(ip)
         try:
             tmp.query_version()
@@ -704,6 +790,41 @@ class DeviceManager:
             return None
         finally:
             tmp.close()
+
+    def _get_group_colors(
+        self, vdev: VirtualMultizoneDevice,
+    ) -> Optional[list[dict[str, int]]]:
+        """Query each member device of a virtual group and concatenate.
+
+        Args:
+            vdev: The virtual multizone device.
+
+        Returns:
+            A list of ``{h, s, b, k}`` dicts across all members, or
+            ``None`` if all queries fail.
+        """
+        all_colors: list[dict[str, int]] = []
+        for member in vdev.get_device_list():
+            tmp: LifxDevice = LifxDevice(member.ip)
+            try:
+                tmp.query_version()
+                if tmp.is_multizone:
+                    tmp.query_zone_count()
+                    colors = tmp.query_zone_colors()
+                else:
+                    tmp.zone_count = 1
+                    state = tmp.query_light_state()
+                    colors = [(state[0], state[1], state[2], state[3])] if state else None
+                if colors:
+                    all_colors.extend(
+                        {"h": h, "s": s, "b": b, "k": k}
+                        for h, s, b, k in colors
+                    )
+            except Exception as exc:
+                logging.warning("get_colors member %s failed: %s", member.ip, exc)
+            finally:
+                tmp.close()
+        return all_colors if all_colors else None
 
     def list_effects(self) -> dict[str, Any]:
         """Return available effects with parameter metadata.
@@ -889,20 +1010,25 @@ class DeviceManager:
     def _devices_as_list(self) -> list[dict[str, Any]]:
         """Build a JSON-safe list of device info dicts.
 
+        Virtual group devices include ``is_group: true`` and a
+        ``member_ips`` array.  Individual devices have
+        ``is_group: false``.
+
         Returns:
             A sorted list of device metadata dicts.
         """
         result: list[dict[str, Any]] = []
-        for ip, dev in sorted(self._devices.items()):
+        for dev_id, dev in sorted(self._devices.items()):
             with self._lock:
-                ctrl: Optional[Controller] = self._controllers.get(ip)
+                ctrl: Optional[Controller] = self._controllers.get(dev_id)
             current_effect: Optional[str] = None
             if ctrl is not None:
                 status: dict[str, Any] = ctrl.get_status()
                 current_effect = status.get("effect")
-            nickname: Optional[str] = self._nicknames.get(dev.ip)
-            result.append({
-                "ip": dev.ip,
+            is_group: bool = isinstance(dev, VirtualMultizoneDevice)
+            nickname: Optional[str] = self._nicknames.get(dev_id)
+            entry: dict[str, Any] = {
+                "ip": dev_id,
                 "mac": dev.mac_str,
                 "label": dev.label,
                 "nickname": nickname,
@@ -911,8 +1037,14 @@ class DeviceManager:
                 "zones": dev.zone_count,
                 "is_multizone": dev.is_multizone,
                 "current_effect": current_effect,
-                "overridden": self.is_overridden(dev.ip),
-            })
+                "overridden": self.is_overridden(dev_id),
+                "is_group": is_group,
+            }
+            if is_group:
+                entry["member_ips"] = [
+                    d.ip for d in dev.get_device_list()
+                ]
+            result.append(entry)
         return result
 
     def _stop_and_remove(self, ip: str) -> None:
@@ -1267,70 +1399,72 @@ class SchedulerThread(threading.Thread):
                     group_name,
                 )
 
-                if active_name != prev_name:
-                    # Schedule transition — clear overrides only for
-                    # devices whose override was set against the
-                    # outgoing entry.  Overrides set against a
-                    # different entry (or after a server restart when
-                    # prev was None) survive so the user's manual
-                    # selection is not stomped by the scheduler's
-                    # initial catch-up poll.
-                    for ip in ips:
-                        if self._dm.is_overridden(ip):
-                            override_entry: Optional[str] = (
-                                self._dm.get_override_entry(ip)
-                            )
-                            if override_entry == prev_name:
-                                logging.info(
-                                    "[%s] Clearing phone override on "
-                                    "%s (schedule transition from "
-                                    "'%s' to '%s')",
-                                    group_name, ip,
-                                    prev_name, active_name,
-                                )
-                                self._dm.clear_override(ip)
-                            else:
-                                logging.info(
-                                    "[%s] Preserving phone override "
-                                    "on %s (override entry '%s' != "
-                                    "outgoing '%s')",
-                                    group_name, ip,
-                                    override_entry, prev_name,
-                                )
+                # Device ID for this group: virtual device for multi-IP
+                # groups, individual IP for single-device groups.
+                if len(ips) >= 2:
+                    device_id: str = _group_id_from_name(group_name)
+                else:
+                    device_id = ips[0]
 
-                    # Stop previous effect on non-overridden devices.
-                    if prev_name is not None:
-                        logging.info(
-                            "[%s] Stopping '%s'", group_name, prev_name,
+                if active_name != prev_name:
+                    # Schedule transition — clear overrides only if
+                    # the override was set against the outgoing entry.
+                    if self._dm.is_overridden(device_id):
+                        override_entry: Optional[str] = (
+                            self._dm.get_override_entry(device_id)
                         )
-                        for ip in ips:
-                            if self._dm.is_overridden(ip):
-                                continue
+                        if override_entry == prev_name:
+                            logging.info(
+                                "[%s] Clearing phone override on "
+                                "%s (schedule transition from "
+                                "'%s' to '%s')",
+                                group_name, device_id,
+                                prev_name, active_name,
+                            )
+                            self._dm.clear_override(device_id)
+                        else:
+                            logging.info(
+                                "[%s] Preserving phone override "
+                                "on %s (override entry '%s' != "
+                                "outgoing '%s')",
+                                group_name, device_id,
+                                override_entry, prev_name,
+                            )
+
+                    # Stop previous effect if not overridden.
+                    if prev_name is not None:
+                        if not self._dm.is_overridden(device_id):
+                            logging.info(
+                                "[%s] Stopping '%s'",
+                                group_name, prev_name,
+                            )
                             try:
-                                self._dm.stop(ip)
+                                self._dm.stop(device_id)
                             except (KeyError, Exception) as exc:
                                 logging.warning(
                                     "[%s] Error stopping %s: %s",
-                                    group_name, ip, exc,
+                                    group_name, device_id, exc,
                                 )
 
-                    # Start new effect on non-overridden devices.
+                    # Start new effect if not overridden.
                     if active is not None:
-                        effect: str = active["effect"]
-                        params: dict[str, Any] = active.get("params", {})
-                        logging.info(
-                            "[%s] Starting '%s' (%s)",
-                            group_name, active_name, effect,
-                        )
-                        for ip in ips:
-                            if self._dm.is_overridden(ip):
-                                continue
+                        if not self._dm.is_overridden(device_id):
+                            effect: str = active["effect"]
+                            params: dict[str, Any] = active.get(
+                                "params", {},
+                            )
+                            logging.info(
+                                "[%s] Starting '%s' (%s)",
+                                group_name, active_name, effect,
+                            )
                             try:
-                                self._dm.play(ip, effect, params)
+                                self._dm.play(
+                                    device_id, effect, params,
+                                )
                             except (KeyError, ValueError, Exception) as exc:
                                 logging.warning(
                                     "[%s] Error starting %s on %s: %s",
-                                    group_name, effect, ip, exc,
+                                    group_name, effect, device_id, exc,
                                 )
                     else:
                         logging.info(
@@ -1340,34 +1474,34 @@ class SchedulerThread(threading.Thread):
                     self._group_entries[group_name] = active_name
 
                 elif active is not None:
-                    # Same entry still active — ensure running on
-                    # non-overridden devices (restart if crashed).
-                    for ip in ips:
-                        if self._dm.is_overridden(ip):
-                            continue
-                        ctrl: Optional[Controller] = (
-                            self._dm.get_or_create_controller(ip)
-                        )
-                        if ctrl is not None:
-                            status: dict[str, Any] = ctrl.get_status()
-                            if not status.get("running"):
-                                effect_name: str = active["effect"]
-                                params_restart: dict = active.get(
-                                    "params", {},
+                    # Same entry still active — ensure running
+                    # (restart if crashed).
+                    if self._dm.is_overridden(device_id):
+                        continue
+                    ctrl: Optional[Controller] = (
+                        self._dm.get_or_create_controller(device_id)
+                    )
+                    if ctrl is not None:
+                        status: dict[str, Any] = ctrl.get_status()
+                        if not status.get("running"):
+                            effect_name: str = active["effect"]
+                            params_restart: dict = active.get(
+                                "params", {},
+                            )
+                            logging.info(
+                                "[%s] Restarting '%s' on %s",
+                                group_name, active_name, device_id,
+                            )
+                            try:
+                                self._dm.play(
+                                    device_id, effect_name,
+                                    params_restart,
                                 )
-                                logging.info(
-                                    "[%s] Restarting '%s' on %s",
-                                    group_name, active_name, ip,
+                            except Exception as exc:
+                                logging.warning(
+                                    "[%s] Restart error on %s: %s",
+                                    group_name, device_id, exc,
                                 )
-                                try:
-                                    self._dm.play(
-                                        ip, effect_name, params_restart,
-                                    )
-                                except Exception as exc:
-                                    logging.warning(
-                                        "[%s] Restart error on %s: %s",
-                                        group_name, ip, exc,
-                                    )
 
             # Sleep until next poll, checking for stop every second.
             self._stop_event.wait(SCHEDULER_POLL_SECONDS)
@@ -1569,6 +1703,10 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         path: str = self.path.split("?")[0]  # strip query string
         parts: list[str] = path.strip("/").split("/")
+        # URL-decode the device identifier (handles %3A for colon in
+        # group:name identifiers).
+        if len(parts) >= 3 and parts[1] == "devices":
+            parts[2] = unquote(parts[2])
 
         # /api/status
         if path == "/api/status":
@@ -1585,32 +1723,32 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_get_effects()
             return
 
-        # /api/devices/{ip}/status
+        # /api/devices/{id}/status
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "status"):
             ip: str = parts[2]
-            if not _validate_ip(ip):
-                self._send_json(400, {"error": "Invalid IP address"})
+            if not _validate_device_id(ip):
+                self._send_json(400, {"error": "Invalid device identifier"})
                 return
             self._handle_get_device_status(ip)
             return
 
-        # /api/devices/{ip}/colors
+        # /api/devices/{id}/colors
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "colors"):
             ip = parts[2]
-            if not _validate_ip(ip):
-                self._send_json(400, {"error": "Invalid IP address"})
+            if not _validate_device_id(ip):
+                self._send_json(400, {"error": "Invalid device identifier"})
                 return
             self._handle_get_device_colors(ip)
             return
 
-        # /api/devices/{ip}/colors/stream
+        # /api/devices/{id}/colors/stream
         if (len(parts) == 5 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "colors" and parts[4] == "stream"):
             ip = parts[2]
-            if not _validate_ip(ip):
-                self._send_json(400, {"error": "Invalid IP address"})
+            if not _validate_device_id(ip):
+                self._send_json(400, {"error": "Invalid device identifier"})
                 return
             self._handle_get_device_colors_stream(ip)
             return
@@ -1629,73 +1767,75 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         path: str = self.path.split("?")[0]
         parts: list[str] = path.strip("/").split("/")
+        if len(parts) >= 3 and parts[1] == "devices":
+            parts[2] = unquote(parts[2])
 
-        # /api/devices/{ip}/play
+        # /api/devices/{id}/play
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "play"):
             ip: str = parts[2]
-            if not _validate_ip(ip):
-                self._send_json(400, {"error": "Invalid IP address"})
+            if not _validate_device_id(ip):
+                self._send_json(400, {"error": "Invalid device identifier"})
                 return
             self._handle_post_play(ip)
             return
 
-        # /api/devices/{ip}/stop
+        # /api/devices/{id}/stop
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "stop"):
             ip = parts[2]
-            if not _validate_ip(ip):
-                self._send_json(400, {"error": "Invalid IP address"})
+            if not _validate_device_id(ip):
+                self._send_json(400, {"error": "Invalid device identifier"})
                 return
             self._handle_post_stop(ip)
             return
 
-        # /api/devices/{ip}/power
+        # /api/devices/{id}/power
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "power"):
             ip = parts[2]
-            if not _validate_ip(ip):
-                self._send_json(400, {"error": "Invalid IP address"})
+            if not _validate_device_id(ip):
+                self._send_json(400, {"error": "Invalid device identifier"})
                 return
             self._handle_post_power(ip)
             return
 
-        # /api/devices/{ip}/identify
+        # /api/devices/{id}/identify
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "identify"):
             ip = parts[2]
-            if not _validate_ip(ip):
-                self._send_json(400, {"error": "Invalid IP address"})
+            if not _validate_device_id(ip):
+                self._send_json(400, {"error": "Invalid device identifier"})
                 return
             self._handle_post_identify(ip)
             return
 
-        # /api/devices/{ip}/resume
+        # /api/devices/{id}/resume
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "resume"):
             ip = parts[2]
-            if not _validate_ip(ip):
-                self._send_json(400, {"error": "Invalid IP address"})
+            if not _validate_device_id(ip):
+                self._send_json(400, {"error": "Invalid device identifier"})
                 return
             self._handle_post_resume(ip)
             return
 
-        # /api/devices/{ip}/reset
+        # /api/devices/{id}/reset
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "reset"):
             ip = parts[2]
-            if not _validate_ip(ip):
-                self._send_json(400, {"error": "Invalid IP address"})
+            if not _validate_device_id(ip):
+                self._send_json(400, {"error": "Invalid device identifier"})
                 return
             self._handle_post_reset(ip)
             return
 
-        # /api/devices/{ip}/nickname
+        # /api/devices/{id}/nickname
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "nickname"):
             ip = parts[2]
-            if not _validate_ip(ip):
-                self._send_json(400, {"error": "Invalid IP address"})
+            if not _validate_device_id(ip):
+                self._send_json(400, {"error": "Invalid device identifier"})
                 return
             self._handle_post_nickname(ip)
             return
@@ -2174,13 +2314,14 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     # -- Helpers ------------------------------------------------------------
 
     def _get_active_entry_for_ip(self, ip: str) -> Optional[str]:
-        """Find the active schedule entry name for a device IP.
+        """Find the active schedule entry name for a device or group.
 
-        Searches all groups in the config for one containing this IP,
-        then checks which schedule entry is active for that group.
+        For group IDs (``group:name``), extracts the group name and
+        looks up directly.  For individual IPs, searches all groups
+        for one containing this IP.
 
         Args:
-            ip: Device IP address.
+            ip: Device IP address or group identifier.
 
         Returns:
             The active entry name, or ``None``.
@@ -2196,9 +2337,25 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         now: datetime = datetime.now(timezone.utc).astimezone()
 
+        # For group identifiers, look up by group name directly.
+        if _is_group_id(ip):
+            group_name: str = _group_name_from_id(ip)
+            if group_name in groups:
+                active: Optional[dict[str, Any]] = _find_active_entry(
+                    specs,
+                    config["location"]["latitude"],
+                    config["location"]["longitude"],
+                    now,
+                    group_name,
+                )
+                if active is not None:
+                    return active.get("name")
+            return None
+
+        # For individual IPs, search groups.
         for group_name, ips in groups.items():
             if ip in ips:
-                active: Optional[dict[str, Any]] = _find_active_entry(
+                active = _find_active_entry(
                     specs,
                     config["location"]["latitude"],
                     config["location"]["longitude"],
@@ -2535,6 +2692,7 @@ def main() -> None:
     dm: DeviceManager = DeviceManager(
         device_ips=device_ips, nicknames=nicknames,
         config_dir=os.path.dirname(os.path.abspath(config_path)),
+        groups=_get_groups(config),
     )
 
     # -- HTTP server (bind immediately) -------------------------------------
