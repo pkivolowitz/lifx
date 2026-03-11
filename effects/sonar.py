@@ -11,6 +11,10 @@ from white to black over a configurable number of zones.
 Obstacle count scales with string length: 1 obstacle per 12 bulbs
 (36 zones with the default 3 zones-per-bulb), minimum 1.
 
+Each source is limited to one live (non-absorbed) pulse at a time;
+a new wavefront is emitted only after the previous one from that
+source has been absorbed or has died.
+
 This effect is stateful: wavefront positions, obstacle drift, and
 pulse timing are tracked across frames.
 """
@@ -18,7 +22,7 @@ pulse timing are tracked across frames.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import math
 import random
@@ -251,8 +255,27 @@ class Sonar(Effect):
 
             obs.pos = new_pos
 
+    def _source_has_live_pulse(self, src: float) -> bool:
+        """Check whether a source already has a live (non-absorbed) wavefront.
+
+        Args:
+            src: Source position in bulb units.
+
+        Returns:
+            True if *src* already owns a non-absorbed wavefront.
+        """
+        for wf in self._wavefronts:
+            if wf.alive and not wf.absorbed and wf.source == src:
+                return True
+        return False
+
     def _emit_pulses(self, t: float, bulb_count: int) -> None:
-        """Emit new wavefronts from all sources if the interval has elapsed.
+        """Emit new wavefronts from sources that have no live pulse.
+
+        Each source is limited to one active (non-absorbed) wavefront at a
+        time.  A new pulse is emitted only when the previous one from that
+        source has been absorbed or has died, *and* the pulse interval has
+        elapsed since the last global emission check.
 
         Args:
             t:          Current time in seconds.
@@ -262,9 +285,12 @@ class Sonar(Effect):
             return
 
         self._last_pulse_t = t
-        obs_positions: list[float] = sorted(o.pos for o in self._obstacles)
 
         for src in self._sources:
+            # Only one live pulse per source at a time.
+            if self._source_has_live_pulse(src):
+                continue
+
             # Determine which directions this source should emit.
             # End sources emit inward only; middle sources emit both ways.
             if src <= 0.5:
