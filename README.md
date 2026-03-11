@@ -151,8 +151,8 @@ control.
 | `newtons_cradle` | Newton's Cradle with Phong-shaded spheres and specular highlights |
 | `rule30` | Wolfram elementary cellular automaton (rules 30/90/110) |
 | `rule_trio` | Three independent CAs with CIELAB blending and 50 palette presets |
+| `spin` | Colors migrate through concentric rings of each bulb (50 palette presets) |
 | `_bloom` | Polychrome bloom exploiting concentric zone architecture |
-| `_spin` | Rotate colors within each polychrome bulb |
 | `_crossfade` | A/B comparison between HSB and Lab interpolation |
 | `_zone_map` | Diagnostic — visualize physical zone layout |
 | `_polychrome_test` | Static R/G/B pattern to reveal zone positions |

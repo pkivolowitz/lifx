@@ -1207,6 +1207,45 @@ python3 glowup.py play jacobs_ladder --ip <device-ip> --zpb 3 --arcs 4 --speed 0
 python3 glowup.py play jacobs_ladder --ip <device-ip> --zpb 3 --reverse 1
 ```
 
+### spin
+
+Migrates colors through the concentric rings of each polychrome bulb.
+Each LIFX bulb contains three nested light-guide tubes (inner, middle,
+outer), and spin cycles colors through them so hues appear to flow
+between the inside and outside of every bulb simultaneously.
+
+Supports the 50-palette preset system shared with `rule_trio`.
+Selecting a named palette overrides the manual hue/saturation
+parameters with three curated colors.  The "custom" palette preserves
+continuous-hue behaviour controlled by `base_hue`, `hue_spread`, and
+`bulb_offset`.
+
+| Parameter | Default | Range | Description |
+|---|---|---|---|
+| `speed` | 2.0 | 0.2–30.0 | Seconds per full rotation |
+| `brightness` | 100 | 0–100 | Brightness percent |
+| `saturation` | 100 | 0–100 | Saturation percent (custom palette only) |
+| `kelvin` | 3500 | 1500–9000 | Color temperature |
+| `palette` | custom | 51 presets | Colour preset (non-custom overrides hue/sat) |
+| `hue_spread` | 120.0 | 10–360 | Hue spread in degrees across zones (custom) |
+| `base_hue` | 0.0 | 0–360 | Starting hue in degrees (custom) |
+| `bulb_offset` | 30.0 | 0–360 | Hue offset between adjacent bulbs |
+| `zones_per_bulb` | 3 | 1–16 | Zones per physical bulb |
+
+```bash
+# Default custom rainbow spin
+python3 glowup.py play spin --ip <device-ip> --zpb 3
+
+# Fire palette — red/orange/amber rotation
+python3 glowup.py play spin --ip <device-ip> --zpb 3 --palette fire
+
+# Slow holiday spin
+python3 glowup.py play spin --ip <device-ip> --zpb 3 --palette christmas --speed 5
+
+# Tight custom red spin
+python3 glowup.py play spin --ip <device-ip> --zpb 3 --base-hue 0 --hue-spread 30 --bulb-offset 10
+```
+
 ---
 
 ## Effect Developer Guide
@@ -1250,7 +1289,7 @@ the network, device objects, or anything outside their render function.
 5. That's it — the effect auto-registers and appears in the CLI.
 
 > **Hidden effects:** Effects whose name starts with `_` (e.g.,
-> `_polychrome_test`, `_zone_map`, `_crossfade`, `_bloom`, `_spin`) are hidden from the
+> `_polychrome_test`, `_zone_map`, `_crossfade`, `_bloom`) are hidden from the
 > iOS app by default.  Users can reveal them with the "Show Hidden"
 > toggle on the effect list screen.  Use this convention for diagnostic
 > and test effects that would otherwise clutter the list.  Hidden
