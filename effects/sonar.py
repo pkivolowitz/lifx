@@ -5,8 +5,8 @@ Obstacles meander around the middle of the string.  Between obstacles
 When a wavefront hits an obstacle it reflects; when it returns to its
 source it is absorbed (its tail continues to fade).
 
-The wavefront is intense white.  The trailing tail fades linearly
-from white to black over a configurable number of zones.
+The wavefront is intense white.  As it moves it drops particles
+that decay over time, producing a fading tail.
 
 Obstacle count scales with string length: 1 obstacle per 24 bulbs
 (72 zones with the default 3 zones-per-bulb), minimum 1.
@@ -22,7 +22,7 @@ pulse timing are tracked across frames.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.3"
+__version__ = "2.0"
 
 import math
 import random
@@ -69,16 +69,30 @@ OBSTACLE_DIRECTION_INTERVAL: float = 4.0
 MIN_OBSTACLES: int = 1
 
 
-class _Wavefront:
-    """A single traveling wavefront with a fading tail.
+class _Particle:
+    """A decaying brightness particle dropped by a wavefront.
 
     Attributes:
-        pos:       Current position in fractional zone units.
+        bulb:       Bulb position where the particle was dropped.
+        brightness: Current brightness fraction (1.0 → 0.0).
+    """
+
+    def __init__(self, bulb: float, brightness: float) -> None:
+        self.bulb: float = bulb
+        self.brightness: float = brightness
+
+
+class _Wavefront:
+    """A single traveling wavefront that drops decaying particles.
+
+    Attributes:
+        pos:       Current position in bulb units.
         direction: +1 (rightward) or -1 (leftward).
-        source:    Zone position of the source that emitted this wavefront.
-        alive:     False once the wavefront has returned to source and
-                   its tail has fully faded.
-        born_t:    Time the wavefront was created (for tail length calc).
+        source:    Bulb position of the emitting source.
+        speed:     Travel speed in bulbs per second.
+        alive:     False once fully absorbed or off-string.
+        reflected: True after bouncing off an obstacle.
+        absorbed:  True after returning to source post-reflection.
     """
 
     def __init__(self, source: float, direction: int, speed: float) -> None:
@@ -89,8 +103,6 @@ class _Wavefront:
         self.alive: bool = True
         self.reflected: bool = False
         self.absorbed: bool = False
-        # Track positions for tail rendering.
-        self.trail: list[float] = []
 
 
 class _Obstacle:
@@ -122,8 +134,8 @@ class Sonar(Effect):
 
     speed = Param(1.5, min=0.3, max=10.0,
                   description="Wavefront travel speed in bulbs per second")
-    tail = Param(8, min=1, max=50,
-                 description="Tail length in zones (fades white to black)")
+    decay = Param(2.0, min=0.1, max=10.0,
+                  description="Particle decay time in seconds (tail lifetime)")
     pulse_interval = Param(2.0, min=0.5, max=15.0,
                            description="Seconds between pulse emissions")
     obstacle_speed = Param(0.5, min=0.0, max=3.0,
@@ -148,6 +160,7 @@ class Sonar(Effect):
         super().__init__(**overrides)
         self._obstacles: list[_Obstacle] = []
         self._wavefronts: list[_Wavefront] = []
+        self._particles: list[_Particle] = []
         self._sources: list[float] = []
         self._last_pulse_t: float = -999.0
         self._initialized: bool = False
@@ -313,7 +326,7 @@ class Sonar(Effect):
                 )
 
     def _update_wavefronts(self, dt: float, bulb_count: int) -> None:
-        """Advance all wavefronts and handle reflection/absorption.
+        """Move wavefronts, drop particles, handle reflection/absorption.
 
         Args:
             dt:         Time delta since last frame.
@@ -326,25 +339,15 @@ class Sonar(Effect):
             if not wf.alive:
                 continue
 
-            # Record current position in trail before moving.
-            wf.trail.append(wf.pos)
-
-            # Trim trail by spatial distance: keep only entries within
-            # `tail` zones (converted to bulbs) of the current head.
-            zpb: int = max(1, int(self.zones_per_bulb))
-            max_dist: float = self.tail / zpb
-            while (len(wf.trail) > 1
-                   and abs(wf.trail[0] - wf.pos) > max_dist):
-                wf.trail.pop(0)
+            # Drop a particle at the current position.
+            if not wf.absorbed:
+                self._particles.append(_Particle(wf.pos, 1.0))
 
             # Move.
             wf.pos += wf.direction * wf.speed * dt
 
             if wf.absorbed:
-                # Already absorbed — just let the trail fade out.
-                # Kill when trail is fully past.
-                if len(wf.trail) <= 1:
-                    wf.alive = False
+                wf.alive = False
                 continue
 
             # Check reflection off obstacles.
@@ -353,7 +356,6 @@ class Sonar(Effect):
                     if (wf.direction > 0
                             and wf.pos >= obs_pos - half_obs
                             and wf.source < obs_pos):
-                        # Hit obstacle from the left.
                         wf.pos = obs_pos - half_obs
                         wf.direction = -1
                         wf.reflected = True
@@ -361,7 +363,6 @@ class Sonar(Effect):
                     elif (wf.direction < 0
                             and wf.pos <= obs_pos + half_obs
                             and wf.source > obs_pos):
-                        # Hit obstacle from the right.
                         wf.pos = obs_pos + half_obs
                         wf.direction = +1
                         wf.reflected = True
@@ -380,6 +381,17 @@ class Sonar(Effect):
 
         # Prune dead wavefronts.
         self._wavefronts = [wf for wf in self._wavefronts if wf.alive]
+
+    def _update_particles(self, dt: float) -> None:
+        """Decay all particles and remove dead ones.
+
+        Args:
+            dt: Time delta since last frame.
+        """
+        decay_rate: float = dt / max(0.01, self.decay)
+        for p in self._particles:
+            p.brightness -= decay_rate
+        self._particles = [p for p in self._particles if p.brightness > 0.0]
 
     def render(self, t: float, zone_count: int) -> list[HSBK]:
         """Produce one frame of the sonar effect.
@@ -414,34 +426,28 @@ class Sonar(Effect):
         # Emit new pulses.
         self._emit_pulses(t, bulb_count)
 
-        # Advance wavefronts.
+        # Advance wavefronts and decay particles.
         self._update_wavefronts(dt, bulb_count)
+        self._update_particles(dt)
 
         # --- Render to zone buffer ---
-        # Start with black.
         brightness_buf: list[float] = [0.0] * zone_count
         peak_bri: float = pct_to_u16(self.brightness) / float(HSBK_MAX)
 
-        # Paint wavefronts and their tails.
-        # Brightness fades linearly by spatial distance from the head,
-        # not by trail-entry index (which is frame-rate dependent).
-        tail_bulbs: float = max(0.01, self.tail / zpb)
-
+        # Paint wavefront heads at full brightness.
         for wf in self._wavefronts:
-            all_points: list[float] = wf.trail + [wf.pos]
-            head: float = wf.pos
-            for bulb_pos in all_points:
-                # Fraction 1.0 at head, 0.0 at tail_bulbs away.
-                dist: float = abs(bulb_pos - head)
-                frac: float = max(0.0, 1.0 - dist / tail_bulbs)
-                bri: float = frac * peak_bri
+            zone_start: int = int(wf.pos * zpb)
+            zone_end: int = zone_start + zpb
+            for z in range(max(0, zone_start), min(zone_count, zone_end)):
+                brightness_buf[z] = min(1.0, brightness_buf[z] + peak_bri)
 
-                # Map bulb position to zone range.
-                zone_start: int = int(bulb_pos * zpb)
-                zone_end: int = zone_start + zpb
-                for z in range(max(0, zone_start), min(zone_count, zone_end)):
-                    # Additive — multiple wavefronts can overlap.
-                    brightness_buf[z] = min(1.0, brightness_buf[z] + bri)
+        # Paint decaying particles.
+        for p in self._particles:
+            bri: float = p.brightness * peak_bri
+            zone_start: int = int(p.bulb * zpb)
+            zone_end: int = zone_start + zpb
+            for z in range(max(0, zone_start), min(zone_count, zone_end)):
+                brightness_buf[z] = min(1.0, brightness_buf[z] + bri)
 
         # Build the output color buffer.
         colors: list[HSBK] = []
