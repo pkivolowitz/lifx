@@ -54,9 +54,15 @@ struct Device: Codable, Identifiable, Hashable {
     var isVirtualGroup: Bool { isGroup ?? false }
 
     /// The best available display name: nickname, then label, then IP.
+    /// Virtual groups are prefixed with "Group: " for clarity.
     var displayName: String {
-        if let nickname = nickname, !nickname.isEmpty { return nickname }
-        return label ?? ip
+        let base: String
+        if let nickname = nickname, !nickname.isEmpty {
+            base = nickname
+        } else {
+            base = label ?? ip
+        }
+        return isVirtualGroup ? "Group: \(base)" : base
     }
 
     /// Coding keys to match the server's snake_case JSON.
