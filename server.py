@@ -40,6 +40,7 @@ Endpoints::
     POST /api/devices/{ip}/power         Turn device on/off
     POST /api/devices/{ip}/identify      Pulse brightness to locate device
     POST /api/devices/{ip}/nickname      Set a custom display name
+    POST /api/effects/{name}/defaults    Save tuned params as effect defaults
     GET  /api/schedule                   Schedule entries with resolved times
     POST /api/schedule/{index}/enabled   Enable or disable a schedule entry
 Usage::
@@ -53,7 +54,7 @@ Usage::
 
 from __future__ import annotations
 
-__version__ = "1.6"
+__version__ = "1.7"
 
 import hmac
 import http.server
@@ -107,6 +108,9 @@ BEARER_PREFIX: str = "Bearer "
 
 # Default configuration file path (for Pi deployment).
 DEFAULT_CONFIG_PATH: str = "/etc/glowup/server.json"
+
+# Filename for user-saved effect parameter defaults (co-located with config).
+EFFECT_DEFAULTS_FILENAME: str = "effect_defaults.json"
 
 # Logging format matching scheduler.py.
 LOG_FORMAT: str = "%(asctime)s %(levelname)s %(message)s"
@@ -252,7 +256,8 @@ class DeviceManager:
     """
 
     def __init__(self, device_ips: list[str],
-                 nicknames: Optional[dict[str, str]] = None) -> None:
+                 nicknames: Optional[dict[str, str]] = None,
+                 config_dir: Optional[str] = None) -> None:
         """Initialize with the device IPs from the config file.
 
         Args:
@@ -261,6 +266,8 @@ class DeviceManager:
                         the server will manage.
             nicknames:  Optional mapping of device IP to user-assigned
                         display name, loaded from the config file.
+            config_dir: Directory containing the config file, used to
+                        locate ``effect_defaults.json``.
         """
         self._devices: dict[str, LifxDevice] = {}
         self._controllers: dict[str, Controller] = {}
@@ -273,6 +280,14 @@ class DeviceManager:
         self._device_ips: list[str] = device_ips
         # User-assigned nicknames: IP → display name.
         self._nicknames: dict[str, str] = nicknames or {}
+        # User-saved effect parameter defaults: effect name → {param: value}.
+        self._effect_defaults: dict[str, dict[str, Any]] = {}
+        self._defaults_path: Optional[str] = None
+        if config_dir is not None:
+            self._defaults_path = os.path.join(
+                config_dir, EFFECT_DEFAULTS_FILENAME,
+            )
+            self._load_effect_defaults()
         # Readiness flag: False until initial load completes.
         self._ready: bool = False
 
@@ -396,6 +411,14 @@ class DeviceManager:
         ctrl: Optional[Controller] = self.get_or_create_controller(ip)
         if ctrl is None:
             raise KeyError(f"Unknown device: {ip}")
+        # Merge user-saved defaults under explicit params.  Explicit
+        # params from the API call take priority; saved defaults fill
+        # in anything the caller didn't specify.
+        saved: dict[str, Any] = self._effect_defaults.get(effect_name, {})
+        if saved:
+            merged: dict[str, Any] = dict(saved)
+            merged.update(params)
+            params = merged
         # Power on the device before playing.  The persistent committed
         # state is managed by stop() and reset() — not here — so the
         # render loop's rapid writes don't flicker against a black fallback.
@@ -707,12 +730,66 @@ class DeviceManager:
                 }
                 if pdef.choices:
                     params[pname]["choices"] = pdef.choices
+            # Overlay user-saved defaults so the app sees them.
+            saved: dict[str, Any] = self._effect_defaults.get(name, {})
+            for pname, sval in saved.items():
+                if pname in params:
+                    params[pname]["default"] = sval
             result[name] = {
                 "description": cls.description,
                 "params": params,
                 "hidden": name.startswith("_"),
             }
         return result
+
+    def _load_effect_defaults(self) -> None:
+        """Load user-saved effect defaults from disk."""
+        if self._defaults_path is None:
+            return
+        try:
+            with open(self._defaults_path, "r") as f:
+                self._effect_defaults = json.load(f)
+            logging.info(
+                "Loaded effect defaults for %d effects from %s",
+                len(self._effect_defaults), self._defaults_path,
+            )
+        except FileNotFoundError:
+            self._effect_defaults = {}
+        except (json.JSONDecodeError, ValueError) as exc:
+            logging.warning("Bad effect_defaults.json: %s", exc)
+            self._effect_defaults = {}
+
+    def _save_effect_defaults(self) -> None:
+        """Persist user-saved effect defaults to disk."""
+        if self._defaults_path is None:
+            logging.warning("No config directory — cannot save defaults")
+            return
+        with open(self._defaults_path, "w") as f:
+            json.dump(self._effect_defaults, f, indent=2)
+        logging.info(
+            "Saved effect defaults to %s", self._defaults_path,
+        )
+
+    def save_effect_defaults(
+        self, effect_name: str, params: dict[str, Any],
+    ) -> None:
+        """Save user-tuned parameter values as the defaults for an effect.
+
+        These override class-level Param defaults when the effect is
+        created without explicit params (e.g., from the scheduler).
+
+        Args:
+            effect_name: Registered effect name.
+            params:      Parameter values to save as defaults.
+
+        Raises:
+            ValueError: If the effect name is not registered.
+        """
+        registry: dict = get_registry()
+        if effect_name not in registry:
+            raise ValueError(f"Unknown effect: {effect_name}")
+        self._effect_defaults[effect_name] = dict(params)
+        self._save_effect_defaults()
 
     def devices_as_list(self) -> list[dict[str, Any]]:
         """Return configured devices as a JSON-serializable list.
@@ -1623,6 +1700,13 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_post_nickname(ip)
             return
 
+        # /api/effects/{name}/defaults
+        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "effects"
+                and parts[3] == "defaults"):
+            effect_name: str = parts[2]
+            self._handle_post_effect_defaults(effect_name)
+            return
+
         # /api/schedule/{index}/enabled
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "schedule"
                 and parts[3] == "enabled"):
@@ -1999,6 +2083,34 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         """Persist current nicknames to the config file."""
         nicknames: dict[str, str] = self.device_manager.get_nicknames()
         self._save_config_field("nicknames", nicknames or {})
+
+    def _handle_post_effect_defaults(self, effect_name: str) -> None:
+        """POST /api/effects/{name}/defaults — save tuned params as defaults.
+
+        Request body::
+
+            {"params": {"speed": 8.0, "decay": 2.0, ...}}
+
+        Persists the provided parameter values as the new defaults for
+        the named effect.  These defaults are used by the scheduler and
+        reported by GET /api/effects.
+        """
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        params: Any = body.get("params")
+        if not isinstance(params, dict):
+            self._send_json(400, {"error": "'params' must be an object"})
+            return
+
+        try:
+            self.device_manager.save_effect_defaults(effect_name, params)
+        except ValueError as exc:
+            self._send_json(404, {"error": str(exc)})
+            return
+
+        self._send_json(200, {"ok": True})
 
     def _handle_post_schedule_enabled(self, index: int) -> None:
         """POST /api/schedule/{index}/enabled — enable or disable an entry.
@@ -2422,6 +2534,7 @@ def main() -> None:
     nicknames: dict[str, str] = config.get("nicknames", {})
     dm: DeviceManager = DeviceManager(
         device_ips=device_ips, nicknames=nicknames,
+        config_dir=os.path.dirname(os.path.abspath(config_path)),
     )
 
     # -- HTTP server (bind immediately) -------------------------------------

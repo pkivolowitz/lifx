@@ -91,6 +91,25 @@ class APIClient: ObservableObject {
         return response.toEffectArray()
     }
 
+    /// Save tuned parameter values as the server-side defaults for an effect.
+    ///
+    /// These defaults are used by the scheduler and reported by
+    /// ``GET /api/effects`` on subsequent queries.
+    ///
+    /// - Parameters:
+    ///   - effectName: Registered effect name.
+    ///   - params: Parameter values to save as defaults.
+    /// - Throws: ``APIError`` on failure.
+    func saveEffectDefaults(
+        effectName: String,
+        params: [String: Any]
+    ) async throws {
+        let body: [String: Any] = ["params": params]
+        let _: GenericOKResponse = try await postRaw(
+            "/api/effects/\(effectName)/defaults", body: body
+        )
+    }
+
     /// Start an effect on a device.
     ///
     /// - Parameters:
@@ -327,6 +346,11 @@ class APIClient: ObservableObject {
 
 /// Empty JSON body (``{}``) for POST endpoints that need no payload.
 private struct EmptyBody: Encodable {}
+
+/// Generic ``{"ok": true}`` response from endpoints that return no data.
+struct GenericOKResponse: Codable {
+    let ok: Bool
+}
 
 /// Errors that can occur during API communication.
 enum APIError: LocalizedError {

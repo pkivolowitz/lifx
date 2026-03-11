@@ -31,6 +31,12 @@ struct EffectConfigView: View {
     /// Whether the play request is in progress.
     @State private var isPlaying: Bool = false
 
+    /// Whether the save-defaults request is in progress.
+    @State private var isSaving: Bool = false
+
+    /// Confirmation that defaults were saved.
+    @State private var savedConfirmation: Bool = false
+
     /// Error message for display.
     @State private var errorMessage: String?
 
@@ -56,7 +62,7 @@ struct EffectConfigView: View {
                 }
             }
 
-            // Play button section.
+            // Action buttons section.
             Section {
                 Button {
                     Task { await playEffect() }
@@ -72,7 +78,28 @@ struct EffectConfigView: View {
                         Spacer()
                     }
                 }
-                .disabled(isPlaying)
+                .disabled(isPlaying || isSaving)
+
+                Button {
+                    Task { await saveAsDefaults() }
+                } label: {
+                    HStack {
+                        Spacer()
+                        if isSaving {
+                            ProgressView()
+                                .padding(.trailing, 8)
+                        }
+                        Label(
+                            savedConfirmation ? "Saved" : "Save as Defaults",
+                            systemImage: savedConfirmation
+                                ? "checkmark.circle.fill"
+                                : "square.and.arrow.down"
+                        )
+                        .font(.subheadline)
+                        Spacer()
+                    }
+                }
+                .disabled(isPlaying || isSaving)
             }
         }
         .navigationTitle(effect.name)
@@ -298,6 +325,40 @@ struct EffectConfigView: View {
             errorMessage = error.localizedDescription
         }
         isPlaying = false
+    }
+
+    /// Push the current parameter values to the server as the new defaults.
+    private func saveAsDefaults() async {
+        isSaving = true
+        errorMessage = nil
+
+        // Also persist locally.
+        saveParams()
+
+        var apiParams: [String: Any] = [:]
+        for (name, value) in paramValues {
+            switch value {
+            case .int(let v): apiParams[name] = v
+            case .double(let v): apiParams[name] = v
+            case .string(let v): apiParams[name] = v
+            }
+        }
+
+        do {
+            try await apiClient.saveEffectDefaults(
+                effectName: effect.name,
+                params: apiParams
+            )
+            savedConfirmation = true
+            // Reset confirmation after a brief delay.
+            Task {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                savedConfirmation = false
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isSaving = false
     }
 }
 
