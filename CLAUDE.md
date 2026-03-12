@@ -2,6 +2,13 @@
 
 Modular effect engine for LIFX devices. See README.md for overview, MANUAL.md for full docs.
 
+## NAS Memory Check
+At the start of every conversation, verify the NAS is mounted:
+```
+ls /Volumes/perryk/.claude/projects/-Users-perrykivolowitz-lifx/memory/MEMORY.md
+```
+If the file is missing, tell Perry: "The NAS at /Volumes/perryk is not mounted — shared memory is unavailable. Mount it before we proceed so I have full context."
+
 ## Code Standards
 - PEP 257 docstrings on all public classes, methods, and functions
 - Explanatory inline comments
