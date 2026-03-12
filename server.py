@@ -2773,29 +2773,37 @@ def main() -> None:
         """Load devices from config IPs, then start the scheduler."""
         nonlocal mqtt_bridge
 
-        logging.info("Loading %d device(s) from config...", len(device_ips))
-        devices: list[dict[str, Any]] = dm.load_devices()
-        logging.info("Loaded %d device(s)", len(devices))
+        try:
+            logging.info(
+                "Loading %d device(s) from config...", len(device_ips),
+            )
+            devices: list[dict[str, Any]] = dm.load_devices()
+            logging.info("Loaded %d device(s)", len(devices))
 
-        # Start the scheduler now that devices are available.
-        sched: Optional[SchedulerThread] = None
-        if config.get("schedule"):
-            sched = SchedulerThread(config, dm)
-            GlowUpRequestHandler.scheduler = sched
-            sched.start()
-        else:
-            logging.info("No schedule configured — API-only mode")
-
-        # Start the MQTT bridge if configured.
-        if config.get("mqtt"):
-            if not _MQTT_AVAILABLE:
-                logging.error(
-                    "MQTT section found in config but paho-mqtt is not "
-                    "installed.  Install with: pip install paho-mqtt"
-                )
+            # Start the scheduler now that devices are available.
+            sched: Optional[SchedulerThread] = None
+            if config.get("schedule"):
+                sched = SchedulerThread(config, dm)
+                GlowUpRequestHandler.scheduler = sched
+                sched.start()
             else:
-                mqtt_bridge = MqttBridge(dm, config, scheduler=sched)
-                mqtt_bridge.start()
+                logging.info("No schedule configured — API-only mode")
+
+            # Start the MQTT bridge if configured.
+            if config.get("mqtt"):
+                if not _MQTT_AVAILABLE:
+                    logging.error(
+                        "MQTT section found in config but paho-mqtt is "
+                        "not installed.  Install with: pip install "
+                        "paho-mqtt"
+                    )
+                else:
+                    mqtt_bridge = MqttBridge(
+                        dm, config, scheduler=sched,
+                    )
+                    mqtt_bridge.start()
+        except Exception:
+            logging.exception("Background startup failed")
 
     startup_thread: threading.Thread = threading.Thread(
         target=_background_startup, daemon=True, name="startup-loader",
