@@ -109,9 +109,44 @@ colors. The engine handles framing, timing, and transport.
 
 ## Requirements
 
-- Python 3.10+
+- **Python 3.10+**
 - One or more LIFX devices on the same LAN subnet (multizone, single color, or monochrome)
-- No external dependencies — the entire stack is pure Python
+- No external dependencies — the entire stack is pure Python stdlib
+
+### Platform Support
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| **macOS** | Fully supported | Primary development platform. Broadcast auto-detection via `ifconfig`, simulator window focus via `osascript`. |
+| **Linux (Raspberry Pi, Ubuntu, etc.)** | Fully supported | Broadcast auto-detection via `ioctl`. Recommended deployment target. |
+| **Windows** | Not supported | The transport layer uses `fcntl` and Unix ioctl for broadcast address detection. These have no Windows equivalent without third-party packages. |
+
+### Platform-Specific Setup
+
+**macOS** — Python 3.10+ from Homebrew, the Xcode command-line tools,
+or a conda environment.  tkinter ships with the standard Python
+distribution on macOS:
+
+```bash
+# Homebrew
+brew install python@3.12
+
+# Or conda
+conda create -n glowup python=3.12
+conda activate glowup
+```
+
+**Linux (Debian / Ubuntu / Raspberry Pi OS)** — install Python and
+tkinter (needed only for the `--sim` live preview):
+
+```bash
+sudo apt update
+sudo apt install python3 python3-tk
+```
+
+On Raspberry Pi OS (Bookworm), Python 3.11+ is included by default.
+Install tkinter only if you plan to use the simulator on a desktop —
+headless Pi deployments (server, scheduler) do not need it.
 
 ## Quick Start
 
