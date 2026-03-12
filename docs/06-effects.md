@@ -844,3 +844,171 @@ python3 glowup.py play sine --ip <device-ip> --zpb 3 --hue 200 --hue2 300
 python3 glowup.py play sine --ip <device-ip> --zpb 3 --hue 45 --saturation 20 --reverse 1
 ```
 
+---
+
+### pendulum_wave
+
+**Pendulum wave** — a row of pendulums with slightly different periods.
+Each bulb is one pendulum.  All start in phase, then drift apart as their
+slightly different frequencies create traveling waves, standing waves, and
+apparent chaos — before magically realigning.  This is a real physics
+demonstration (search "pendulum wave" on YouTube).
+
+The math is simple harmonic motion with linearly varying periods:
+`T_n = T_base / (N_cycles + n/N)` so that after `speed` seconds the
+fastest pendulum has completed exactly one more oscillation than the
+slowest — guaranteeing perfect realignment.
+
+Displacement maps to CIELAB-blended color (two endpoint hues) and
+brightness modulation: extremes are bright, center is dim.
+
+| Parameter        | Default | Range       | Description                                    |
+|------------------|---------|-------------|------------------------------------------------|
+| `speed`          | 30.0    | 5.0–120.0  | Seconds for full realignment cycle             |
+| `cycles`         | 10      | 3–50       | Oscillations of slowest pendulum per cycle     |
+| `hue1`           | 240.0   | 0.0–360.0  | Color at negative displacement (degrees)       |
+| `hue2`           | 0.0     | 0.0–360.0  | Color at positive displacement (degrees)       |
+| `sat1`           | 100     | 0–100      | Saturation at negative displacement            |
+| `sat2`           | 100     | 0–100      | Saturation at positive displacement            |
+| `brightness`     | 100     | 0–100      | Peak brightness percent                        |
+| `zones_per_bulb` | 1       | 1–16       | Zones per physical bulb (3 for string lights)  |
+| `kelvin`         | 3500    | 1500–9000  | Color temperature in Kelvin                    |
+
+**Examples:**
+
+```bash
+# Default — blue/red pendulums, 30s realignment
+python3 glowup.py play pendulum_wave --ip <device-ip> --zpb 3
+
+# Faster cycle with more oscillations
+python3 glowup.py play pendulum_wave --ip <device-ip> --zpb 3 --speed 15 --cycles 20
+
+# Green/gold color scheme
+python3 glowup.py play pendulum_wave --ip <device-ip> --zpb 3 --hue1 120 --hue2 45
+```
+
+---
+
+### double_slit
+
+**Double slit interference** — Young's double slit experiment on a 1D LED
+strip.  Two point sources at configurable positions emit sinusoidal waves.
+Superposition creates an interference fringe pattern: constructive
+interference = bright, destructive = dark.
+
+The wavelength slowly breathes over a configurable period, making the
+fringe pattern shift and evolve.  Color encodes displacement sign
+(positive → hue1, negative → hue2).
+
+| Parameter        | Default | Range       | Description                                    |
+|------------------|---------|-------------|------------------------------------------------|
+| `speed`          | 4.0     | 0.5–30.0   | Wave propagation period in seconds             |
+| `wavelength`     | 0.25    | 0.05–2.0   | Base wavelength as fraction of strip length    |
+| `separation`     | 0.4     | 0.05–0.9   | Source separation as fraction of strip length  |
+| `breathe`        | 20.0    | 0.0–120.0  | Wavelength modulation period (0 = off)         |
+| `hue1`           | 200.0   | 0.0–360.0  | Color for positive displacement (degrees)      |
+| `hue2`           | 330.0   | 0.0–360.0  | Color for negative displacement (degrees)      |
+| `saturation`     | 100     | 0–100      | Wave color saturation percent                  |
+| `brightness`     | 100     | 0–100      | Peak brightness percent                        |
+| `zones_per_bulb` | 1       | 1–16       | Zones per physical bulb (3 for string lights)  |
+| `kelvin`         | 3500    | 1500–9000  | Color temperature in Kelvin                    |
+
+**Examples:**
+
+```bash
+# Default — teal/magenta interference with breathing wavelength
+python3 glowup.py play double_slit --ip <device-ip> --zpb 3
+
+# Wide separation, fast waves
+python3 glowup.py play double_slit --ip <device-ip> --zpb 3 --separation 0.7 --speed 2
+
+# No breathing — static fringe pattern that just propagates
+python3 glowup.py play double_slit --ip <device-ip> --zpb 3 --breathe 0
+
+# Long wavelength — broad fringes
+python3 glowup.py play double_slit --ip <device-ip> --zpb 3 --wavelength 0.8
+```
+
+---
+
+### ripple
+
+**Ripple tank** — raindrops on a 1D water surface.  Random drops hit the
+surface at Poisson-distributed intervals, launching wavefronts that
+propagate in both directions, reflect off the strip endpoints, and interfere
+with each other.
+
+Uses a second-order finite difference discretization of the 1D wave equation
+with first-order damping.  The Courant number is CFL-clamped for numerical
+stability.  Displacement maps to brightness (|u| → bright) and color
+(positive → hue1, negative → hue2).
+
+| Parameter        | Default | Range       | Description                                    |
+|------------------|---------|-------------|------------------------------------------------|
+| `speed`          | 30.0    | 5.0–100.0  | Wave propagation speed in zones per second     |
+| `damping`        | 0.03    | 0.001–0.2  | Wave damping factor (higher = faster fade)     |
+| `drop_rate`      | 1.5     | 0.1–10.0   | Average drops per second                       |
+| `hue1`           | 200.0   | 0.0–360.0  | Color for positive displacement (degrees)      |
+| `hue2`           | 330.0   | 0.0–360.0  | Color for negative displacement (degrees)      |
+| `saturation`     | 100     | 0–100      | Wave color saturation percent                  |
+| `brightness`     | 100     | 0–100      | Peak brightness percent                        |
+| `zones_per_bulb` | 1       | 1–16       | Zones per physical bulb (3 for string lights)  |
+| `kelvin`         | 3500    | 1500–9000  | Color temperature in Kelvin                    |
+
+**Examples:**
+
+```bash
+# Default — moderate rain, reflected wavefronts
+python3 glowup.py play ripple --ip <device-ip> --zpb 3
+
+# Heavy rain — lots of drops, short-lived ripples
+python3 glowup.py play ripple --ip <device-ip> --zpb 3 --drop-rate 5 --damping 0.1
+
+# Slow, lingering ripples
+python3 glowup.py play ripple --ip <device-ip> --zpb 3 --speed 15 --damping 0.005
+
+# Warm color scheme
+python3 glowup.py play ripple --ip <device-ip> --zpb 3 --hue1 30 --hue2 0
+```
+
+---
+
+### plasma
+
+**Plasma ball** — electric tendrils reaching from a central hot core toward
+both ends of the strip.  A bright core sits at the center, pulsing slowly.
+Tendrils are biased random walks that crackle outward, fork stochastically,
+and die quickly — constantly regenerating to give the characteristic look
+of a plasma globe.
+
+Each tendril has independent flicker, occasional crackle spikes (full
+brightness), and brightness that decays with distance from the core via
+a power-law falloff.
+
+| Parameter        | Default | Range       | Description                                    |
+|------------------|---------|-------------|------------------------------------------------|
+| `speed`          | 2.0     | 0.3–10.0   | Core pulse period in seconds                   |
+| `tendril_rate`   | 8.0     | 1.0–30.0   | Average new tendrils spawned per second        |
+| `hue`            | 270.0   | 0.0–360.0  | Base tendril hue (270 = violet)                |
+| `hue_spread`     | 40.0    | 0.0–180.0  | Random hue variation in degrees                |
+| `saturation`     | 80      | 0–100      | Tendril saturation percent                     |
+| `brightness`     | 100     | 0–100      | Peak brightness percent                        |
+| `zones_per_bulb` | 1       | 1–16       | Zones per physical bulb (3 for string lights)  |
+| `kelvin`         | 3500    | 1500–9000  | Color temperature in Kelvin                    |
+
+**Examples:**
+
+```bash
+# Default — violet plasma globe
+python3 glowup.py play plasma --ip <device-ip> --zpb 3
+
+# Blue-white lightning ball
+python3 glowup.py play plasma --ip <device-ip> --zpb 3 --hue 220 --saturation 40
+
+# Rapid tendrils, wide color spread
+python3 glowup.py play plasma --ip <device-ip> --zpb 3 --tendril-rate 20 --hue-spread 90
+
+# Slow, menacing pulse
+python3 glowup.py play plasma --ip <device-ip> --zpb 3 --speed 5 --tendril-rate 4
+```
+

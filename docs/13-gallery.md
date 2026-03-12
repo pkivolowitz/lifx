@@ -8,7 +8,7 @@ headlessly using the `record` subcommand — no physical hardware needed.
 
 Gallery features:
 
-- Animated GIF previews of all 17 public effects
+- Animated GIF previews of all 21 public effects
 - Effect descriptions and full parameter tables
 - Click-to-copy CLI command to reproduce any effect on your own hardware
 - Seamless loop badge for periodic effects

@@ -15,7 +15,7 @@ integration are performed by Perry Kivolowitz, the sole Human Author.
 ## What It Does
 
 - **Discovery** — finds all LIFX devices on your LAN via UDP broadcast
-- **Effects** — ships with 22 effects including aurora borealis, binary clock, fireworks, embers, Newton's Cradle, cellular automata (rule30, rule_trio), waving flag (199 countries), Larson scanner, Morse code, twinkling lights, standing wave, color breathe, and polychrome-aware diagnostics
+- **Effects** — ships with 26 effects including aurora borealis, binary clock, fireworks, embers, Newton's Cradle, cellular automata (rule30, rule_trio), waving flag (199 countries), Larson scanner, Morse code, twinkling lights, standing wave, color breathe, and polychrome-aware diagnostics
 - **Virtual multizone** — group any combination of devices into a single animation surface. A 108-zone string light and 4 single bulbs become a 112-zone strip. Effects animate across all devices as one. LIFX limits a physical chain to 3 string lights; virtual multizone removes that ceiling — any number of independent strings can be combined.
 - **Identify** — pulse a bulb's brightness to figure out which physical lamp corresponds to which IP address
 - **Monochrome support** — color effects on white-only bulbs are automatically converted to perceptually correct brightness using BT.709 luma coefficients
@@ -156,6 +156,7 @@ control.
 | `binclock` | Display the current time in binary (per-group colors) |
 | `breathe` | All bulbs oscillate between two colors via sine wave |
 | `cylon` | Larson scanner — bright eye sweeps back and forth |
+| `double_slit` | Two-source wave interference with shifting fringe patterns |
 | `fireworks` | Rockets launch from both ends, trail exhaust, detonate in expanding color halos (string lights) |
 | `flag` | Waving national flag with perspective ripple (199 countries) |
 | `morse` | Flashes a message in Morse code |
@@ -164,6 +165,9 @@ control.
 | `embers` | Rising embers — 1D heat diffusion with convection and cooling gradient |
 | `jacobs_ladder` | Rising electric arcs between electrode pairs (Frankenstein lab) |
 | `newtons_cradle` | Newton's Cradle with Phong-shaded spheres and specular highlights |
+| `pendulum_wave` | Row of pendulums drifting in and out of phase |
+| `plasma` | Plasma ball — electric tendrils crackle from a pulsing core |
+| `ripple` | Raindrops on water — wavefronts propagate, reflect, and interfere |
 | `rule30` | Wolfram elementary cellular automaton (rules 30/90/110) |
 | `rule_trio` | Three independent CAs with CIELAB blending and 50 palette presets |
 | `sine` | Traveling ease wave — bright humps roll with smooth cubic transitions |

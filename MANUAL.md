@@ -18,7 +18,7 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
 | 3 | [Quick Start](docs/03-quick-start.md) | Get running in 60 seconds |
 | 4 | [CLI Reference](docs/04-cli-reference.md) | discover, effects, identify, play, record |
 | 5 | [Scheduler](docs/05-scheduler.md) | Daemon mode, config file, symbolic times, systemd |
-| 6 | [Built-in Effects](docs/06-effects.md) | All 17 public effects with parameter tables |
+| 6 | [Built-in Effects](docs/06-effects.md) | All 21 public effects with parameter tables |
 | 7 | [Effect Developer Guide](docs/07-effect-dev-guide.md) | Architecture, base class, Param system, HSBK, examples |
 | 8 | [Live Simulator](docs/08-simulator.md) | tkinter preview window (--sim, --sim-only) |
 | 9 | [Engine and Controller API](docs/09-engine-api.md) | Programmatic API, VirtualMultizoneDevice |
