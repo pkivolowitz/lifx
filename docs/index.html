@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GlowUp Effect Gallery</title>
+<style>
+  :root {
+    --bg:       #0e0e10;
+    --card-bg:  #1a1a1e;
+    --border:   #2a2a2e;
+    --text:     #e0e0e0;
+    --dim:      #888;
+    --accent:   #5ea8f5;
+    --accent2:  #f59e42;
+    --mono:     "SF Mono", "Menlo", "Consolas", monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  header {
+    text-align: center;
+    padding: 3rem 1rem 2rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  header h1 {
+    font-size: 2.4rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 0.4rem;
+  }
+
+  header h1 span { color: var(--accent); }
+
+  header p {
+    color: var(--dim);
+    font-size: 1.05rem;
+    max-width: 600px;
+    margin: 0 auto;
+  }
+
+  header .links {
+    margin-top: 1rem;
+  }
+
+  header .links a {
+    color: var(--accent);
+    text-decoration: none;
+    margin: 0 0.8rem;
+    font-size: 0.95rem;
+  }
+
+  header .links a:hover { text-decoration: underline; }
+
+  #gallery {
+    max-width: 1100px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
+    gap: 1.5rem;
+  }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+
+  .card:hover { border-color: var(--accent); }
+
+  .card .preview {
+    width: 100%;
+    background: #111;
+    display: block;
+    image-rendering: pixelated;
+  }
+
+  .card .info {
+    padding: 1rem 1.2rem;
+  }
+
+  .card .info h2 {
+    font-size: 1.2rem;
+    font-weight: 600;
+    margin-bottom: 0.2rem;
+  }
+
+  .card .info .desc {
+    color: var(--dim);
+    font-size: 0.9rem;
+    margin-bottom: 0.6rem;
+  }
+
+  .card .info .meta {
+    font-size: 0.8rem;
+    color: var(--dim);
+    font-family: var(--mono);
+    margin-bottom: 0.5rem;
+  }
+
+  .card .info .meta span {
+    margin-right: 1rem;
+  }
+
+  .card .info .meta .loop-badge {
+    color: var(--accent2);
+    font-weight: 600;
+  }
+
+  .card .info details {
+    margin-top: 0.5rem;
+  }
+
+  .card .info summary {
+    cursor: pointer;
+    color: var(--accent);
+    font-size: 0.85rem;
+    user-select: none;
+  }
+
+  .card .info .cmd {
+    margin-top: 0.5rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--text);
+    word-break: break-all;
+    position: relative;
+    cursor: pointer;
+  }
+
+  .card .info .cmd:hover { border-color: var(--accent); }
+
+  .card .info .cmd::after {
+    content: "click to copy";
+    position: absolute;
+    right: 0.5rem;
+    top: 0.3rem;
+    font-size: 0.65rem;
+    color: var(--dim);
+  }
+
+  .card .info .cmd.copied::after {
+    content: "copied!";
+    color: var(--accent2);
+  }
+
+  .card .info .params-table {
+    margin-top: 0.5rem;
+    width: 100%;
+    font-size: 0.78rem;
+    font-family: var(--mono);
+    border-collapse: collapse;
+  }
+
+  .card .info .params-table td {
+    padding: 0.15rem 0.4rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .card .info .params-table td:first-child {
+    color: var(--accent);
+    white-space: nowrap;
+  }
+
+  .card .info .author {
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--dim);
+    font-style: italic;
+  }
+
+  #loading {
+    text-align: center;
+    padding: 4rem;
+    color: var(--dim);
+    font-size: 1.1rem;
+  }
+
+  #empty {
+    text-align: center;
+    padding: 4rem;
+    color: var(--dim);
+    display: none;
+  }
+
+  #empty code {
+    display: block;
+    margin-top: 1rem;
+    font-family: var(--mono);
+    color: var(--accent);
+    font-size: 0.9rem;
+  }
+
+  footer {
+    text-align: center;
+    padding: 2rem;
+    color: var(--dim);
+    font-size: 0.85rem;
+    border-top: 1px solid var(--border);
+    margin-top: 2rem;
+  }
+
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  @media (max-width: 540px) {
+    #gallery { grid-template-columns: 1fr; }
+    header h1 { font-size: 1.8rem; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Glow<span>Up</span> Effect Gallery</h1>
+  <p>Animated lighting effects for LIFX string lights.
+     Each preview was rendered headlessly — click the command to reproduce
+     it on your own hardware.</p>
+  <div class="links">
+    <a href="https://github.com/pkivolowitz/lifx">GitHub</a>
+    <a href="https://github.com/pkivolowitz/lifx/blob/master/MANUAL.md">Manual</a>
+  </div>
+</header>
+
+<div id="loading">Loading gallery&hellip;</div>
+<div id="empty">
+  No effects recorded yet.
+  <code>python3 glowup.py record wave --output docs/assets/previews/wave.gif</code>
+</div>
+<div id="gallery"></div>
+
+<footer>
+  GlowUp &copy; 2026 <a href="https://github.com/pkivolowitz">Perry Kivolowitz</a>.
+  Licensed under the MIT License.
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var MANIFEST = "effects.json";
+
+  function formatDuration(s) {
+    return s < 1 ? (s * 1000).toFixed(0) + "ms" : s.toFixed(1) + "s";
+  }
+
+  function buildCard(e) {
+    var card = document.createElement("div");
+    card.className = "card";
+
+    // Preview image / video
+    var ext = (e.format || "gif").toLowerCase();
+    var media;
+    if (ext === "mp4" || ext === "webm") {
+      media = document.createElement("video");
+      media.src = e.media_url;
+      media.autoplay = true;
+      media.loop = true;
+      media.muted = true;
+      media.playsInline = true;
+    } else {
+      media = document.createElement("img");
+      media.src = e.media_url;
+      media.alt = e.effect + " effect preview";
+      media.loading = "lazy";
+    }
+    media.className = "preview";
+    card.appendChild(media);
+
+    // Info section
+    var info = document.createElement("div");
+    info.className = "info";
+
+    var title = e.title || e.effect;
+    info.innerHTML =
+      '<h2>' + escHtml(title) + '</h2>' +
+      '<div class="desc">' + escHtml(e.description || "") + '</div>';
+
+    // Meta line
+    var metaParts = [];
+    metaParts.push(e.zones + " zones");
+    metaParts.push(formatDuration(e.duration));
+    metaParts.push(e.width + "&times;" + e.height + "px");
+    if (e.looping) metaParts.push('<span class="loop-badge">seamless loop</span>');
+    var metaDiv = document.createElement("div");
+    metaDiv.className = "meta";
+    metaDiv.innerHTML = metaParts.map(function (p) {
+      return "<span>" + p + "</span>";
+    }).join("");
+    info.appendChild(metaDiv);
+
+    // Expandable details
+    var details = document.createElement("details");
+    var summary = document.createElement("summary");
+    summary.textContent = "Parameters & command";
+    details.appendChild(summary);
+
+    // Params table
+    if (e.params && Object.keys(e.params).length > 0) {
+      var table = document.createElement("table");
+      table.className = "params-table";
+      Object.keys(e.params).sort().forEach(function (k) {
+        var tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + escHtml(k) + "</td><td>" + escHtml(String(e.params[k])) + "</td>";
+        table.appendChild(tr);
+      });
+      details.appendChild(table);
+    }
+
+    // CLI command
+    if (e.command) {
+      var cmdDiv = document.createElement("div");
+      cmdDiv.className = "cmd";
+      cmdDiv.textContent = e.command;
+      cmdDiv.addEventListener("click", function () {
+        navigator.clipboard.writeText(e.command).then(function () {
+          cmdDiv.classList.add("copied");
+          setTimeout(function () { cmdDiv.classList.remove("copied"); }, 1500);
+        });
+      });
+      details.appendChild(cmdDiv);
+    }
+
+    // Author
+    if (e.author) {
+      var authorDiv = document.createElement("div");
+      authorDiv.className = "author";
+      authorDiv.textContent = "by " + e.author;
+      details.appendChild(authorDiv);
+    }
+
+    info.appendChild(details);
+    card.appendChild(info);
+    return card;
+  }
+
+  function escHtml(s) {
+    var d = document.createElement("div");
+    d.appendChild(document.createTextNode(s));
+    return d.innerHTML;
+  }
+
+  // Load manifest and render
+  fetch(MANIFEST)
+    .then(function (r) {
+      if (!r.ok) throw new Error("No manifest");
+      return r.json();
+    })
+    .then(function (effects) {
+      document.getElementById("loading").style.display = "none";
+      var gallery = document.getElementById("gallery");
+
+      if (!effects || effects.length === 0) {
+        document.getElementById("empty").style.display = "block";
+        return;
+      }
+
+      // Sort alphabetically by effect name
+      effects.sort(function (a, b) {
+        return (a.effect || "").localeCompare(b.effect || "");
+      });
+
+      effects.forEach(function (e) {
+        gallery.appendChild(buildCard(e));
+      });
+    })
+    .catch(function () {
+      document.getElementById("loading").style.display = "none";
+      document.getElementById("empty").style.display = "block";
+    });
+})();
+</script>
+
+</body>
+</html>

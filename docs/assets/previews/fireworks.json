@@ -1,0 +1,27 @@
+{
+  "effect": "fireworks",
+  "description": "Rockets from both ends burst into spreading color halos",
+  "params": {
+    "ascent_speed": 10.0,
+    "burst_duration": 1.8,
+    "burst_spread": 20,
+    "kelvin": 3500,
+    "launch_rate": 0.5,
+    "max_rockets": 3,
+    "trail_length": 8
+  },
+  "zones": 108,
+  "zpb": 3,
+  "duration": 5.0,
+  "looping": false,
+  "fps": 20,
+  "width": 600,
+  "height": 80,
+  "format": "gif",
+  "lerp": "lab",
+  "file": "fireworks.gif",
+  "created": "2026-03-11",
+  "title": "Fireworks",
+  "media_url": "assets/previews/fireworks.gif",
+  "command": "python3 glowup.py play fireworks --zones 108 --zpb 3 --ascent-speed 10.0 --burst-duration 1.8 --burst-spread 20 --kelvin 3500 --launch-rate 0.5 --max-rockets 3 --trail-length 8"
+}

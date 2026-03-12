@@ -1,0 +1,25 @@
+{
+  "effect": "flag",
+  "description": "Waving national flag with perspective ripple",
+  "params": {
+    "brightness": 80,
+    "country": "us",
+    "direction": "left",
+    "kelvin": 3500,
+    "speed": 1.5
+  },
+  "zones": 108,
+  "zpb": 3,
+  "duration": 1.5,
+  "looping": true,
+  "fps": 20,
+  "width": 600,
+  "height": 80,
+  "format": "gif",
+  "lerp": "lab",
+  "file": "flag.gif",
+  "created": "2026-03-11",
+  "title": "Flag \u2014 United States",
+  "media_url": "assets/previews/flag.gif",
+  "command": "python3 glowup.py play flag --zones 108 --zpb 3 --brightness 80 --country us --direction left --kelvin 3500 --speed 1.5"
+}

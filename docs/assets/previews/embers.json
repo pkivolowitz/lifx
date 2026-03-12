@@ -1,0 +1,26 @@
+{
+  "effect": "embers",
+  "description": "Rising embers \u2014 heat diffusion with cooling gradient",
+  "params": {
+    "brightness": 100,
+    "cooling": 0.98,
+    "intensity": 0.7,
+    "kelvin": 3500,
+    "turbulence": 0.08,
+    "zones_per_bulb": 3
+  },
+  "zones": 108,
+  "zpb": 3,
+  "duration": 5.0,
+  "looping": false,
+  "fps": 20,
+  "width": 600,
+  "height": 80,
+  "format": "gif",
+  "lerp": "lab",
+  "file": "embers.gif",
+  "created": "2026-03-11",
+  "title": "Embers",
+  "media_url": "assets/previews/embers.gif",
+  "command": "python3 glowup.py play embers --zones 108 --zpb 3 --brightness 100 --cooling 0.98 --intensity 0.7 --kelvin 3500 --turbulence 0.08"
+}

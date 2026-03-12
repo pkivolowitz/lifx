@@ -1,0 +1,30 @@
+{
+  "effect": "newtons_cradle",
+  "description": "Newton's Cradle \u2014 alternating pendulum balls with Phong sphere shading",
+  "params": {
+    "ball_width": 0,
+    "brightness": 90,
+    "gap": 1,
+    "hue": 200.0,
+    "kelvin": 3500,
+    "num_balls": 5,
+    "sat": 15,
+    "shininess": 25,
+    "speed": 1.5,
+    "swing": 0
+  },
+  "zones": 108,
+  "zpb": 3,
+  "duration": 1.5,
+  "looping": true,
+  "fps": 20,
+  "width": 600,
+  "height": 80,
+  "format": "gif",
+  "lerp": "lab",
+  "file": "newtons_cradle.gif",
+  "created": "2026-03-11",
+  "title": "Newton's Cradle",
+  "media_url": "assets/previews/newtons_cradle.gif",
+  "command": "python3 glowup.py play newtons_cradle --zones 108 --zpb 3 --ball-width 0 --brightness 90 --gap 1 --hue 200.0 --kelvin 3500 --num-balls 5 --sat 15 --shininess 25 --speed 1.5 --swing 0"
+}
