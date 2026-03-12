@@ -2901,9 +2901,14 @@ your own by copying any existing one and changing the arguments.
 - **Scheduler conflict:** Like any external client, effects started
   via `glowup.sh play` set a phone override on the device.  Use
   `glowup.sh resume` to hand control back to the scheduler.
-- **Apple Shortcuts integration:** If you want Siri voice control,
-  create a Shortcut with a "Run Shell Script" action that calls
-  `glowup.sh`.  Name the Shortcut and Siri will respond to it.
+- **Apple Shortcuts:** The GlowUp REST API is fully compatible with
+  the Shortcuts app on iPhone, iPad, and Mac.  You can build
+  shortcuts using either the "Run Shell Script" action (calling
+  `glowup.sh`) or the "Get Contents of URL" action (calling the
+  REST API directly with POST method and Bearer token header).
+  Either approach gives you Siri voice control, NFC tag triggers,
+  time-of-day automations, and Home Screen widgets.  The details
+  are left as an exercise for the reader.
 - **Remote access:** If your server is reachable via Cloudflare
   Tunnel, set `GLOWUP_HOST` to your tunnel hostname.
 
