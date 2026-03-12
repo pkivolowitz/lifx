@@ -73,7 +73,7 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
 14. [Troubleshooting](#troubleshooting)
 15. [Cloudflare Tunnel (Remote Access)](#cloudflare-tunnel-remote-access)
 16. [Home Assistant Integration](#home-assistant-integration)
-17. [Apple Shortcuts Integration](#apple-shortcuts-integration)
+17. [macOS Remote Control](#macos-remote-control)
 18. [Node-RED Integration](#node-red-integration)
 19. [MQTT Integration](#mqtt-integration)
 
@@ -2812,80 +2812,100 @@ tap_action:
 
 ---
 
-## Apple Shortcuts Integration
+## macOS Remote Control
 
-The GlowUp REST API works directly with Apple's
-[Shortcuts](https://support.apple.com/guide/shortcuts/welcome/ios) app
-on iPhone, iPad, and Mac.  No additional software is needed — Shortcuts
-ships with every Apple device and can make HTTP requests natively via
-the **Get Contents of URL** action.
+The `shortcuts/` directory contains a shell-based remote control for
+GlowUp.  No app installation required — just a terminal or a
+double-clickable `.command` file from Finder.
 
-### Basic Shortcut: Play an Effect
+### Setup
 
-1. Open the **Shortcuts** app and tap **+** to create a new shortcut.
-2. Add a **Get Contents of URL** action.
-3. Set the URL to:
+1. Store your auth token (once per machine):
+
+   ```bash
+   echo -n "YOUR_AUTH_TOKEN" > ~/.glowup_token
+   chmod 600 ~/.glowup_token
    ```
-   http://GLOWUP_IP:8420/api/devices/DEVICE_IP/play
-   ```
-4. Tap **Show More** and configure:
-   - **Method:** POST
-   - **Headers:**
-     - `Authorization` → `Bearer YOUR_AUTH_TOKEN`
-     - `Content-Type` → `application/json`
-   - **Request Body:** JSON
-     - `effect` (Text) → `aurora`
-     - `params` (Dictionary) → `{"speed": 10.0, "brightness": 60}`
-5. Name the shortcut (e.g., "Porch Aurora").
 
-Replace `GLOWUP_IP`, `DEVICE_IP`, and `YOUR_AUTH_TOKEN` with your
-actual values (see [Server Configuration](#server-configuration)).
+   Replace `YOUR_AUTH_TOKEN` with the `auth_token` value from your
+   `server.json` (see [Server Configuration](#server-configuration)).
 
-### Stop Shortcut
+2. If your server is not at `10.0.0.48`, edit the default in
+   `shortcuts/glowup.sh` or set the `GLOWUP_HOST` environment variable.
 
-Create a second shortcut with the same steps but change:
-- **URL:** `http://GLOWUP_IP:8420/api/devices/DEVICE_IP/stop`
-- **Request Body:** leave empty (no body needed)
+### The glowup.sh CLI
 
-### Resume Schedule Shortcut
+`shortcuts/glowup.sh` is a single script that wraps the REST API:
 
-Same pattern with:
-- **URL:** `http://GLOWUP_IP:8420/api/devices/DEVICE_IP/resume`
-- **Request Body:** leave empty
+```bash
+# Play an effect on a group or device
+glowup.sh play porch aurora speed=10 brightness=80
+glowup.sh play living-room cylon hue=240
+glowup.sh play 10.0.0.62 breathe
 
-### Trigger Ideas
+# Stop the current effect (override stays active)
+glowup.sh stop porch
 
-Once you have shortcuts defined, Apple lets you trigger them in
-several ways — all without opening the GlowUp app:
+# Resume the schedule (clears override)
+glowup.sh resume porch
 
-| Trigger | How | Example |
-|---------|-----|---------|
-| **Siri** | "Hey Siri, Porch Aurora" | Voice control from any Apple device |
-| **Home Screen widget** | Long-press home screen → add Shortcuts widget | One-tap effect launcher |
-| **NFC tag** | Shortcuts → Automation → NFC → scan tag | Tap phone to an NFC sticker on the wall to start an effect |
-| **Time of day** | Shortcuts → Automation → Time of Day | Play an effect at sunset (Shortcuts has its own sunrise/sunset triggers) |
-| **Arrive / Leave** | Shortcuts → Automation → Arrive / Leave | Turn on lights when you get home |
-| **Focus mode** | Shortcuts → Automation → Focus | Start a calm effect when Do Not Disturb activates |
+# Power on / off
+glowup.sh on porch
+glowup.sh off all
+
+# Query status
+glowup.sh status              # all devices
+glowup.sh status porch        # one group
+
+# List available effects
+glowup.sh list
+```
+
+**Targets** can be group names (`porch`, `living-room`, `all`,
+`testing`) or individual device IPs (`10.0.0.62`).  Group names
+are automatically expanded to `group:NAME` for the API.
+
+Effect parameters are passed as `key=value` pairs after the effect
+name.  Numbers are sent as JSON numbers; everything else as strings.
+
+### One-Click .command Files
+
+The `shortcuts/` directory also includes pre-built `.command` files
+that can be double-clicked from Finder or dragged to the Dock:
+
+| File | Action |
+|------|--------|
+| `Porch Aurora.command` | Play aurora on porch |
+| `Porch Fireworks.command` | Play fireworks on porch |
+| `Porch Flag.command` | Play US flag on porch |
+| `Stop Porch.command` | Stop the porch effect |
+| `Resume Porch.command` | Resume porch schedule |
+| `Porch On.command` | Power on porch |
+| `Porch Off.command` | Power off porch |
+
+Each `.command` file is a one-liner that calls `glowup.sh`.  Create
+your own by copying any existing one and changing the arguments.
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GLOWUP_HOST` | `10.0.0.48` | Server IP or hostname |
+| `GLOWUP_PORT` | `8420` | Server port |
+| `GLOWUP_TOKEN` | *(reads `~/.glowup_token`)* | Auth token (overrides file) |
 
 ### Notes
 
-- **Siri voice control** works immediately — Siri uses the shortcut
-  name as the voice command.  Name your shortcuts accordingly
-  (e.g., "Porch Aurora", "Stop Porch", "Resume Porch").
-- **NFC tags** are inexpensive (a few cents each) and can be stuck
-  anywhere — on the wall by the front door, on a nightstand, etc.
-  Tap your phone to the tag and the shortcut runs instantly.
+- **No secrets in the repo.** The auth token is read at runtime from
+  `~/.glowup_token` or the `GLOWUP_TOKEN` environment variable.
 - **Scheduler conflict:** Like any external client, effects started
-  via Shortcuts set a phone override on the device.  Use your
-  "Resume" shortcut to hand control back to the GlowUp scheduler.
+  via `glowup.sh play` set a phone override on the device.  Use
+  `glowup.sh resume` to hand control back to the scheduler.
+- **Apple Shortcuts integration:** If you want Siri voice control,
+  create a Shortcut with a "Run Shell Script" action that calls
+  `glowup.sh`.  Name the Shortcut and Siri will respond to it.
 - **Remote access:** If your server is reachable via Cloudflare
-  Tunnel, replace the LAN URL with your tunnel hostname
-  (e.g., `https://lights.yourdomain.com/api/devices/...`).
-  Shortcuts work identically over the internet.
-- **Untested:** This integration has not yet been tested against a
-  live Apple Shortcuts setup.  If you try it, please open an issue
-  at the [GitHub repo](https://github.com/pkivolowitz/lifx/issues)
-  with any corrections or suggestions.
+  Tunnel, set `GLOWUP_HOST` to your tunnel hostname.
 
 ---
 
