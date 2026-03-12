@@ -9,12 +9,17 @@ ease-in-ease-out interpolation.  Each zone's normalized phase
 which has zero derivative at both endpoints — brightness ramps
 up gently from black, peaks, and ramps back down without any
 perceptible flicker or quiver at the transitions.
+
+On polychrome (color) string lights, only the center ring (zone 0
+of each bulb) is animated.  The outer two rings are held black.
+This eliminates visible quivering caused by the three concentric
+tubes responding at slightly different rates.
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.2"
+__version__ = "1.3"
 
 import math
 import os
@@ -36,10 +41,10 @@ from colorspace import lerp_color
 
 TWO_PI: float = 2.0 * math.pi
 
-# Default zones per bulb for polychrome-aware rendering.
-DEFAULT_ZPB: int = 1
+# Polychrome string lights have 3 zones per bulb (concentric rings).
+ZONES_PER_BULB: int = 3
 
-# Black — used for the off portion of the wave.
+# Black — used for the off portion of the wave and outer rings.
 BLACK: HSBK = (0, 0, 0, KELVIN_DEFAULT)
 
 
@@ -63,10 +68,14 @@ def _smoothstep(x: float) -> float:
 class Sine(Effect):
     """Traveling ease wave — bright humps roll along the strip.
 
-    Each zone computes a traveling wave phase, then the positive
+    Each bulb computes a traveling wave phase, then the positive
     half is remapped through cubic ease-in-ease-out (smoothstep).
     The negative half is black, creating distinct bright humps
     separated by dark gaps that scroll continuously.
+
+    Only the center ring (zone 0) of each polychrome bulb is
+    animated.  The outer rings are held black to prevent visible
+    quivering from the concentric tubes responding at different rates.
     """
 
     name: str = "sine"
@@ -84,8 +93,6 @@ class Sine(Effect):
                        description="Peak brightness percent")
     hue2 = Param(-1.0, min=-1.0, max=360.0,
                  description="Optional second hue for gradient along wave (-1 = disabled)")
-    zones_per_bulb = Param(DEFAULT_ZPB, min=1, max=16,
-                           description="Zones per physical bulb (3 for string lights)")
     kelvin = Param(KELVIN_DEFAULT, min=KELVIN_MIN, max=KELVIN_MAX,
                    description="Color temperature in Kelvin")
     reverse = Param(0, min=0, max=1,
@@ -94,9 +101,11 @@ class Sine(Effect):
     def render(self, t: float, zone_count: int) -> list[HSBK]:
         """Produce one frame of the traveling ease wave.
 
-        Each zone computes a traveling-wave phase.  The positive
+        Each bulb computes a traveling-wave phase.  The positive
         half-cycle is remapped through smoothstep for flicker-free
-        brightness; the negative half-cycle is black.
+        brightness; the negative half-cycle is black.  Only zone 0
+        (center ring) of each 3-zone bulb is lit; outer rings stay
+        black.
 
         Args:
             t:          Seconds elapsed since effect started.
@@ -120,20 +129,25 @@ class Sine(Effect):
         # Direction multiplier.
         direction: float = -1.0 if self.reverse else 1.0
 
-        zpb: int = self.zones_per_bulb
-        bulb_count: int = max(1, zone_count // zpb)
+        bulb_count: int = max(1, zone_count // ZONES_PER_BULB)
 
         colors: list[HSBK] = []
         for i in range(zone_count):
-            # Polychrome-aware: all zones within one bulb share position.
-            bulb_index: int = i // zpb
+            # Which zone within this bulb? (0 = center, 1 = middle, 2 = outer)
+            zone_in_bulb: int = i % ZONES_PER_BULB
+
+            # Only animate the center ring; outer rings stay black.
+            if zone_in_bulb != 0:
+                colors.append(BLACK)
+                continue
+
+            # Which bulb along the strip.
+            bulb_index: int = i // ZONES_PER_BULB
 
             # Normalized position along the strip (0.0 to 1.0).
             x: float = bulb_index / bulb_count if bulb_count > 0 else 0.0
 
             # Traveling wave: sin(2π * (x/wavelength - t/speed))
-            # The spatial term x/wavelength controls how many humps are
-            # visible.  The temporal term t/speed scrolls the pattern.
             phase: float = TWO_PI * (x / self.wavelength - direction * t / self.speed)
             displacement: float = math.sin(phase)
 
@@ -142,14 +156,10 @@ class Sine(Effect):
                 colors.append(BLACK)
             else:
                 # Positive half-cycle: remap through cubic ease-in-ease-out.
-                # smoothstep(displacement) has zero derivative at both 0
-                # and 1, so brightness enters and exits black silently
-                # and peaks without overshoot.
                 eased: float = _smoothstep(displacement)
                 bri: int = int(max_bri * eased)
 
                 if use_gradient:
-                    # Blend between hue and hue2 based on position along strip.
                     blended: HSBK = lerp_color(base_color, end_color, x)
                     colors.append((blended[0], blended[1], bri, self.kelvin))
                 else:
