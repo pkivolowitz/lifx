@@ -119,7 +119,7 @@ colors. The engine handles framing, timing, and transport.
 |----------|--------|-------|
 | **macOS** | Fully supported | Primary development platform. Broadcast auto-detection via `ifconfig`, simulator window focus via `osascript`. |
 | **Linux (Raspberry Pi, Ubuntu, etc.)** | Fully supported | Broadcast auto-detection via `ioctl`. Recommended deployment target. |
-| **Windows** | Degraded | Broadcast discovery is unavailable — use `--ip` to address devices directly. Effects, simulator, and server all work. See [Windows notes](#windows) below. |
+| **Windows** | Degraded (untested) | Broadcast discovery is unavailable — use `--ip` to address devices directly. Effects, simulator, and server should work. See [Windows notes](#windows) below. |
 
 ### Platform-Specific Setup
 
@@ -150,10 +150,14 @@ headless Pi deployments (server, scheduler) do not need it.
 
 #### Windows
 
-GlowUp runs on Windows with one limitation: the `discover` command
-cannot auto-detect your subnet's broadcast address (this requires
-Unix-specific `fcntl`/ioctl calls).  Everything else works — effects,
-the simulator, and the server.
+> **Windows support has not been tested.**  The guidance below is based
+> on code analysis, not hands-on verification.  If you try it, we would
+> appreciate a report — good or bad — via a GitHub issue.
+
+GlowUp should run on Windows with one limitation: the `discover`
+command cannot auto-detect your subnet's broadcast address (this
+requires Unix-specific `fcntl`/ioctl calls).  Everything else should
+work — effects, the simulator, and the server.
 
 Install Python 3.10+ from [python.org](https://www.python.org/downloads/)
 (tkinter is included by default on Windows).
