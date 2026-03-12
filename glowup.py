@@ -30,7 +30,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from transport import LifxDevice, discover_devices
 from engine import Controller, VirtualMultizoneDevice
-from effects import get_registry, get_effect_names, HSBK_MAX, KELVIN_DEFAULT
+from effects import get_registry, get_effect_names, create_effect, HSBK_MAX, KELVIN_DEFAULT
 from colorspace import set_lerp_method
 
 # ---------------------------------------------------------------------------
@@ -57,6 +57,34 @@ IDENTIFY_MIN_BRI: float = 0.05
 
 SIM_STOP_CHECK_MS: int = 100
 """Interval in milliseconds between stop-event checks in simulator mode."""
+
+# Record subcommand defaults.
+DEFAULT_RECORD_ZONES: int = 108
+"""Default zone count for recordings (matches a 36-bulb string light)."""
+
+DEFAULT_RECORD_ZPB: int = 3
+"""Default zones-per-bulb for recordings (LIFX string lights)."""
+
+DEFAULT_RECORD_DURATION: float = 5.0
+"""Default recording duration in seconds when no period is available."""
+
+DEFAULT_RECORD_WIDTH: int = 600
+"""Default output width in pixels."""
+
+DEFAULT_RECORD_HEIGHT: int = 80
+"""Default output height in pixels."""
+
+DEFAULT_RECORD_FORMAT: str = "gif"
+"""Default output format."""
+
+RECORD_BG_COLOR: tuple[int, int, int] = (26, 26, 26)
+"""Background RGB color for the strip image (dark grey, matches simulator)."""
+
+RECORD_ZONE_GAP: int = 1
+"""Gap in pixels between bulbs in the recording."""
+
+RECORD_SUPPORTED_FORMATS: list[str] = ["gif", "mp4", "webm"]
+"""Output formats supported by the record subcommand."""
 
 DEFAULT_MONITOR_POLL_HZ: float = 4.0
 """Default polling rate in Hz for monitor mode."""
@@ -861,6 +889,315 @@ def cmd_play(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Record subcommand — render to GIF/MP4/WebM via ffmpeg
+# ---------------------------------------------------------------------------
+
+def _hsbk_to_rgb_tuple(hue: int, sat: int, bri: int, kelvin: int) -> tuple[int, int, int]:
+    """Convert an HSBK color to an (R, G, B) tuple of 0-255 ints.
+
+    Args:
+        hue:    LIFX hue (0-65535).
+        sat:    LIFX saturation (0-65535).
+        bri:    LIFX brightness (0-65535).
+        kelvin: Color temperature (ignored for display).
+
+    Returns:
+        (R, G, B) with each component in 0-255.
+    """
+    h: float = (hue / HSBK_MAX) * 6.0
+    s: float = sat / HSBK_MAX
+    b: float = bri / HSBK_MAX
+
+    c: float = b * s
+    x: float = c * (1.0 - abs(h % 2.0 - 1.0))
+    m: float = b - c
+
+    sextant: int = int(h) % 6
+    if sextant == 0:
+        r, g, bl = c + m, x + m, m
+    elif sextant == 1:
+        r, g, bl = x + m, c + m, m
+    elif sextant == 2:
+        r, g, bl = m, c + m, x + m
+    elif sextant == 3:
+        r, g, bl = m, x + m, c + m
+    elif sextant == 4:
+        r, g, bl = x + m, m, c + m
+    else:
+        r, g, bl = c + m, m, x + m
+
+    return (min(int(r * 255), 255),
+            min(int(g * 255), 255),
+            min(int(bl * 255), 255))
+
+
+def _render_frame_pixels(
+    colors: list,
+    zones_per_bulb: int,
+    width: int,
+    height: int,
+) -> bytes:
+    """Render one frame of HSBK zone colors to raw RGB pixel bytes.
+
+    Groups zones into bulbs (using the middle zone's color), then
+    paints each bulb as a vertical column scaled to fill the output
+    width.  Gaps between bulbs are rendered in the background color.
+
+    Args:
+        colors:         List of (H, S, B, K) tuples, one per zone.
+        zones_per_bulb: Zones per physical bulb (e.g. 3).
+        width:          Output image width in pixels.
+        height:         Output image height in pixels.
+
+    Returns:
+        Raw RGB bytes (width * height * 3) suitable for ffmpeg rawvideo.
+    """
+    zpb: int = max(1, zones_per_bulb)
+    zone_count: int = len(colors)
+    bulb_count: int = max(1, (zone_count + zpb - 1) // zpb)
+
+    # Sample the middle zone of each bulb group for its display color.
+    bulb_colors: list[tuple[int, int, int]] = []
+    for b_idx in range(bulb_count):
+        mid: int = min(b_idx * zpb + zpb // 2, zone_count - 1)
+        h, s, br, k = colors[mid]
+        bulb_colors.append(_hsbk_to_rgb_tuple(h, s, br, k))
+
+    # Compute pixel column assignments.
+    total_gaps: int = (bulb_count - 1) * RECORD_ZONE_GAP
+    usable: int = max(bulb_count, width - total_gaps)
+    bulb_w: int = usable // bulb_count
+
+    # Build one scanline.
+    bg: tuple[int, int, int] = RECORD_BG_COLOR
+    scanline: bytearray = bytearray()
+    for b_idx in range(bulb_count):
+        r, g, b = bulb_colors[b_idx]
+        scanline.extend(bytes([r, g, b]) * bulb_w)
+        if b_idx < bulb_count - 1:
+            scanline.extend(bytes(bg) * RECORD_ZONE_GAP)
+
+    # Pad or trim to exact width.
+    row_bytes: int = width * 3
+    if len(scanline) < row_bytes:
+        scanline.extend(bytes(bg) * ((row_bytes - len(scanline)) // 3))
+    scanline = scanline[:row_bytes]
+
+    # Replicate scanline for the full height.
+    row: bytes = bytes(scanline)
+    return row * height
+
+
+def cmd_record(args: argparse.Namespace) -> None:
+    """Render an effect to a video file (GIF, MP4, or WebM) via ffmpeg.
+
+    No device or network connection is needed.  The effect is rendered
+    headlessly at deterministic timestamps.  If the effect has a known
+    period and no explicit ``--duration`` was given, exactly one cycle
+    is recorded for seamless looping.
+
+    A JSON metadata sidecar is written alongside the output file
+    containing effect name, parameters, and reproduction details.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments.
+    """
+    import os
+    import subprocess as sp
+    from datetime import date
+
+    # --- Validate ffmpeg is available ----------------------------------------
+    try:
+        sp.run(["ffmpeg", "-version"], capture_output=True, check=True)
+    except (FileNotFoundError, sp.CalledProcessError):
+        _print(
+            "ERROR: ffmpeg is required for recording. "
+            "Install with: brew install ffmpeg (macOS) or "
+            "sudo apt install ffmpeg (Linux).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # --- Set color interpolation method --------------------------------------
+    lerp_method: str = getattr(args, "lerp", "lab")
+    set_lerp_method(lerp_method)
+
+    # --- Resolve effect and parameters ---------------------------------------
+    effect_name: str = args.effect
+    registry: Dict[str, Any] = get_registry()
+    if effect_name not in registry:
+        _print(
+            f"ERROR: Unknown effect '{effect_name}'. "
+            f"Available: {', '.join(get_effect_names())}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    effect_cls = registry[effect_name]
+    param_defs = effect_cls.get_param_defs()
+    effect_params: Dict[str, Any] = {}
+    for pname in param_defs:
+        val: Any = getattr(args, pname, None)
+        if val is not None:
+            effect_params[pname] = val
+
+    # Map --zpb to zones_per_bulb if the effect declares it.
+    zpb: int = getattr(args, "zpb", DEFAULT_RECORD_ZPB)
+    if "zones_per_bulb" in param_defs:
+        effect_params["zones_per_bulb"] = zpb
+
+    effect = create_effect(effect_name, **effect_params)
+
+    # --- Determine recording parameters -------------------------------------
+    zones: int = getattr(args, "zones", DEFAULT_RECORD_ZONES)
+    fps: int = getattr(args, "fps", DEFAULT_FPS)
+    width: int = getattr(args, "width", DEFAULT_RECORD_WIDTH)
+    height: int = getattr(args, "height", DEFAULT_RECORD_HEIGHT)
+    fmt: str = getattr(args, "format", DEFAULT_RECORD_FORMAT)
+    author: str = getattr(args, "author", None) or ""
+    title: str = getattr(args, "title", None) or ""
+
+    # Determine duration: explicit --duration, or one period, or default.
+    explicit_duration: bool = getattr(args, "duration", None) is not None
+    effect_period = effect.period()
+    if explicit_duration:
+        duration: float = args.duration
+        looping: bool = False
+    elif effect_period is not None and effect_period > 0:
+        duration = effect_period
+        looping = True
+        _print(f"Effect period detected: {duration:.2f}s (recording one cycle for seamless loop)")
+    else:
+        duration = DEFAULT_RECORD_DURATION
+        looping = False
+
+    total_frames: int = max(1, int(duration * fps))
+    dt: float = 1.0 / fps
+
+    # --- Determine output path -----------------------------------------------
+    output: str = getattr(args, "output", None) or f"{effect_name}.{fmt}"
+    if not output.endswith(f".{fmt}"):
+        output = f"{output}.{fmt}"
+    json_path: str = os.path.splitext(output)[0] + ".json"
+
+    _print(f"Recording '{effect_name}' → {output}")
+    _print(f"  {zones} zones, {zpb} zpb, {fps} fps, {duration:.2f}s "
+           f"({total_frames} frames), {width}×{height}px")
+    if looping:
+        _print(f"  Looping: one full cycle ({effect_period:.2f}s)")
+
+    # --- Build ffmpeg command ------------------------------------------------
+    ffmpeg_cmd: list[str] = [
+        "ffmpeg", "-y",
+        "-f", "rawvideo",
+        "-pix_fmt", "rgb24",
+        "-s", f"{width}x{height}",
+        "-r", str(fps),
+        "-i", "pipe:0",
+    ]
+
+    if fmt == "gif":
+        # Two-pass palette generation for high-quality GIF.
+        ffmpeg_cmd.extend([
+            "-vf", "split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+            "-loop", "0",
+        ])
+    elif fmt == "mp4":
+        ffmpeg_cmd.extend([
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+        ])
+    elif fmt == "webm":
+        ffmpeg_cmd.extend([
+            "-c:v", "libvpx-vp9",
+            "-b:v", "0",
+            "-crf", "30",
+        ])
+
+    ffmpeg_cmd.append(output)
+
+    # --- Render frames and pipe to ffmpeg ------------------------------------
+    proc = sp.Popen(ffmpeg_cmd, stdin=sp.PIPE, stdout=sp.DEVNULL,
+                    stderr=sp.PIPE)
+
+    try:
+        for frame_idx in range(total_frames):
+            t: float = frame_idx * dt
+            colors = effect.render(t, zones)
+            pixels: bytes = _render_frame_pixels(colors, zpb, width, height)
+            proc.stdin.write(pixels)
+
+            # Progress indicator every 20%.
+            if total_frames >= 10 and frame_idx % (total_frames // 5) == 0:
+                pct: int = int(100 * frame_idx / total_frames)
+                _print(f"  {pct}%...", end=" ", flush=True)
+
+        proc.stdin.close()
+        proc.wait()
+        stderr_bytes: bytes = proc.stderr.read()
+
+        if proc.returncode != 0:
+            _print(f"\nERROR: ffmpeg failed:\n{stderr_bytes.decode()}", file=sys.stderr)
+            sys.exit(1)
+
+        _print(f"\n  Wrote {output}")
+
+    except BrokenPipeError:
+        proc.wait()
+        stderr_bytes = proc.stderr.read()
+        _print(f"\nERROR: ffmpeg pipe broke:\n{stderr_bytes.decode()}", file=sys.stderr)
+        sys.exit(1)
+
+    # --- Write JSON metadata sidecar -----------------------------------------
+    all_params: Dict[str, Any] = effect.get_params()
+    metadata: Dict[str, Any] = {
+        "effect": effect_name,
+        "description": effect_cls.description,
+        "params": all_params,
+        "zones": zones,
+        "zpb": zpb,
+        "duration": round(duration, 3),
+        "looping": looping,
+        "fps": fps,
+        "width": width,
+        "height": height,
+        "format": fmt,
+        "lerp": lerp_method,
+        "file": os.path.basename(output),
+        "created": str(date.today()),
+    }
+    if author:
+        metadata["author"] = author
+    if title:
+        metadata["title"] = title
+
+    # media_url: relative path for gallery JS (defaults to output filename).
+    media_url: str = getattr(args, "media_url", None) or os.path.basename(output)
+    metadata["media_url"] = media_url
+
+    # Build a CLI command that reproduces this recording.
+    cmd_parts: list[str] = [
+        "python3 glowup.py play", effect_name,
+        f"--zones {zones}", f"--zpb {zpb}",
+    ]
+    for pname, pval in all_params.items():
+        if pname == "zones_per_bulb":
+            continue  # already covered by --zpb
+        cmd_parts.append(f"--{pname.replace('_', '-')} {pval}")
+    metadata["command"] = " ".join(cmd_parts)
+
+    with open(json_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+        f.write("\n")
+
+    _print(f"  Wrote {json_path}")
+    _print("Done.")
+
+
+# ---------------------------------------------------------------------------
 # Layered effect help
 # ---------------------------------------------------------------------------
 
@@ -1093,6 +1430,109 @@ def build_parser() -> argparse.ArgumentParser:
                 **kwargs,
             )
 
+    # -- record ----------------------------------------------------------------
+    p_record = sub.add_parser(
+        "record",
+        help="Render an effect to GIF/MP4/WebM via ffmpeg (no device needed)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Effect-specific parameters are hidden from this view.\n"
+            "To see all parameters for a specific effect:\n\n"
+            "  python3 glowup.py record <effect> --help\n\n"
+            "If the effect has a known period and no --duration is given,\n"
+            "exactly one cycle is recorded for seamless looping.\n\n"
+            "A JSON metadata sidecar is written alongside every recording."
+        ),
+    )
+    p_record.add_argument(
+        "effect", help="Effect name (run 'effects' to list)",
+    )
+    p_record.add_argument(
+        "--zones", type=int, default=DEFAULT_RECORD_ZONES,
+        help=f"Number of zones to simulate (default: {DEFAULT_RECORD_ZONES})",
+    )
+    p_record.add_argument(
+        "--zpb", type=int, default=DEFAULT_RECORD_ZPB,
+        help=f"Zones per bulb (default: {DEFAULT_RECORD_ZPB})",
+    )
+    p_record.add_argument(
+        "--fps", type=int, default=DEFAULT_FPS,
+        help=f"Frames per second (default: {DEFAULT_FPS})",
+    )
+    p_record.add_argument(
+        "--duration", type=float, default=None,
+        help="Recording duration in seconds (auto-detected from period if omitted)",
+    )
+    p_record.add_argument(
+        "--width", type=int, default=DEFAULT_RECORD_WIDTH,
+        help=f"Output width in pixels (default: {DEFAULT_RECORD_WIDTH})",
+    )
+    p_record.add_argument(
+        "--height", type=int, default=DEFAULT_RECORD_HEIGHT,
+        help=f"Output height in pixels (default: {DEFAULT_RECORD_HEIGHT})",
+    )
+    p_record.add_argument(
+        "--format", type=str, default=DEFAULT_RECORD_FORMAT,
+        choices=RECORD_SUPPORTED_FORMATS,
+        help=f"Output format (default: {DEFAULT_RECORD_FORMAT})",
+    )
+    p_record.add_argument(
+        "--output", type=str, default=None,
+        help="Output file path (default: <effect>.<format>)",
+    )
+    p_record.add_argument(
+        "--lerp", type=str, default="lab",
+        choices=["lab", "hsb"],
+        help="Color interpolation method (default: lab)",
+    )
+    p_record.add_argument(
+        "--author", type=str, default=None,
+        help="Author name for the metadata sidecar",
+    )
+    p_record.add_argument(
+        "--title", type=str, default=None,
+        help="Title / description for the metadata sidecar",
+    )
+    p_record.add_argument(
+        "--media-url", dest="media_url", type=str, default=None,
+        help="Relative URL path for gallery use (e.g. assets/previews/aurora.gif). "
+             "Defaults to the output filename.",
+    )
+
+    # Add effect params to record subcommand (same pattern as play).
+    # Skip params whose names collide with record's own arguments.
+    record_reserved: set = {
+        "effect", "zones", "zpb", "fps", "duration", "width", "height",
+        "format", "output", "lerp", "author", "title", "media_url",
+    }
+    seen_rec: set = set()
+    for _effect_name, effect_cls in get_registry().items():
+        for pname, pdef in effect_cls.get_param_defs().items():
+            if pname in seen_rec or pname in record_reserved:
+                continue
+            seen_rec.add(pname)
+
+            kwargs_rec: Dict[str, Any] = {
+                "default": None,
+                "help": argparse.SUPPRESS,
+            }
+
+            if isinstance(pdef.default, int):
+                kwargs_rec["type"] = int
+            elif isinstance(pdef.default, float):
+                kwargs_rec["type"] = float
+            elif isinstance(pdef.default, str):
+                kwargs_rec["type"] = str
+
+            if pdef.choices:
+                kwargs_rec["choices"] = pdef.choices
+
+            p_record.add_argument(
+                f"--{pname.replace('_', '-')}",
+                dest=pname,
+                **kwargs_rec,
+            )
+
     return parser
 
 
@@ -1115,13 +1555,13 @@ def main() -> None:
     """
     global _quiet
 
-    # --- Intercept "play <effect> --help" before argparse consumes -h ---------
-    # sys.argv[1] == "play", sys.argv[2] is a non-flag token (the effect name),
-    # and -h or --help appears anywhere in the remaining arguments.
+    # --- Intercept "play/record <effect> --help" before argparse consumes -h --
+    # sys.argv[1] is "play" or "record", sys.argv[2] is a non-flag token
+    # (the effect name), and -h or --help appears anywhere after.
     argv = sys.argv[1:]
     if (
         len(argv) >= 2
-        and argv[0] == "play"
+        and argv[0] in ("play", "record")
         and not argv[1].startswith("-")
         and ("-h" in argv or "--help" in argv)
     ):
@@ -1147,6 +1587,7 @@ def main() -> None:
         "identify": cmd_identify,
         "monitor": cmd_monitor,
         "play": cmd_play,
+        "record": cmd_record,
     }
 
     handler: Optional[Callable[[argparse.Namespace], None]] = commands.get(
