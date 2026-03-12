@@ -379,6 +379,7 @@ python3 glowup.py record <effect> [--duration N] [--format gif|mp4|webm] [--outp
 | `--author`     | *(none)* | Author name for the metadata sidecar                 |
 | `--title`      | *(none)* | Title / description for the metadata sidecar         |
 | `--media-url`  | *(auto)* | Relative URL for gallery use (defaults to filename)  |
+| `--realtime`   | off      | Sleep between frames so wall-clock effects (e.g. binclock) animate correctly. Recording takes real time. |
 
 **Seamless looping** — If no `--duration` is specified and the effect has
 a known period (e.g. `speed = 3.0` seconds), exactly one cycle is recorded
