@@ -802,3 +802,45 @@ python3 glowup.py play sonar --ip <device-ip> --zpb 3 --speed 16 --decay 0.5 --p
 python3 glowup.py play sonar --ip <device-ip> --zpb 3 --obstacle_speed 0
 ```
 
+---
+
+### sine
+
+**Traveling ease wave** — bright humps roll smoothly along the strip using
+cubic ease-in-ease-out interpolation (smoothstep: 3x² − 2x³).  The positive
+half of a traveling sine wave is remapped through smoothstep for silky-smooth
+brightness transitions; the negative half holds at a configurable floor
+brightness to avoid LIFX hardware flicker near true black.
+
+An optional second hue creates a color gradient along the wave crest,
+blended via CIELAB interpolation.
+
+| Parameter        | Default | Range       | Description                                    |
+|------------------|---------|-------------|------------------------------------------------|
+| `speed`          | 4.0     | 0.3–30.0   | Seconds per full wave cycle (travel speed)     |
+| `wavelength`     | 0.5     | 0.1–5.0    | Wavelength as fraction of strip (0.5 = two humps) |
+| `hue`            | 200.0   | 0.0–360.0  | Wave color hue in degrees                      |
+| `saturation`     | 100     | 0–100      | Wave color saturation percent                  |
+| `brightness`     | 100     | 0–100      | Peak brightness percent                        |
+| `floor`          | 2       | 0–50       | Minimum brightness percent (avoids flicker near black) |
+| `hue2`           | -1.0    | -1.0–360.0 | Second hue for gradient along wave (-1 = disabled) |
+| `kelvin`         | 3500    | 1500–9000  | Color temperature in Kelvin                    |
+| `reverse`        | 0       | 0–1        | Reverse wave direction (0 = left→right)        |
+| `zones_per_bulb` | 1       | 1–16       | Zones per physical bulb (3 for string lights)  |
+
+**Examples:**
+
+```bash
+# Default — teal humps rolling left to right
+python3 glowup.py play sine --ip <device-ip> --zpb 3
+
+# Slow red wave with longer wavelength
+python3 glowup.py play sine --ip <device-ip> --zpb 3 --hue 0 --speed 8 --wavelength 1.0
+
+# Two-color gradient wave (teal to magenta)
+python3 glowup.py play sine --ip <device-ip> --zpb 3 --hue 200 --hue2 300
+
+# Reverse direction, warm white
+python3 glowup.py play sine --ip <device-ip> --zpb 3 --hue 45 --saturation 20 --reverse 1
+```
+

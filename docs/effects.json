@@ -330,6 +330,37 @@
     "command": "python3 glowup.py play rule_trio --zones 108 --zpb 3 --bg 0 --brightness 90 --drift-b 1.31 --drift-c 1.73 --gap-fill 3 --hue-a 0.0 --hue-b 120.0 --hue-c 240.0 --kelvin 3500 --palette fire --rule-a 30 --rule-b 30 --rule-c 30 --sat 80 --speed 1.5"
   },
   {
+    "effect": "sine",
+    "description": "Traveling ease wave \u2014 bright humps roll with smooth cubic transitions",
+    "params": {
+      "brightness": 100,
+      "floor": 2,
+      "hue": 200.0,
+      "hue2": -1.0,
+      "kelvin": 3500,
+      "reverse": 0,
+      "saturation": 100,
+      "speed": 4.0,
+      "wavelength": 0.5,
+      "zones_per_bulb": 3
+    },
+    "zones": 108,
+    "zpb": 3,
+    "duration": 4.0,
+    "looping": true,
+    "fps": 20,
+    "width": 600,
+    "height": 80,
+    "format": "gif",
+    "lerp": "lab",
+    "file": "sine.gif",
+    "created": "2026-03-12",
+    "author": "Perry Kivolowitz",
+    "title": "Sine Wave",
+    "media_url": "assets/previews/sine.gif",
+    "command": "python3 glowup.py play sine --zones 108 --zpb 3 --brightness 100 --floor 2 --hue 200.0 --hue2 -1.0 --kelvin 3500 --reverse 0 --saturation 100 --speed 4.0 --wavelength 0.5"
+  },
+  {
     "effect": "sonar",
     "description": "Sonar pulses reflect off drifting obstacles",
     "params": {
