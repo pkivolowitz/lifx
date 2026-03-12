@@ -955,6 +955,39 @@ class DeviceManager:
         with self._lock:
             return ip in self._overrides
 
+    def is_overridden_or_member(self, device_id: str) -> bool:
+        """Check if a device or any member of its group is overridden.
+
+        For group identifiers (``group:name``), returns ``True`` if the
+        group itself is overridden *or* any of its individual member
+        devices are overridden.  For individual IPs, behaves identically
+        to :meth:`is_overridden`.
+
+        This prevents the scheduler from clobbering an individually
+        targeted device that belongs to a group.  Without this, playing
+        an effect on ``10.0.0.62`` while the scheduler manages
+        ``group:porch`` (which includes ``10.0.0.62``) would be
+        overwritten on the next scheduler poll.
+
+        Args:
+            device_id: Device IP address or group identifier.
+
+        Returns:
+            ``True`` if the device or any of its members has an
+            active override.
+        """
+        with self._lock:
+            if device_id in self._overrides:
+                return True
+            # Check group members if this is a group device.
+            if _is_group_id(device_id):
+                group_name: str = _group_name_from_id(device_id)
+                member_ips: list[str] = self._group_config.get(
+                    group_name, [],
+                )
+                return any(ip in self._overrides for ip in member_ips)
+            return False
+
     def get_override_entry(self, ip: str) -> Optional[str]:
         """Get the schedule entry name that was active when override began.
 
@@ -1433,8 +1466,14 @@ class SchedulerThread(threading.Thread):
                             )
 
                     # Stop previous effect if not overridden.
+                    # Use is_overridden_or_member so that an override
+                    # on an individual member device (e.g. 10.0.0.62)
+                    # prevents the scheduler from clobbering it when
+                    # the group (e.g. group:porch) transitions.
                     if prev_name is not None:
-                        if not self._dm.is_overridden(device_id):
+                        if not self._dm.is_overridden_or_member(
+                            device_id,
+                        ):
                             logging.info(
                                 "[%s] Stopping '%s'",
                                 group_name, prev_name,
@@ -1449,7 +1488,9 @@ class SchedulerThread(threading.Thread):
 
                     # Start new effect if not overridden.
                     if active is not None:
-                        if not self._dm.is_overridden(device_id):
+                        if not self._dm.is_overridden_or_member(
+                            device_id,
+                        ):
                             effect: str = active["effect"]
                             params: dict[str, Any] = active.get(
                                 "params", {},
@@ -1476,8 +1517,9 @@ class SchedulerThread(threading.Thread):
 
                 elif active is not None:
                     # Same entry still active — ensure running
-                    # (restart if crashed).
-                    if self._dm.is_overridden(device_id):
+                    # (restart if crashed).  Check members too so
+                    # an individual device override isn't clobbered.
+                    if self._dm.is_overridden_or_member(device_id):
                         continue
                     ctrl: Optional[Controller] = (
                         self._dm.get_or_create_controller(device_id)
