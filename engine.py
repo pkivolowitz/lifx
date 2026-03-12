@@ -28,8 +28,9 @@ Typical usage::
 
 from __future__ import annotations
 
-__version__ = "1.5"
+__version__ = "1.6"
 
+import queue
 import threading
 import time
 from typing import Any, Callable, Optional
@@ -56,6 +57,18 @@ MIN_FADE_MS: int = 0
 # Sentinel zone index for single-bulb devices in VirtualMultizoneDevice.
 # Distinguishes single bulbs (set_color) from multizone zones (batched set_zones).
 SINGLE_BULB_ZONE_SENTINEL: int = -1
+
+# Pipeline buffer capacity (high water mark).
+# At 20 FPS this is 500 ms of lookahead — enough to absorb OS scheduling
+# jitter and render-time variance without adding perceptible latency
+# to parameter changes.  The render thread pauses when the buffer is full.
+PIPELINE_HIGH_WATER: int = 10
+
+# Pipeline low water mark.  The render thread is woken when the buffer
+# drains to this level, ensuring it stays ahead of the send thread.
+# Set to half the high water mark so the render thread re-fills in bursts
+# rather than waking on every consumed frame.
+PIPELINE_LOW_WATER: int = 5
 
 
 class VirtualMultizoneDevice:
@@ -304,7 +317,8 @@ class Engine:
         self.fps: int = fps
         self.effect: Optional[Effect] = None
         self.running: bool = False
-        self._thread: Optional[threading.Thread] = None
+        self._send_thread: Optional[threading.Thread] = None
+        self._render_thread_handle: Optional[threading.Thread] = None
         self._lock: threading.Lock = threading.Lock()
         self._stop_event: threading.Event = threading.Event()
         self._effect_start_time: float = 0.0
@@ -312,6 +326,19 @@ class Engine:
         # Last rendered frame, stored for SSE streaming without UDP queries.
         self._last_frame: Optional[list[tuple[int, int, int, int]]] = None
         self._last_frame_lock: threading.Lock = threading.Lock()
+
+        # --- Frame pipeline ---
+        # Pre-rendered frames flow from the render thread (producer) through
+        # a bounded queue to the send thread (consumer).  This decouples
+        # render jitter from send timing, producing smoother animations.
+        self._pipeline: queue.Queue = queue.Queue(maxsize=PIPELINE_HIGH_WATER)
+        # Condition variable for water-mark signalling.  The render thread
+        # waits when the queue is at high water and is notified when the
+        # send thread drains it to low water.
+        self._water_cond: threading.Condition = threading.Condition()
+        # Generation counter: incremented on each effect swap so the send
+        # thread can discard stale pre-rendered frames from the old effect.
+        self._effect_generation: int = 0
 
     def start(self, effect: Effect) -> None:
         """Start or hot-swap the current effect.
@@ -346,20 +373,35 @@ class Engine:
                 self.effect.on_stop()
             self.effect = effect
             self._effect_start_time = time.time()
+            # Increment generation so the send thread discards stale frames
+            # pre-rendered by the old effect.
+            self._effect_generation += 1
             # Notify the new effect of each device's zone count so it can
             # perform any one-time setup (e.g., pre-allocating buffers).
             for dev in self.devices:
                 if dev.zone_count:
                     effect.on_start(dev.zone_count)
 
+        # Flush any stale pre-rendered frames from the pipeline.
+        self._flush_pipeline()
+
         if not self.running:
             self.running = True
             self._stop_event.clear()
-            self._thread = threading.Thread(
+            # Spawn the render (producer) thread.
+            self._render_thread_handle = threading.Thread(
+                target=self._render_thread,
+                daemon=True,
+                name="glowup-render",
+            )
+            self._render_thread_handle.start()
+            # Spawn the send (consumer) thread.
+            self._send_thread = threading.Thread(
                 target=self._run_loop,
                 daemon=True,
+                name="glowup-send",
             )
-            self._thread.start()
+            self._send_thread.start()
 
     def stop(self, fade_ms: int = DEFAULT_FADE_MS) -> None:
         """Stop the animation loop and optionally fade to black.
@@ -376,12 +418,18 @@ class Engine:
                 f"fade_ms must be >= {MIN_FADE_MS}, got {fade_ms}."
             )
 
-        # Signal the render thread to exit and wait for it.
+        # Signal both threads to exit and wait for them.
         self.running = False
         self._stop_event.set()
-        if self._thread is not None:
-            self._thread.join(timeout=THREAD_JOIN_TIMEOUT)
-            self._thread = None
+        # Wake the render thread if it's blocked on the water-mark condition.
+        with self._water_cond:
+            self._water_cond.notify_all()
+        if self._render_thread_handle is not None:
+            self._render_thread_handle.join(timeout=THREAD_JOIN_TIMEOUT)
+            self._render_thread_handle = None
+        if self._send_thread is not None:
+            self._send_thread.join(timeout=THREAD_JOIN_TIMEOUT)
+            self._send_thread = None
 
         # Clean up the active effect under the lock.
         with self._lock:
@@ -404,13 +452,82 @@ class Engine:
                         dev.set_color(0, 0, 0, KELVIN_DEFAULT,
                                       duration_ms=fade_ms)
 
-    def _run_loop(self) -> None:
-        """Render loop -- runs in a background thread.
+    def _render_thread(self) -> None:
+        """Producer thread — pre-renders frames into the pipeline buffer.
 
-        Paces itself to the target FPS using
-        :meth:`threading.Event.wait` for clean, interruptible sleep
-        (unlike ``time.sleep``, it returns immediately when the stop
-        event is set).
+        Runs ahead of the send thread, filling the bounded queue with
+        ``(frame_dict, generation)`` tuples.  Uses water-mark flow
+        control: pauses when the queue reaches high water, resumes when
+        the send thread drains it to low water.  This lets rendering
+        happen in efficient bursts rather than waking per frame.
+
+        Each frame_dict maps ``id(dev)`` to the rendered color list for
+        that device, so multi-device setups get per-device zone counts
+        handled correctly.
+        """
+        interval: float = 1.0 / self.fps
+
+        while self.running and not self._stop_event.is_set():
+            # --- Water-mark flow control ---
+            # Pause rendering when the pipeline is full.  The send thread
+            # notifies us when it drains to low water.
+            with self._water_cond:
+                while (self._pipeline.qsize() >= PIPELINE_HIGH_WATER
+                       and self.running
+                       and not self._stop_event.is_set()):
+                    self._water_cond.wait(timeout=interval)
+
+            if not self.running or self._stop_event.is_set():
+                break
+
+            # Snapshot the current effect under the lock.
+            with self._lock:
+                effect: Optional[Effect] = self.effect
+                start_time: float = self._effect_start_time
+                gen: int = self._effect_generation
+
+            if effect is None:
+                self._stop_event.wait(interval)
+                continue
+
+            # Use wall-clock time.  The pipeline depth is small enough
+            # (500 ms at high water) that the time skew between render
+            # and send is imperceptible, and stochastic effects need
+            # real elapsed time for their random processes.
+            t: float = time.time() - start_time
+
+            # Render for every device.
+            frame: dict[int, list] = {}
+            for dev in self.devices:
+                if dev.zone_count is None:
+                    continue
+                try:
+                    frame[id(dev)] = effect.render(t, dev.zone_count)
+                except Exception:
+                    pass
+
+            if not frame:
+                self._stop_event.wait(interval)
+                continue
+
+            # Push into the pipeline.  Use a short timeout so we can
+            # re-check the stop event if the queue is still full.
+            try:
+                self._pipeline.put((frame, gen), timeout=interval)
+            except queue.Full:
+                pass
+
+    def _run_loop(self) -> None:
+        """Consumer thread — sends pre-rendered frames on a strict clock.
+
+        Pops frames from the pipeline buffer and transmits them to
+        devices at exact frame intervals.  Because rendering happened
+        asynchronously in the producer thread, OS scheduling jitter
+        and render-time variance do not affect send timing.
+
+        If the pipeline is empty (render thread can't keep up), the
+        last sent frame is held — no visual glitch, just a repeated
+        frame.
         """
         # Pre-compute the target interval to avoid division every frame.
         interval: float = 1.0 / self.fps
@@ -419,62 +536,89 @@ class Engine:
         # UDP packet never exposes the committed layer.
         transition_ms: int = int(2000.0 / self.fps)
 
+        last_colors: dict[int, list] = {}
+
         while self.running and not self._stop_event.is_set():
             frame_start: float = time.time()
 
-            # Snapshot the current effect and elapsed time under the lock
-            # so hot-swaps are safe.
-            with self._lock:
-                effect: Optional[Effect] = self.effect
-                t: float = frame_start - self._effect_start_time
+            # Try to pop a pre-rendered frame from the pipeline.
+            frame: Optional[dict[int, list]] = None
+            frame_gen: int = -1
+            try:
+                frame, frame_gen = self._pipeline.get_nowait()
+            except queue.Empty:
+                pass
 
-            if effect is None:
-                # No effect loaded; idle until one arrives or we're stopped.
-                self._stop_event.wait(interval)
-                continue
+            # Signal the render thread when we cross the low water mark.
+            # This lets it re-fill in bursts rather than waking per frame.
+            if self._pipeline.qsize() <= PIPELINE_LOW_WATER:
+                with self._water_cond:
+                    self._water_cond.notify()
 
+            # If the pipeline is empty, hold the last frame.
+            # If the frame is from a stale effect generation (hot-swap
+            # happened), discard it and drain the queue.
+            if frame is not None:
+                with self._lock:
+                    current_gen: int = self._effect_generation
+                if frame_gen == current_gen:
+                    last_colors = frame
+                else:
+                    # Stale frame — drain any remaining stale frames.
+                    self._flush_pipeline()
+                    frame = None
+
+            # Send the frame to all devices.
             colors: list = []
             for dev in self.devices:
                 if dev.zone_count is None:
-                    # Device hasn't been queried yet; skip it.
                     continue
+                dev_colors: Optional[list] = last_colors.get(id(dev))
+                if dev_colors is None:
+                    continue
+                colors = dev_colors
                 try:
-                    colors = effect.render(t, dev.zone_count)
                     if dev.is_multizone:
-                        dev.set_zones(colors, duration_ms=transition_ms,
+                        dev.set_zones(dev_colors, duration_ms=transition_ms,
                                       rapid=True)
                     elif dev.is_polychrome:
-                        # Single color bulb: apply the first rendered color.
-                        h, s, b, k = colors[0]
+                        h, s, b, k = dev_colors[0]
                         dev.set_color(h, s, b, k, duration_ms=0)
                     else:
-                        # Monochrome bulb: BT.709 luma for perceptual brightness.
-                        dev.set_color(*hsbk_to_luminance(*colors[0]),
+                        dev.set_color(*hsbk_to_luminance(*dev_colors[0]),
                                       duration_ms=0)
                 except Exception:
-                    # Don't crash the loop on a single frame error.
-                    # A transient render glitch or network hiccup should not
-                    # bring down the entire animation.
                     pass
 
-            # Store the last rendered frame for SSE streaming.
-            with self._last_frame_lock:
-                self._last_frame = colors
+            # Store the last sent frame for SSE streaming.
+            if colors:
+                with self._last_frame_lock:
+                    self._last_frame = colors
 
-            # Notify the frame callback (e.g., simulator) with the last
-            # rendered color list.  Wrapped in try/except so a callback
-            # failure never crashes the render loop.
-            if self._frame_callback is not None:
-                try:
-                    self._frame_callback(colors)
-                except Exception:
-                    pass
+                # Notify the frame callback (e.g., simulator).
+                if self._frame_callback is not None:
+                    try:
+                        self._frame_callback(colors)
+                    except Exception:
+                        pass
 
             # Frame pacing: sleep only the remaining time in this frame slot.
             elapsed: float = time.time() - frame_start
             sleep_time: float = interval - elapsed
             if sleep_time > 0:
                 self._stop_event.wait(sleep_time)
+
+    def _flush_pipeline(self) -> None:
+        """Drain all frames from the pipeline buffer.
+
+        Called on effect hot-swap to discard stale pre-rendered frames
+        so the new effect's output appears immediately.
+        """
+        while not self._pipeline.empty():
+            try:
+                self._pipeline.get_nowait()
+            except queue.Empty:
+                break
 
 
 class Controller:
