@@ -1473,27 +1473,50 @@ python3 glowup.py play sonar --ip <device-ip> --zpb 3 --obstacle_speed 0
 ### Architecture Overview
 
 ```
-glowup.py            CLI — argparse, dispatches to subcommand handlers
+glowup.py              CLI — argparse, dispatches to subcommand handlers
     │
-    ├── transport.py     LIFX LAN protocol: discovery, LifxDevice, UDP sockets
-    ├── engine.py        Engine (threaded frame loop) + Controller (thread-safe API)
-    ├── simulator.py     Live tkinter preview window (optional, graceful fallback)
-    ├── solar.py         Sunrise/sunset calculator (NOAA algorithm, no dependencies)
-    ├── scheduler.py     Daemon: named device groups, symbolic time scheduling
+    ├── transport.py       LIFX LAN protocol: discovery, LifxDevice, UDP sockets
+    ├── engine.py          Engine (threaded frame loop) + Controller (thread-safe API)
+    ├── simulator.py       Live tkinter preview window (optional, graceful fallback)
+    ├── solar.py           Sunrise/sunset calculator (NOAA algorithm, no dependencies)
+    ├── colorspace.py      CIELAB color interpolation and palette utilities
+    ├── lanscan.py         LAN device discovery and product identification
     │
-    ├── test_virtual_multizone.py  Tests for VirtualMultizoneDevice (mock-based)
+    ├── server.py          REST API server, scheduler, device management
+    ├── mqtt_bridge.py     Optional MQTT pub/sub bridge (requires paho-mqtt)
+    │
+    ├── test_config.py     Config validation tests
+    ├── test_effects.py    Effect rendering tests (all effects × multiple zone counts)
+    ├── test_override.py   Phone override and group member logic tests
+    ├── test_schedule.py   Schedule parsing and entry resolution tests
+    ├── test_solar.py      Solar time calculation tests
+    ├── test_virtual_multizone.py   VirtualMultizoneDevice zone dispatch tests
+    ├── test_multizone_products.py  LIFX product database tests
     │
     └── effects/
-        ├── __init__.py   Effect base class, Param system, auto-registry, utilities
-        ├── cylon.py      Individual effect implementations
-        ├── breathe.py
-        ├── wave.py
-        ├── twinkle.py
-        ├── morse.py
-        ├── aurora.py
-        ├── binclock.py
-        ├── flag.py         Waving flag with Perlin noise perspective projection
-        └── flag_data.py    199-country flag color database
+        ├── __init__.py       Effect base class, Param system, auto-registry, utilities
+        ├── aurora.py         Northern lights color waves
+        ├── binclock.py       Binary clock display
+        ├── breathe.py        Smooth brightness pulsing
+        ├── cylon.py          Bouncing scanner bar (Battlestar Galactica)
+        ├── embers.py         Smoldering fire embers
+        ├── fireworks.py      Rocket launches and starbursts
+        ├── flag.py           Waving flag with Perlin noise perspective projection
+        ├── flag_data.py      199-country flag color database
+        ├── jacobs_ladder.py  Rising electrical arcs
+        ├── morse.py          Morse code message display
+        ├── newtons_cradle.py Pendulum simulation with Phong sphere shading
+        ├── rule30.py         Wolfram elementary 1-D cellular automaton
+        ├── rule_trio.py      Three CAs with CIELAB blending and 50 palettes
+        ├── sonar.py          Radar sweep pulse
+        ├── spin.py           Rotating color segments
+        ├── twinkle.py        Random sparkle points
+        ├── wave.py           Traveling color wave
+        │
+        ├── bloom.py          [hidden] Concentric zone bloom/pulse diagnostic
+        ├── crossfade.py      [hidden] Two-color zone-lagged crossfade diagnostic
+        ├── polychrome_test.py [hidden] Polychrome vs mono rendering test
+        └── zone_map.py       [hidden] Zone index identification diagnostic
 ```
 
 **Key design principle:** Effects are pure renderers. They receive elapsed
@@ -1508,12 +1531,18 @@ the network, device objects, or anything outside their render function.
 4. Implement `render(self, t: float, zone_count: int) -> list[HSBK]`.
 5. That's it — the effect auto-registers and appears in the CLI.
 
-> **Hidden effects:** Effects whose name starts with `_` (e.g.,
-> `_polychrome_test`, `_zone_map`, `_crossfade`, `_bloom`) are hidden from the
-> iOS app by default.  Users can reveal them with the "Show Hidden"
+> **Hidden effects:** Effects whose name starts with `_` are hidden from
+> the iOS app by default.  Users can reveal them with the "Show Hidden"
 > toggle on the effect list screen.  Use this convention for diagnostic
 > and test effects that would otherwise clutter the list.  Hidden
 > effects are experimental and may be removed at any time.
+>
+> | Effect | Purpose |
+> |--------|---------|
+> | `_bloom` | Concentric zone pulse — tests per-zone brightness weighting on polychrome bulbs |
+> | `_crossfade` | Two-color crossfade with zone lag — validates smooth HSBK interpolation |
+> | `_polychrome_test` | Renders differently on color vs mono bulbs — verifies BT.709 luma path |
+> | `_zone_map` | Lights one zone at a time in sequence — identifies physical zone indices |
 
 No imports in `__init__.py` are needed. The framework auto-discovers all
 `.py` files in the `effects/` directory via `pkgutil.iter_modules` and
@@ -2180,34 +2209,68 @@ dev.close()
 
 ## Testing
 
-### VirtualMultizoneDevice Tests
+GlowUp includes a comprehensive test suite that validates the core engine
+without requiring physical LIFX hardware or network access.  All tests
+use mock objects, temporary files, or pure math — no sockets are opened.
 
-The file `test_virtual_multizone.py` contains mock-based tests that verify
-the `VirtualMultizoneDevice` zone mapping and dispatch logic without
-requiring physical LIFX hardware.
+### Running the Full Suite
 
 ```bash
-python3 test_virtual_multizone.py
+# Run every test file at once (stop on first failure):
+for f in test_*.py; do python3 -m unittest "$f" || exit 1; done
+
+# Or run a specific module:
+python3 -m unittest test_effects -v
 ```
 
-**What it tests:**
+### Test Modules
 
-| Test | Description |
-|------|-------------|
-| Zone map expansion | A 6-zone multizone + color bulb + mono bulb = 8 virtual zones |
-| set_zones dispatch | Multizone gets 1 batched `set_zones()`, color bulb gets `set_color()`, mono gets BT.709 luma |
-| set_color broadcast | Fade-to-black `set_color()` reaches all devices |
-| set_power broadcast | `set_power()` reaches all devices |
-| Two multizone devices | Two strips (4+3) batch independently into separate `set_zones()` calls |
-| All singles regression | Pure single-bulb group still works (original use case) |
+| Module | Tests | What it covers |
+|--------|------:|----------------|
+| `test_effects.py` | 73 | Every registered effect × {1, 3, 36, 108} zones — frame length, HSBK range (0–65535 for H/S/B, 1500–9000 K), 50-frame stability for stateful effects, registry sanity |
+| `test_schedule.py` | 28 | `_parse_time_spec` (fixed times, symbolic solar times, offsets), `_validate_days`, `_days_display`, `_resolve_entries` (overnight wraparound, group filtering), `_find_active_entry` |
+| `test_config.py` | 22 | `_load_config` validation: auth tokens (missing, default, empty, non-string), ports (zero, negative, >65535, string), groups (missing, empty), schedule entries (missing fields, unknown groups, invalid days), MQTT section (bad port, empty prefix, negative interval), file errors |
+| `test_override.py` | 18 | DeviceManager override logic: basic set/clear, group-level overrides, individual member overrides within groups (`is_overridden_or_member`), override entry tracking, clear-and-resume |
+| `test_solar.py` | 12 | `sun_times()` for Mobile AL, NYC, Tromso (polar night + midnight sun), Quito (equator): event ordering, day length, timezone awareness, noon always present, latitude validation |
+| `test_virtual_multizone.py` | 6 | `VirtualMultizoneDevice` zone mapping and dispatch: multizone + color + mono mix, batched `set_zones()`, `set_color` broadcast, two-strip independent batching, all-singles regression |
+| `test_multizone_products.py` | varies | LIFX product database: product IDs, zone counts, multizone detection |
 
-The tests use `MockDevice` objects that record all method calls for
-assertion.  No sockets are opened and no network traffic is generated.
+### VirtualMultizoneDevice Tests (Detail)
 
-To add new tests, follow the same pattern: create `MockDevice` instances
-with the desired `zone_count`, `is_multizone`, and `is_polychrome` values,
-build a `VirtualMultizoneDevice`, call methods, and assert against the
-recorded calls.
+The tests in `test_virtual_multizone.py` use `MockDevice` objects that
+record all method calls for assertion.  To add new tests, follow the same
+pattern: create `MockDevice` instances with the desired `zone_count`,
+`is_multizone`, and `is_polychrome` values, build a
+`VirtualMultizoneDevice`, call methods, and assert against the recorded
+calls.
+
+### Effect Rendering Tests (Detail)
+
+`test_effects.py` dynamically generates a test method for every registered
+effect at four zone counts (1, 3, 36, 108 zones).  Each test calls
+`on_start()` then `render()` at t=0, 1, and 10 seconds, validating:
+
+- Frame length matches the requested zone count
+- Every HSBK tuple has exactly 4 components
+- H, S, B values are in [0, 65535]
+- Kelvin values are in [1500, 9000]
+
+A separate stability test renders 50 consecutive frames at 20 fps for
+every effect to catch late-onset crashes in stateful effects like
+fireworks, rule30, and newtons_cradle.
+
+### Override Tests (Detail)
+
+`test_override.py` covers the group-member override bug fixed in 8a27b45.
+When a user overrides an individual device (e.g., 10.0.0.62) that belongs
+to a group (e.g., group:porch), the scheduler must recognize the conflict
+and skip the group.  The `is_overridden_or_member()` method checks both
+the group ID and every member IP.  Tests verify:
+
+- Overriding one member makes the group check return True
+- Overriding a non-member does not affect the group
+- Clearing the member override restores normal scheduling
+- Both group and member overridden simultaneously works correctly
 
 ---
 
@@ -2348,13 +2411,13 @@ proxies (e.g. Cloudflare Tunnel) during restart.
 Clients should query `GET /api/status` on connect:
 
 ```json
-{"status": "loading", "ready": false, "version": "1.6"}
+{"status": "loading", "ready": false, "version": "1.8"}
 ```
 
 Once device loading completes the response changes to:
 
 ```json
-{"status": "ready", "ready": true, "version": "1.6"}
+{"status": "ready", "ready": true, "version": "1.8"}
 ```
 
 While `ready` is `false`, other endpoints work normally but return empty
@@ -2385,20 +2448,41 @@ used by monitor mode).
 
 ### Phone Override Behavior
 
-When the phone app sends a `play` or `stop` command, the server marks
-the device as "overridden" so the scheduler skips it.  The iOS app
-shows an orange "Schedule paused on this device" banner on the device
-detail screen while an override is active.
+When the phone app (or any external client — REST, MQTT, Home Assistant,
+Shortcuts) sends a `play` or `stop` command, the server marks the device
+as "overridden" so the scheduler skips it.  The iOS app shows an orange
+"Schedule paused on this device" banner on the device detail screen
+while an override is active.
+
+**Override lifecycle:**
+
+```
+  ┌─────────────┐   play / stop    ┌────────────────┐
+  │  Scheduled   │ ──────────────► │   Overridden    │
+  │  (normal)    │                 │ (scheduler skip)│
+  └─────────────┘                 └────────────────┘
+        ▲                                │
+        │      resume / schedule         │
+        │         transition             │
+        └────────────────────────────────┘
+```
 
 Overrides are cleared in two ways:
 
 - **Manual resume:** Tap "Resume Schedule" in the app (calls
-  `POST /api/devices/{ip}/resume`).  The scheduler picks up on its
-  next poll cycle.
+  `POST /api/devices/{ip}/resume`), or publish to the MQTT resume
+  topic.  The scheduler picks up on its next poll cycle (every 30 s).
 - **Schedule transition:** When the active schedule entry changes
   (e.g., from "evening" to "night"), overrides that were set against
   the outgoing entry are cleared automatically.  Overrides set after
   a server restart or against a different entry are preserved.
+
+**Virtual multizone groups:** When multiple devices are stitched into a
+virtual multizone group (e.g., `group:porch` contains 10.0.0.62 and
+10.0.0.23), the scheduler checks both the group ID *and* every member
+IP for overrides.  This means overriding a single member device via the
+app correctly pauses the entire group's schedule — the scheduler will
+not overwrite a manually controlled device.
 
 The `GET /api/devices/{ip}/status` and `GET /api/devices` responses
 include an `"overridden"` boolean field so the app can display the
@@ -2543,7 +2627,7 @@ headlessly using the `record` subcommand — no physical hardware needed.
 
 Gallery features:
 
-- Animated GIF previews of 14+ effects
+- Animated GIF previews of all 16 public effects
 - Effect descriptions and full parameter tables
 - Click-to-copy CLI command to reproduce any effect on your own hardware
 - Seamless loop badge for periodic effects
