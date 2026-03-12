@@ -16,7 +16,6 @@ Typical usage::
 
 __version__ = "1.3"
 
-import fcntl
 import math
 import random
 import re
@@ -190,10 +189,15 @@ IOCTL_STRUCT_SIZE: int = 256
 def _get_broadcast_address() -> str:
     """Detect the subnet broadcast address from the default network interface.
 
-    Works on both macOS and Linux.  On macOS, parses ``ifconfig`` output
-    for the broadcast address.  On Linux, uses ioctl to read the IP and
-    netmask from the interface that holds the default route, then computes
-    the broadcast address as ``IP | ~netmask``.
+    Works on macOS and Linux.  On macOS, parses ``ifconfig`` output for
+    the broadcast address.  On Linux, uses ``fcntl``/ioctl to read the IP
+    and netmask from the default-route interface, then computes the
+    broadcast address as ``IP | ~netmask``.
+
+    On Windows and other platforms, broadcast detection is not available.
+    The function returns the global fallback ``"255.255.255.255"`` and
+    logs a warning.  Use ``--ip`` to address devices directly on these
+    platforms.
 
     Returns:
         A dotted-quad broadcast address string (e.g. ``"10.0.3.255"``
@@ -234,8 +238,9 @@ def _get_broadcast_address() -> str:
 
             return FALLBACK_BROADCAST
 
-        else:
+        elif platform.system() == "Linux":
             # Linux: use ioctl to compute broadcast from IP and netmask.
+            import fcntl
             route_out = subprocess.check_output(
                 ["ip", "route", "show", "default"],
                 stderr=subprocess.DEVNULL,
@@ -266,6 +271,19 @@ def _get_broadcast_address() -> str:
             mask_int: int = struct.unpack("!I", mask_bytes)[0]
             bcast_int: int = ip_int | (~mask_int & 0xFFFFFFFF)
             return socket.inet_ntoa(struct.pack("!I", bcast_int))
+
+        else:
+            # Windows or other unsupported platform — broadcast detection
+            # is not available.  Discovery will use the global fallback
+            # (255.255.255.255) which may work on simple networks.  For
+            # reliable operation, use --ip to address devices directly.
+            import logging
+            logging.getLogger(__name__).warning(
+                "Broadcast auto-detection is not supported on %s. "
+                "Use --ip to address devices directly.",
+                platform.system(),
+            )
+            return FALLBACK_BROADCAST
 
     except (subprocess.SubprocessError, OSError, ValueError, IndexError):
         return FALLBACK_BROADCAST

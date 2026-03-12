@@ -119,7 +119,7 @@ colors. The engine handles framing, timing, and transport.
 |----------|--------|-------|
 | **macOS** | Fully supported | Primary development platform. Broadcast auto-detection via `ifconfig`, simulator window focus via `osascript`. |
 | **Linux (Raspberry Pi, Ubuntu, etc.)** | Fully supported | Broadcast auto-detection via `ioctl`. Recommended deployment target. |
-| **Windows** | Not supported | The transport layer uses `fcntl` and Unix ioctl for broadcast address detection. These have no Windows equivalent without third-party packages. |
+| **Windows** | Degraded | Broadcast discovery is unavailable — use `--ip` to address devices directly. Effects, simulator, and server all work. See [Windows notes](#windows) below. |
 
 ### Platform-Specific Setup
 
@@ -147,6 +147,35 @@ sudo apt install python3 python3-tk
 On Raspberry Pi OS (Bookworm), Python 3.11+ is included by default.
 Install tkinter only if you plan to use the simulator on a desktop —
 headless Pi deployments (server, scheduler) do not need it.
+
+#### Windows
+
+GlowUp runs on Windows with one limitation: the `discover` command
+cannot auto-detect your subnet's broadcast address (this requires
+Unix-specific `fcntl`/ioctl calls).  Everything else works — effects,
+the simulator, and the server.
+
+Install Python 3.10+ from [python.org](https://www.python.org/downloads/)
+(tkinter is included by default on Windows).
+
+To work around the discovery limitation, find your device IPs using the
+official LIFX app or your router's DHCP lease table, then address
+devices directly:
+
+```bash
+# Play an effect by IP (no broadcast discovery needed)
+python glowup.py play aurora --ip 10.0.0.62
+
+# Simulator-only mode works with no devices at all
+python glowup.py play aurora --ip 10.0.0.62 --sim-only
+
+# Server mode — list device IPs in server.json
+python server.py server.json
+```
+
+> **Note:** `discover` may still work on simple single-subnet networks
+> because the fallback broadcast address `255.255.255.255` is used
+> automatically.  Results vary by network configuration.
 
 ## Quick Start
 

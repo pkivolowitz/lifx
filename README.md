@@ -164,7 +164,7 @@ control.
 
 ## Requirements
 
-- Python 3.10+ (macOS or Linux — Windows is not supported)
+- Python 3.10+ (macOS, Linux, or Windows — Windows has degraded discovery; use `--ip`)
 - No external dependencies (stdlib only)
 - One or more LIFX devices on the same LAN subnet (multizone, single color, or monochrome)
 - **Linux only:** `sudo apt install python3-tk` if using the `--sim` live preview
