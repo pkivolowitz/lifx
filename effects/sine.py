@@ -1,19 +1,20 @@
-"""Traveling sine wave effect — a colored sine wave rolls along the strip.
+"""Traveling ease wave effect — bright humps roll along the strip.
 
-A single sine wave travels smoothly from one end to the other.  The positive
-half-cycle displays a user-chosen color with brightness proportional to the
-sine value.  The negative half-cycle maps to black (off), creating distinct
-bright humps separated by dark gaps that roll continuously.
+A wave travels smoothly from one end to the other using cubic
+ease-in-ease-out interpolation.  Each zone's normalized phase
+(0 to 1) is mapped through the smoothstep function
 
-displacement(x, t) = sin(2π * (x / wavelength - t / speed))
-    if displacement > 0: brightness = displacement * max_brightness
-    if displacement ≤ 0: brightness = 0 (black)
+    f(x) = 3x² − 2x³
+
+which has zero derivative at both endpoints — brightness ramps
+up gently from black, peaks, and ramps back down without any
+perceptible flicker or quiver at the transitions.
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.2"
 
 import math
 import os
@@ -38,21 +39,38 @@ TWO_PI: float = 2.0 * math.pi
 # Default zones per bulb for polychrome-aware rendering.
 DEFAULT_ZPB: int = 1
 
-# Black — used for the negative half of the sine wave.
+# Black — used for the off portion of the wave.
 BLACK: HSBK = (0, 0, 0, KELVIN_DEFAULT)
 
 
-class Sine(Effect):
-    """Traveling sine wave — bright humps roll along the strip.
+def _smoothstep(x: float) -> float:
+    """Cubic ease-in-ease-out: 3x² − 2x³.
 
-    The sine function's positive half maps to a colored hump whose
-    brightness follows the curve.  The negative half is black,
-    producing dark gaps between the humps.  The wave scrolls
-    continuously at a configurable speed.
+    Input and output are both in [0, 1].  First and second
+    derivatives are zero at x=0 and x=1, producing silky-smooth
+    brightness transitions with no perceptible flicker.
+
+    Args:
+        x: Normalized input, clamped to [0, 1].
+
+    Returns:
+        Eased output in [0, 1].
+    """
+    x = max(0.0, min(1.0, x))
+    return x * x * (3.0 - 2.0 * x)
+
+
+class Sine(Effect):
+    """Traveling ease wave — bright humps roll along the strip.
+
+    Each zone computes a traveling wave phase, then the positive
+    half is remapped through cubic ease-in-ease-out (smoothstep).
+    The negative half is black, creating distinct bright humps
+    separated by dark gaps that scroll continuously.
     """
 
     name: str = "sine"
-    description: str = "Traveling sine wave — bright humps roll along the strip with dark gaps"
+    description: str = "Traveling ease wave — bright humps roll with smooth cubic transitions"
 
     speed = Param(4.0, min=0.3, max=30.0,
                   description="Seconds per full wave cycle (travel speed)")
@@ -74,11 +92,11 @@ class Sine(Effect):
                     description="Reverse wave direction (0 = left-to-right, 1 = right-to-left)")
 
     def render(self, t: float, zone_count: int) -> list[HSBK]:
-        """Produce one frame of the traveling sine wave.
+        """Produce one frame of the traveling ease wave.
 
-        Each zone computes its displacement from a standard traveling
-        wave equation.  Positive displacement becomes brightness;
-        negative displacement becomes black.
+        Each zone computes a traveling-wave phase.  The positive
+        half-cycle is remapped through smoothstep for flicker-free
+        brightness; the negative half-cycle is black.
 
         Args:
             t:          Seconds elapsed since effect started.
@@ -123,12 +141,12 @@ class Sine(Effect):
                 # Negative half-cycle: black.
                 colors.append(BLACK)
             else:
-                # Positive half-cycle: square the displacement so the
-                # derivative is zero at the zero crossing.  This
-                # eliminates visible quivering on the slopes — the
-                # brightness ramps in and out smoothly instead of
-                # jumping between black and dim.
-                bri: int = int(max_bri * displacement * displacement)
+                # Positive half-cycle: remap through cubic ease-in-ease-out.
+                # smoothstep(displacement) has zero derivative at both 0
+                # and 1, so brightness enters and exits black silently
+                # and peaks without overshoot.
+                eased: float = _smoothstep(displacement)
+                bri: int = int(max_bri * eased)
 
                 if use_gradient:
                     # Blend between hue and hue2 based on position along strip.
