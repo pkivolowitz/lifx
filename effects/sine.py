@@ -82,7 +82,7 @@ class Sine(Effect):
                        description="Wave color saturation percent")
     brightness = Param(100, min=0, max=100,
                        description="Peak brightness percent")
-    floor = Param(5, min=0, max=50,
+    floor = Param(2, min=0, max=50,
                   description="Minimum brightness percent (avoids flicker near black)")
     hue2 = Param(-1.0, min=-1.0, max=360.0,
                  description="Optional second hue for gradient along wave (-1 = disabled)")
