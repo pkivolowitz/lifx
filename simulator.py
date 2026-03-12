@@ -526,10 +526,14 @@ def create_simulator(
         is unavailable.
     """
     if not _TK_AVAILABLE:
+        import platform
         import sys
+        if platform.system() == "Linux":
+            hint = "Install with: sudo apt install python3-tk"
+        else:
+            hint = "Install with: brew install tcl-tk python-tk@3.10"
         print(
-            "Note: tkinter not available — simulator disabled.  "
-            "Install with: brew install tcl-tk python-tk@3.10",
+            f"Note: tkinter not available — simulator disabled.  {hint}",
             file=sys.stderr,
         )
         return None
