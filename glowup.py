@@ -1099,9 +1099,12 @@ def cmd_record(args: argparse.Namespace) -> None:
     ]
 
     if fmt == "gif":
-        # Two-pass palette generation for high-quality GIF.
+        # Palette-optimized GIF: split input, generate a global palette
+        # from one copy, apply it to the other.  Must use -filter_complex
+        # (not -vf) because the graph has named streams.
         ffmpeg_cmd.extend([
-            "-vf", "split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+            "-filter_complex",
+            "[0:v]split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
             "-loop", "0",
         ])
     elif fmt == "mp4":
