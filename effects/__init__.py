@@ -221,6 +221,24 @@ class Effect(metaclass=EffectMeta):
                 defs[attr_name] = val
         return defs
 
+    def period(self) -> Optional[float]:
+        """Return the animation period in seconds, or ``None`` if aperiodic.
+
+        When a period is known, recording tools can capture exactly one
+        cycle to produce a seamlessly looping animation.
+
+        The default implementation returns the ``speed`` parameter if the
+        effect declares one (most cyclic effects use *speed* as seconds
+        per full cycle).  Aperiodic effects should override this to
+        return ``None``.
+
+        Returns:
+            Period in seconds, or ``None`` if the effect does not loop.
+        """
+        if hasattr(self, "speed") and "speed" in self._param_defs:
+            return float(self.speed)
+        return None
+
     def on_start(self, zone_count: int) -> None:
         """Called when this effect becomes active.
 

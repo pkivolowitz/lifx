@@ -63,6 +63,10 @@ class Twinkle(Effect):
     kelvin = Param(KELVIN_DEFAULT, min=KELVIN_MIN, max=KELVIN_MAX,
                    description="Color temperature in Kelvin")
 
+    def period(self) -> None:
+        """Twinkle is stochastic — speed is fade duration, not cycle time."""
+        return None
+
     def __init__(self, **overrides: dict) -> None:
         """Initialize sparkle state tracking.
 

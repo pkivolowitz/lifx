@@ -140,6 +140,10 @@ class Sonar(Effect):
     zones_per_bulb = Param(DEFAULT_ZPB, min=1, max=10,
                            description="Zones per physical bulb")
 
+    def period(self) -> None:
+        """Sonar is stochastic — obstacle drift and pulse timing are random."""
+        return None
+
     def __init__(self, **overrides: dict) -> None:
         """Initialize sonar state.
 

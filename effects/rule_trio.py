@@ -387,6 +387,10 @@ class RuleTrio(Effect):
     # Lifecycle
     # ------------------------------------------------------------------
 
+    def period(self) -> None:
+        """Cellular automata are aperiodic — no loopable cycle."""
+        return None
+
     def __init__(self, **overrides: dict) -> None:
         """Initialise effect state.
 

@@ -133,6 +133,10 @@ class Embers(Effect):
     kelvin = Param(KELVIN_DEFAULT, min=KELVIN_MIN, max=KELVIN_MAX,
                    description="Color temperature in Kelvin")
 
+    def period(self) -> None:
+        """Embers are stochastic — random heat injection has no cycle."""
+        return None
+
     def __init__(self, **overrides: dict) -> None:
         """Initialise the embers effect with an empty heat buffer."""
         super().__init__(**overrides)

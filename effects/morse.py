@@ -140,6 +140,12 @@ class Morse(Effect):
         self._total_units: Optional[int] = None
         self._cached_message: Optional[str] = None
 
+    def period(self) -> float:
+        """One full message cycle: Morse pattern duration + pause."""
+        if self._timeline is None:
+            self._build_timeline()
+        return self._total_units * self.unit + self.pause
+
     def _build_timeline(self) -> None:
         """Parse the current message into a Morse timeline.
 

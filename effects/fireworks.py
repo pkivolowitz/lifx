@@ -194,6 +194,10 @@ class Fireworks(Effect):
         self._next_z_order: int = 0
         self._last_t: Optional[float] = None
 
+    def period(self) -> None:
+        """Fireworks launches are random — no loopable cycle."""
+        return None
+
     def on_start(self, zone_count: int) -> None:
         """Reset all rocket state when the effect becomes active.
 
