@@ -123,8 +123,12 @@ class Sine(Effect):
                 # Negative half-cycle: black.
                 colors.append(BLACK)
             else:
-                # Positive half-cycle: brightness follows the sine curve.
-                bri: int = int(max_bri * displacement)
+                # Positive half-cycle: square the displacement so the
+                # derivative is zero at the zero crossing.  This
+                # eliminates visible quivering on the slopes — the
+                # brightness ramps in and out smoothly instead of
+                # jumping between black and dim.
+                bri: int = int(max_bri * displacement * displacement)
 
                 if use_gradient:
                     # Blend between hue and hue2 based on position along strip.
