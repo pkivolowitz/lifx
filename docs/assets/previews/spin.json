@@ -1,0 +1,26 @@
+{
+  "effect": "spin",
+  "description": "Migrate colors through the concentric rings of each bulb",
+  "params": {
+    "brightness": 100,
+    "bulb_offset": 30.0,
+    "kelvin": 3500,
+    "palette": "custom",
+    "speed": 2.0,
+    "zones_per_bulb": 3
+  },
+  "zones": 108,
+  "zpb": 3,
+  "duration": 2.0,
+  "looping": true,
+  "fps": 20,
+  "width": 600,
+  "height": 80,
+  "format": "gif",
+  "lerp": "lab",
+  "file": "spin.gif",
+  "created": "2026-03-11",
+  "title": "Spin",
+  "media_url": "assets/previews/spin.gif",
+  "command": "python3 glowup.py play spin --zones 108 --zpb 3 --brightness 100 --bulb-offset 30.0 --kelvin 3500 --palette custom --speed 2.0"
+}
