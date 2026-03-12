@@ -14,7 +14,7 @@
   "zpb": 3,
   "duration": 10.0,
   "looping": false,
-  "fps": 20,
+  "fps": 4,
   "width": 600,
   "height": 80,
   "format": "gif",

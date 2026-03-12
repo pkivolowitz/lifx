@@ -1126,12 +1126,19 @@ def cmd_record(args: argparse.Namespace) -> None:
     proc = sp.Popen(ffmpeg_cmd, stdin=sp.PIPE, stdout=sp.DEVNULL,
                     stderr=sp.PIPE)
 
+    realtime: bool = getattr(args, "realtime", False)
+
     try:
         for frame_idx in range(total_frames):
             t: float = frame_idx * dt
             colors = effect.render(t, zones)
             pixels: bytes = _render_frame_pixels(colors, zpb, width, height)
             proc.stdin.write(pixels)
+
+            # In realtime mode, sleep between frames so wall-clock-
+            # dependent effects (e.g. binclock) advance naturally.
+            if realtime:
+                time.sleep(dt)
 
             # Progress indicator every 20%.
             if total_frames >= 10 and frame_idx % (total_frames // 5) == 0:
@@ -1500,6 +1507,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--media-url", dest="media_url", type=str, default=None,
         help="Relative URL path for gallery use (e.g. assets/previews/aurora.gif). "
              "Defaults to the output filename.",
+    )
+    p_record.add_argument(
+        "--realtime", action="store_true", default=False,
+        help="Sleep between frames so wall-clock-dependent effects "
+             "(e.g. binclock) animate correctly. Recording takes real time.",
     )
 
     # Add effect params to record subcommand (same pattern as play).
