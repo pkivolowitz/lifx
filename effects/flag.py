@@ -447,7 +447,7 @@ class Flag(Effect):
         for i in range(SAMPLE_COUNT):
             # Map normalized screen position to zone index.
             zi: int = int(normalized[i] * last_zone + 0.5)
-            zi = max(0, min(zi, last_zone))
+            zi = max(0, min(zi, zone_count - 1))
 
             # Z-buffer test: closer samples overwrite farther ones.
             if z_depth[i] < zone_z[zi]:
