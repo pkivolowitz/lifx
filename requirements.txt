@@ -1,8 +1,7 @@
 # GlowUp — LIFX Effect Engine
 #
-# No third-party pip dependencies. The entire stack uses only the Python
-# standard library. This file exists for conventional completeness and
-# to confirm that "pip install -r requirements.txt" is a no-op.
+# The core engine uses only the Python standard library. The single
+# optional dependency below is needed only for MQTT integration.
 #
 # External (non-Python) dependencies:
 #
@@ -17,3 +16,7 @@
 # system package (not pip-installable):
 #
 #   sudo apt install python3-tk
+
+# Optional: MQTT integration (server.py only — not needed for CLI usage).
+# Uncomment the line below if you want MQTT support.
+# paho-mqtt>=2.0

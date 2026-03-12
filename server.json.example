@@ -25,6 +25,18 @@
         ]
     },
 
+    "mqtt": {
+        "_comment": "Optional — remove this section to disable MQTT. Requires: pip install paho-mqtt",
+        "broker": "localhost",
+        "port": 1883,
+        "topic_prefix": "glowup",
+        "username": null,
+        "password": null,
+        "tls": false,
+        "publish_colors": false,
+        "color_interval": 1.0
+    },
+
     "schedule": [
         {
             "name": "porch evening aurora",

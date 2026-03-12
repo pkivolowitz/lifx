@@ -76,6 +76,7 @@ from typing import Any, Callable, Optional
 
 from effects import get_registry, create_effect, HSBK_MAX, KELVIN_DEFAULT
 from engine import Controller, VirtualMultizoneDevice
+from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
 from solar import SunTimes, sun_times
 from transport import LifxDevice
 
@@ -2474,6 +2475,26 @@ def _load_config(config_path: str) -> dict[str, Any]:
                     f"'{days}' — use letters from MTWRFSU (no repeats)"
                 )
 
+    # Validate optional MQTT section.
+    if "mqtt" in config:
+        mqtt_cfg: Any = config["mqtt"]
+        if not isinstance(mqtt_cfg, dict):
+            raise ValueError("'mqtt' must be a JSON object")
+        mqtt_port: Any = mqtt_cfg.get("port", 1883)
+        if not isinstance(mqtt_port, int) or mqtt_port < 1 or mqtt_port > 65535:
+            raise ValueError(
+                f"mqtt 'port' must be 1-65535, got {mqtt_port!r}"
+            )
+        mqtt_prefix: Any = mqtt_cfg.get("topic_prefix", "glowup")
+        if not isinstance(mqtt_prefix, str) or not mqtt_prefix:
+            raise ValueError("mqtt 'topic_prefix' must be a non-empty string")
+        color_interval: Any = mqtt_cfg.get("color_interval", 1.0)
+        if not isinstance(color_interval, (int, float)) or color_interval <= 0:
+            raise ValueError(
+                f"mqtt 'color_interval' must be a positive number, "
+                f"got {color_interval!r}"
+            )
+
     return config
 
 
@@ -2745,19 +2766,36 @@ def main() -> None:
     # -- Background device loading -------------------------------------------
     # Load devices in a daemon thread so the HTTP server is already
     # accepting connections while we query each device.
+    # MQTT bridge reference — set by _background_startup if configured.
+    mqtt_bridge: Optional[MqttBridge] = None
+
     def _background_startup() -> None:
         """Load devices from config IPs, then start the scheduler."""
+        nonlocal mqtt_bridge
+
         logging.info("Loading %d device(s) from config...", len(device_ips))
         devices: list[dict[str, Any]] = dm.load_devices()
         logging.info("Loaded %d device(s)", len(devices))
 
         # Start the scheduler now that devices are available.
+        sched: Optional[SchedulerThread] = None
         if config.get("schedule"):
-            scheduler: SchedulerThread = SchedulerThread(config, dm)
-            GlowUpRequestHandler.scheduler = scheduler
-            scheduler.start()
+            sched = SchedulerThread(config, dm)
+            GlowUpRequestHandler.scheduler = sched
+            sched.start()
         else:
             logging.info("No schedule configured — API-only mode")
+
+        # Start the MQTT bridge if configured.
+        if config.get("mqtt"):
+            if not _MQTT_AVAILABLE:
+                logging.error(
+                    "MQTT section found in config but paho-mqtt is not "
+                    "installed.  Install with: pip install paho-mqtt"
+                )
+            else:
+                mqtt_bridge = MqttBridge(dm, config, scheduler=sched)
+                mqtt_bridge.start()
 
     startup_thread: threading.Thread = threading.Thread(
         target=_background_startup, daemon=True, name="startup-loader",
@@ -2768,6 +2806,8 @@ def main() -> None:
         server.serve_forever()
     finally:
         logging.info("Shutting down...")
+        if mqtt_bridge is not None:
+            mqtt_bridge.stop()
         scheduler: Optional[SchedulerThread] = GlowUpRequestHandler.scheduler
         if scheduler is not None:
             scheduler.stop()
