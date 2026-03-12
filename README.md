@@ -55,6 +55,10 @@ python3 glowup.py play fireworks --ip <device-ip> # string lights only
 # Virtual multizone — animate across a group of devices
 python3 glowup.py play cylon --config schedule.json --group office
 
+# Record an effect to GIF (no device needed)
+python3 glowup.py record aurora --duration 8      # renders to aurora.gif
+python3 glowup.py record cylon                    # auto-loops one cycle
+
 # Layered help — three levels
 python3 glowup.py --help                          # top-level commands
 python3 glowup.py play --help                     # play options only
@@ -71,12 +75,19 @@ you. Please report problems but remember, I do not own the other types. I'll do
 my best. Most of all, I would appreciate you fixing errors for the other LIFX
 products if you are willing and able. Thank you.
 
+## Effect Gallery
+
+See animated previews of every effect: **[Effect Gallery](https://pkivolowitz.github.io/lifx/)**
+
+Each preview includes a click-to-copy CLI command to reproduce it on your own hardware.
+
 ## Documentation
 
 See the **[User Manual](MANUAL.md)** for:
-- Full CLI reference (discover, effects, identify, play)
+- Full CLI reference (discover, effects, identify, play, record)
 - Layered help system (`--help` at top-level, play, and per-effect)
 - All effects with parameter tables
+- Recording effects to GIF/MP4/WebM (`record` subcommand)
 - Virtual multizone setup and configuration
 - Effect developer guide (how to build your own)
 - Live simulator (`--sim` and `--sim-only` preview modes)
@@ -129,7 +140,7 @@ control.
 | `colorspace.py` | CIELAB/HSB color interpolation with runtime method dispatch |
 | `effects/*.py` | Pure renderers — no I/O, no device knowledge |
 | `effects/flag_data.py` | 199-country flag color database |
-| `glowup.py` | CLI entry point (discover, effects, identify, play) |
+| `glowup.py` | CLI entry point (discover, effects, identify, play, record) |
 | `simulator.py` | Live tkinter preview window (`--sim`, `--sim-only`), optional graceful fallback |
 | `solar.py` | Sunrise/sunset calculator (NOAA algorithm, no dependencies) |
 | `server.py` | REST API daemon with built-in scheduler — recommended deployment |
@@ -165,9 +176,10 @@ control.
 ## Requirements
 
 - Python 3.10+ (macOS, Linux, or Windows — Windows is untested with degraded discovery; use `--ip`)
-- No external dependencies (stdlib only)
+- No external Python packages (stdlib only)
 - One or more LIFX devices on the same LAN subnet (multizone, single color, or monochrome)
 - **Linux only:** `sudo apt install python3-tk` if using the `--sim` live preview
+- **Optional:** [ffmpeg](https://ffmpeg.org/) for the `record` subcommand (GIF/MP4/WebM rendering)
 - See the [User Manual](MANUAL.md#requirements) for detailed platform setup
 
 ## License

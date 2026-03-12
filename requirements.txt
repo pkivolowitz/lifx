@@ -4,6 +4,15 @@
 # standard library. This file exists for conventional completeness and
 # to confirm that "pip install -r requirements.txt" is a no-op.
 #
+# External (non-Python) dependencies:
+#
+#   ffmpeg — required by the 'record' subcommand for rendering effects
+#            to GIF, MP4, or WebM. Not needed for normal operation.
+#
+#     macOS:  brew install ffmpeg
+#     Linux:  sudo apt install ffmpeg
+#     Windows: download from https://ffmpeg.org/download.html
+#
 # Linux users who want the --sim live preview need tkinter, which is a
 # system package (not pip-installable):
 #

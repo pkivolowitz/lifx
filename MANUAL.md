@@ -19,6 +19,7 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
    - [effects](#effects)
    - [identify](#identify)
    - [play](#play)
+   - [record](#record)
 5. [Scheduler (Daemon)](#scheduler-daemon)
    - [Configuration File](#configuration-file)
    - [Symbolic Times](#symbolic-times)
@@ -68,8 +69,9 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
     - [Building the App](#building-the-app)
     - [Running on Your iPhone](#running-on-your-iphone)
     - [App Screens](#app-screens)
-13. [Troubleshooting](#troubleshooting)
-14. [Cloudflare Tunnel (Remote Access)](#cloudflare-tunnel-remote-access)
+13. [Effect Gallery](#effect-gallery)
+14. [Troubleshooting](#troubleshooting)
+15. [Cloudflare Tunnel (Remote Access)](#cloudflare-tunnel-remote-access)
 
 ---
 
@@ -111,7 +113,8 @@ colors. The engine handles framing, timing, and transport.
 
 - **Python 3.10+**
 - One or more LIFX devices on the same LAN subnet (multizone, single color, or monochrome)
-- No external dependencies — the entire stack is pure Python stdlib
+- No external Python packages — the entire stack is pure Python stdlib
+- **Optional:** [ffmpeg](https://ffmpeg.org/) for the `record` subcommand (rendering effects to GIF/MP4/WebM)
 
 ### Platform Support
 
@@ -131,6 +134,9 @@ distribution on macOS:
 # Homebrew
 brew install python@3.12
 
+# For the record subcommand (optional)
+brew install ffmpeg
+
 # Or conda
 conda create -n glowup python=3.12
 conda activate glowup
@@ -142,6 +148,9 @@ tkinter (needed only for the `--sim` live preview):
 ```bash
 sudo apt update
 sudo apt install python3 python3-tk
+
+# For the record subcommand (optional)
+sudo apt install ffmpeg
 ```
 
 On Raspberry Pi OS (Bookworm), Python 3.11+ is included by default.
@@ -345,6 +354,72 @@ python3 glowup.py play cylon --ip <device-ip> --sim
 
 On stop (Ctrl+C or closing the simulator window), the device fades to
 black over 500ms.
+
+### record
+
+Render an effect headlessly to GIF, MP4, or WebM via ffmpeg.  No device
+or network connection needed — the effect is rendered at deterministic
+timestamps and piped as raw RGB frames to ffmpeg.
+
+```bash
+python3 glowup.py record <effect> [--duration N] [--format gif|mp4|webm] [--output file] [params...]
+```
+
+| Option         | Default | Description                                           |
+|----------------|---------|-------------------------------------------------------|
+| `--zones`      | 108     | Number of zones to simulate                           |
+| `--zpb`        | 3       | Zones per bulb (groups zones into displayed bulbs)    |
+| `--fps`        | 20      | Frames per second                                     |
+| `--duration`   | *(auto)* | Recording duration in seconds (see below)            |
+| `--width`      | 600     | Output width in pixels                                |
+| `--height`     | 80      | Output height in pixels                               |
+| `--format`     | gif     | Output format: `gif`, `mp4`, or `webm`               |
+| `--output`     | *(auto)* | Output file path (default: `<effect>.<format>`)      |
+| `--lerp`       | lab     | Color interpolation: `lab` or `hsb`                  |
+| `--author`     | *(none)* | Author name for the metadata sidecar                 |
+| `--title`      | *(none)* | Title / description for the metadata sidecar         |
+| `--media-url`  | *(auto)* | Relative URL for gallery use (defaults to filename)  |
+
+**Seamless looping** — If no `--duration` is specified and the effect has
+a known period (e.g. `speed = 3.0` seconds), exactly one cycle is recorded
+so the GIF loops seamlessly.  Aperiodic effects (fireworks, twinkle,
+rule30, etc.) default to 5 seconds.
+
+**JSON metadata sidecar** — Every recording produces a companion `.json`
+file alongside the output containing:
+
+- Effect name, description, and all parameter values
+- Recording dimensions, duration, FPS, format, and looping flag
+- A ready-to-paste CLI command that reproduces the effect on live hardware
+- Optional author, title, and media_url fields for gallery integration
+
+**Examples:**
+
+```bash
+# Record one seamless cycle of cylon (auto-detects 2s period)
+python3 glowup.py record cylon
+
+# 10-second fireworks in MP4 format
+python3 glowup.py record fireworks --duration 10 --format mp4
+
+# Custom parameters — fast red cylon with wide trail
+python3 glowup.py record cylon --speed 1.0 --hue 0 --trail 0.8
+
+# Gallery-ready recording with metadata
+python3 glowup.py record aurora --duration 8 \
+    --output docs/assets/previews/aurora.gif \
+    --media-url assets/previews/aurora.gif \
+    --author "Perry" --title "Aurora Borealis"
+```
+
+The help system works the same as `play`:
+
+```bash
+python3 glowup.py record --help              # record options
+python3 glowup.py record fireworks --help     # effect parameters
+```
+
+**Requires:** [ffmpeg](https://ffmpeg.org/) must be installed and on your PATH.
 
 ---
 
@@ -2450,6 +2525,47 @@ and 10.0.0.62) combined into a single 144-zone animation surface.
 <p align="center">
   <img src="multizone.PNG" alt="Virtual multizone group detail" width="300">
 </p>
+
+---
+
+## Effect Gallery
+
+An online gallery showcasing animated previews of every effect is
+available at the project's GitHub Pages site.  Each preview was rendered
+headlessly using the `record` subcommand — no physical hardware needed.
+
+**View the gallery:** [https://pkivolowitz.github.io/lifx/](https://pkivolowitz.github.io/lifx/)
+
+Gallery features:
+
+- Animated GIF previews of 14+ effects
+- Effect descriptions and full parameter tables
+- Click-to-copy CLI command to reproduce any effect on your own hardware
+- Seamless loop badge for periodic effects
+
+**Adding to the gallery:**
+
+```bash
+# Record an effect preview
+python3 glowup.py record aurora --duration 8 \
+    --output docs/assets/previews/aurora.gif \
+    --media-url assets/previews/aurora.gif \
+    --title "Aurora Borealis" --author "Your Name"
+
+# Rebuild the manifest (combines all JSON sidecars)
+python3 -c "
+import json, glob
+sidecars = sorted(glob.glob('docs/assets/previews/*.json'))
+effects = [json.load(open(p)) for p in sidecars]
+json.dump(effects, open('docs/effects.json', 'w'), indent=2)
+"
+
+# Commit and push — GitHub Pages deploys automatically
+git add docs/ && git commit -m "Add aurora to gallery" && git push
+```
+
+To enable GitHub Pages: repo Settings > Pages > Source: "Deploy from a
+branch" > Branch: `master`, folder: `/docs`.
 
 ---
 
