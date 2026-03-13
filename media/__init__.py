@@ -27,7 +27,7 @@ Public classes:
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import json
 import logging
@@ -126,6 +126,12 @@ class SignalBus:
     signals published by other nodes are received and merged into the
     local dict.  This enables distributed compute without changing any
     effect or engine code.
+
+    Transport routing (v1.1): named :class:`TransportAdapter` instances
+    can be registered via :meth:`add_transport`.  Per-signal routes
+    configured via :meth:`set_route` direct ``write()`` calls to the
+    appropriate transport.  If no route is configured, the legacy MQTT
+    bridge path is used as a fallback.
     """
 
     def __init__(self) -> None:
@@ -136,6 +142,10 @@ class SignalBus:
         self._mqtt_client: Optional[Any] = None
         self._mqtt_connected: bool = False
 
+        # Transport routing (v1.1).
+        self._transports: dict[str, Any] = {}         # name → TransportAdapter
+        self._signal_routes: dict[str, str] = {}       # signal_name → transport_name
+
     # ------------------------------------------------------------------
     # Core read/write
     # ------------------------------------------------------------------
@@ -143,8 +153,9 @@ class SignalBus:
     def write(self, name: str, value: SignalValue) -> None:
         """Atomically update a signal value.
 
-        If MQTT bridge mode is active, the value is also published to
-        the broker for consumption by other nodes.
+        If a transport route is configured for this signal, the value is
+        published via that transport adapter.  Otherwise, falls back to
+        the legacy MQTT bridge if active.
 
         Args:
             name:  Hierarchical signal name (e.g. ``"backyard:audio:bass"``).
@@ -152,7 +163,15 @@ class SignalBus:
         """
         with self._lock:
             self._signals[name] = value
-        # Publish to MQTT (outside lock to avoid blocking).
+        # Check transport routing (v1.1) first.
+        transport_name: Optional[str] = self._signal_routes.get(name)
+        if transport_name and transport_name in self._transports:
+            try:
+                self._transports[transport_name].publish(name, value)
+            except Exception:
+                pass  # Best-effort.
+            return
+        # Fallback: legacy MQTT bridge (outside lock to avoid blocking).
         if self._mqtt_client and self._mqtt_connected:
             try:
                 payload: str = json.dumps(value)
@@ -251,6 +270,90 @@ class SignalBus:
         """
         with self._lock:
             return sorted(self._metadata.keys())
+
+    # ------------------------------------------------------------------
+    # Transport routing (v1.1)
+    # ------------------------------------------------------------------
+
+    def add_transport(self, name: str, adapter: Any) -> None:
+        """Register a named transport adapter.
+
+        The adapter must implement the :class:`TransportAdapter` interface
+        (``publish``, ``subscribe``, ``start``, ``stop``).  Once registered,
+        signals can be routed to this transport via :meth:`set_route`.
+
+        Args:
+            name:    Transport name (e.g. ``"udp"``, ``"mqtt_v2"``).
+            adapter: A :class:`TransportAdapter` instance.
+        """
+        self._transports[name] = adapter
+
+    def remove_transport(self, name: str) -> None:
+        """Unregister a transport adapter.
+
+        Also removes all signal routes pointing to this transport.
+
+        Args:
+            name: Transport name to remove.
+        """
+        self._transports.pop(name, None)
+        # Clear routes that referenced this transport.
+        stale: list[str] = [
+            sig for sig, tn in self._signal_routes.items() if tn == name
+        ]
+        for sig in stale:
+            del self._signal_routes[sig]
+
+    def set_route(self, signal_name: str, transport_name: str) -> None:
+        """Route a signal to a specific transport for publishing.
+
+        When ``write()`` is called for this signal, the value is
+        published via the named transport instead of the legacy
+        MQTT bridge.
+
+        Args:
+            signal_name:    Signal name to route.
+            transport_name: Name of a registered transport adapter.
+        """
+        self._signal_routes[signal_name] = transport_name
+
+    def clear_route(self, signal_name: str) -> None:
+        """Remove the transport route for a signal.
+
+        The signal reverts to the legacy MQTT bridge (if active)
+        or local-only operation.
+
+        Args:
+            signal_name: Signal name to un-route.
+        """
+        self._signal_routes.pop(signal_name, None)
+
+    def subscribe_remote(self, signal_name: str,
+                         transport_name: str) -> None:
+        """Subscribe to a remote signal via a transport adapter.
+
+        Incoming values are merged into the local signal dict,
+        making them available via :meth:`read` as if they were
+        written locally.
+
+        Args:
+            signal_name:    Signal name to subscribe to.
+            transport_name: Name of the transport adapter to use.
+        """
+        adapter = self._transports.get(transport_name)
+        if adapter is None:
+            logger.warning(
+                "Cannot subscribe to '%s': transport '%s' not found",
+                signal_name, transport_name,
+            )
+            return
+
+        def _ingest(name: str, value: SignalValue) -> None:
+            """Merge a remote signal into the local bus."""
+            with self._lock:
+                self._signals[name] = value
+
+        adapter.subscribe(signal_name, _ingest)
 
     # ------------------------------------------------------------------
     # MQTT bridge
