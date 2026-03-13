@@ -2449,11 +2449,10 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 "error": "Media pipeline not configured",
             })
             return
-        try:
-            mm.start_source(name)
+        if mm.start_source(name):
             logging.info("API: started media source '%s'", name)
             self._send_json(200, {"source": name, "started": True})
-        except KeyError:
+        else:
             self._send_json(404, {
                 "error": f"Unknown media source: {name}",
             })
@@ -2993,7 +2992,7 @@ def main() -> None:
             # Start the media pipeline if configured.
             if config.get("media_sources"):
                 media_mgr = MediaManager()
-                media_mgr.configure(config.get("media_sources", {}))
+                media_mgr.configure(config)
                 GlowUpRequestHandler.media_manager = media_mgr
                 source_count: int = len(config["media_sources"])
                 logging.info(
