@@ -2059,6 +2059,18 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_post_signal_ingest()
             return
 
+        # /api/assign — issue a work assignment to a compute node
+        if (len(parts) == 2 and parts[0] == "api"
+                and parts[1] == "assign"):
+            self._handle_post_assign()
+            return
+
+        # /api/assign/{node_id}/cancel/{assignment_id}
+        if (len(parts) == 5 and parts[0] == "api" and parts[1] == "assign"
+                and parts[3] == "cancel"):
+            self._handle_post_cancel_assignment(parts[2], parts[4])
+            return
+
         self._send_json(404, {"error": "Not found"})
 
     # -- GET handlers -------------------------------------------------------
@@ -2558,6 +2570,112 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         status: dict[str, Any] = orch.get_fleet_status()
         status["enabled"] = True
         self._send_json(200, status)
+
+    def _handle_post_assign(self) -> None:
+        """POST /api/assign — issue a work assignment to a compute node.
+
+        Request body::
+
+            {
+                "node_id": "judy",
+                "operator": "AudioExtractor",
+                "config": {"source_name": "conway", "bands": 8},
+                "inputs": [
+                    {"signal_name": "conway:audio:pcm_raw",
+                     "transport": "udp", "udp_port": 9420}
+                ],
+                "outputs": [
+                    {"signal_name": "judy:audio:bands",
+                     "transport": "mqtt"}
+                ]
+            }
+        """
+        orch: Optional[Any] = self.orchestrator
+        if orch is None:
+            self._send_json(503, {
+                "error": "Distributed compute not configured",
+            })
+            return
+
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        node_id: str = body.get("node_id", "")
+        operator_name: str = body.get("operator", "")
+        if not node_id or not operator_name:
+            self._send_json(400, {
+                "error": "Missing required fields: node_id, operator",
+            })
+            return
+
+        # Import SignalBinding and WorkAssignment from distributed module.
+        try:
+            from distributed.orchestrator import SignalBinding, WorkAssignment
+        except ImportError:
+            self._send_json(503, {"error": "Distributed module not available"})
+            return
+
+        # Build input/output bindings.
+        inputs: list[SignalBinding] = [
+            SignalBinding.from_dict(b) for b in body.get("inputs", [])
+        ]
+        outputs: list[SignalBinding] = [
+            SignalBinding.from_dict(b) for b in body.get("outputs", [])
+        ]
+
+        # Generate assignment ID.
+        import time as _time
+        assignment_id: str = (
+            f"{node_id}-{operator_name.lower()}-{int(_time.time())}"
+        )
+
+        assignment: WorkAssignment = WorkAssignment(
+            assignment_id=assignment_id,
+            operator_name=operator_name,
+            operator_config=body.get("config", {}),
+            inputs=inputs,
+            outputs=outputs,
+            action="start",
+        )
+
+        success: bool = orch.assign_work(node_id, assignment)
+        if success:
+            logging.info(
+                "API: assigned '%s' to node '%s' (id: %s)",
+                operator_name, node_id, assignment_id,
+            )
+            self._send_json(200, {
+                "assigned": True,
+                "assignment_id": assignment_id,
+                "node_id": node_id,
+                "operator": operator_name,
+            })
+        else:
+            self._send_json(409, {
+                "error": f"Cannot assign to node '{node_id}'",
+                "assigned": False,
+            })
+
+    def _handle_post_cancel_assignment(self, node_id: str,
+                                       assignment_id: str) -> None:
+        """POST /api/assign/{node_id}/cancel/{assignment_id}."""
+        orch: Optional[Any] = self.orchestrator
+        if orch is None:
+            self._send_json(503, {
+                "error": "Distributed compute not configured",
+            })
+            return
+        success: bool = orch.cancel_assignment(node_id, assignment_id)
+        if success:
+            self._send_json(200, {
+                "cancelled": True,
+                "assignment_id": assignment_id,
+            })
+        else:
+            self._send_json(404, {
+                "error": f"Assignment '{assignment_id}' not found",
+            })
 
     def _handle_post_media_source_start(self, name: str) -> None:
         """POST /api/media/sources/{name}/start — manually start a source."""
@@ -3191,16 +3309,25 @@ def main() -> None:
                     "not available"
                 )
 
-            # Start the media pipeline if configured.
-            if config.get("media_sources"):
+            # Start the media pipeline if configured.  Also start the
+            # SignalBus MQTT bridge if signal_bus.mqtt is true — this allows
+            # the server to ingest signals from remote compute nodes (e.g.
+            # Judy's AudioExtractor output) even without local media sources.
+            if config.get("media_sources") or config.get("signal_bus"):
                 media_mgr = MediaManager()
                 media_mgr.configure(config)
                 GlowUpRequestHandler.media_manager = media_mgr
-                source_count: int = len(config["media_sources"])
-                logging.info(
-                    "Media pipeline configured — %d source(s)",
-                    source_count,
-                )
+                source_count: int = len(config.get("media_sources", {}))
+                if source_count:
+                    logging.info(
+                        "Media pipeline configured — %d source(s)",
+                        source_count,
+                    )
+                else:
+                    logging.info(
+                        "SignalBus started (no local sources — "
+                        "listening for remote signals)"
+                    )
             else:
                 logging.info("No media_sources configured — media idle")
         except Exception:
