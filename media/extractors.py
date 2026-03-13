@@ -400,8 +400,18 @@ class AudioExtractor(SignalExtractor):
         # --- Spectral centroid ---
         centroid: float = spectral_centroid(mags, self._sample_rate)
 
+        # --- Global peak normalization ---
+        # Normalize all bands against the single loudest band value.
+        # This preserves relative differences between bands (unlike
+        # per-band peak tracking which makes ambient noise look uniform).
+        global_peak: float = max(self._smooth_bands) if self._smooth_bands else MIN_PEAK
+        global_peak = max(global_peak, MIN_PEAK)
+        bands_global: list[float] = [
+            min(1.0, b / global_peak) for b in self._smooth_bands
+        ]
+
         # --- Write to bus ---
-        self._bus.write(f"{prefix}:bands", bands_norm)
+        self._bus.write(f"{prefix}:bands", bands_global)
         self._bus.write(f"{prefix}:bass", bass)
         self._bus.write(f"{prefix}:mid", mid)
         self._bus.write(f"{prefix}:treble", treble)
