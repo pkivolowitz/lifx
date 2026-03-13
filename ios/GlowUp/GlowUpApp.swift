@@ -22,7 +22,7 @@ struct GlowUpApp: App {
         }
     }
 }
-
+ 
 /// Root content view — shows the login screen until the user
 /// authenticates, then the main hub.
 struct ContentView: View {
@@ -31,7 +31,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             if apiClient.isAuthenticated {
-                HubView()
+                HubView(apiClient: apiClient)
             } else {
                 LoginView()
             }

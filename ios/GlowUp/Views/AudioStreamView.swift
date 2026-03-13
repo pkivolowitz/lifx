@@ -15,10 +15,11 @@ import SwiftUI
 ///
 /// Below the triangle: navigation to Devices, Schedule, and Settings.
 struct HubView: View {
-    @EnvironmentObject var apiClient: APIClient
+    /// API client for server communication.
+    let apiClient: APIClient
 
-    /// Audio streaming service (created lazily once apiClient is available).
-    @State private var audioService: AudioStreamService?
+    /// Audio streaming service — @StateObject so @Published updates drive the UI.
+    @StateObject private var audioService: AudioStreamService
 
     // MARK: - Triangle state
 
@@ -62,6 +63,13 @@ struct HubView: View {
         "soundlevel", "waveform",
     ]
 
+    init(apiClient: APIClient) {
+        self.apiClient = apiClient
+        _audioService = StateObject(
+            wrappedValue: AudioStreamService(apiClient: apiClient)
+        )
+    }
+
     /// Whether all three vertices are selected.
     private var allSelected: Bool {
         selectedSensor != nil && selectedEffect != nil && selectedDevice != nil
@@ -85,7 +93,7 @@ struct HubView: View {
                     surfaceSection
 
                     // Live feedback (visible when running with mic).
-                    if isRunning, let svc = audioService, svc.isStreaming {
+                    if isRunning && audioService.isStreaming {
                         liveFeedbackSection
                     }
 
@@ -109,12 +117,7 @@ struct HubView: View {
                 }
             }
             .navigationTitle("GlowUp")
-            .task {
-                if audioService == nil {
-                    audioService = AudioStreamService(apiClient: apiClient)
-                }
-                await loadData()
-            }
+            .task { await loadData() }
             .onDisappear { stopEverything() }
             .sheet(isPresented: $showDevices) {
                 DeviceListView()
@@ -221,11 +224,17 @@ struct HubView: View {
     /// Surface picker — always visible, independent of other selections.
     private var surfaceSection: some View {
         Section {
-            ForEach(devices, id: \.id) { device in
-                Button {
-                    withAnimation { selectedDevice = device }
-                } label: {
-                    deviceRow(device)
+            if devices.isEmpty {
+                Text("No devices found.")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            } else {
+                ForEach(devices, id: \.id) { device in
+                    Button {
+                        withAnimation { selectedDevice = device }
+                    } label: {
+                        deviceRow(device)
+                    }
                 }
             }
         } header: {
@@ -281,12 +290,10 @@ struct HubView: View {
     /// Live audio feedback when mic is active.
     private var liveFeedbackSection: some View {
         Section("Live") {
-            if let svc = audioService {
-                VUMeterView(level: svc.currentRMS)
-                    .frame(height: 20)
-                BandVisualizerView(bands: svc.currentBands)
-                    .frame(height: 60)
-            }
+            VUMeterView(level: audioService.currentRMS)
+                .frame(height: 20)
+            BandVisualizerView(bands: audioService.currentBands)
+                .frame(height: 60)
         }
     }
 
@@ -452,7 +459,7 @@ struct HubView: View {
 
         // Start iPhone mic if needed.
         if sensor.type == .iphone {
-            audioService?.start()
+            audioService.start()
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
 
@@ -488,13 +495,13 @@ struct HubView: View {
             withAnimation { isRunning = true }
         } catch {
             errorMessage = error.localizedDescription
-            audioService?.stop()
+            audioService.stop()
         }
     }
 
     /// Stop everything.
     private func stopEverything() {
-        audioService?.stop()
+        audioService.stop()
 
         if let device = selectedDevice {
             Task {
