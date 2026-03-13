@@ -89,6 +89,14 @@ from media import MediaManager, SignalBus
 from solar import SunTimes, sun_times
 from transport import LifxDevice
 
+# Optional distributed compute subsystem.
+try:
+    from distributed.orchestrator import Orchestrator
+    _HAS_DISTRIBUTED: bool = True
+except ImportError:
+    Orchestrator = None  # type: ignore[assignment,misc]
+    _HAS_DISTRIBUTED = False
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -1694,6 +1702,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     config: dict[str, Any] = {}
     config_path: Optional[str] = None
     media_manager: Optional[MediaManager] = None
+    orchestrator: Optional[Any] = None
 
     # Silence per-request logging from BaseHTTPRequestHandler.
     def log_message(self, format: str, *args: Any) -> None:
@@ -1925,6 +1934,11 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         # /api/media/signals
         if path == "/api/media/signals":
             self._handle_get_media_signals()
+            return
+
+        # /api/fleet
+        if path == "/api/fleet":
+            self._handle_get_fleet()
             return
 
         self._send_json(404, {"error": "Not found"})
@@ -2526,6 +2540,25 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             return
         self._send_json(200, {"signals": mm.bus.list_signals()})
 
+    def _handle_get_fleet(self) -> None:
+        """GET /api/fleet — distributed fleet status.
+
+        Returns the orchestrator's fleet inventory: online nodes,
+        capabilities, assignments, and allocated UDP ports.
+        """
+        orch: Optional[Any] = self.orchestrator
+        if orch is None:
+            self._send_json(200, {
+                "enabled": False,
+                "nodes": [],
+                "node_count": 0,
+                "message": "Distributed compute not configured",
+            })
+            return
+        status: dict[str, Any] = orch.get_fleet_status()
+        status["enabled"] = True
+        self._send_json(200, status)
+
     def _handle_post_media_source_start(self, name: str) -> None:
         """POST /api/media/sources/{name}/start — manually start a source."""
         mm: Optional[MediaManager] = self.media_manager
@@ -3100,10 +3133,12 @@ def main() -> None:
     mqtt_bridge: Optional[MqttBridge] = None
     # MediaManager reference — set by _background_startup if configured.
     media_mgr: Optional[MediaManager] = None
+    # Orchestrator reference — set by _background_startup if configured.
+    orch: Optional[Any] = None
 
     def _background_startup() -> None:
         """Load devices from config IPs, then start the scheduler."""
-        nonlocal mqtt_bridge, media_mgr
+        nonlocal mqtt_bridge, media_mgr, orch
 
         try:
             logging.info(
@@ -3135,6 +3170,27 @@ def main() -> None:
                     )
                     mqtt_bridge.start()
 
+            # Start the distributed orchestrator if configured.
+            if config.get("distributed") and _HAS_DISTRIBUTED:
+                if mqtt_bridge is not None and mqtt_bridge._client is not None:
+                    orch = Orchestrator(
+                        mqtt_bridge._client,
+                        config.get("distributed", {}),
+                    )
+                    orch.start()
+                    GlowUpRequestHandler.orchestrator = orch
+                    logging.info("Distributed orchestrator started")
+                else:
+                    logging.warning(
+                        "Distributed section found but MQTT bridge is not "
+                        "active — orchestrator requires MQTT"
+                    )
+            elif config.get("distributed") and not _HAS_DISTRIBUTED:
+                logging.warning(
+                    "Distributed section found but distributed module "
+                    "not available"
+                )
+
             # Start the media pipeline if configured.
             if config.get("media_sources"):
                 media_mgr = MediaManager()
@@ -3161,6 +3217,8 @@ def main() -> None:
         logging.info("Shutting down...")
         if media_mgr is not None:
             media_mgr.shutdown()
+        if orch is not None:
+            orch.stop()
         if mqtt_bridge is not None:
             mqtt_bridge.stop()
         scheduler: Optional[SchedulerThread] = GlowUpRequestHandler.scheduler
