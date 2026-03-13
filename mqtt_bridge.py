@@ -403,8 +403,8 @@ class MqttBridge:
                 pass
 
         # Validate that the device exists.
-        dev: Any = self._dm.get_device(device_id)
-        if dev is None:
+        em: Any = self._dm.get_emitter(device_id)
+        if em is None:
             logger.warning("MQTT: unknown device '%s'", device_id)
             return
 
