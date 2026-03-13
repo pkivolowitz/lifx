@@ -53,6 +53,12 @@ PEAK_DECAY_RATE: float = 0.5
 # Minimum peak value to prevent division by near-zero.
 MIN_PEAK: float = 1e-6
 
+# Absolute noise floor — raw values below this are treated as silence.
+# This prevents the adaptive peak tracker from normalizing mic hiss
+# and electrical noise to full scale during quiet passages.
+# Calibrated for 16-bit PCM: ~60 dB below full scale.
+NOISE_FLOOR: float = 0.001
+
 # Beat detection: energy must exceed this multiple of the recent average
 # to qualify as a beat.
 BEAT_THRESHOLD: float = 1.5
@@ -129,20 +135,32 @@ class _PeakTracker:
     def update(self, value: float) -> float:
         """Update peak and return normalized value in [0.0, 1.0].
 
+        Values below the absolute noise floor are treated as silence
+        (returns 0.0) to prevent mic hiss from being normalized to
+        full scale during quiet passages.
+
         Args:
             value: Raw (non-negative) signal value.
 
         Returns:
-            Normalized value.
+            Normalized value, or 0.0 if below noise floor.
         """
         now: float = time.monotonic()
         dt: float = now - self._last_update
         self._last_update = now
 
+        # Noise gate: below absolute floor → silence.
+        if value < NOISE_FLOOR:
+            # Still decay the peak so it adapts when signal returns.
+            self.peak *= math.exp(-self._decay_rate * dt)
+            if self.peak < NOISE_FLOOR:
+                self.peak = NOISE_FLOOR
+            return 0.0
+
         # Decay the peak toward the ambient level.
         self.peak *= math.exp(-self._decay_rate * dt)
-        if self.peak < MIN_PEAK:
-            self.peak = MIN_PEAK
+        if self.peak < NOISE_FLOOR:
+            self.peak = NOISE_FLOOR
 
         # Update peak if new value exceeds it.
         if value > self.peak:
