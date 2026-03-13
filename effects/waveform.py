@@ -79,6 +79,10 @@ class Waveform(MediaEffect):
         30, min=0, max=100,
         description="Extra brightness on beat (percent, 0 to disable)",
     )
+    noise_gate = Param(
+        0.15, min=0.0, max=0.5,
+        description="Band energy below this threshold is treated as silence",
+    )
 
     def __init__(self, **overrides) -> None:
         """Initialize with per-zone smoothing state.
@@ -145,6 +149,10 @@ class Waveform(MediaEffect):
 
             # Linearly interpolate band energy.
             energy: float = bands[lo] * (1.0 - frac) + bands[hi] * frac
+
+            # Noise gate: squash ambient noise to zero.
+            if energy < self.noise_gate:
+                energy = 0.0
 
             # Apply sensitivity.
             energy = min(1.0, energy * self.sensitivity)
