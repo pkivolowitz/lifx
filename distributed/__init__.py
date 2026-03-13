@@ -27,6 +27,7 @@ Modules:
     capability         — NodeCapability dataclass and serialization
     orchestrator       — Orchestrator: fleet management + work assignment
     worker_agent       — WorkerAgent daemon for compute nodes
+    audio_sensor       — Mic capture → UDP sensor for distributed FFT
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
