@@ -47,6 +47,7 @@ Endpoints::
     GET  /api/media/signals              List available signal names
     POST /api/media/sources/{name}/start Manually start a media source
     POST /api/media/sources/{name}/stop  Manually stop a media source
+    POST /api/media/signals/ingest       Write signals from external source
 Usage::
 
     python3 server.py server.json
@@ -1961,6 +1962,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_post_media_source_stop(parts[3])
             return
 
+        # /api/media/signals/ingest
+        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "media"
+                and parts[2] == "signals" and parts[3] == "ingest"):
+            self._handle_post_signal_ingest()
+            return
+
         self._send_json(404, {"error": "Not found"})
 
     # -- GET handlers -------------------------------------------------------
@@ -2474,6 +2481,67 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(404, {
                 "error": f"Unknown media source: {name}",
             })
+
+    def _handle_post_signal_ingest(self) -> None:
+        """POST /api/media/signals/ingest — write signals from an external source.
+
+        Accepts a JSON body with a ``source`` name and a ``signals`` dict
+        mapping signal suffixes to values (scalar float or float array).
+        Each signal is written to the bus as ``{source}:audio:{name}``.
+
+        This endpoint enables any device (iPhone, ESP32, browser) to act
+        as a media source by posting computed signal values directly to
+        the signal bus, bypassing the ffmpeg/extractor pipeline.
+
+        Request body::
+
+            {
+                "source": "iphone",
+                "signals": {
+                    "bands": [0.1, 0.3, 0.8, 0.2, 0.0, 0.1, 0.5, 0.9],
+                    "rms": 0.42,
+                    "beat": 1.0,
+                    "bass": 0.2,
+                    "mid": 0.5,
+                    "treble": 0.7,
+                    "energy": 0.45,
+                    "centroid": 0.6
+                }
+            }
+        """
+        mm: Optional[MediaManager] = self.media_manager
+        if mm is None:
+            self._send_json(503, {
+                "error": "Media pipeline not configured",
+            })
+            return
+
+        body: dict = self._read_json_body()
+        if body is None:
+            return
+
+        source: str = body.get("source", "")
+        if not source:
+            self._send_json(400, {"error": "'source' is required"})
+            return
+
+        signals: dict = body.get("signals", {})
+        if not isinstance(signals, dict):
+            self._send_json(400, {"error": "'signals' must be an object"})
+            return
+
+        bus = mm.bus
+        written: int = 0
+        for name, value in signals.items():
+            signal_name: str = f"{source}:audio:{name}"
+            if isinstance(value, (int, float)):
+                bus.write(signal_name, float(value))
+                written += 1
+            elif isinstance(value, list):
+                bus.write(signal_name, [float(v) for v in value])
+                written += 1
+
+        self._send_json(200, {"written": written})
 
     def _save_config_field(self, key: str, value: Any) -> None:
         """Persist a single config field to the config file.
