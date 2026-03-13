@@ -28,7 +28,7 @@ Typical usage::
 
 from __future__ import annotations
 
-__version__ = "1.6"
+__version__ = "1.7"
 
 import queue
 import threading
@@ -327,6 +327,14 @@ class Engine:
         self._last_frame: Optional[list[tuple[int, int, int, int]]] = None
         self._last_frame_lock: threading.Lock = threading.Lock()
 
+        # --- Signal bindings (media pipeline integration) ---
+        # When an effect is played with bindings, the render thread reads
+        # signal values from the bus and overwrites the bound effect params
+        # each frame before calling render().  This lets any existing effect
+        # respond to audio/video without modification.
+        self._bindings: Optional[dict[str, dict]] = None
+        self._signal_bus: Optional[Any] = None
+
         # --- Frame pipeline ---
         # Pre-rendered frames flow from the render thread (producer) through
         # a bounded queue to the send thread (consumer).  This decouples
@@ -340,7 +348,9 @@ class Engine:
         # thread can discard stale pre-rendered frames from the old effect.
         self._effect_generation: int = 0
 
-    def start(self, effect: Effect) -> None:
+    def start(self, effect: Effect,
+              bindings: Optional[dict[str, dict]] = None,
+              signal_bus: Optional[Any] = None) -> None:
         """Start or hot-swap the current effect.
 
         If the engine thread is not yet running it is spawned automatically.
@@ -348,7 +358,12 @@ class Engine:
         before the new effect takes over.
 
         Args:
-            effect: The new :class:`Effect` instance to render.
+            effect:     The new :class:`Effect` instance to render.
+            bindings:   Optional dict mapping param names to binding dicts.
+                        Each binding has ``"signal"`` (signal bus name) and
+                        optional ``"scale"`` ([lo, hi]) and ``"reduce"``
+                        (for array signals: ``"max"``, ``"mean"``, ``"sum"``).
+            signal_bus: Optional :class:`SignalBus` for reading bound signals.
 
         Raises:
             TypeError: If *effect* is not an :class:`Effect` instance.
@@ -373,6 +388,12 @@ class Engine:
                 self.effect.on_stop()
             self.effect = effect
             self._effect_start_time = time.time()
+            # Store signal bindings for the render thread.
+            self._bindings = bindings
+            self._signal_bus = signal_bus
+            # If this is a MediaEffect, give it direct bus access.
+            if signal_bus is not None and hasattr(effect, '_signal_bus'):
+                effect._signal_bus = signal_bus
             # Increment generation so the send thread discards stale frames
             # pre-rendered by the old effect.
             self._effect_generation += 1
@@ -485,10 +506,19 @@ class Engine:
                 effect: Optional[Effect] = self.effect
                 start_time: float = self._effect_start_time
                 gen: int = self._effect_generation
+                bindings: Optional[dict] = self._bindings
+                signal_bus = self._signal_bus
 
             if effect is None:
                 self._stop_event.wait(interval)
                 continue
+
+            # --- Signal binding resolution ---
+            # Before rendering, overwrite bound effect params with live
+            # signal values from the bus.  This lets any existing effect
+            # respond to audio/video/sensor data without modification.
+            if bindings and signal_bus:
+                self._resolve_bindings(effect, bindings, signal_bus)
 
             # Use wall-clock time.  The pipeline depth is small enough
             # (500 ms at high water) that the time skew between render
@@ -608,6 +638,58 @@ class Engine:
             if sleep_time > 0:
                 self._stop_event.wait(sleep_time)
 
+    @staticmethod
+    def _resolve_bindings(effect: Effect, bindings: dict[str, dict],
+                          signal_bus: Any) -> None:
+        """Overwrite effect params with live signal values from the bus.
+
+        For each binding, reads the named signal, applies optional array
+        reduction and scaling, then sets the param on the effect.
+
+        Args:
+            effect:     The active effect instance.
+            bindings:   Dict mapping param names to binding specifications.
+            signal_bus: The :class:`SignalBus` to read from.
+        """
+        for param_name, binding in bindings.items():
+            signal_name: str = binding.get("signal", "")
+            if not signal_name:
+                continue
+
+            value = signal_bus.read(signal_name, 0.0)
+
+            # Reduce array signals to a scalar.
+            if isinstance(value, list):
+                reduce_fn: str = binding.get("reduce", "max")
+                if not value:
+                    value = 0.0
+                elif reduce_fn == "max":
+                    value = max(value)
+                elif reduce_fn == "mean":
+                    value = sum(value) / len(value)
+                elif reduce_fn == "sum":
+                    value = min(1.0, sum(value))
+                else:
+                    value = max(value)
+
+            # Scale the normalized [0, 1] value to the param's range.
+            scale = binding.get("scale")
+            if scale and len(scale) >= 2:
+                lo, hi = float(scale[0]), float(scale[1])
+            else:
+                # Use the param's own min/max from the Param definition.
+                param_def = effect._param_defs.get(param_name)
+                if param_def:
+                    lo, hi = param_def.min, param_def.max
+                else:
+                    lo, hi = 0.0, 1.0
+
+            scaled: float = lo + float(value) * (hi - lo)
+            try:
+                setattr(effect, param_name, scaled)
+            except Exception:
+                pass
+
     def _flush_pipeline(self) -> None:
         """Drain all frames from the pipeline buffer.
 
@@ -656,12 +738,21 @@ class Controller:
         self._current_effect_name: Optional[str] = None
         self._last_effect_name: Optional[str] = None
         self._last_params: dict[str, Any] = {}
+        self._bindings: Optional[dict[str, dict]] = None
 
-    def play(self, effect_name: str, **params: Any) -> None:
+    def play(self, effect_name: str,
+             bindings: Optional[dict[str, dict]] = None,
+             signal_bus: Optional[Any] = None,
+             **params: Any) -> None:
         """Start playing an effect by name.
 
         Args:
             effect_name: Registered effect name (e.g., ``"cylon"``).
+            bindings:    Optional dict mapping param names to signal bindings.
+                         Each binding has ``"signal"`` (bus signal name) and
+                         optional ``"scale"`` ([lo, hi]) and ``"reduce"``
+                         (``"max"``, ``"mean"``, ``"sum"``).
+            signal_bus:  Optional :class:`SignalBus` for reading signals.
             **params:    Parameter overrides forwarded to the effect.
 
         Raises:
@@ -679,7 +770,8 @@ class Controller:
         self._current_effect_name = effect_name
         self._last_effect_name = effect_name
         self._last_params = dict(params)
-        self.engine.start(effect)
+        self._bindings = bindings
+        self.engine.start(effect, bindings=bindings, signal_bus=signal_bus)
 
     def stop(self, fade_ms: int = DEFAULT_FADE_MS) -> None:
         """Stop the current effect and optionally fade to black.
@@ -735,7 +827,7 @@ class Controller:
             else:
                 effect_name = self._last_effect_name
                 params = self._last_params
-            return {
+            status: dict[str, Any] = {
                 "running": self.engine.running,
                 "effect": effect_name,
                 "params": params,
@@ -751,6 +843,9 @@ class Controller:
                     for dev in self.devices
                 ],
             }
+            if self._bindings:
+                status["bindings"] = self._bindings
+            return status
 
     def get_last_frame(self) -> Optional[list[tuple[int, int, int, int]]]:
         """Return the most recently rendered frame of HSBK colors.
