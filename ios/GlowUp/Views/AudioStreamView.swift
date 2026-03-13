@@ -1,4 +1,4 @@
-// AudioStreamView.swift
+// AudioStreamView.swift → HubView.swift
 // GlowUp — LIFX Remote Control
 //
 // Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
@@ -6,25 +6,21 @@
 
 import SwiftUI
 
-/// Three-step wizard for audio-reactive lighting.
+/// Main application screen built around the Mosaic Warfare triangle:
+/// **Sensor × Effect × Surface**.
 ///
-/// Flow: Sensor → Effect → Surface
+/// All three vertices are always visible.  The user picks any vertex
+/// first — the other two adapt.  Selecting a sensor filters effects;
+/// selecting an effect or surface has no ordering dependency.
 ///
-/// 1. **Sensor**: None (non-reactive effects), iPhone mic, or server
-///    camera sources.
-/// 2. **Effect**: Filtered by sensor — None shows all effects, mic
-///    shows only audio-reactive effects (soundlevel, waveform).
-/// 3. **Surface**: Device or group to render on.
-///
-/// A single "Go" button starts everything: mic capture (if needed),
-/// effect playback on the chosen surface.  "Stop" tears it all down.
-struct AudioStreamView: View {
-    /// API client for server communication.
-    let apiClient: APIClient
+/// Below the triangle: navigation to Devices, Schedule, and Settings.
+struct HubView: View {
+    @EnvironmentObject var apiClient: APIClient
 
-    @StateObject private var audioService: AudioStreamService
+    /// Audio streaming service (created lazily once apiClient is available).
+    @State private var audioService: AudioStreamService?
 
-    // MARK: - Wizard state
+    // MARK: - Triangle state
 
     /// Available sensors (built from server sources + local mic).
     @State private var sensors: [Sensor] = []
@@ -32,7 +28,7 @@ struct AudioStreamView: View {
     /// Selected sensor.
     @State private var selectedSensor: Sensor?
 
-    /// Available effects (filtered by sensor type).
+    /// Available effects (filtered by sensor type when sensor is selected).
     @State private var effects: [Effect] = []
 
     /// All effects from server (unfiltered).
@@ -56,81 +52,103 @@ struct AudioStreamView: View {
     /// Error message.
     @State private var errorMessage: String?
 
+    /// Sheet presentation.
+    @State private var showDevices: Bool = false
+    @State private var showSchedule: Bool = false
+    @State private var showSettings: Bool = false
+
     /// Audio-reactive effect names (effects that extend MediaEffect).
     private let audioEffectNames: Set<String> = [
         "soundlevel", "waveform",
     ]
 
-    init(apiClient: APIClient) {
-        self.apiClient = apiClient
-        _audioService = StateObject(
-            wrappedValue: AudioStreamService(apiClient: apiClient)
-        )
+    /// Whether all three vertices are selected.
+    private var allSelected: Bool {
+        selectedSensor != nil && selectedEffect != nil && selectedDevice != nil
     }
 
     var body: some View {
-        List {
-            if isLoading {
-                Section {
-                    HStack {
-                        Spacer()
-                        ProgressView("Loading...")
-                        Spacer()
+        NavigationStack {
+            List {
+                if isLoading {
+                    Section {
+                        HStack {
+                            Spacer()
+                            ProgressView("Loading...")
+                            Spacer()
+                        }
+                    }
+                } else {
+                    // The triangle: any vertex first.
+                    sensorSection
+                    effectSection
+                    surfaceSection
+
+                    // Live feedback (visible when running with mic).
+                    if isRunning, let svc = audioService, svc.isStreaming {
+                        liveFeedbackSection
+                    }
+
+                    // Go/Stop button.
+                    if allSelected {
+                        actionSection
                     }
                 }
-            } else {
-                // Step 1: Sensor
-                sensorSection
 
-                // Step 2: Effect (visible after sensor selected)
-                if selectedSensor != nil {
-                    effectSection
+                // Error display.
+                if let error = errorMessage {
+                    Section {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.red)
+                    }
                 }
 
-                // Step 3: Surface (visible after effect selected)
-                if selectedEffect != nil {
-                    surfaceSection
-                }
-
-                // Live feedback (visible when running)
-                if isRunning && selectedSensor?.type == .iphone {
-                    liveFeedbackSection
-                }
-
-                // Action button (visible when all three selected)
-                if selectedSensor != nil && selectedEffect != nil
-                    && selectedDevice != nil {
-                    actionSection
+                // Navigation to sub-screens.
+                if !isLoading {
+                    navigationSection
                 }
             }
-
-            // Error display.
-            if let error = errorMessage {
-                Section {
-                    Label(error, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
+            .navigationTitle("GlowUp")
+            .task {
+                if audioService == nil {
+                    audioService = AudioStreamService(apiClient: apiClient)
                 }
+                await loadData()
+            }
+            .onDisappear { stopEverything() }
+            .sheet(isPresented: $showDevices) {
+                DeviceListView()
+            }
+            .sheet(isPresented: $showSchedule) {
+                ScheduleView()
+            }
+            .sheet(isPresented: $showSettings) {
+                SettingsView()
             }
         }
-        .navigationTitle("Audio Reactive")
-        .task { await loadData() }
-        .onDisappear { stopEverything() }
     }
 
-    // MARK: - Sections
+    // MARK: - Triangle sections
 
-    /// Step 1: Sensor picker.
+    /// Sensor picker — always visible.
     private var sensorSection: some View {
-        Section("1. Sensor") {
+        Section {
             ForEach(sensors, id: \.id) { sensor in
                 Button {
-                    withAnimation {
-                        selectSensor(sensor)
-                    }
+                    withAnimation { selectSensor(sensor) }
                 } label: {
                     sensorRow(sensor)
                 }
             }
+        } header: {
+            sectionHeader(
+                "Sensor",
+                selection: selectedSensor?.displayName,
+                onClear: {
+                    selectedSensor = nil
+                    applyEffectFilter()
+                }
+            )
         }
     }
 
@@ -156,18 +174,28 @@ struct AudioStreamView: View {
         }
     }
 
-    /// Step 2: Effect picker (filtered by sensor).
+    /// Effect picker — always visible.
     private var effectSection: some View {
-        Section("2. Effect") {
-            ForEach(effects, id: \.id) { effect in
-                Button {
-                    withAnimation {
-                        selectedEffect = effect
+        Section {
+            if effects.isEmpty && selectedSensor != nil {
+                Text("No effects for this sensor type.")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            } else {
+                ForEach(effects, id: \.id) { effect in
+                    Button {
+                        withAnimation { selectedEffect = effect }
+                    } label: {
+                        effectRow(effect)
                     }
-                } label: {
-                    effectRow(effect)
                 }
             }
+        } header: {
+            sectionHeader(
+                "Effect",
+                selection: selectedEffect?.name,
+                onClear: { selectedEffect = nil }
+            )
         }
     }
 
@@ -190,18 +218,22 @@ struct AudioStreamView: View {
         }
     }
 
-    /// Step 3: Surface picker (device or group).
+    /// Surface picker — always visible, independent of other selections.
     private var surfaceSection: some View {
-        Section("3. Surface") {
+        Section {
             ForEach(devices, id: \.id) { device in
                 Button {
-                    withAnimation {
-                        selectedDevice = device
-                    }
+                    withAnimation { selectedDevice = device }
                 } label: {
                     deviceRow(device)
                 }
             }
+        } header: {
+            sectionHeader(
+                "Surface",
+                selection: selectedDevice?.displayName,
+                onClear: { selectedDevice = nil }
+            )
         }
     }
 
@@ -224,13 +256,37 @@ struct AudioStreamView: View {
         }
     }
 
+    /// Section header with current selection and clear button.
+    @ViewBuilder
+    private func sectionHeader(
+        _ title: String,
+        selection: String?,
+        onClear: @escaping () -> Void
+    ) -> some View {
+        HStack {
+            if let name = selection {
+                Text("\(title): \(name)")
+                Spacer()
+                Button("Clear") {
+                    withAnimation { onClear() }
+                }
+                .font(.caption)
+                .textCase(nil)
+            } else {
+                Text(title)
+            }
+        }
+    }
+
     /// Live audio feedback when mic is active.
     private var liveFeedbackSection: some View {
         Section("Live") {
-            VUMeterView(level: audioService.currentRMS)
-                .frame(height: 20)
-            BandVisualizerView(bands: audioService.currentBands)
-                .frame(height: 60)
+            if let svc = audioService {
+                VUMeterView(level: svc.currentRMS)
+                    .frame(height: 20)
+                BandVisualizerView(bands: svc.currentBands)
+                    .frame(height: 60)
+            }
         }
     }
 
@@ -244,22 +300,50 @@ struct AudioStreamView: View {
                     Task { await startEverything() }
                 }
             } label: {
-                HStack {
-                    Spacer()
-                    Label(
-                        isRunning ? "Stop" : "Go",
-                        systemImage: isRunning
-                            ? "stop.fill" : "play.fill"
-                    )
-                    .font(.title2.bold())
-                    .foregroundStyle(.white)
-                    Spacer()
-                }
-                .padding(.vertical, 8)
-                .background(isRunning ? Color.red : Color.green)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                goStopLabel
             }
             .listRowBackground(Color.clear)
+        }
+    }
+
+    /// Label extracted to keep actionSection simple for the type checker.
+    @ViewBuilder
+    private var goStopLabel: some View {
+        HStack {
+            Spacer()
+            Label(
+                isRunning ? "Stop" : "Go",
+                systemImage: isRunning ? "stop.fill" : "play.fill"
+            )
+            .font(.title2.bold())
+            .foregroundStyle(.white)
+            Spacer()
+        }
+        .padding(.vertical, 8)
+        .background(isRunning ? Color.red : Color.green)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Navigation to sub-screens.
+    private var navigationSection: some View {
+        Section {
+            Button { showDevices = true } label: {
+                Label("Devices", systemImage: "lightbulb.2")
+                    .foregroundStyle(.primary)
+            }
+            Button { showSchedule = true } label: {
+                Label("Schedule", systemImage: "calendar")
+                    .foregroundStyle(.primary)
+            }
+            Button { showSettings = true } label: {
+                Label("Settings", systemImage: "gear")
+                    .foregroundStyle(.primary)
+            }
+            Button(role: .destructive) {
+                apiClient.isAuthenticated = false
+            } label: {
+                Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+            }
         }
     }
 
@@ -317,27 +401,39 @@ struct AudioStreamView: View {
             }
 
             sensors = sensorList
+            applyEffectFilter()
         } catch {
             errorMessage = error.localizedDescription
         }
         isLoading = false
     }
 
-    // MARK: - Selection logic
+    // MARK: - Filtering
 
     /// Handle sensor selection — filter effects accordingly.
     private func selectSensor(_ sensor: Sensor) {
         selectedSensor = sensor
-        selectedEffect = nil
+        applyEffectFilter()
+        // Invalidate selected effect if no longer in filtered list.
+        if let selected = selectedEffect,
+           !effects.contains(where: { $0.id == selected.id }) {
+            selectedEffect = nil
+        }
+    }
 
+    /// Apply effect filtering based on current sensor selection.
+    private func applyEffectFilter() {
+        guard let sensor = selectedSensor else {
+            // No sensor chosen — show all non-hidden effects.
+            effects = allEffects.filter { !$0.hidden }
+            return
+        }
         switch sensor.type {
         case .none:
-            // Show all non-hidden, non-audio-reactive effects.
             effects = allEffects.filter {
                 !$0.hidden && !audioEffectNames.contains($0.name)
             }
         case .iphone, .server:
-            // Show only audio-reactive effects.
             effects = allEffects.filter {
                 audioEffectNames.contains($0.name)
             }
@@ -356,15 +452,14 @@ struct AudioStreamView: View {
 
         // Start iPhone mic if needed.
         if sensor.type == .iphone {
-            audioService.start()
-            // Brief delay for first signals to reach server.
+            audioService?.start()
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
 
         // Start server camera source if needed.
         if sensor.type == .server {
             do {
-                let _: GenericOKResponse = try await apiClient.post(
+                let _: SourceStartResponse = try await apiClient.post(
                     "/api/media/sources/\(sensor.id)/start",
                     body: EmptyBody()
                 )
@@ -393,13 +488,13 @@ struct AudioStreamView: View {
             withAnimation { isRunning = true }
         } catch {
             errorMessage = error.localizedDescription
-            audioService.stop()
+            audioService?.stop()
         }
     }
 
     /// Stop everything.
     private func stopEverything() {
-        audioService.stop()
+        audioService?.stop()
 
         if let device = selectedDevice {
             Task {
@@ -413,7 +508,7 @@ struct AudioStreamView: View {
 
 // MARK: - Sensor model
 
-/// Represents an audio source in the wizard.
+/// Represents an audio source in the triangle.
 struct Sensor: Identifiable {
     let id: String
     let type: SensorType
@@ -445,6 +540,12 @@ struct MediaSourcesInner: Codable {
 struct MediaSourceInfo: Codable {
     let name: String
     let type: String
+}
+
+/// Response from POST /api/media/sources/{name}/start.
+struct SourceStartResponse: Codable {
+    let source: String
+    let started: Bool
 }
 
 // MARK: - VU Meter
