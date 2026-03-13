@@ -24,14 +24,14 @@ struct GlowUpApp: App {
 }
 
 /// Root content view — shows the login screen until the user
-/// authenticates, then the main device list.
+/// authenticates, then the main hub.
 struct ContentView: View {
     @EnvironmentObject var apiClient: APIClient
 
     var body: some View {
         Group {
             if apiClient.isAuthenticated {
-                DeviceListView()
+                HubView()
             } else {
                 LoginView()
             }
