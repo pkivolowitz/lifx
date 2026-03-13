@@ -443,6 +443,10 @@ class WorkerAgent:
                 from media.extractors import AudioExtractor
 
                 bus: SignalBus = SignalBus()
+                # Enable MQTT bridge on the operator's bus so ALL
+                # output signals (bands, bass, mid, treble, rms,
+                # energy, beat, centroid) auto-publish to the broker.
+                bus.enable_mqtt(broker=self._broker, port=self._port)
                 operator: AudioExtractor = AudioExtractor(
                     source_name=config.get("source_name", "remote"),
                     sample_rate=config.get("sample_rate", 44100),
