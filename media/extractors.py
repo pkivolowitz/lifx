@@ -422,11 +422,15 @@ class AudioExtractor(SignalExtractor):
         # Normalize all bands against the single loudest band value.
         # This preserves relative differences between bands (unlike
         # per-band peak tracking which makes ambient noise look uniform).
-        global_peak: float = max(self._smooth_bands) if self._smooth_bands else MIN_PEAK
-        global_peak = max(global_peak, MIN_PEAK)
-        bands_global: list[float] = [
-            min(1.0, b / global_peak) for b in self._smooth_bands
-        ]
+        # Gate: if RMS is below the noise floor, all bands are silence.
+        if rms_raw < NOISE_FLOOR:
+            bands_global: list[float] = [0.0] * self._band_count
+        else:
+            global_peak: float = max(self._smooth_bands) if self._smooth_bands else NOISE_FLOOR
+            global_peak = max(global_peak, NOISE_FLOOR)
+            bands_global = [
+                min(1.0, b / global_peak) for b in self._smooth_bands
+            ]
 
         # --- Write to bus ---
         self._bus.write(f"{prefix}:bands", bands_global)
