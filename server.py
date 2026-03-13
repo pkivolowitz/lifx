@@ -59,7 +59,7 @@ Usage::
 
 from __future__ import annotations
 
-__version__ = "1.9"
+__version__ = "2.0"
 
 import hmac
 import http.server
@@ -79,8 +79,11 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
-from effects import get_registry, create_effect, HSBK_MAX, KELVIN_DEFAULT
-from engine import Controller, VirtualMultizoneDevice
+from effects import get_registry, create_effect, HSBK, HSBK_MAX, KELVIN_DEFAULT
+from emitters import Emitter
+from emitters.lifx import LifxEmitter
+from emitters.virtual import VirtualMultizoneEmitter
+from engine import Controller
 from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
 from media import MediaManager, SignalBus
 from solar import SunTimes, sun_times
@@ -315,6 +318,7 @@ class DeviceManager:
                         multizone devices with a unified zone canvas.
         """
         self._devices: dict[str, LifxDevice] = {}
+        self._emitters: dict[str, Emitter] = {}
         self._controllers: dict[str, Controller] = {}
         self._lock: threading.Lock = threading.Lock()
         # Override tracking: maps device ID (IP or group:name) to the
@@ -346,9 +350,10 @@ class DeviceManager:
         are logged as warnings but do not prevent the server from
         starting.
 
-        After loading individual devices, creates a
-        :class:`VirtualMultizoneDevice` for every multi-device group
-        in the config.  The virtual device combines member zones into
+        After loading individual devices, wraps each in a
+        :class:`LifxEmitter` and creates a
+        :class:`VirtualMultizoneEmitter` for every multi-device group
+        in the config.  The virtual emitter combines member zones into
         a single unified canvas.  The order of IPs in the group array
         determines the zone layout (first IP's zones come first).
 
@@ -391,19 +396,24 @@ class DeviceManager:
 
             self._devices = new_map
 
-            # Build VirtualMultizoneDevices for multi-device groups.
+            # Build emitter wrappers for all individual devices.
+            new_emitters: dict[str, Emitter] = {}
+            for ip, dev in new_map.items():
+                new_emitters[ip] = LifxEmitter(dev)
+
+            # Build VirtualMultizoneEmitters for multi-device groups.
             for group_name, ips in self._group_config.items():
                 if len(ips) < 2:
                     continue
-                member_devs: list[LifxDevice] = [
-                    self._devices[ip] for ip in ips
-                    if ip in self._devices
+                member_emitters: list[Emitter] = [
+                    new_emitters[ip] for ip in ips
+                    if ip in new_emitters
                 ]
-                if len(member_devs) < 2:
+                if len(member_emitters) < 2:
                     logging.warning(
                         "Group '%s' has fewer than 2 reachable devices "
-                        "(%d/%d) — skipping virtual device",
-                        group_name, len(member_devs), len(ips),
+                        "(%d/%d) — skipping virtual emitter",
+                        group_name, len(member_emitters), len(ips),
                     )
                     continue
                 group_id: str = _group_id_from_name(group_name)
@@ -414,15 +424,27 @@ class DeviceManager:
                 if old_ctrl is not None:
                     old_ctrl.stop(fade_ms=0)
                     del self._controllers[group_id]
-                vdev: VirtualMultizoneDevice = VirtualMultizoneDevice(
-                    member_devs, name=group_name, owns_devices=False,
+                vem: VirtualMultizoneEmitter = VirtualMultizoneEmitter(
+                    member_emitters, name=group_name, owns_emitters=False,
                 )
-                self._devices[group_id] = vdev
+                new_emitters[group_id] = vem
                 logging.info(
-                    "  group '%s' — %d devices, %d zones",
-                    group_name, len(member_devs), vdev.zone_count,
+                    "  group '%s' — %d emitters, %d zones",
+                    group_name, len(member_emitters), vem.zone_count,
                 )
 
+            # Clean up controllers for emitter IDs that no longer exist
+            # (e.g., groups whose members all went offline).
+            gone_ids: set[str] = set(self._emitters) - set(new_emitters)
+            for eid in gone_ids:
+                stale_ctrl: Optional[Controller] = self._controllers.pop(
+                    eid, None,
+                )
+                if stale_ctrl is not None:
+                    stale_ctrl.stop(fade_ms=0)
+                self._overrides.pop(eid, None)
+
+            self._emitters = new_emitters
             self._ready = True
 
         return self._devices_as_list()
@@ -433,7 +455,11 @@ class DeviceManager:
         return self._ready
 
     def get_device(self, ip: str) -> Optional[LifxDevice]:
-        """Look up a cached device by IP.
+        """Look up a cached LIFX device by IP.
+
+        Only returns individual :class:`LifxDevice` instances — not
+        virtual groups.  Use :meth:`get_emitter` for the universal
+        registry that includes groups.
 
         Args:
             ip: Device IP address.
@@ -443,6 +469,23 @@ class DeviceManager:
         """
         with self._lock:
             return self._devices.get(ip)
+
+    def get_emitter(self, device_id: str) -> Optional[Emitter]:
+        """Look up an emitter by device ID (IP or group identifier).
+
+        This is the universal lookup — covers both individual
+        :class:`LifxEmitter` instances and :class:`VirtualMultizoneEmitter`
+        groups.
+
+        Args:
+            device_id: Device IP address or group identifier
+                       (e.g., ``"group:porch"``).
+
+        Returns:
+            The :class:`Emitter`, or ``None`` if not found.
+        """
+        with self._lock:
+            return self._emitters.get(device_id)
 
     def get_controller(self, ip: str) -> Optional[Controller]:
         """Look up an existing Controller by IP (does not create one).
@@ -457,20 +500,20 @@ class DeviceManager:
             return self._controllers.get(ip)
 
     def get_or_create_controller(self, ip: str) -> Optional[Controller]:
-        """Get or lazily create a Controller for a device.
+        """Get or lazily create a Controller for an emitter.
 
         Args:
-            ip: Device IP address.
+            ip: Device IP address or group identifier.
 
         Returns:
-            A :class:`Controller`, or ``None`` if the device is unknown.
+            A :class:`Controller`, or ``None`` if the emitter is unknown.
         """
         with self._lock:
-            if ip not in self._devices:
+            if ip not in self._emitters:
                 return None
             if ip not in self._controllers:
-                dev: LifxDevice = self._devices[ip]
-                self._controllers[ip] = Controller([dev])
+                em: Emitter = self._emitters[ip]
+                self._controllers[ip] = Controller([em])
             return self._controllers[ip]
 
     def play(
@@ -512,13 +555,13 @@ class DeviceManager:
             merged: dict[str, Any] = dict(saved)
             merged.update(params)
             params = merged
-        # Power on the device before playing.  The persistent committed
+        # Power on the emitter before playing.  The persistent committed
         # state is managed by stop() and reset() — not here — so the
         # render loop's rapid writes don't flicker against a black fallback.
-        dev: Optional[LifxDevice] = self.get_device(ip)
-        if dev is not None:
+        em: Optional[Emitter] = self.get_emitter(ip)
+        if em is not None:
             try:
-                dev.set_power(on=True, duration_ms=0)
+                em.power_on(duration_ms=0)
             except Exception:
                 pass
         ctrl.play(effect_name, bindings=bindings,
@@ -556,7 +599,7 @@ class DeviceManager:
         """Get the current effect status for a device.
 
         Args:
-            ip: Device IP address.
+            ip: Device IP address or group identifier.
 
         Returns:
             A status dict, or a minimal dict if no controller exists.
@@ -565,7 +608,7 @@ class DeviceManager:
             KeyError: If the device IP is not configured.
         """
         with self._lock:
-            if ip not in self._devices:
+            if ip not in self._emitters:
                 raise KeyError(f"Unknown device: {ip}")
             ctrl: Optional[Controller] = self._controllers.get(ip)
 
@@ -576,21 +619,15 @@ class DeviceManager:
             result["overridden"] = overridden
             return result
 
-        # No controller yet — return idle status.
-        dev: LifxDevice = self._devices[ip]
+        # No controller yet — return idle status from the emitter.
+        em: Emitter = self._emitters[ip]
         return {
             "running": False,
             "effect": None,
             "params": {},
             "fps": 0,
             "overridden": overridden,
-            "devices": [{
-                "ip": dev.ip,
-                "mac": dev.mac_str,
-                "label": dev.label,
-                "product": dev.product_name,
-                "zones": dev.zone_count,
-            }],
+            "devices": [em.get_info()],
         }
 
     def set_power(self, ip: str, on: bool) -> dict[str, Any]:
@@ -601,8 +638,11 @@ class DeviceManager:
         Without this, the device shows old effect colors the next time
         it powers on — even hours or days later.
 
+        Works for both individual devices and virtual groups — the
+        emitter interface handles fan-out to group members.
+
         Args:
-            ip: Device IP address.
+            ip: Device IP address or group identifier.
             on: ``True`` to power on, ``False`` to power off.
 
         Returns:
@@ -611,20 +651,23 @@ class DeviceManager:
         Raises:
             KeyError: If the device IP is not configured.
         """
-        dev: Optional[LifxDevice] = self.get_device(ip)
-        if dev is None:
+        em: Optional[Emitter] = self.get_emitter(ip)
+        if em is None:
             raise KeyError(f"Unknown device: {ip}")
 
         # Blank all zones before powering off so the firmware's stored
         # state is clean.  Without this, the device flashes stale colors
         # the next time it powers on.
-        if not on and dev.is_multizone and dev.zone_count:
-            blank: list[tuple[int, int, int, int]] = [
+        if not on and em.is_multizone and em.zone_count:
+            blank: list[HSBK] = [
                 (0, 0, 0, KELVIN_DEFAULT)
-            ] * dev.zone_count
-            dev.set_zones(blank, duration_ms=0, rapid=False)
+            ] * em.zone_count
+            em.send_zones(blank, duration_ms=0, rapid=False)
 
-        dev.set_power(on=on, duration_ms=DEFAULT_FADE_MS)
+        if on:
+            em.power_on(duration_ms=DEFAULT_FADE_MS)
+        else:
+            em.power_off(duration_ms=DEFAULT_FADE_MS)
         return {"ip": ip, "power": "on" if on else "off"}
 
     def reset(self, ip: str) -> dict[str, Any]:
@@ -632,7 +675,10 @@ class DeviceManager:
 
         This is the nuclear option for cleaning a device that has stale
         zone colors or a firmware-level multizone effect running inside
-        the hardware.  Steps:
+        the hardware.  For virtual groups, resets each member device
+        individually.
+
+        Steps per device:
 
         1. Stop any running software effect (immediate, no fade).
         2. Disable any firmware-level multizone effect (type 508 OFF).
@@ -641,7 +687,7 @@ class DeviceManager:
         5. Power off.
 
         Args:
-            ip: Device IP address.
+            ip: Device IP address or group identifier.
 
         Returns:
             A dict confirming the reset.
@@ -649,8 +695,8 @@ class DeviceManager:
         Raises:
             KeyError: If the device IP is not configured.
         """
-        dev: Optional[LifxDevice] = self.get_device(ip)
-        if dev is None:
+        em: Optional[Emitter] = self.get_emitter(ip)
+        if em is None:
             raise KeyError(f"Unknown device: {ip}")
 
         # 1. Stop any running software effect immediately.
@@ -658,35 +704,49 @@ class DeviceManager:
         if ctrl is not None:
             ctrl.stop(fade_ms=0)
 
-        # 2. Clear any firmware-level multizone effect.
-        if dev.is_multizone:
-            try:
-                dev.clear_firmware_effect()
-                logging.info("Reset %s: firmware effect cleared", ip)
-            except Exception as exc:
-                logging.warning(
-                    "Reset %s: clear_firmware_effect failed: %s", ip, exc,
-                )
+        # Collect the LifxEmitters to reset (single device or group members).
+        if isinstance(em, VirtualMultizoneEmitter):
+            lifx_members: list[LifxEmitter] = [
+                m for m in em.get_emitter_list()
+                if isinstance(m, LifxEmitter)
+            ]
+        elif isinstance(em, LifxEmitter):
+            lifx_members = [em]
+        else:
+            # Non-LIFX emitters don't need firmware reset.
+            return {"ip": ip, "reset": False}
 
-        # 3. Power on so zone writes are accepted.
-        dev.set_power(on=True, duration_ms=0)
-        time_mod.sleep(0.1)  # Brief delay for device to wake up.
+        for lem in lifx_members:
+            dev: LifxDevice = lem.transport
 
-        # 4. Clear the persistent committed state with set_color (type 102)
-        # and also blank zones with set_zones (type 510).  set_color
-        # updates the device's persistent fallback state; set_zones
-        # only updates the live overlay.
-        dev.set_color(0, 0, 0, KELVIN_DEFAULT, duration_ms=0)
-        if dev.is_multizone and dev.zone_count:
-            blank: list[tuple[int, int, int, int]] = [
-                (0, 0, 0, KELVIN_DEFAULT)
-            ] * dev.zone_count
-            dev.set_zones(blank, duration_ms=0, rapid=False)
+            # 2. Clear any firmware-level multizone effect.
+            if dev.is_multizone:
+                try:
+                    dev.clear_firmware_effect()
+                    logging.info("Reset %s: firmware effect cleared", dev.ip)
+                except Exception as exc:
+                    logging.warning(
+                        "Reset %s: clear_firmware_effect failed: %s",
+                        dev.ip, exc,
+                    )
 
-        # 5. Power off.
-        dev.set_power(on=False, duration_ms=0)
+            # 3. Power on so zone writes are accepted.
+            dev.set_power(on=True, duration_ms=0)
+            time_mod.sleep(0.1)  # Brief delay for device to wake up.
 
-        logging.info("Reset %s: device cleaned and powered off", ip)
+            # 4. Clear the persistent committed state with set_color
+            # (type 102) and also blank zones with set_zones (type 510).
+            dev.set_color(0, 0, 0, KELVIN_DEFAULT, duration_ms=0)
+            if dev.is_multizone and dev.zone_count:
+                blank: list[HSBK] = [
+                    (0, 0, 0, KELVIN_DEFAULT)
+                ] * dev.zone_count
+                dev.set_zones(blank, duration_ms=0, rapid=False)
+
+            # 5. Power off.
+            dev.set_power(on=False, duration_ms=0)
+
+        logging.info("Reset %s: device(s) cleaned and powered off", ip)
         return {"ip": ip, "reset": True}
 
     def identify(
@@ -702,16 +762,19 @@ class DeviceManager:
         in a sine wave for :data:`IDENTIFY_DURATION_SECONDS`, then powers
         the device off.
 
+        Works for both individual devices and virtual groups — the
+        emitter interface handles fan-out to group members.
+
         Args:
-            ip:          Device IP address.
+            ip:          Device IP address or group identifier.
             on_complete: Optional callback invoked when the pulse finishes
                          (e.g. to clear a phone override).
 
         Raises:
             KeyError: If the device IP is not configured.
         """
-        dev: Optional[LifxDevice] = self.get_device(ip)
-        if dev is None:
+        em: Optional[Emitter] = self.get_emitter(ip)
+        if em is None:
             raise KeyError(f"Unknown device: {ip}")
 
         # Stop any running effect so identify is visible.
@@ -722,7 +785,7 @@ class DeviceManager:
         def _pulse() -> None:
             """Background pulse loop."""
             try:
-                dev.set_power(on=True, duration_ms=0)
+                em.power_on(duration_ms=0)
                 start: float = time_mod.monotonic()
                 while time_mod.monotonic() - start < IDENTIFY_DURATION_SECONDS:
                     elapsed: float = time_mod.monotonic() - start
@@ -735,16 +798,16 @@ class DeviceManager:
                     )
                     bri: int = int(bri_frac * HSBK_MAX)
 
-                    if dev.is_multizone:
-                        color = (0, 0, bri, KELVIN_DEFAULT)
-                        colors = [color] * dev.zone_count
-                        dev.set_zones(colors, duration_ms=0, rapid=True)
+                    if em.is_multizone:
+                        color: HSBK = (0, 0, bri, KELVIN_DEFAULT)
+                        colors: list[HSBK] = [color] * (em.zone_count or 1)
+                        em.send_zones(colors, duration_ms=0, rapid=True)
                     else:
-                        dev.set_color(0, 0, bri, KELVIN_DEFAULT, duration_ms=0)
+                        em.send_color(0, 0, bri, KELVIN_DEFAULT, duration_ms=0)
 
                     time_mod.sleep(IDENTIFY_FRAME_INTERVAL)
 
-                dev.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
+                em.power_off(duration_ms=DEFAULT_FADE_MS)
             except Exception as exc:
                 logging.warning("Identify pulse failed for %s: %s", ip, exc)
             finally:
@@ -775,13 +838,13 @@ class DeviceManager:
         Raises:
             KeyError: If the device/group is not configured.
         """
-        dev = self.get_device(ip)
-        if dev is None:
+        em: Optional[Emitter] = self.get_emitter(ip)
+        if em is None:
             raise KeyError(f"Unknown device: {ip}")
 
         # Virtual group: query each member device and concatenate.
-        if isinstance(dev, VirtualMultizoneDevice):
-            return self._get_group_colors(dev)
+        if isinstance(em, VirtualMultizoneEmitter):
+            return self._get_group_colors(em)
 
         # Individual device: use a temporary device to avoid contention.
         tmp: LifxDevice = LifxDevice(ip)
@@ -808,20 +871,26 @@ class DeviceManager:
             tmp.close()
 
     def _get_group_colors(
-        self, vdev: VirtualMultizoneDevice,
+        self, vem: VirtualMultizoneEmitter,
     ) -> Optional[list[dict[str, int]]]:
         """Query each member device of a virtual group and concatenate.
 
+        Iterates member emitters, accesses the LIFX transport for each,
+        and queries zone colors directly from the hardware.
+
         Args:
-            vdev: The virtual multizone device.
+            vem: The virtual multizone emitter.
 
         Returns:
             A list of ``{h, s, b, k}`` dicts across all members, or
             ``None`` if all queries fail.
         """
         all_colors: list[dict[str, int]] = []
-        for member in vdev.get_device_list():
-            tmp: LifxDevice = LifxDevice(member.ip)
+        for member_em in vem.get_emitter_list():
+            if not isinstance(member_em, LifxEmitter):
+                continue
+            member_ip: str = member_em.transport.ip
+            tmp: LifxDevice = LifxDevice(member_ip)
             try:
                 tmp.query_version()
                 if tmp.is_multizone:
@@ -837,7 +906,9 @@ class DeviceManager:
                         for h, s, b, k in colors
                     )
             except Exception as exc:
-                logging.warning("get_colors member %s failed: %s", member.ip, exc)
+                logging.warning(
+                    "get_colors member %s failed: %s", member_ip, exc,
+                )
             finally:
                 tmp.close()
         return all_colors if all_colors else None
@@ -1057,41 +1128,45 @@ class DeviceManager:
     # -- Internal helpers ---------------------------------------------------
 
     def _devices_as_list(self) -> list[dict[str, Any]]:
-        """Build a JSON-safe list of device info dicts.
+        """Build a JSON-safe list of emitter info dicts.
 
-        Virtual group devices include ``is_group: true`` and a
-        ``member_ips`` array.  Individual devices have
+        Virtual group emitters include ``is_group: true`` and a
+        ``member_ips`` array.  Individual emitters have
         ``is_group: false``.
 
         Returns:
-            A sorted list of device metadata dicts.
+            A sorted list of emitter metadata dicts.
         """
         result: list[dict[str, Any]] = []
-        for dev_id, dev in sorted(self._devices.items()):
+        for dev_id, em in sorted(self._emitters.items()):
             with self._lock:
                 ctrl: Optional[Controller] = self._controllers.get(dev_id)
             current_effect: Optional[str] = None
             if ctrl is not None:
                 status: dict[str, Any] = ctrl.get_status()
                 current_effect = status.get("effect")
-            is_group: bool = isinstance(dev, VirtualMultizoneDevice)
+            is_group: bool = isinstance(em, VirtualMultizoneEmitter)
             nickname: Optional[str] = self._nicknames.get(dev_id)
             entry: dict[str, Any] = {
                 "ip": dev_id,
-                "mac": dev.mac_str,
-                "label": dev.label,
+                "label": em.label,
                 "nickname": nickname,
-                "product": dev.product_name,
-                "group": dev.group,
-                "zones": dev.zone_count,
-                "is_multizone": dev.is_multizone,
+                "product": em.product_name,
+                "zones": em.zone_count,
+                "is_multizone": em.is_multizone,
                 "current_effect": current_effect,
                 "overridden": self.is_overridden(dev_id),
                 "is_group": is_group,
             }
-            if is_group:
+            # LIFX-specific fields from the transport layer.
+            if isinstance(em, LifxEmitter):
+                entry["mac"] = em.transport.mac_str
+                entry["group"] = em.transport.group
+            elif is_group:
+                entry["mac"] = ""
+                entry["group"] = em.label
                 entry["member_ips"] = [
-                    d.ip for d in dev.get_device_list()
+                    m.emitter_id for m in em.get_emitter_list()
                 ]
             result.append(entry)
         return result
@@ -1113,6 +1188,8 @@ class DeviceManager:
         dev: Optional[LifxDevice] = self._devices.pop(ip, None)
         if dev is not None:
             dev.close()
+        # Remove from emitter registry (socket already closed via dev).
+        self._emitters.pop(ip, None)
         self._overrides.pop(ip, None)
 
     def shutdown(self) -> None:
@@ -2101,8 +2178,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         queries to avoid socket contention with the engine.  The stream
         runs until the client disconnects.
         """
-        dev: Optional[LifxDevice] = self.device_manager.get_device(ip)
-        if dev is None:
+        em: Optional[Emitter] = self.device_manager.get_emitter(ip)
+        if em is None:
             self._send_json(404, {"error": "Device not found"})
             return
 

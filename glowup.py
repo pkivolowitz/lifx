@@ -17,7 +17,7 @@ declarations.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.9"
+__version__ = "2.0"
 
 import argparse
 import json
@@ -29,8 +29,11 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from transport import LifxDevice, discover_devices
-from engine import Controller, VirtualMultizoneDevice
-from effects import get_registry, get_effect_names, create_effect, HSBK_MAX, KELVIN_DEFAULT
+from emitters import Emitter
+from emitters.lifx import LifxEmitter
+from emitters.virtual import VirtualMultizoneEmitter
+from engine import Controller
+from effects import get_registry, get_effect_names, create_effect, HSBK, HSBK_MAX, KELVIN_DEFAULT
 from colorspace import set_lerp_method
 
 # ---------------------------------------------------------------------------
@@ -135,33 +138,21 @@ def _print(*args: Any, **kwargs: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Null device — geometry-only stub for --sim-only mode
+# Null emitter — geometry-only stub for --sim-only mode
 # ---------------------------------------------------------------------------
 
-class _NullDevice:
-    """Geometry-only device stub used by ``--sim-only``.
+class _NullEmitter(Emitter):
+    """Geometry-only emitter stub used by ``--sim-only``.
 
-    Mirrors the properties that :class:`Engine` and :class:`Controller`
-    read from a real device (zone count, label, etc.) but makes every
-    write method a silent no-op.  This guarantees that ``--sim-only``
-    never sends a single UDP packet to physical hardware after the
-    initial query.
+    Implements the :class:`Emitter` ABC with no-op write methods.
+    This guarantees that ``--sim-only`` never sends a single UDP packet
+    to physical hardware after the initial query.
 
     Attributes:
-        zone_count:   Number of zones copied from the real device.
-        is_multizone: Always ``True`` so the engine uses the
-                      ``set_zones`` path (zone-accurate rendering).
-        is_polychrome: Always ``True`` (unused for the multizone path).
-        label:        Device or group label for display.
-        product_name: Human-readable product string.
-        product:      Non-``None`` so engine readiness checks pass.
-        ip:           Display-only address string.
-        mac_str:      Fixed ``"sim-only"`` sentinel.
-        group:        Empty string placeholder.
         _pre_poly_map: Pre-computed per-zone polychrome list extracted
-                      from the real device before it was closed.  Used
-                      by :func:`_build_polychrome_map` to produce an
-                      accurate simulator colour map.
+                       from the real device before it was closed.  Used
+                       by :func:`_build_polychrome_map` to produce an
+                       accurate simulator colour map.
     """
 
     def __init__(
@@ -182,33 +173,62 @@ class _NullDevice:
             pre_poly_map:  Per-zone polychrome flags from the real
                            device, extracted before it was closed.
         """
-        self.zone_count: int = zone_count
-        self.is_multizone: bool = True
-        self.is_polychrome: bool = True
-        self.label: str = label
-        self.product_name: str = product_name
-        self.product: int = 0       # non-None so engine checks pass
-        self.ip: str = ip
-        self.mac_str: str = "sim-only"
-        self.group: str = ""
+        self._zone_count: int = zone_count
+        self._label: str = label
+        self._product_name: str = product_name
+        self._ip: str = ip
         self._pre_poly_map: list[bool] = pre_poly_map
 
-    # All write methods are silent no-ops — no packets reach the lights.
+    # --- Emitter properties ---
 
-    def set_zones(self, *args: Any, **kwargs: Any) -> None:
+    @property
+    def zone_count(self) -> Optional[int]:
+        """Number of zones copied from the real device."""
+        return self._zone_count
+
+    @property
+    def is_multizone(self) -> bool:
+        """Always ``True`` so the engine uses the zone-accurate path."""
+        return True
+
+    @property
+    def emitter_id(self) -> str:
+        """Display-only address string."""
+        return self._ip
+
+    @property
+    def label(self) -> str:
+        """Device or group label for display."""
+        return self._label
+
+    @property
+    def product_name(self) -> str:
+        """Human-readable product string."""
+        return self._product_name
+
+    # --- Frame dispatch (all no-ops) ---
+
+    def send_zones(self, colors: list[HSBK], duration_ms: int = 0,
+                   rapid: bool = True) -> None:
         """No-op — sim-only mode never writes to physical devices."""
 
-    def set_color(self, *args: Any, **kwargs: Any) -> None:
+    def send_color(self, hue: int, sat: int, bri: int, kelvin: int,
+                   duration_ms: int = 0) -> None:
         """No-op — sim-only mode never writes to physical devices."""
 
-    def set_power(self, *args: Any, **kwargs: Any) -> None:
+    # --- Lifecycle (all no-ops) ---
+
+    def prepare_for_rendering(self) -> None:
+        """No-op — no hardware to prepare."""
+
+    def power_on(self, duration_ms: int = 0) -> None:
+        """No-op — sim-only mode never writes to physical devices."""
+
+    def power_off(self, duration_ms: int = 0) -> None:
         """No-op — sim-only mode never writes to physical devices."""
 
     def close(self) -> None:
         """No-op — the real socket was closed before this stub was created."""
-
-    def query_all(self) -> None:
-        """No-op — geometry was already obtained from the real device."""
 
 
 # ---------------------------------------------------------------------------
@@ -615,35 +635,44 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     _print("Done.")
 
 
-def _build_polychrome_map(dev: Any) -> list[bool]:
+def _build_polychrome_map(em: Any) -> list[bool]:
     """Build a per-zone list indicating color vs. monochrome capability.
 
-    For a :class:`_NullDevice` (``--sim-only``), uses the pre-computed
+    For a :class:`_NullEmitter` (``--sim-only``), uses the pre-computed
     map that was extracted from the real device before it was closed.
 
-    For a :class:`VirtualMultizoneDevice`, each zone inherits the
-    polychrome status of its underlying physical device.  For a plain
-    :class:`LifxDevice`, all zones share the device's status.
+    For a :class:`VirtualMultizoneEmitter`, each zone inherits the
+    polychrome status of its underlying physical emitter.  For a
+    :class:`LifxEmitter`, all zones share the device's status.
 
     Args:
-        dev: A device, virtual multizone device, or null device stub.
+        em: An emitter, virtual multizone emitter, or null emitter stub.
 
     Returns:
         A list of booleans, one per zone.  ``True`` = color,
         ``False`` = monochrome (simulator renders in grayscale).
     """
-    # _NullDevice carries a pre-computed map extracted before real device
+    # _NullEmitter carries a pre-computed map extracted before real device
     # sockets were closed.
-    if hasattr(dev, "_pre_poly_map") and dev._pre_poly_map is not None:
-        return dev._pre_poly_map
+    if hasattr(em, "_pre_poly_map") and em._pre_poly_map is not None:
+        return em._pre_poly_map
 
-    # VirtualMultizoneDevice exposes _zone_map with (device, zone_idx) tuples.
-    if hasattr(dev, "_zone_map"):
-        return [d.is_polychrome for d, _ in dev._zone_map]
+    # VirtualMultizoneEmitter exposes _zone_map with (emitter, zone_idx) tuples.
+    if hasattr(em, "_zone_map"):
+        result: list[bool] = []
+        for member_em, _ in em._zone_map:
+            if isinstance(member_em, LifxEmitter):
+                result.append(bool(member_em.transport.is_polychrome))
+            else:
+                result.append(True)  # Non-LIFX: assume polychrome.
+        return result
 
-    # Single device: all zones share the same polychrome status.
-    zones: int = dev.zone_count if dev.zone_count else 1
-    poly: bool = bool(getattr(dev, "is_polychrome", True))
+    # Single LifxEmitter: all zones share the same polychrome status.
+    zones: int = em.zone_count if em.zone_count else 1
+    if isinstance(em, LifxEmitter):
+        poly: bool = bool(em.transport.is_polychrome)
+    else:
+        poly = True
     return [poly] * zones
 
 
@@ -696,7 +725,7 @@ def cmd_play(args: argparse.Namespace) -> None:
 
     # --- Device-free simulator mode ------------------------------------------
     # When --zones is specified, skip all network I/O and create a
-    # _NullDevice directly with the requested geometry.
+    # _NullEmitter directly with the requested geometry.
     if virtual_zones > 0:
         if has_ip or has_group:
             _print(
@@ -706,7 +735,7 @@ def cmd_play(args: argparse.Namespace) -> None:
             )
             sys.exit(1)
         poly_map: list[bool] = [True] * virtual_zones
-        dev = _NullDevice(
+        em: Emitter = _NullEmitter(
             zone_count=virtual_zones,
             label="virtual",
             product_name="Virtual Device",
@@ -718,18 +747,19 @@ def cmd_play(args: argparse.Namespace) -> None:
 
     # --- Connect to device(s) ------------------------------------------------
     elif has_group:
-        # Virtual multizone: load group, connect all devices, wrap.
+        # Virtual multizone: load group, connect all devices, wrap in emitters.
         ips: list[str] = _load_group(args.config, args.group)
         _print(f"Connecting to group '{args.group}' ({len(ips)} devices)...",
               flush=True)
         devices: list[LifxDevice] = _connect_group(ips)
-        dev = VirtualMultizoneDevice(devices)
-        _print(f"  Virtual multizone: {dev.zone_count} zones", flush=True)
+        member_emitters: list[Emitter] = [LifxEmitter(d) for d in devices]
+        em = VirtualMultizoneEmitter(member_emitters, name=args.group)
+        _print(f"  Virtual multizone: {em.zone_count} zones", flush=True)
     else:
         # Single device mode.
         _print(f"Connecting to {args.ip}...", flush=True)
         try:
-            dev = LifxDevice(args.ip)
+            dev: LifxDevice = LifxDevice(args.ip)
         except ValueError as exc:
             _print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -750,19 +780,21 @@ def cmd_play(args: argparse.Namespace) -> None:
         else:
             _print("  Monochrome bulb (BT.709 luma mode)", flush=True)
 
+        em = LifxEmitter(dev)
+
     # --- Sim-only: extract geometry then close real sockets immediately --------
-    # From this point on, if sim_only is active, dev is a _NullDevice and
+    # From this point on, if sim_only is active, em is a _NullEmitter and
     # no further packets will be sent to the physical lights.
-    # Skip when --zones was used — dev is already a _NullDevice.
+    # Skip when --zones was used — em is already a _NullEmitter.
     if sim_only and virtual_zones <= 0:
-        pre_poly: list[bool] = _build_polychrome_map(dev)
-        null_label: str = getattr(dev, "label", None) or "?"
-        null_product: str = getattr(dev, "product_name", None) or "?"
-        null_ip: str = getattr(dev, "ip", None) or "sim-only"
-        null_zones: int = dev.zone_count or 1
+        pre_poly: list[bool] = _build_polychrome_map(em)
+        null_label: str = em.label or "?"
+        null_product: str = em.product_name or "?"
+        null_ip: str = em.emitter_id or "sim-only"
+        null_zones: int = em.zone_count or 1
         # Close real sockets — the null stub takes over from here.
-        dev.close()
-        dev = _NullDevice(
+        em.close()
+        em = _NullEmitter(
             zone_count=null_zones,
             label=null_label,
             product_name=null_product,
@@ -787,7 +819,7 @@ def cmd_play(args: argparse.Namespace) -> None:
             f"Available: {', '.join(get_effect_names())}",
             file=sys.stderr,
         )
-        dev.close()
+        em.close()
         sys.exit(1)
 
     # Collect only the parameters the user explicitly provided on the CLI.
@@ -808,20 +840,20 @@ def cmd_play(args: argparse.Namespace) -> None:
         zpb_val: int = getattr(args, "zpb", 1)
         effect_params["zones_per_bulb"] = zpb_val
 
-    # --- Ensure device is powered on before sending colors --------------------
-    # Skipped in sim-only mode: _NullDevice.set_power is a no-op, but
+    # --- Ensure emitter is powered on before sending colors --------------------
+    # Skipped in sim-only mode: _NullEmitter methods are no-ops, but
     # being explicit avoids confusing log output about powering on.
     if not sim_only:
-        dev.set_power(on=True, duration_ms=0)
+        em.power_on(duration_ms=0)
 
     # --- Optional simulator window (--sim or --sim-only) ----------------------
     sim = None
     if getattr(args, "sim", False) or sim_only:
         from simulator import create_simulator
-        poly_map: list[bool] = _build_polychrome_map(dev)
+        poly_map: list[bool] = _build_polychrome_map(em)
         zpb: int = getattr(args, "zpb", 1)
         zoom_val: int = getattr(args, "zoom", 1)
-        sim = create_simulator(dev.zone_count or 1, effect_name,
+        sim = create_simulator(em.zone_count or 1, effect_name,
                                polychrome_map=poly_map,
                                zones_per_bulb=zpb,
                                zoom=zoom_val)
@@ -832,13 +864,13 @@ def cmd_play(args: argparse.Namespace) -> None:
                 "Install it (e.g. brew install python-tk) and retry.",
                 file=sys.stderr,
             )
-            dev.close()
+            em.close()
             sys.exit(1)
 
     frame_cb = sim.update if sim is not None else None
 
     # --- Start the render engine ----------------------------------------------
-    ctrl: Controller = Controller([dev], fps=args.fps,
+    ctrl: Controller = Controller([em], fps=args.fps,
                                   frame_callback=frame_cb)
     ctrl.play(effect_name, **effect_params)
 
@@ -877,14 +909,14 @@ def cmd_play(args: argparse.Namespace) -> None:
         stop_requested.wait()
 
     _print("\nStopping...")
-    # In sim-only mode dev is a _NullDevice; skip the fade and power-off
+    # In sim-only mode em is a _NullEmitter; skip the fade and power-off
     # so the intent is clear even though the no-ops would be harmless.
     if sim_only:
         ctrl.stop(fade_ms=0)
     else:
         ctrl.stop(fade_ms=DEFAULT_FADE_MS)
-        dev.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
-    dev.close()
+        em.power_off(duration_ms=DEFAULT_FADE_MS)
+    em.close()
     _print("Done.")
 
 

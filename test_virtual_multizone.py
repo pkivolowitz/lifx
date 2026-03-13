@@ -1,217 +1,285 @@
-"""Test VirtualMultizoneDevice zone mapping and dispatch.
+"""Test VirtualMultizoneEmitter zone mapping and dispatch.
 
-Creates mock devices of all three types (multizone, color single, monochrome
-single), builds a virtual group, and verifies that:
-  1. Zone map expands multizone devices to their full zone count.
-  2. set_zones() batches multizone colors into one call per device.
-  3. Single color bulbs receive set_color() with full HSBK.
-  4. Monochrome bulbs receive BT.709 luma-converted brightness.
-  5. set_color() (fade-to-black) reaches all devices.
-  6. set_power() reaches all devices.
+Creates mock emitters of multiple types (multizone, single-zone), builds
+a virtual group, and verifies that:
+  1. Zone map expands multizone emitters to their full zone count.
+  2. send_zones() batches multizone colors into one call per emitter.
+  3. Single-zone emitters receive send_color() with full HSBK.
+  4. send_color() (fade-to-black) reaches all emitters.
+  5. power_on/power_off reaches all emitters.
+
+Monochrome luma conversion is now internal to LifxEmitter, not the
+virtual group.  These tests verify the dispatch layer only.
+
+The backward-compatible import ``from engine import VirtualMultizoneDevice``
+is tested alongside the canonical ``VirtualMultizoneEmitter`` import.
 """
 
 from __future__ import annotations
 
 import sys
+from typing import Optional
+
+from effects import HSBK
+from emitters import Emitter
 
 
-class MockDevice:
-    """Minimal mock implementing the LifxDevice interface."""
+# ---------------------------------------------------------------------------
+# Mock emitter for testing
+# ---------------------------------------------------------------------------
+
+class MockEmitter(Emitter):
+    """Minimal mock implementing the Emitter ABC."""
 
     def __init__(
         self,
-        ip: str,
+        emitter_id: str,
         zone_count: int,
         is_multizone: bool,
-        is_polychrome: bool,
     ) -> None:
-        self.ip = ip
-        self.zone_count = zone_count
-        self.is_multizone = is_multizone
-        self._is_polychrome = is_polychrome
-        self.label = f"mock-{ip}"
-        self.product_name = "Mock"
-        self.mac_str = "00:00:00:00:00:00"
-        self.product = 1
-        self.group = ""
+        self._emitter_id: str = emitter_id
+        self._zone_count: int = zone_count
+        self._is_multizone: bool = is_multizone
+        self._label: str = f"mock-{emitter_id}"
+        self._product_name: str = "Mock"
 
         # Record calls for assertions.
-        self.set_color_calls: list[tuple] = []
-        self.set_zones_calls: list[tuple] = []
-        self.set_power_calls: list[tuple] = []
+        self.send_color_calls: list[tuple] = []
+        self.send_zones_calls: list[tuple] = []
+        self.power_on_calls: list[tuple] = []
+        self.power_off_calls: list[tuple] = []
         self.close_called: bool = False
+        self.prepare_called: bool = False
 
     @property
-    def is_polychrome(self) -> bool:
-        return self._is_polychrome
+    def zone_count(self) -> Optional[int]:
+        return self._zone_count
 
-    def set_color(self, h, s, b, k, duration_ms=0):
-        self.set_color_calls.append((h, s, b, k, duration_ms))
+    @property
+    def is_multizone(self) -> bool:
+        return self._is_multizone
 
-    def set_zones(self, colors, duration_ms=0, rapid=True):
-        self.set_zones_calls.append((list(colors), duration_ms, rapid))
+    @property
+    def emitter_id(self) -> str:
+        return self._emitter_id
 
-    def set_power(self, on, duration_ms=0):
-        self.set_power_calls.append((on, duration_ms))
+    @property
+    def label(self) -> str:
+        return self._label
 
-    def close(self):
+    @property
+    def product_name(self) -> str:
+        return self._product_name
+
+    def send_zones(self, colors: list[HSBK], duration_ms: int = 0,
+                   rapid: bool = True) -> None:
+        self.send_zones_calls.append((list(colors), duration_ms, rapid))
+
+    def send_color(self, hue: int, sat: int, bri: int, kelvin: int,
+                   duration_ms: int = 0) -> None:
+        self.send_color_calls.append((hue, sat, bri, kelvin, duration_ms))
+
+    def prepare_for_rendering(self) -> None:
+        self.prepare_called = True
+
+    def power_on(self, duration_ms: int = 0) -> None:
+        self.power_on_calls.append((duration_ms,))
+
+    def power_off(self, duration_ms: int = 0) -> None:
+        self.power_off_calls.append((duration_ms,))
+
+    def close(self) -> None:
         self.close_called = True
 
 
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
 def test_zone_map_expansion():
-    """Multizone devices contribute all zones; single bulbs contribute 1."""
-    from engine import VirtualMultizoneDevice
+    """Multizone emitters contribute all zones; single emitters contribute 1."""
+    from emitters.virtual import VirtualMultizoneEmitter
 
-    string_light = MockDevice("10.0.0.1", zone_count=6, is_multizone=True, is_polychrome=True)
-    color_bulb = MockDevice("10.0.0.2", zone_count=1, is_multizone=False, is_polychrome=True)
-    mono_bulb = MockDevice("10.0.0.3", zone_count=1, is_multizone=False, is_polychrome=False)
+    strip = MockEmitter("10.0.0.1", zone_count=6, is_multizone=True)
+    bulb_a = MockEmitter("10.0.0.2", zone_count=1, is_multizone=False)
+    bulb_b = MockEmitter("10.0.0.3", zone_count=1, is_multizone=False)
 
-    vdev = VirtualMultizoneDevice([string_light, color_bulb, mono_bulb])
+    vem = VirtualMultizoneEmitter([strip, bulb_a, bulb_b])
 
-    assert vdev.zone_count == 8, f"Expected 8 zones (6+1+1), got {vdev.zone_count}"
-    assert vdev.is_multizone is True
-    print(f"  zone_count = {vdev.zone_count} (6 multizone + 1 color + 1 mono) ... OK")
+    assert vem.zone_count == 8, f"Expected 8 zones (6+1+1), got {vem.zone_count}"
+    assert vem.is_multizone is True
+    print(f"  zone_count = {vem.zone_count} (6 multizone + 1 + 1) ... OK")
 
 
-def test_set_zones_dispatch():
-    """set_zones() batches multizone, dispatches singles correctly."""
-    from engine import VirtualMultizoneDevice
+def test_send_zones_dispatch():
+    """send_zones() batches multizone, dispatches singles correctly."""
+    from emitters.virtual import VirtualMultizoneEmitter
 
-    string_light = MockDevice("10.0.0.1", zone_count=6, is_multizone=True, is_polychrome=True)
-    color_bulb = MockDevice("10.0.0.2", zone_count=1, is_multizone=False, is_polychrome=True)
-    mono_bulb = MockDevice("10.0.0.3", zone_count=1, is_multizone=False, is_polychrome=False)
+    strip = MockEmitter("10.0.0.1", zone_count=6, is_multizone=True)
+    bulb_a = MockEmitter("10.0.0.2", zone_count=1, is_multizone=False)
+    bulb_b = MockEmitter("10.0.0.3", zone_count=1, is_multizone=False)
 
-    vdev = VirtualMultizoneDevice([string_light, color_bulb, mono_bulb])
+    vem = VirtualMultizoneEmitter([strip, bulb_a, bulb_b])
 
-    # 8 colors: zones 0-5 → string light, zone 6 → color bulb, zone 7 → mono bulb.
-    colors = [
+    # 8 colors: zones 0-5 → strip, zone 6 → bulb_a, zone 7 → bulb_b.
+    colors: list[HSBK] = [
         (1000 * i, 65535, 32768, 3500) for i in range(8)
     ]
-    vdev.set_zones(colors, duration_ms=0, rapid=True)
+    vem.send_zones(colors, duration_ms=0, rapid=True)
 
-    # String light should get ONE set_zones() call with 6 colors.
-    assert len(string_light.set_zones_calls) == 1, \
-        f"Expected 1 set_zones call, got {len(string_light.set_zones_calls)}"
-    batch_colors = string_light.set_zones_calls[0][0]
+    # Strip should get ONE send_zones() call with 6 colors.
+    assert len(strip.send_zones_calls) == 1, \
+        f"Expected 1 send_zones call, got {len(strip.send_zones_calls)}"
+    batch_colors = strip.send_zones_calls[0][0]
     assert len(batch_colors) == 6, f"Expected 6 colors in batch, got {len(batch_colors)}"
     for i in range(6):
         assert batch_colors[i] == colors[i], \
             f"Zone {i}: expected {colors[i]}, got {batch_colors[i]}"
-    print(f"  String light: 1 set_zones() call, 6 colors batched ... OK")
+    print(f"  Strip: 1 send_zones() call, 6 colors batched ... OK")
 
-    # Color bulb should get ONE set_color() with full HSBK.
-    assert len(color_bulb.set_color_calls) == 1, \
-        f"Expected 1 set_color call, got {len(color_bulb.set_color_calls)}"
-    assert color_bulb.set_color_calls[0] == (6000, 65535, 32768, 3500, 0)
-    assert len(color_bulb.set_zones_calls) == 0
-    print(f"  Color bulb: set_color(6000, 65535, 32768, 3500) ... OK")
+    # Bulb A should get ONE send_color() with full HSBK.
+    assert len(bulb_a.send_color_calls) == 1, \
+        f"Expected 1 send_color call, got {len(bulb_a.send_color_calls)}"
+    assert bulb_a.send_color_calls[0] == (6000, 65535, 32768, 3500, 0)
+    assert len(bulb_a.send_zones_calls) == 0
+    print(f"  Bulb A: send_color(6000, 65535, 32768, 3500) ... OK")
 
-    # Mono bulb should get ONE set_color() with luma-converted brightness.
-    assert len(mono_bulb.set_color_calls) == 1, \
-        f"Expected 1 set_color call, got {len(mono_bulb.set_color_calls)}"
-    h, s, b, k, dur = mono_bulb.set_color_calls[0]
-    assert h == 0 and s == 0, f"Mono should get h=0, s=0; got h={h}, s={s}"
-    assert k == 3500, f"Kelvin should pass through; got {k}"
-    # Brightness should be > 0 (BT.709 luma of a colored pixel).
-    assert b > 0, f"Luma brightness should be > 0, got {b}"
-    print(f"  Mono bulb: set_color(0, 0, {b}, 3500) (BT.709 luma) ... OK")
+    # Bulb B should get ONE send_color() with full HSBK.
+    assert len(bulb_b.send_color_calls) == 1, \
+        f"Expected 1 send_color call, got {len(bulb_b.send_color_calls)}"
+    assert bulb_b.send_color_calls[0] == (7000, 65535, 32768, 3500, 0)
+    print(f"  Bulb B: send_color(7000, 65535, 32768, 3500) ... OK")
 
 
-def test_set_color_broadcast():
-    """set_color() reaches all devices (used for fade-to-black)."""
-    from engine import VirtualMultizoneDevice
+def test_send_color_broadcast():
+    """send_color() reaches all emitters (used for fade-to-black)."""
+    from emitters.virtual import VirtualMultizoneEmitter
 
-    devs = [
-        MockDevice(f"10.0.0.{i}", zone_count=(6 if i == 1 else 1),
-                   is_multizone=(i == 1), is_polychrome=True)
+    emitters = [
+        MockEmitter(f"10.0.0.{i}", zone_count=(6 if i == 1 else 1),
+                    is_multizone=(i == 1))
         for i in range(1, 4)
     ]
-    vdev = VirtualMultizoneDevice(devs)
-    vdev.set_color(0, 0, 0, 3500, duration_ms=500)
+    vem = VirtualMultizoneEmitter(emitters)
+    vem.send_color(0, 0, 0, 3500, duration_ms=500)
 
-    for dev in devs:
-        assert len(dev.set_color_calls) == 1, \
-            f"{dev.ip}: expected 1 set_color call, got {len(dev.set_color_calls)}"
-        assert dev.set_color_calls[0] == (0, 0, 0, 3500, 500)
-    print(f"  set_color(0,0,0,3500) broadcast to all 3 devices ... OK")
+    for em in emitters:
+        assert len(em.send_color_calls) == 1, \
+            f"{em.emitter_id}: expected 1 send_color call, got {len(em.send_color_calls)}"
+        assert em.send_color_calls[0] == (0, 0, 0, 3500, 500)
+    print(f"  send_color(0,0,0,3500) broadcast to all 3 emitters ... OK")
 
 
-def test_set_power_broadcast():
-    """set_power() reaches all devices."""
-    from engine import VirtualMultizoneDevice
+def test_power_broadcast():
+    """power_on/power_off reaches all emitters."""
+    from emitters.virtual import VirtualMultizoneEmitter
 
-    devs = [
-        MockDevice(f"10.0.0.{i}", zone_count=1, is_multizone=False, is_polychrome=True)
+    emitters = [
+        MockEmitter(f"10.0.0.{i}", zone_count=1, is_multizone=False)
         for i in range(1, 6)
     ]
-    vdev = VirtualMultizoneDevice(devs)
-    vdev.set_power(on=True, duration_ms=0)
+    vem = VirtualMultizoneEmitter(emitters)
+    vem.power_on(duration_ms=0)
 
-    for dev in devs:
-        assert len(dev.set_power_calls) == 1
-        assert dev.set_power_calls[0] == (True, 0)
-    print(f"  set_power(on=True) broadcast to all 5 devices ... OK")
+    for em in emitters:
+        assert len(em.power_on_calls) == 1
+        assert em.power_on_calls[0] == (0,)
+    print(f"  power_on() broadcast to all 5 emitters ... OK")
+
+    vem.power_off(duration_ms=500)
+    for em in emitters:
+        assert len(em.power_off_calls) == 1
+        assert em.power_off_calls[0] == (500,)
+    print(f"  power_off(500) broadcast to all 5 emitters ... OK")
 
 
-def test_two_multizone_devices():
-    """Two multizone devices in one group batch independently."""
-    from engine import VirtualMultizoneDevice
+def test_two_multizone_emitters():
+    """Two multizone emitters in one group batch independently."""
+    from emitters.virtual import VirtualMultizoneEmitter
 
-    strip_a = MockDevice("10.0.0.1", zone_count=4, is_multizone=True, is_polychrome=True)
-    strip_b = MockDevice("10.0.0.2", zone_count=3, is_multizone=True, is_polychrome=True)
+    strip_a = MockEmitter("10.0.0.1", zone_count=4, is_multizone=True)
+    strip_b = MockEmitter("10.0.0.2", zone_count=3, is_multizone=True)
 
-    vdev = VirtualMultizoneDevice([strip_a, strip_b])
-    assert vdev.zone_count == 7, f"Expected 7, got {vdev.zone_count}"
+    vem = VirtualMultizoneEmitter([strip_a, strip_b])
+    assert vem.zone_count == 7, f"Expected 7, got {vem.zone_count}"
 
-    colors = [(i * 1000, 65535, 65535, 3500) for i in range(7)]
-    vdev.set_zones(colors)
+    colors: list[HSBK] = [(i * 1000, 65535, 65535, 3500) for i in range(7)]
+    vem.send_zones(colors)
 
     # Strip A: 4 zones.
-    assert len(strip_a.set_zones_calls) == 1
-    assert len(strip_a.set_zones_calls[0][0]) == 4
+    assert len(strip_a.send_zones_calls) == 1
+    assert len(strip_a.send_zones_calls[0][0]) == 4
     for i in range(4):
-        assert strip_a.set_zones_calls[0][0][i] == colors[i]
+        assert strip_a.send_zones_calls[0][0][i] == colors[i]
 
     # Strip B: 3 zones.
-    assert len(strip_b.set_zones_calls) == 1
-    assert len(strip_b.set_zones_calls[0][0]) == 3
+    assert len(strip_b.send_zones_calls) == 1
+    assert len(strip_b.send_zones_calls[0][0]) == 3
     for i in range(3):
-        assert strip_b.set_zones_calls[0][0][i] == colors[4 + i]
+        assert strip_b.send_zones_calls[0][0][i] == colors[4 + i]
 
-    print(f"  Two strips (4+3=7 zones): each gets 1 batched set_zones() ... OK")
+    print(f"  Two strips (4+3=7 zones): each gets 1 batched send_zones() ... OK")
 
 
 def test_all_singles():
-    """Pure single-bulb group (original use case) still works."""
-    from engine import VirtualMultizoneDevice
+    """Pure single-emitter group (original use case) still works."""
+    from emitters.virtual import VirtualMultizoneEmitter
 
-    devs = [
-        MockDevice(f"10.0.0.{i}", zone_count=1, is_multizone=False, is_polychrome=True)
+    emitters = [
+        MockEmitter(f"10.0.0.{i}", zone_count=1, is_multizone=False)
         for i in range(5)
     ]
-    vdev = VirtualMultizoneDevice(devs)
-    assert vdev.zone_count == 5
+    vem = VirtualMultizoneEmitter(emitters)
+    assert vem.zone_count == 5
 
-    colors = [(i * 10000, 65535, 65535, 3500) for i in range(5)]
-    vdev.set_zones(colors)
+    colors: list[HSBK] = [(i * 10000, 65535, 65535, 3500) for i in range(5)]
+    vem.send_zones(colors)
 
-    for i, dev in enumerate(devs):
-        assert len(dev.set_color_calls) == 1
-        assert dev.set_color_calls[0][:4] == colors[i][:4]
-    print(f"  5 single bulbs: 5 individual set_color() calls ... OK")
+    for i, em in enumerate(emitters):
+        assert len(em.send_color_calls) == 1
+        assert em.send_color_calls[0][:4] == colors[i][:4]
+    print(f"  5 single emitters: 5 individual send_color() calls ... OK")
+
+
+def test_backward_compat_import():
+    """The engine.VirtualMultizoneDevice re-export still works."""
+    from engine import VirtualMultizoneDevice
+    from emitters.virtual import VirtualMultizoneEmitter
+
+    assert VirtualMultizoneDevice is VirtualMultizoneEmitter, \
+        "engine.VirtualMultizoneDevice should be emitters.virtual.VirtualMultizoneEmitter"
+    print(f"  engine.VirtualMultizoneDevice is VirtualMultizoneEmitter ... OK")
+
+
+def test_prepare_for_rendering():
+    """prepare_for_rendering() fans out to all members."""
+    from emitters.virtual import VirtualMultizoneEmitter
+
+    emitters = [
+        MockEmitter(f"10.0.0.{i}", zone_count=1, is_multizone=False)
+        for i in range(3)
+    ]
+    vem = VirtualMultizoneEmitter(emitters)
+    vem.prepare_for_rendering()
+
+    for em in emitters:
+        assert em.prepare_called, f"{em.emitter_id}: prepare not called"
+    print(f"  prepare_for_rendering() reached all 3 emitters ... OK")
 
 
 def main() -> int:
     tests = [
         ("Zone map expansion", test_zone_map_expansion),
-        ("set_zones dispatch", test_set_zones_dispatch),
-        ("set_color broadcast", test_set_color_broadcast),
-        ("set_power broadcast", test_set_power_broadcast),
-        ("Two multizone devices", test_two_multizone_devices),
+        ("send_zones dispatch", test_send_zones_dispatch),
+        ("send_color broadcast", test_send_color_broadcast),
+        ("Power broadcast", test_power_broadcast),
+        ("Two multizone emitters", test_two_multizone_emitters),
         ("All singles (regression)", test_all_singles),
+        ("Backward compat import", test_backward_compat_import),
+        ("prepare_for_rendering", test_prepare_for_rendering),
     ]
 
-    print("VirtualMultizoneDevice tests\n" + "=" * 40)
+    print("VirtualMultizoneEmitter tests\n" + "=" * 40)
     passed = 0
     failed = 0
     for name, fn in tests:
