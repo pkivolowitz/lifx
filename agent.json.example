@@ -1,0 +1,23 @@
+{
+    "node_id": "judy",
+    "mqtt_broker": "10.0.0.48",
+    "mqtt_port": 1883,
+    "ip": "10.0.0.63",
+    "roles": ["compute"],
+    "resources": {
+        "gpus": [
+            {"model": "Jetson Orin Nano", "vram_mb": 8192}
+        ],
+        "cpu_cores": 6,
+        "ram_mb": 8192
+    },
+    "operators": [
+        {
+            "name": "AudioExtractor",
+            "description": "FFT-based frequency band analysis",
+            "max_bands": 64,
+            "max_fps": 60
+        }
+    ],
+    "emitters": []
+}

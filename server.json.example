@@ -37,6 +37,12 @@
         "color_interval": 1.0
     },
 
+    "distributed": {
+        "_comment": "Optional — remove this section to disable distributed compute. Requires MQTT.",
+        "udp_port_base": 9420,
+        "udp_port_range": 100
+    },
+
     "schedule": [
         {
             "name": "porch evening aurora",
