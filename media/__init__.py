@@ -43,9 +43,12 @@ from typing import Any, Callable, Optional, Union
 try:
     import paho.mqtt.client as mqtt
     _HAS_MQTT: bool = True
+    # Detect paho v2 (CallbackAPIVersion enum present).
+    _PAHO_V2: bool = hasattr(mqtt, "CallbackAPIVersion")
 except ImportError:
     mqtt = None  # type: ignore[assignment]
     _HAS_MQTT = False
+    _PAHO_V2 = False
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -385,30 +388,44 @@ class SignalBus:
             )
             return False
 
-        client = mqtt.Client(
-            client_id=f"glowup-signals-{int(time.time())}",
-            protocol=mqtt.MQTTv311,
-        )
+        client_id: str = f"glowup-signals-{int(time.time())}"
+        if _PAHO_V2:
+            client = mqtt.Client(
+                mqtt.CallbackAPIVersion.VERSION2,
+                client_id=client_id,
+            )
+        else:
+            client = mqtt.Client(
+                client_id=client_id,
+                protocol=mqtt.MQTTv311,
+            )
         if username:
             client.username_pw_set(username, password)
         if tls:
             client.tls_set()
 
-        def on_connect(client: Any, userdata: Any, flags: Any,
-                       rc: int) -> None:
-            """Subscribe to remote signals on successful connect."""
-            if rc == 0:
+        def on_connect(client: Any, userdata: Any, *args: Any) -> None:
+            """Subscribe to remote signals on successful connect.
+
+            Handles both paho v1 ``(flags, rc)`` and v2
+            ``(flags, reason_code, properties)`` signatures.
+            """
+            # In v1 rc is an int; in v2 it's a ReasonCode object.
+            # Both evaluate to 0 / falsy on success.
+            rc: Any = args[1] if len(args) >= 2 else args[0]
+            if not rc or (hasattr(rc, "value") and rc.value == 0):
                 self._mqtt_connected = True
                 client.subscribe(SIGNAL_TOPIC_PREFIX + "#", qos=MQTT_QOS)
                 logger.info("SignalBus MQTT bridge connected to %s:%d",
                             broker, port)
             else:
-                logger.error("SignalBus MQTT connect failed: rc=%d", rc)
+                logger.error("SignalBus MQTT connect failed: rc=%s", rc)
 
-        def on_disconnect(client: Any, userdata: Any, rc: int) -> None:
+        def on_disconnect(client: Any, userdata: Any, *args: Any) -> None:
             """Mark bridge as disconnected."""
             self._mqtt_connected = False
-            if rc != 0:
+            rc: Any = args[0] if args else 0
+            if rc:
                 logger.warning("SignalBus MQTT disconnected unexpectedly")
 
         def on_message(client: Any, userdata: Any, msg: Any) -> None:
