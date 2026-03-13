@@ -642,12 +642,17 @@ class WorkerAgent:
                 ValueError, IndexError):
             pass
 
-        # Try Jetson tegrastats sysfs.
-        try:
-            with open("/sys/devices/gpu.0/load", "r") as f:
-                return float(f.read().strip()) / 10.0  # Tegra reports 0-1000.
-        except (OSError, ValueError):
-            pass
+        # Try Jetson tegrastats sysfs (multiple known paths).
+        for gpu_path in (
+            "/sys/devices/platform/gpu.0/load",
+            "/sys/devices/gpu.0/load",
+            "/sys/devices/platform/bus@0/17000000.gpu/load",
+        ):
+            try:
+                with open(gpu_path, "r") as f:
+                    return float(f.read().strip()) / 10.0  # Tegra reports 0-1000.
+            except (OSError, ValueError):
+                continue
 
         return -1.0
 
