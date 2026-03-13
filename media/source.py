@@ -12,6 +12,7 @@ instead, chunks are pushed directly to extractors via callback.
 Concrete sources:
     RtspSource  — RTSP stream via ffmpeg (cameras, NVR)
     FileSource  — local audio/video file via ffmpeg
+    MicSource   — system microphone via ffmpeg (avfoundation / pulse)
 
 Factory function:
     create_source — construct the right source type from config dict
@@ -20,11 +21,12 @@ Factory function:
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import json
 import logging
 import os
+import platform
 import shutil
 import subprocess
 import threading
@@ -521,6 +523,87 @@ class FileSource(MediaSource):
 
 
 # ---------------------------------------------------------------------------
+# MicSource
+# ---------------------------------------------------------------------------
+
+# Default sample rate for microphone capture (Hz).
+# 44100 Hz captures the full audible range (up to 22 kHz Nyquist).
+MIC_DEFAULT_SAMPLE_RATE: int = 44100
+
+
+class MicSource(MediaSource):
+    """System microphone capture via ffmpeg.
+
+    Captures from the default audio input device using the platform's
+    native audio framework:
+
+    * **macOS**: ``avfoundation`` (``-i :default``)
+    * **Linux**: ``pulse`` (PulseAudio, ``-i default``)
+
+    On first use, macOS will prompt for microphone permission.
+
+    Config keys:
+        sample_rate: Audio sample rate in Hz (default 44100)
+        channels:    Audio channels (default 1 = mono)
+        device:      Device specifier (default: platform default input)
+    """
+
+    def __init__(self, name: str, config: dict[str, Any]) -> None:
+        """Initialize a microphone source.
+
+        Args:
+            name:   Unique source name.
+            config: Source configuration dict.
+        """
+        # Default to 44100 Hz for mic (higher than RTSP default).
+        if "sample_rate" not in config:
+            config = dict(config, sample_rate=MIC_DEFAULT_SAMPLE_RATE)
+        super().__init__(name, "mic", "audio", config)
+        self._device: str = config.get("device", "")
+
+    def _build_ffmpeg_cmd(self) -> list[str]:
+        """Build ffmpeg command for microphone capture.
+
+        Returns:
+            Command-line arguments list.
+
+        Raises:
+            RuntimeError: If the platform is not macOS or Linux.
+        """
+        system: str = platform.system()
+        device: str = self._device
+
+        cmd: list[str] = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
+
+        if system == "Darwin":
+            # macOS: AVFoundation — ":default" = default audio input.
+            if not device:
+                device = ":default"
+            cmd.extend(["-f", "avfoundation", "-i", device])
+        elif system == "Linux":
+            # Linux: PulseAudio.
+            if not device:
+                device = "default"
+            cmd.extend(["-f", "pulse", "-i", device])
+        else:
+            raise RuntimeError(
+                f"Microphone capture not supported on {system}. "
+                f"Supported: macOS (avfoundation), Linux (pulse)."
+            )
+
+        cmd.extend([
+            "-vn",
+            "-acodec", "pcm_s16le",
+            "-ar", str(self.sample_rate),
+            "-ac", str(self.channels),
+            "-f", "s16le",
+            "pipe:1",
+        ])
+
+        return cmd
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -550,10 +633,12 @@ def create_source(name: str, config: dict[str, Any],
         source: MediaSource = RtspSource(name, config)
     elif source_type == "file":
         source = FileSource(name, config)
+    elif source_type == "mic":
+        source = MicSource(name, config)
     else:
         raise ValueError(
             f"Unknown media source type '{source_type}' for '{name}'. "
-            f"Supported types: rtsp, file"
+            f"Supported types: rtsp, file, mic"
         )
 
     # Attach extractors.
