@@ -2186,9 +2186,10 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(400, {"error": "'bindings' must be an object"})
             return
 
-        # Resolve signal bus — only pass if we have an active media manager.
+        # Resolve signal bus — pass if we have bindings OR a media manager
+        # (MediaEffects need the bus even without explicit bindings).
         signal_bus: Optional[SignalBus] = None
-        if bindings and self.media_manager is not None:
+        if self.media_manager is not None:
             signal_bus = self.media_manager.bus
 
         try:
