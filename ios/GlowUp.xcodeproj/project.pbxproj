@@ -26,6 +26,8 @@
 		A10017 /* ScheduleEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10017 /* ScheduleEntry.swift */; };
 		A10018 /* ScheduleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10018 /* ScheduleView.swift */; };
 		A10019 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10019 /* LoginView.swift */; };
+		A10020 /* AudioStreamService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10020 /* AudioStreamService.swift */; };
+		A10021 /* AudioStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10021 /* AudioStreamView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -48,6 +50,8 @@
 		B10017 /* ScheduleEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleEntry.swift; sourceTree = "<group>"; };
 		B10018 /* ScheduleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduleView.swift; sourceTree = "<group>"; };
 		B10019 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		B10020 /* AudioStreamService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioStreamService.swift; sourceTree = "<group>"; };
+		B10021 /* AudioStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioStreamView.swift; sourceTree = "<group>"; };
 		C10001 /* GlowUp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GlowUp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -101,6 +105,7 @@
 				B10006 /* APIClient.swift */,
 				B10007 /* SSEClient.swift */,
 				B10008 /* KeychainHelper.swift */,
+				B10020 /* AudioStreamService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -116,6 +121,7 @@
 				B10015 /* SettingsView.swift */,
 				B10018 /* ScheduleView.swift */,
 				B10019 /* LoginView.swift */,
+				B10021 /* AudioStreamView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -223,6 +229,8 @@
 				A10017 /* ScheduleEntry.swift in Sources */,
 				A10018 /* ScheduleView.swift in Sources */,
 				A10019 /* LoginView.swift in Sources */,
+				A10020 /* AudioStreamService.swift in Sources */,
+				A10021 /* AudioStreamView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -301,6 +309,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = GlowUp;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "GlowUp uses the microphone to drive audio-reactive lighting effects in real time.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -328,6 +337,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = GlowUp;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "GlowUp uses the microphone to drive audio-reactive lighting effects in real time.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

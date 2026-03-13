@@ -33,6 +33,9 @@ struct DeviceListView: View {
     /// Controls presentation of the schedule sheet.
     @State private var showSchedule: Bool = false
 
+    /// Controls presentation of the mic streaming sheet.
+    @State private var showMicStream: Bool = false
+
     /// Device being renamed (drives the rename alert).
     @State private var renamingDevice: Device?
 
@@ -87,6 +90,11 @@ struct DeviceListView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 16) {
                         Button {
+                            showMicStream = true
+                        } label: {
+                            Image(systemName: "mic")
+                        }
+                        Button {
                             showSchedule = true
                         } label: {
                             Image(systemName: "calendar")
@@ -119,6 +127,18 @@ struct DeviceListView: View {
             }
             .sheet(isPresented: $showSchedule) {
                 ScheduleView()
+            }
+            .sheet(isPresented: $showMicStream) {
+                NavigationStack {
+                    AudioStreamView(apiClient: apiClient)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Done") {
+                                    showMicStream = false
+                                }
+                            }
+                        }
+                }
             }
             .alert(
                 "Rename Device",
