@@ -104,6 +104,13 @@ Authorization: Bearer your-secret-token-here
 | `POST` | `/api/devices/{ip}/stop` | Stop current effect (fade to black) |
 | `POST` | `/api/devices/{ip}/resume` | Clear phone override, resume schedule |
 | `POST` | `/api/devices/{ip}/power` | Power on/off (body: `{"on": true}`) |
+| `GET` | `/api/schedule` | Schedule entries with resolved times |
+| `POST` | `/api/schedule/{index}/enabled` | Enable or disable a schedule entry |
+| `GET` | `/api/media/sources` | List media sources with status (see [Media Pipeline](20-media-pipeline.md)) |
+| `GET` | `/api/media/signals` | List available signal names |
+| `POST` | `/api/media/sources/{name}/start` | Manually start a media source |
+| `POST` | `/api/media/sources/{name}/stop` | Manually stop a media source |
+| `POST` | `/api/media/signals/ingest` | Write signals from external source |
 
 **Examples:**
 
