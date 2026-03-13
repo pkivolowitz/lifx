@@ -5,6 +5,10 @@ it inside a Unicode box-drawing border.  Each character cell is one pixel.
 Status information (effect name, grid dimensions, FPS, elapsed time) is
 embedded in the top and bottom border lines.
 
+The bottom border includes pipeline profiling: actual FPS vs target,
+send time per frame, and frame count.  These metrics reveal pipeline
+saturation — when actual FPS drops below target, a stage is overloaded.
+
 The available pixel resolution is ``(terminal_cols - 2) x (terminal_rows - 2)``
 — the border consumes exactly one row/column on each side.  Increasing the
 terminal window size or decreasing font size directly increases resolution.
@@ -24,7 +28,7 @@ Usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import os
 import sys
@@ -53,6 +57,10 @@ BOX_V: str = "\u2502"
 
 # FPS averaging window in seconds.
 FPS_WINDOW: float = 1.0
+
+# Send time exponential moving average smoothing factor.
+# 0.2 = responsive to changes, 0.5 = more stable reading.
+SEND_TIME_SMOOTHING: float = 0.2
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +125,11 @@ class ScreenMatrixEmitter(Emitter):
     fills ``(terminal_cols - 2) x (terminal_rows - 2)`` by default.
     Enlarging the terminal window or shrinking the font increases resolution.
 
+    Pipeline profiling is shown in the bottom border:
+        - ``FPS: actual/target`` — ratio reveals headroom
+        - ``Send: Xms`` — time to write one frame to the terminal
+        - ``Frames: N`` — total frames rendered
+
     Args:
         effect_name:  Effect name shown in the top border.
         fps:          Target FPS shown in the top border.
@@ -157,6 +170,10 @@ class ScreenMatrixEmitter(Emitter):
         self._start_time: float = 0.0
         self._fps_actual: float = 0.0
         self._fps_times: list[float] = []
+
+        # Profiling: send time and frame count.
+        self._send_time_ms: float = 0.0
+        self._frame_count: int = 0
 
     # --- Public pixel dimensions ---
 
@@ -207,6 +224,8 @@ class ScreenMatrixEmitter(Emitter):
         ``pixel_width`` values are the top row, the next are the second
         row, and so on.
 
+        Times the terminal write to produce the ``Send`` profiling metric.
+
         Args:
             colors:      Flat list of HSBK tuples (width * height).
             duration_ms: Ignored.
@@ -215,9 +234,12 @@ class ScreenMatrixEmitter(Emitter):
         if not self._powered:
             return
 
+        send_start: float = time.monotonic()
+
         # Track actual FPS.
-        now: float = time.monotonic()
+        now: float = send_start
         self._fps_times.append(now)
+        self._frame_count += 1
         cutoff: float = now - FPS_WINDOW
         while self._fps_times and self._fps_times[0] < cutoff:
             self._fps_times.pop(0)
@@ -244,20 +266,28 @@ class ScreenMatrixEmitter(Emitter):
                     out.append(" ")
             out.append(RESET)
 
-        # Update bottom border with live stats.
+        # Update bottom border with profiling stats.
         elapsed: float = now - self._start_time if self._start_time else 0.0
         out.append(_move(self._frame_height, 1))
         out.append(_border_line(BOX_BL, BOX_BR, self._frame_width, [
-            f"FPS: {self._fps_actual:.0f}",
+            f"FPS: {self._fps_actual:.0f}/{self._fps_target}",
+            f"Send: {self._send_time_ms:.1f}ms",
+            f"Frames: {self._frame_count}",
             _elapsed_str(elapsed),
-            f"{w}x{h} = {w * h} pixels",
-            "Ctrl+C to quit",
+            f"{w}x{h}",
         ]))
 
         # Park cursor below the frame.
         out.append(_move(self._frame_height + 1, 1))
         sys.stdout.write("".join(out))
         sys.stdout.flush()
+
+        # Measure send time (EMA smoothed).
+        send_elapsed: float = (time.monotonic() - send_start) * 1000.0
+        alpha: float = SEND_TIME_SMOOTHING
+        self._send_time_ms = (
+            alpha * self._send_time_ms + (1.0 - alpha) * send_elapsed
+        )
 
     def send_color(self, hue: int, sat: int, bri: int, kelvin: int,
                    duration_ms: int = 0) -> None:
@@ -290,7 +320,8 @@ class ScreenMatrixEmitter(Emitter):
         # Bottom border with placeholder.
         out.append(_move(self._frame_height, 1))
         out.append(_border_line(BOX_BL, BOX_BR, self._frame_width, [
-            "FPS: --", "00:00", "Ctrl+C to quit",
+            f"FPS: --/{self._fps_target}", "Send: --", "Frames: 0",
+            "00:00", "Ctrl+C to quit",
         ]))
 
         sys.stdout.write("".join(out))
