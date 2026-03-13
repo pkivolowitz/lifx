@@ -82,6 +82,10 @@ ZENITH_MARGIN: float = 0.25
 # Absolute minimum zenith travel distance in zones (guards tiny zone counts).
 MIN_ZENITH_ZONES: int = 3
 
+# HSB color space has 6 sextants (60 degrees each).  Used by the RGB
+# conversion helpers for additive compositing.
+HUE_SEXTANTS: int = 6
+
 
 # ---------------------------------------------------------------------------
 # Rocket state
