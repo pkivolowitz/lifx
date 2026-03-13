@@ -43,6 +43,10 @@ Endpoints::
     POST /api/effects/{name}/defaults    Save tuned params as effect defaults
     GET  /api/schedule                   Schedule entries with resolved times
     POST /api/schedule/{index}/enabled   Enable or disable a schedule entry
+    GET  /api/media/sources              List media sources with status
+    GET  /api/media/signals              List available signal names
+    POST /api/media/sources/{name}/start Manually start a media source
+    POST /api/media/sources/{name}/stop  Manually stop a media source
 Usage::
 
     python3 server.py server.json
@@ -54,7 +58,7 @@ Usage::
 
 from __future__ import annotations
 
-__version__ = "1.8"
+__version__ = "1.9"
 
 import hmac
 import http.server
@@ -77,6 +81,7 @@ from typing import Any, Callable, Optional
 from effects import get_registry, create_effect, HSBK_MAX, KELVIN_DEFAULT
 from engine import Controller, VirtualMultizoneDevice
 from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
+from media import MediaManager, SignalBus
 from solar import SunTimes, sun_times
 from transport import LifxDevice
 
@@ -472,6 +477,8 @@ class DeviceManager:
         ip: str,
         effect_name: str,
         params: dict[str, Any],
+        bindings: Optional[dict[str, Any]] = None,
+        signal_bus: Optional[SignalBus] = None,
     ) -> dict[str, Any]:
         """Start an effect on a device.
 
@@ -479,6 +486,12 @@ class DeviceManager:
             ip:          Device IP address.
             effect_name: Registered effect name.
             params:      Parameter overrides.
+            bindings:    Optional signal-to-param bindings for media
+                         reactivity.  Each key is a param name, each
+                         value is a dict with ``signal``, optional
+                         ``reduce``, and optional ``scale`` fields.
+            signal_bus:  Optional :class:`SignalBus` instance for
+                         reading media signals during rendering.
 
         Returns:
             A status dict for the device.
@@ -507,7 +520,8 @@ class DeviceManager:
                 dev.set_power(on=True, duration_ms=0)
             except Exception:
                 pass
-        ctrl.play(effect_name, **params)
+        ctrl.play(effect_name, bindings=bindings,
+                  signal_bus=signal_bus, **params)
         result: dict[str, Any] = ctrl.get_status()
         result["overridden"] = self.is_overridden(ip)
         return result
@@ -1495,6 +1509,16 @@ class SchedulerThread(threading.Thread):
                             params: dict[str, Any] = active.get(
                                 "params", {},
                             )
+                            # Pass bindings from schedule entry if present.
+                            sched_bindings: Optional[dict] = active.get(
+                                "bindings",
+                            )
+                            sched_bus: Optional[SignalBus] = None
+                            mm: Optional[MediaManager] = (
+                                GlowUpRequestHandler.media_manager
+                            )
+                            if sched_bindings and mm is not None:
+                                sched_bus = mm.bus
                             logging.info(
                                 "[%s] Starting '%s' (%s)",
                                 group_name, active_name, effect,
@@ -1502,6 +1526,8 @@ class SchedulerThread(threading.Thread):
                             try:
                                 self._dm.play(
                                     device_id, effect, params,
+                                    bindings=sched_bindings,
+                                    signal_bus=sched_bus,
                                 )
                             except (KeyError, ValueError, Exception) as exc:
                                 logging.warning(
@@ -1531,6 +1557,15 @@ class SchedulerThread(threading.Thread):
                             params_restart: dict = active.get(
                                 "params", {},
                             )
+                            restart_bindings: Optional[dict] = (
+                                active.get("bindings")
+                            )
+                            restart_bus: Optional[SignalBus] = None
+                            rmm: Optional[MediaManager] = (
+                                GlowUpRequestHandler.media_manager
+                            )
+                            if restart_bindings and rmm is not None:
+                                restart_bus = rmm.bus
                             logging.info(
                                 "[%s] Restarting '%s' on %s",
                                 group_name, active_name, device_id,
@@ -1539,6 +1574,8 @@ class SchedulerThread(threading.Thread):
                                 self._dm.play(
                                     device_id, effect_name,
                                     params_restart,
+                                    bindings=restart_bindings,
+                                    signal_bus=restart_bus,
                                 )
                             except Exception as exc:
                                 logging.warning(
@@ -1578,6 +1615,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     scheduler: Optional[SchedulerThread] = None
     config: dict[str, Any] = {}
     config_path: Optional[str] = None
+    media_manager: Optional[MediaManager] = None
 
     # Silence per-request logging from BaseHTTPRequestHandler.
     def log_message(self, format: str, *args: Any) -> None:
@@ -1801,6 +1839,16 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_get_schedule()
             return
 
+        # /api/media/sources
+        if path == "/api/media/sources":
+            self._handle_get_media_sources()
+            return
+
+        # /api/media/signals
+        if path == "/api/media/signals":
+            self._handle_get_media_signals()
+            return
+
         self._send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
@@ -1899,6 +1947,18 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "Invalid schedule index"})
                 return
             self._handle_post_schedule_enabled(index)
+            return
+
+        # /api/media/sources/{name}/start
+        if (len(parts) == 5 and parts[0] == "api" and parts[1] == "media"
+                and parts[2] == "sources" and parts[4] == "start"):
+            self._handle_post_media_source_start(parts[3])
+            return
+
+        # /api/media/sources/{name}/stop
+        if (len(parts) == 5 and parts[0] == "api" and parts[1] == "media"
+                and parts[2] == "sources" and parts[4] == "stop"):
+            self._handle_post_media_source_stop(parts[3])
             return
 
         self._send_json(404, {"error": "Not found"})
@@ -2092,8 +2152,19 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
             {
                 "effect": "cylon",
-                "params": {"speed": 2.0, "hue": 120}
+                "params": {"speed": 2.0, "hue": 120},
+                "bindings": {
+                    "brightness": {
+                        "signal": "backyard:audio:bass",
+                        "scale": [20, 100]
+                    }
+                }
             }
+
+        The optional ``bindings`` field maps parameter names to media
+        signals.  Each binding specifies a signal name and optional
+        ``scale`` (output range) and ``reduce`` (for array signals:
+        ``"max"``, ``"mean"``, or ``"sum"``).
         """
         body: Optional[dict[str, Any]] = self._read_json_body()
         if body is None:
@@ -2109,6 +2180,17 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(400, {"error": "'params' must be an object"})
             return
 
+        # Extract optional signal bindings for media-reactive effects.
+        bindings: Optional[dict[str, Any]] = body.get("bindings")
+        if bindings is not None and not isinstance(bindings, dict):
+            self._send_json(400, {"error": "'bindings' must be an object"})
+            return
+
+        # Resolve signal bus — only pass if we have an active media manager.
+        signal_bus: Optional[SignalBus] = None
+        if bindings and self.media_manager is not None:
+            signal_bus = self.media_manager.bus
+
         try:
             # Track override so the scheduler knows to back off.
             active_entry: Optional[str] = self._get_active_entry_for_ip(ip)
@@ -2116,10 +2198,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
             status: dict[str, Any] = self.device_manager.play(
                 ip, effect_name, params,
+                bindings=bindings, signal_bus=signal_bus,
             )
             logging.info(
-                "API: playing '%s' on %s (params: %s)",
+                "API: playing '%s' on %s (params: %s, bindings: %s)",
                 effect_name, ip, params,
+                list(bindings.keys()) if bindings else None,
             )
             self._send_json(200, status)
         except KeyError:
@@ -2331,6 +2415,65 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             "name": name,
             "enabled": enabled,
         })
+
+    # -- Media handlers -----------------------------------------------------
+
+    def _handle_get_media_sources(self) -> None:
+        """GET /api/media/sources — list media sources with status.
+
+        Returns source names, types, and alive status.  Never exposes
+        RTSP URLs or credentials.
+        """
+        mm: Optional[MediaManager] = self.media_manager
+        if mm is None:
+            self._send_json(200, {"sources": []})
+            return
+        self._send_json(200, {"sources": mm.get_status()})
+
+    def _handle_get_media_signals(self) -> None:
+        """GET /api/media/signals — list available signal names.
+
+        Returns signal metadata for the iOS signal picker UI.
+        """
+        mm: Optional[MediaManager] = self.media_manager
+        if mm is None:
+            self._send_json(200, {"signals": []})
+            return
+        self._send_json(200, {"signals": mm.bus.list_signals()})
+
+    def _handle_post_media_source_start(self, name: str) -> None:
+        """POST /api/media/sources/{name}/start — manually start a source."""
+        mm: Optional[MediaManager] = self.media_manager
+        if mm is None:
+            self._send_json(503, {
+                "error": "Media pipeline not configured",
+            })
+            return
+        try:
+            mm.start_source(name)
+            logging.info("API: started media source '%s'", name)
+            self._send_json(200, {"source": name, "started": True})
+        except KeyError:
+            self._send_json(404, {
+                "error": f"Unknown media source: {name}",
+            })
+
+    def _handle_post_media_source_stop(self, name: str) -> None:
+        """POST /api/media/sources/{name}/stop — manually stop a source."""
+        mm: Optional[MediaManager] = self.media_manager
+        if mm is None:
+            self._send_json(503, {
+                "error": "Media pipeline not configured",
+            })
+            return
+        try:
+            mm.stop_source(name)
+            logging.info("API: stopped media source '%s'", name)
+            self._send_json(200, {"source": name, "stopped": True})
+        except KeyError:
+            self._send_json(404, {
+                "error": f"Unknown media source: {name}",
+            })
 
     def _save_config_field(self, key: str, value: Any) -> None:
         """Persist a single config field to the config file.
@@ -2810,10 +2953,12 @@ def main() -> None:
     # accepting connections while we query each device.
     # MQTT bridge reference — set by _background_startup if configured.
     mqtt_bridge: Optional[MqttBridge] = None
+    # MediaManager reference — set by _background_startup if configured.
+    media_mgr: Optional[MediaManager] = None
 
     def _background_startup() -> None:
         """Load devices from config IPs, then start the scheduler."""
-        nonlocal mqtt_bridge
+        nonlocal mqtt_bridge, media_mgr
 
         try:
             logging.info(
@@ -2844,6 +2989,19 @@ def main() -> None:
                         dm, config, scheduler=sched,
                     )
                     mqtt_bridge.start()
+
+            # Start the media pipeline if configured.
+            if config.get("media_sources"):
+                media_mgr = MediaManager()
+                media_mgr.configure(config.get("media_sources", {}))
+                GlowUpRequestHandler.media_manager = media_mgr
+                source_count: int = len(config["media_sources"])
+                logging.info(
+                    "Media pipeline configured — %d source(s)",
+                    source_count,
+                )
+            else:
+                logging.info("No media_sources configured — media idle")
         except Exception:
             logging.exception("Background startup failed")
 
@@ -2856,6 +3014,8 @@ def main() -> None:
         server.serve_forever()
     finally:
         logging.info("Shutting down...")
+        if media_mgr is not None:
+            media_mgr.shutdown()
         if mqtt_bridge is not None:
             mqtt_bridge.stop()
         scheduler: Optional[SchedulerThread] = GlowUpRequestHandler.scheduler
