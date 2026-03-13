@@ -28,6 +28,8 @@ Modules:
     orchestrator       — Orchestrator: fleet management + work assignment
     worker_agent       — WorkerAgent daemon for compute nodes
     audio_sensor       — Mic capture → UDP sensor for distributed FFT
+    spectrum_display   — ANSI terminal frequency spectrum visualizer
+    demo_spectrum      — End-to-end demo: mic → Judy FFT → terminal display
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
