@@ -69,21 +69,31 @@ check **Connect via network**.
 
 ### App Screens
 
-1. **Device List** — Shows all configured devices with name, product
+1. **Hub** — The main screen, built around the Mosaic Warfare
+   triangle: three always-visible pickers for **Sensor**, **Effect**,
+   and **Surface**.  Pick any vertex first — the other two adapt.
+   Selecting a sensor filters effects to the matching type; selecting
+   an effect or surface has no ordering dependency.  Section headers
+   show current selection with a clear button.  A Go/Stop button
+   appears when all three vertices are filled.  Navigation to Devices,
+   Schedule, and Settings is at the bottom.  See
+   [Media Pipeline](20-media-pipeline.md) for the full architecture.
+
+2. **Device List** — Shows all configured devices with name, product
    type, group, and current effect.  Virtual multizone groups are
    prefixed with "Group:" and display a group icon with member count.
    Pull-to-refresh fetches the latest state.
 
-2. **Device Detail** — Live color strip visualization (SSE-fed at 4 Hz),
+3. **Device Detail** — Live color strip visualization (SSE-fed at 4 Hz),
    current effect info, power toggle, stop button, restart button, and
    a link to change the effect.  Virtual groups show the combined zone
    count, member device IPs, and type "Virtual Group" (see screenshot
    below).
 
-3. **Effect Picker** — Lists all registered effects with descriptions
+4. **Effect Picker** — Lists all registered effects with descriptions
    and parameter counts.
 
-4. **Effect Config** — Auto-generated parameter UI built from the
+5. **Effect Config** — Auto-generated parameter UI built from the
    server's `Param` metadata.  Sliders for numeric params, pickers
    for choice params, text fields for strings.  Tap "Play" to send
    the command.  **Save as Defaults** pushes the current parameter
@@ -91,7 +101,7 @@ check **Connect via network**.
    `server.json` by hand.  Parameter values persist across app
    sessions.
 
-5. **Settings** — Server URL and API token configuration.  Token is
+6. **Settings** — Server URL and API token configuration.  Token is
    stored in the iOS Keychain.  Includes a "Test Connection" button
    and an About section displaying the app icon, version, and license
    information.

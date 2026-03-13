@@ -32,3 +32,4 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
 | 17 | [macOS Remote Control](docs/17-macos-remote.md) | Shell scripts and .command files for Finder/Dock |
 | 18 | [Node-RED](docs/18-node-red.md) | Flow-based visual automation |
 | 19 | [MQTT](docs/19-mqtt.md) | Native pub/sub bridge for device control |
+| 20 | [Media Pipeline](docs/20-media-pipeline.md) | Audio-reactive lighting, Mosaic Warfare architecture |
