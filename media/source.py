@@ -22,7 +22,9 @@ Factory function:
 
 __version__ = "1.0"
 
+import json
 import logging
+import os
 import shutil
 import subprocess
 import threading
@@ -31,6 +33,76 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Optional
 
 logger: logging.Logger = logging.getLogger("glowup.media.source")
+
+# ---------------------------------------------------------------------------
+# Credential resolution
+# ---------------------------------------------------------------------------
+
+def _resolve_credentials(config: dict[str, Any]) -> str:
+    """Build an RTSP URL with credentials from a separate file.
+
+    Supports two config patterns:
+
+    1. Direct URL (not recommended — credentials in config file)::
+
+        {"url": "rtsp://admin:pass@10.0.0.39:554/..."}
+
+    2. Credentials file (recommended — keeps secrets out of config)::
+
+        {
+            "url": "rtsp://{user}:{password}@10.0.0.39:554/...",
+            "credentials_file": "/etc/glowup/rtsp_creds.json"
+        }
+
+    The credentials file is a simple JSON object::
+
+        {"user": "admin", "password": "s3cret"}
+
+    File must be owner-readable only (chmod 600).
+
+    Args:
+        config: Source configuration dict.
+
+    Returns:
+        Fully resolved RTSP URL string.
+
+    Raises:
+        ValueError: If URL is missing or credentials file is unreadable.
+    """
+    url: str = config.get("url", "")
+    if not url:
+        raise ValueError("RTSP source requires a 'url' field")
+
+    creds_path: str = config.get("credentials_file", "")
+    if not creds_path:
+        return url
+
+    # Expand ~ and env vars.
+    creds_path = os.path.expanduser(creds_path)
+    creds_path = os.path.expandvars(creds_path)
+
+    if not os.path.isfile(creds_path):
+        raise ValueError(
+            f"Credentials file not found: {creds_path}"
+        )
+
+    # Warn if file permissions are too open.
+    mode: int = os.stat(creds_path).st_mode & 0o777
+    if mode & 0o077:
+        logger.warning(
+            "Credentials file %s has permissions %o — "
+            "should be 600 (owner-only read/write)",
+            creds_path, mode,
+        )
+
+    with open(creds_path, "r") as f:
+        creds: dict[str, str] = json.load(f)
+
+    user: str = creds.get("user", "")
+    password: str = creds.get("password", "")
+
+    return url.format(user=user, password=password)
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -336,9 +408,7 @@ class RtspSource(MediaSource):
         Raises:
             ValueError: If ``url`` is missing from config.
         """
-        url: str = config.get("url", "")
-        if not url:
-            raise ValueError(f"RTSP source '{name}' requires a 'url' field")
+        url: str = _resolve_credentials(config)
         media_type: str = config.get("stream", "audio")
         super().__init__(name, "rtsp", media_type, config)
         self._url: str = url
