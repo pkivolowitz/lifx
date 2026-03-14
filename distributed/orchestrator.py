@@ -2,18 +2,26 @@
 
 Runs on the Pi alongside the GlowUp server.  Watches MQTT for
 node capability and health messages, maintains a fleet inventory,
-and assigns work to compute nodes when pipelines are configured.
+and assigns work to compute and emitter nodes when pipelines are
+configured.
 
 The orchestrator's job is deciding **who runs what** and **which
 transport carries each signal**.  It does not touch the data plane
-— signals flow directly between nodes via UDP or MQTT.
+— signals and frames flow directly between nodes via UDP or MQTT.
 
 Work assignments are published as MQTT messages to individual nodes.
-Each assignment describes:
+Each assignment describes either:
+
+**Compute assignment** (operator):
 - What operator to run (e.g., ``AudioExtractor``)
 - Input signals and their transport (MQTT or UDP endpoint)
 - Output signals and their transport
 - Operator configuration (bands, window size, etc.)
+
+**Emitter assignment** (remote emitter):
+- What emitter type to instantiate (e.g., ``audio_out``)
+- Input frame source (MQTT topic or UDP endpoint)
+- Emitter configuration (device-specific params)
 
 The orchestrator allocates UDP ports from a configurable range to
 prevent conflicts when multiple workers share a machine.
@@ -22,7 +30,7 @@ prevent conflicts when multiple workers share a machine.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import json
 import logging
@@ -36,7 +44,7 @@ from .capability import (
     NODE_TOPIC_PREFIX, CAPABILITY_SUFFIX, STATUS_SUFFIX,
     HEALTH_SUFFIX, ASSIGNMENT_SUFFIX,
     STATUS_ONLINE, STATUS_OFFLINE,
-    ROLE_COMPUTE,
+    ROLE_COMPUTE, ROLE_EMITTER,
     capability_topic, status_topic, assignment_topic,
 )
 from .udp_channel import UDP_DEFAULT_PORT, UDP_PORT_RANGE
@@ -131,20 +139,48 @@ class WorkAssignment:
 
     Published as an MQTT message to ``glowup/node/{node_id}/assignment``.
 
+    Supports two modes:
+
+    **Compute assignment** (``emitter_type`` is ``None``):
+        The agent runs an operator that processes signals.
+        ``operator_name`` and ``operator_config`` describe the operator.
+        ``inputs``/``outputs`` describe signal routing.
+
+    **Emitter assignment** (``emitter_type`` is set):
+        The agent instantiates a remote emitter and feeds it frames.
+        ``emitter_type`` selects the emitter from the registry.
+        ``emitter_config`` provides emitter-specific parameters.
+        ``inputs`` describes where frame data arrives from (MQTT topic
+        or UDP port).  ``operator_name`` and ``outputs`` are ignored.
+
     Attributes:
         assignment_id:   Unique identifier for this assignment.
-        operator_name:   Operator/extractor class name (e.g. ``"AudioExtractor"``).
-        operator_config: Configuration dict for the operator.
-        inputs:          Input signal bindings (what to subscribe to).
-        outputs:         Output signal bindings (what to publish).
+        operator_name:   Operator/extractor class name (compute mode).
+        operator_config: Configuration dict for the operator (compute mode).
+        inputs:          Input signal/frame bindings.
+        outputs:         Output signal bindings (compute mode only).
         action:          ``"start"`` or ``"stop"``.
+        emitter_type:    Emitter registry type (emitter mode).  When set,
+                         the assignment is treated as an emitter assignment.
+        emitter_config:  Emitter-specific configuration dict (emitter mode).
     """
     assignment_id: str
-    operator_name: str
+    operator_name: str = ""
     operator_config: dict[str, Any] = field(default_factory=dict)
     inputs: list[SignalBinding] = field(default_factory=list)
     outputs: list[SignalBinding] = field(default_factory=list)
     action: str = "start"
+    emitter_type: Optional[str] = None
+    emitter_config: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_emitter_assignment(self) -> bool:
+        """Whether this assignment targets a remote emitter.
+
+        Returns:
+            ``True`` if ``emitter_type`` is set.
+        """
+        return self.emitter_type is not None
 
     def to_json(self) -> str:
         """Serialize to JSON for MQTT publishing.
@@ -152,14 +188,22 @@ class WorkAssignment:
         Returns:
             Compact JSON string.
         """
-        return json.dumps({
+        d: dict[str, Any] = {
             "assignment_id": self.assignment_id,
-            "operator_name": self.operator_name,
-            "operator_config": self.operator_config,
-            "inputs": [b.to_dict() for b in self.inputs],
-            "outputs": [b.to_dict() for b in self.outputs],
             "action": self.action,
-        }, separators=(",", ":"))
+        }
+        if self.emitter_type is not None:
+            # Emitter assignment.
+            d["emitter_type"] = self.emitter_type
+            d["emitter_config"] = self.emitter_config
+            d["inputs"] = [b.to_dict() for b in self.inputs]
+        else:
+            # Compute assignment.
+            d["operator_name"] = self.operator_name
+            d["operator_config"] = self.operator_config
+            d["inputs"] = [b.to_dict() for b in self.inputs]
+            d["outputs"] = [b.to_dict() for b in self.outputs]
+        return json.dumps(d, separators=(",", ":"))
 
     @classmethod
     def from_json(cls, data: str) -> Optional["WorkAssignment"]:
@@ -186,6 +230,8 @@ class WorkAssignment:
                     for b in d.get("outputs", [])
                 ],
                 action=d.get("action", "start"),
+                emitter_type=d.get("emitter_type"),
+                emitter_config=d.get("emitter_config", {}),
             )
         except (json.JSONDecodeError, TypeError):
             return None
@@ -359,6 +405,60 @@ class Orchestrator:
                 if n.online and ROLE_COMPUTE in n.capability.roles
             )
 
+    def get_emitter_nodes(self) -> list[str]:
+        """Return IDs of online nodes with the ``emitter`` role.
+
+        Returns:
+            Sorted list of emitter-capable node IDs.
+        """
+        with self._lock:
+            return sorted(
+                nid for nid, n in self._fleet.items()
+                if n.online and ROLE_EMITTER in n.capability.roles
+            )
+
+    def select_emitter_node(self,
+                            emitter_type: str) -> Optional[str]:
+        """Select the best available node that can run a given emitter type.
+
+        Selection criteria:
+        1. Node must be online with the ``emitter`` role.
+        2. Node must advertise the requested emitter type in its
+           capability ``emitters`` list.
+        3. Node must have assignment capacity.
+        4. Prefer lowest current assignment count.
+
+        Args:
+            emitter_type: Emitter registry type to match (e.g., ``"audio_out"``).
+
+        Returns:
+            Node ID of the selected node, or ``None`` if no suitable
+            node is available.
+        """
+        with self._lock:
+            candidates: list[tuple[str, _FleetNode]] = []
+            for nid, n in self._fleet.items():
+                if not n.online:
+                    continue
+                if ROLE_EMITTER not in n.capability.roles:
+                    continue
+                if len(n.assignments) >= MAX_ASSIGNMENTS_PER_NODE:
+                    continue
+                # Check if the node advertises this emitter type.
+                node_emitter_types: list[str] = [
+                    e.get("type", "") for e in n.capability.emitters
+                ]
+                if emitter_type not in node_emitter_types:
+                    continue
+                candidates.append((nid, n))
+
+        if not candidates:
+            return None
+
+        # Prefer lowest assignment count.
+        candidates.sort(key=lambda item: len(item[1].assignments))
+        return candidates[0][0]
+
     # ------------------------------------------------------------------
     # Work assignment
     # ------------------------------------------------------------------
@@ -407,9 +507,14 @@ class Orchestrator:
                     assignment.assignment_id,
                 )
 
+        what: str = (
+            f"emitter:{assignment.emitter_type}"
+            if assignment.is_emitter_assignment
+            else f"operator:{assignment.operator_name}"
+        )
         logger.info(
-            "Assigned '%s' to node '%s' (id: %s)",
-            assignment.operator_name, node_id, assignment.assignment_id,
+            "Assigned %s to node '%s' (id: %s)",
+            what, node_id, assignment.assignment_id,
         )
         return True
 
