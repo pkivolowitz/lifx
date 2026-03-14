@@ -1,7 +1,7 @@
-"""Worker agent — lightweight daemon for compute nodes.
+"""Worker agent — lightweight daemon for compute and emitter nodes.
 
-Runs on machines like Judy (Jetson), George, ML, or any node that
-offers compute resources to the fleet.  The agent:
+Runs on any machine in the fleet: Jetsons (compute), Macs (emitters),
+the ML box (both), or any node that offers resources.  The agent:
 
 1. Connects to the MQTT broker (on the Pi).
 2. Publishes its capabilities as a retained message.
@@ -9,10 +9,17 @@ offers compute resources to the fleet.  The agent:
 4. Subscribes to its assignment topic and executes work.
 5. Publishes periodic health metrics.
 
-Each work assignment tells the agent what operator to run, where
-to get input signals, and where to send output signals.  The agent
-creates the appropriate transport adapters (MQTT or UDP) and wires
-them to the operator.
+Two assignment types are supported:
+
+**Compute assignment** — the agent runs an operator (e.g.,
+``AudioExtractor``) that transforms signals.  Input signals arrive
+via MQTT or UDP; output signals are published the same way.
+
+**Emitter assignment** — the agent instantiates a remote emitter
+from the emitter registry (e.g., ``audio_out``, ``screen``),
+manages its lifecycle, and feeds it frames received via MQTT or UDP.
+This is how a Mac becomes a speaker for the theremin pipeline, or
+a Jetson drives a local LED matrix.
 
 Usage::
 
@@ -25,7 +32,7 @@ Press Ctrl+C to stop.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import argparse
 import json
@@ -34,6 +41,8 @@ import os
 import platform
 import signal
 import socket
+import struct
+import subprocess
 import sys
 import threading
 import time
@@ -99,15 +108,58 @@ class _RunningOperator:
 
 
 # ---------------------------------------------------------------------------
+# Running emitter state
+# ---------------------------------------------------------------------------
+
+class _RunningEmitter:
+    """Tracks state of an active remote emitter on this agent.
+
+    Parallels :class:`_RunningOperator` for the emitter lifecycle.
+    The emitter instance is created from the emitter registry, opened,
+    and fed frames from an MQTT or UDP subscription.
+
+    Attributes:
+        assignment_id:  Work assignment identifier.
+        emitter_type:   Emitter registry type string.
+        emitter:        The instantiated :class:`Emitter` object.
+        transports:     Active transport/receiver objects to clean up on stop.
+        frame_count:    Total frames dispatched to on_emit().
+        failure_count:  Total on_emit() failures.
+    """
+
+    def __init__(self, assignment_id: str, emitter_type: str) -> None:
+        """Initialize running emitter tracking.
+
+        Args:
+            assignment_id: Unique assignment identifier.
+            emitter_type:  Emitter registry type string.
+        """
+        self.assignment_id: str = assignment_id
+        self.emitter_type: str = emitter_type
+        self.emitter: Optional[Any] = None
+        self.transports: list[Any] = []
+        self.frame_count: int = 0
+        self.failure_count: int = 0
+
+
+# ---------------------------------------------------------------------------
 # WorkerAgent
 # ---------------------------------------------------------------------------
 
 class WorkerAgent:
-    """Lightweight daemon running on each compute node.
+    """Lightweight daemon running on any fleet node.
 
     Connects to the MQTT broker, publishes capabilities, receives
-    work assignments, and executes operators with the appropriate
-    transport adapters.
+    work assignments, and executes operators or emitters with the
+    appropriate transport adapters.
+
+    Supports two roles:
+
+    * **compute** — runs operators that transform signals.
+    * **emitter** — runs remote emitters that express frames on
+      local hardware (speakers, displays, GPIO, etc.).
+
+    A single agent can serve both roles simultaneously.
 
     Args:
         config: Agent configuration dict (from agent.json or CLI args).
@@ -127,6 +179,7 @@ class WorkerAgent:
         self._stop_event: threading.Event = threading.Event()
         self._health_thread: Optional[threading.Thread] = None
         self._operators: dict[str, _RunningOperator] = {}
+        self._emitters: dict[str, _RunningEmitter] = {}
         self._lock: threading.Lock = threading.Lock()
         self._start_time: float = 0.0
 
@@ -262,7 +315,11 @@ class WorkerAgent:
 
     def _on_assignment(self, client: Any, userdata: Any,
                        msg: Any) -> None:
-        """Handle an incoming work assignment."""
+        """Handle an incoming work assignment.
+
+        Routes to the operator or emitter lifecycle based on whether
+        the assignment has ``emitter_type`` set.
+        """
         try:
             payload: str = msg.payload.decode("utf-8")
         except UnicodeDecodeError:
@@ -274,9 +331,13 @@ class WorkerAgent:
             return
 
         if assignment.action == "stop":
-            self._stop_operator(assignment.assignment_id)
+            # Stop checks both operator and emitter dicts.
+            self._stop_assignment(assignment.assignment_id)
         elif assignment.action == "start":
-            self._start_operator(assignment)
+            if assignment.is_emitter_assignment:
+                self._start_emitter(assignment)
+            else:
+                self._start_operator(assignment)
         else:
             logger.warning(
                 "Unknown assignment action: '%s'", assignment.action,
@@ -395,6 +456,37 @@ class WorkerAgent:
             assignment.operator_name, assignment.assignment_id,
         )
 
+    def _stop_assignment(self, assignment_id: str) -> None:
+        """Stop a running operator or emitter by assignment ID.
+
+        Checks both the operator and emitter dicts.
+
+        Args:
+            assignment_id: The assignment to stop.
+        """
+        # Try operator first.
+        with self._lock:
+            running_op: Optional[_RunningOperator] = self._operators.pop(
+                assignment_id, None,
+            )
+        if running_op is not None:
+            self._teardown_operator(running_op)
+            return
+
+        # Try emitter.
+        with self._lock:
+            running_em: Optional[_RunningEmitter] = self._emitters.pop(
+                assignment_id, None,
+            )
+        if running_em is not None:
+            self._teardown_emitter(running_em)
+            return
+
+        logger.warning(
+            "No running operator or emitter for assignment '%s'",
+            assignment_id,
+        )
+
     def _stop_operator(self, assignment_id: str) -> None:
         """Stop a running operator and clean up its transports.
 
@@ -410,7 +502,14 @@ class WorkerAgent:
             logger.warning("No running operator for assignment '%s'", assignment_id)
             return
 
-        # Stop transports.
+        self._teardown_operator(running)
+
+    def _teardown_operator(self, running: _RunningOperator) -> None:
+        """Clean up a running operator's transports.
+
+        Args:
+            running: The running operator state to tear down.
+        """
         for t in running.transports:
             try:
                 t.stop()
@@ -419,7 +518,7 @@ class WorkerAgent:
 
         logger.info(
             "Stopped operator '%s' (assignment %s)",
-            running.operator_name, assignment_id,
+            running.operator_name, running.assignment_id,
         )
 
     def _create_operator(self, assignment: WorkAssignment) -> Optional[Any]:
@@ -554,6 +653,222 @@ class WorkerAgent:
             running.transports.append(udp_transport)
 
     # ------------------------------------------------------------------
+    # Emitter lifecycle
+    # ------------------------------------------------------------------
+
+    def _start_emitter(self, assignment: WorkAssignment) -> None:
+        """Instantiate and start a remote emitter from a work assignment.
+
+        Creates the emitter from the registry, runs its full lifecycle
+        (on_configure → on_open), and subscribes to the frame source
+        (MQTT or UDP) to feed frames into on_emit().
+
+        Args:
+            assignment: The work assignment with ``emitter_type`` set.
+        """
+        with self._lock:
+            if assignment.assignment_id in self._emitters:
+                logger.warning(
+                    "Emitter assignment '%s' already running",
+                    assignment.assignment_id,
+                )
+                return
+
+        emitter_type: str = assignment.emitter_type or ""
+        logger.info(
+            "Starting emitter '%s' (assignment %s)",
+            emitter_type, assignment.assignment_id,
+        )
+
+        running: _RunningEmitter = _RunningEmitter(
+            assignment.assignment_id, emitter_type,
+        )
+
+        try:
+            # Import emitter framework.
+            from emitters import create_emitter
+
+            # Create the emitter instance from the registry.
+            emitter_name: str = assignment.emitter_config.get(
+                "name", f"{self._node_id}:{emitter_type}",
+            )
+            emitter: Any = create_emitter(
+                emitter_type, emitter_name, assignment.emitter_config,
+            )
+            running.emitter = emitter
+
+            # Deferred configuration with full assignment config.
+            emitter.on_configure(assignment.emitter_config)
+
+            # Open: acquire local resources (sockets, audio devices, etc.).
+            emitter.on_open()
+            emitter._is_open = True
+
+            # Wire frame delivery from input bindings.
+            for inp in assignment.inputs:
+                self._setup_emitter_input(inp, running)
+
+        except Exception as exc:
+            logger.error(
+                "Failed to start emitter '%s': %s", emitter_type, exc,
+            )
+            # Clean up partial setup.
+            for t in running.transports:
+                try:
+                    t.stop()
+                except Exception:
+                    pass
+            if running.emitter is not None and running.emitter._is_open:
+                try:
+                    running.emitter.on_close()
+                except Exception:
+                    pass
+            return
+
+        with self._lock:
+            self._emitters[assignment.assignment_id] = running
+
+        logger.info(
+            "Emitter '%s' running (assignment %s, name '%s')",
+            emitter_type, assignment.assignment_id,
+            emitter_name,
+        )
+
+    def _setup_emitter_input(self, binding: SignalBinding,
+                             running: _RunningEmitter) -> None:
+        """Wire a frame source to a running emitter.
+
+        Subscribes to the frame topic (MQTT) or port (UDP) and
+        dispatches received frames to the emitter's ``on_emit()``.
+
+        Args:
+            binding: Input binding describing where frames arrive from.
+            running: Running emitter state for cleanup tracking.
+        """
+        emitter: Any = running.emitter
+
+        if binding.transport == TRANSPORT_MQTT:
+            # MQTT frame delivery — JSON payload with frame + metadata.
+            mqtt_transport: MqttTransport = MqttTransport(
+                broker=self._broker, port=self._port,
+            )
+
+            def on_frame_mqtt(name: str, value: Any) -> None:
+                """Dispatch an MQTT-delivered frame to the emitter."""
+                if emitter is None:
+                    return
+                # Value is the deserialized JSON.  It may be a dict
+                # with "frame" and "metadata" keys, or a raw value.
+                if isinstance(value, dict) and "frame" in value:
+                    frame: Any = value["frame"]
+                    metadata: dict[str, Any] = value.get("metadata", {})
+                else:
+                    frame = value
+                    metadata = {}
+                self._dispatch_to_emitter(running, frame, metadata)
+
+            mqtt_transport.subscribe(binding.signal_name, on_frame_mqtt)
+            mqtt_transport.start()
+            running.transports.append(mqtt_transport)
+
+        elif binding.transport == TRANSPORT_UDP:
+            # UDP frame delivery — binary SignalFrame.
+            from .udp_channel import UdpReceiver
+
+            receiver: UdpReceiver = UdpReceiver(
+                port=binding.udp_port,
+            )
+
+            def on_frame_udp(frame: Any, addr: tuple[str, int]) -> None:
+                """Dispatch a UDP-delivered frame to the emitter."""
+                if emitter is None:
+                    return
+                # Unpack the SignalFrame payload based on dtype.
+                from .protocol import DTYPE_FLOAT32, DTYPE_JSON
+                payload: bytes = frame.payload
+                if frame.dtype == DTYPE_FLOAT32:
+                    # Unpack as float32 array.
+                    count: int = len(payload) // 4
+                    values: list[float] = list(
+                        struct.unpack(f"<{count}f", payload[:count * 4])
+                    )
+                    decoded_frame: Any = values
+                elif frame.dtype == DTYPE_JSON:
+                    try:
+                        decoded_frame = json.loads(payload.decode("utf-8"))
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        return
+                else:
+                    # Raw bytes — pass through.
+                    decoded_frame = payload
+                self._dispatch_to_emitter(running, decoded_frame, {})
+
+            receiver.add_callback(on_frame_udp)
+            receiver.start()
+            running.transports.append(receiver)
+
+    def _dispatch_to_emitter(self, running: _RunningEmitter,
+                             frame: Any,
+                             metadata: dict[str, Any]) -> None:
+        """Call on_emit() on the emitter and track the result.
+
+        Args:
+            running:  Running emitter state.
+            frame:    Frame data to emit.
+            metadata: Per-frame context dict.
+        """
+        emitter: Any = running.emitter
+        if emitter is None:
+            return
+
+        running.frame_count += 1
+        try:
+            success: bool = emitter.on_emit(frame, metadata)
+        except Exception:
+            success = False
+            logger.warning(
+                "Emitter '%s' raised exception in on_emit",
+                running.emitter_type, exc_info=True,
+            )
+        if not success:
+            running.failure_count += 1
+
+    def _teardown_emitter(self, running: _RunningEmitter) -> None:
+        """Flush, close, and clean up a running emitter.
+
+        Args:
+            running: The running emitter state to tear down.
+        """
+        # Stop frame delivery transports first.
+        for t in running.transports:
+            try:
+                t.stop()
+            except Exception as exc:
+                logger.error("Error stopping emitter transport: %s", exc)
+
+        # Emitter lifecycle: flush then close.
+        emitter: Any = running.emitter
+        if emitter is not None and emitter._is_open:
+            try:
+                emitter.on_flush()
+            except Exception:
+                pass
+            try:
+                emitter.on_close()
+                emitter._is_open = False
+            except Exception as exc:
+                logger.error(
+                    "Error closing emitter '%s': %s",
+                    running.emitter_type, exc,
+                )
+
+        logger.info(
+            "Stopped emitter '%s' (assignment %s, frames=%d, failures=%d)",
+            running.emitter_type, running.assignment_id,
+            running.frame_count, running.failure_count,
+        )
+
+    # ------------------------------------------------------------------
     # Health monitoring
     # ------------------------------------------------------------------
 
@@ -570,6 +885,7 @@ class WorkerAgent:
 
         with self._lock:
             active_ops: int = len(self._operators)
+            active_emitters: int = len(self._emitters)
 
         uptime: float = time.monotonic() - self._start_time
 
@@ -578,7 +894,7 @@ class WorkerAgent:
             cpu_percent=self._get_cpu_percent(),
             memory_percent=self._get_memory_percent(),
             gpu_percent=self._get_gpu_percent(),
-            active_ops=active_ops,
+            active_ops=active_ops + active_emitters,
             uptime_s=uptime,
         )
 
@@ -608,11 +924,16 @@ class WorkerAgent:
     def _get_memory_percent(self) -> float:
         """Read memory usage percentage.
 
+        Supports Linux (``/proc/meminfo``) and macOS (``vm_stat``).
+
         Returns:
             Memory usage (0-100), or -1 on failure.
         """
+        if platform.system() == "Darwin":
+            return self._get_memory_percent_darwin()
+
+        # Linux: /proc/meminfo.
         try:
-            # /proc/meminfo is Linux-only.
             with open("/proc/meminfo", "r") as f:
                 lines: dict[str, int] = {}
                 for line in f:
@@ -626,6 +947,61 @@ class WorkerAgent:
         except (OSError, KeyError, ValueError, ZeroDivisionError):
             return -1.0
 
+    def _get_memory_percent_darwin(self) -> float:
+        """Read memory usage on macOS via ``vm_stat`` and ``sysctl``.
+
+        Returns:
+            Memory usage (0-100), or -1 on failure.
+        """
+        try:
+            # Total physical memory via sysctl.
+            result: subprocess.CompletedProcess[str] = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if result.returncode != 0:
+                return -1.0
+            total_bytes: int = int(result.stdout.strip())
+
+            # Page statistics via vm_stat.
+            result = subprocess.run(
+                ["vm_stat"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if result.returncode != 0:
+                return -1.0
+
+            # Parse page size and page counts from vm_stat output.
+            stats: dict[str, int] = {}
+            page_size: int = 16384  # Default for Apple Silicon.
+            for line in result.stdout.splitlines():
+                if "page size of" in line:
+                    # "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
+                    for word in line.split():
+                        if word.isdigit():
+                            page_size = int(word)
+                            break
+                elif ":" in line:
+                    key, _, val = line.partition(":")
+                    val = val.strip().rstrip(".")
+                    if val.isdigit():
+                        stats[key.strip()] = int(val)
+
+            # Free + inactive + speculative ≈ available.
+            free_pages: int = stats.get("Pages free", 0)
+            inactive_pages: int = stats.get("Pages inactive", 0)
+            speculative_pages: int = stats.get("Pages speculative", 0)
+            available_bytes: int = (
+                (free_pages + inactive_pages + speculative_pages) * page_size
+            )
+
+            if total_bytes <= 0:
+                return -1.0
+            return ((total_bytes - available_bytes) / total_bytes) * 100.0
+
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return -1.0
+
     def _get_gpu_percent(self) -> float:
         """Read GPU utilization percentage (Jetson tegrastats or nvidia-smi).
 
@@ -634,7 +1010,6 @@ class WorkerAgent:
         """
         # Try nvidia-smi first (desktop GPUs).
         try:
-            import subprocess
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=utilization.gpu",
                  "--format=csv,noheader,nounits"],
@@ -665,12 +1040,23 @@ class WorkerAgent:
     # ------------------------------------------------------------------
 
     def _shutdown(self) -> None:
-        """Clean shutdown: stop operators, disconnect MQTT."""
+        """Clean shutdown: stop operators and emitters, disconnect MQTT."""
         # Stop all operators.
         with self._lock:
-            ids: list[str] = list(self._operators.keys())
-        for aid in ids:
+            op_ids: list[str] = list(self._operators.keys())
+        for aid in op_ids:
             self._stop_operator(aid)
+
+        # Stop all emitters (flush → close lifecycle).
+        with self._lock:
+            em_ids: list[str] = list(self._emitters.keys())
+        for aid in em_ids:
+            with self._lock:
+                running: Optional[_RunningEmitter] = self._emitters.pop(
+                    aid, None,
+                )
+            if running is not None:
+                self._teardown_emitter(running)
 
         # Publish offline status.
         if self._client:
@@ -699,7 +1085,7 @@ class WorkerAgent:
 def _parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="GlowUp worker agent — compute node daemon.",
+        description="GlowUp worker agent — compute and emitter node daemon.",
         epilog="Press Ctrl+C to stop.",
     )
     parser.add_argument(
