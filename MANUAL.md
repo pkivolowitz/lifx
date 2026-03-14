@@ -33,3 +33,5 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
 | 18 | [Node-RED](docs/18-node-red.md) | Flow-based visual automation |
 | 19 | [MQTT](docs/19-mqtt.md) | Native pub/sub bridge for device control |
 | 20 | [Media Pipeline](docs/20-media-pipeline.md) | Audio-reactive lighting, Mosaic Warfare architecture |
+| 21 | [SOE Pipeline](docs/21-soe-pipeline.md) | Sensors → Operators → Emitters architecture, dispatch modes, vision |
+| 22 | [Emitter Developer Guide](docs/22-emitter-dev-guide.md) | Emitter ABC, lifecycle hooks, Param system, creating new emitters |
