@@ -4,7 +4,10 @@ Renders HSBK frames as colored block characters in a terminal with
 24-bit (truecolor) support.  Each zone becomes two full-block characters,
 producing a horizontal color strip that mirrors the physical light output.
 
-No external dependencies -- uses only ANSI escape sequences.
+No external dependencies — uses only ANSI escape sequences.
+
+Not registered in the emitter registry — created programmatically for
+development and demo use.
 
 Usage::
 
@@ -19,13 +22,13 @@ Usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "2.0"
 
 import sys
-from typing import Optional, TextIO
+from typing import Any, Optional, TextIO
 
 from effects import HSBK, HSBK_MAX
-from emitters import Emitter, EmitterInfo
+from emitters import Emitter, EmitterCapabilities
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -53,23 +56,31 @@ HUE_SEXTANTS: int = 6
 # Maximum 8-bit RGB component value.
 RGB_MAX: int = 255
 
+# Frame type identifier.
+_FRAME_TYPE_STRIP: str = "strip"
+
 
 class ScreenEmitter(Emitter):
     """Render HSBK frames as ANSI-colored blocks in the terminal.
 
     Each zone becomes :data:`CHARS_PER_ZONE` colored block characters.
-    Requires a terminal with 24-bit (truecolor) support -- most modern
+    Requires a terminal with 24-bit (truecolor) support — most modern
     terminals (iTerm2, Terminal.app, GNOME Terminal, Windows Terminal)
     support this.
 
     The emitter uses cursor-home repositioning so each frame overwrites
     the previous one in place, producing smooth animation.
 
+    Not registered in the emitter registry (``emitter_type`` is ``None``).
+    Created programmatically for development and demo use.
+
     Args:
         zone_count: Number of zones to display.
         label:      Human-readable name for this emitter.
         stream:     Output stream (defaults to ``sys.stdout``).
     """
+
+    # Not registered — emitter_type stays None from the base class.
 
     def __init__(
         self,
@@ -84,12 +95,51 @@ class ScreenEmitter(Emitter):
             label:      Display name for status reporting.
             stream:     Output stream (defaults to ``sys.stdout``).
         """
+        # Initialize the Emitter base class with the label as name.
+        super().__init__(label, {})
         self._zone_count: int = zone_count
         self._label: str = label
         self._stream: TextIO = stream or sys.stdout
         self._powered: bool = False
 
-    # --- Emitter properties ---
+    # --- SOE lifecycle -----------------------------------------------------
+
+    def on_open(self) -> None:
+        """Clear the terminal and hide the cursor."""
+        self.prepare_for_rendering()
+
+    def on_emit(self, frame: Any, metadata: dict[str, Any]) -> bool:
+        """Render a frame to the terminal.
+
+        Args:
+            frame:    ``list[HSBK]`` to render as colored blocks.
+            metadata: Per-frame context dict.
+
+        Returns:
+            ``True`` on success.
+        """
+        if isinstance(frame, list):
+            self.send_zones(frame)
+            return True
+        return False
+
+    def on_close(self) -> None:
+        """Restore the terminal if still powered."""
+        if self._powered:
+            self.power_off()
+
+    def capabilities(self) -> EmitterCapabilities:
+        """Declare terminal emitter capabilities.
+
+        Returns:
+            An :class:`EmitterCapabilities` for this terminal emitter.
+        """
+        return EmitterCapabilities(
+            accepted_frame_types=[_FRAME_TYPE_STRIP],
+            zones=self._zone_count,
+        )
+
+    # --- Engine-facing properties ------------------------------------------
 
     @property
     def zone_count(self) -> Optional[int]:
@@ -116,7 +166,7 @@ class ScreenEmitter(Emitter):
         """Description with zone count."""
         return f"Terminal ({self._zone_count} zones)"
 
-    # --- Frame dispatch ---
+    # --- Engine-facing frame dispatch --------------------------------------
 
     def send_zones(self, colors: list[HSBK], duration_ms: int = 0,
                    rapid: bool = True) -> None:
@@ -156,7 +206,7 @@ class ScreenEmitter(Emitter):
         """
         self.send_zones([(hue, sat, bri, kelvin)] * self._zone_count)
 
-    # --- Lifecycle ---
+    # --- Engine-facing lifecycle -------------------------------------------
 
     def prepare_for_rendering(self) -> None:
         """Clear the terminal and hide the cursor."""
@@ -164,19 +214,39 @@ class ScreenEmitter(Emitter):
         self._stream.flush()
 
     def power_on(self, duration_ms: int = 0) -> None:
-        """Enable rendering output."""
+        """Enable rendering output.
+
+        Args:
+            duration_ms: Ignored.
+        """
         self._powered = True
 
     def power_off(self, duration_ms: int = 0) -> None:
-        """Disable rendering and restore the terminal cursor."""
+        """Disable rendering and restore the terminal cursor.
+
+        Args:
+            duration_ms: Ignored.
+        """
         self._powered = False
         self._stream.write(SHOW_CURSOR + RESET + "\n")
         self._stream.flush()
 
     def close(self) -> None:
         """Restore the terminal if still powered."""
-        if self._powered:
-            self.power_off()
+        self.on_close()
+
+    def get_info(self) -> dict[str, Any]:
+        """Return emitter status information.
+
+        Returns:
+            JSON-serializable dict with emitter identity.
+        """
+        return {
+            "id": self.emitter_id,
+            "label": self.label,
+            "product": self.product_name,
+            "zones": self.zone_count,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +262,7 @@ def _hsbk_to_rgb(
     """Convert HSBK to 8-bit RGB for ANSI display.
 
     Uses the standard HSB-to-RGB sextant algorithm.  The kelvin
-    (color temperature) component is ignored -- terminals display
+    (color temperature) component is ignored — terminals display
     pure RGB, not white-point-shifted color.
 
     Args:

@@ -1,4 +1,4 @@
-"""Virtual multizone emitter -- wraps N emitters as one unified zone canvas.
+"""Virtual multizone emitter — wraps N emitters as one unified zone canvas.
 
 Multizone emitters contribute all their zones; single-zone emitters
 contribute one zone each.  The total zone count is the sum.
@@ -6,19 +6,23 @@ contribute one zone each.  The total zone count is the sum.
 This is the emitter-layer replacement for :class:`VirtualMultizoneDevice`
 which previously lived in ``engine.py``.  The zone routing logic is
 preserved exactly, but operates on :class:`Emitter` instances instead
-of :class:`LifxDevice` -- hardware-specific concerns (monochrome luma
+of :class:`LifxDevice` — hardware-specific concerns (monochrome luma
 conversion, power protocol) are pushed down to each member emitter.
+
+Not registered in the emitter registry — created programmatically by
+the server when grouping multiple physical emitters into a single
+addressable canvas.
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "2.0"
 
 from typing import Any, Optional
 
 from effects import HSBK, KELVIN_DEFAULT
-from emitters import Emitter, EmitterInfo
+from emitters import Emitter, EmitterCapabilities
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -28,6 +32,10 @@ from emitters import Emitter, EmitterInfo
 # Distinguishes single-zone emitters (send_color) from multizone zone
 # indices (batched send_zones).
 SINGLE_ZONE_SENTINEL: int = -1
+
+# Frame type identifiers.
+_FRAME_TYPE_STRIP: str = "strip"
+_FRAME_TYPE_SINGLE: str = "single"
 
 
 class VirtualMultizoneEmitter(Emitter):
@@ -40,7 +48,7 @@ class VirtualMultizoneEmitter(Emitter):
     For example, a group containing a 108-zone string light emitter and
     4 single-bulb emitters becomes a 112-zone virtual emitter.  Effects
     render all 112 zones in one ``render()`` call, and :meth:`send_zones`
-    routes each virtual zone's color back to the correct member emitter --
+    routes each virtual zone's color back to the correct member emitter —
     batching multizone updates into a single ``send_zones()`` call per
     emitter and dispatching single-zone colors via ``send_color()``.
 
@@ -48,14 +56,17 @@ class VirtualMultizoneEmitter(Emitter):
     details) are handled by each member emitter's :meth:`send_color`
     implementation.
 
+    Not registered in the emitter registry (``emitter_type`` is ``None``).
+    Created programmatically by the server for multi-device groups.
+
     Args:
-        emitters:      Member :class:`Emitter` instances.  The list order
-                       determines the virtual zone layout.
+        emitters:      Member :class:`Emitter` instances.
         name:          Optional group name for display and identification.
         owns_emitters: If ``True`` (default), :meth:`close` closes all
-                       member emitters.  Set to ``False`` when the caller
-                       manages emitter lifetimes separately.
+                       member emitters.
     """
+
+    # Not registered — emitter_type stays None from the base class.
 
     def __init__(
         self,
@@ -85,6 +96,11 @@ class VirtualMultizoneEmitter(Emitter):
                 "VirtualMultizoneEmitter requires at least one emitter."
             )
 
+        # Initialize the Emitter base class.  The virtual emitter has no
+        # Param declarations and no per-instance config — it's a pure
+        # composition wrapper.
+        super().__init__(name or "virtual", {})
+
         self._emitters: list[Emitter] = list(emitters)
         self._owns_emitters: bool = owns_emitters
         self._name: str = name
@@ -105,7 +121,50 @@ class VirtualMultizoneEmitter(Emitter):
 
         self._zone_count: int = len(self._zone_map)
 
-    # --- Emitter properties ---
+    # --- SOE lifecycle -----------------------------------------------------
+
+    def on_open(self) -> None:
+        """Prepare all member emitters for rendering."""
+        self.prepare_for_rendering()
+
+    def on_emit(self, frame: Any, metadata: dict[str, Any]) -> bool:
+        """Route a frame to member emitters via :meth:`send_zones`.
+
+        Args:
+            frame:    ``list[HSBK]`` with one color per virtual zone.
+            metadata: Per-frame context dict.
+
+        Returns:
+            ``True`` on successful dispatch.
+        """
+        if isinstance(frame, list):
+            self.send_zones(frame)
+            return True
+        return False
+
+    def on_close(self) -> None:
+        """Close all member emitters (if this group owns them)."""
+        if self._owns_emitters:
+            for em in self._emitters:
+                if hasattr(em, "on_close"):
+                    em.on_close()
+
+    def capabilities(self) -> EmitterCapabilities:
+        """Declare virtual group capabilities.
+
+        Always accepts ``"strip"`` and ``"single"`` frame types.  The
+        zone count is the sum across all member emitters.
+
+        Returns:
+            An :class:`EmitterCapabilities` for this virtual group.
+        """
+        return EmitterCapabilities(
+            accepted_frame_types=[_FRAME_TYPE_STRIP, _FRAME_TYPE_SINGLE],
+            zones=self._zone_count,
+            variable_topology=True,
+        )
+
+    # --- Engine-facing properties ------------------------------------------
 
     @property
     def zone_count(self) -> Optional[int]:
@@ -114,7 +173,7 @@ class VirtualMultizoneEmitter(Emitter):
 
     @property
     def is_multizone(self) -> bool:
-        """Always ``True`` -- a virtual group is always multizone."""
+        """Always ``True`` — a virtual group is always multizone."""
         return True
 
     @property
@@ -134,7 +193,7 @@ class VirtualMultizoneEmitter(Emitter):
         """Description string with total zone count."""
         return f"{self._zone_count}-zone virtual multizone"
 
-    # --- Frame dispatch ---
+    # --- Engine-facing frame dispatch --------------------------------------
 
     def send_zones(
         self,
@@ -145,7 +204,7 @@ class VirtualMultizoneEmitter(Emitter):
         """Route each virtual zone's color to the correct member emitter.
 
         Multizone members receive a single batched :meth:`send_zones`
-        call.  Single-zone members receive :meth:`send_color` -- the
+        call.  Single-zone members receive :meth:`send_color` — the
         member emitter handles any hardware-specific conversion
         (e.g., monochrome luma) internally.
 
@@ -163,12 +222,12 @@ class VirtualMultizoneEmitter(Emitter):
                 break
 
             if zone_idx == SINGLE_ZONE_SENTINEL:
-                # Single-zone emitter -- dispatch immediately.
+                # Single-zone emitter — dispatch immediately.
                 # The emitter's send_color handles luma conversion if needed.
                 h, s, b, k = colors[vz]
                 em.send_color(h, s, b, k, duration_ms=duration_ms)
             else:
-                # Multizone emitter -- accumulate colors for batching.
+                # Multizone emitter — accumulate colors for batching.
                 em_id: int = id(em)
                 if em_id not in multizone_batches:
                     # Pre-allocate the full zone list for this emitter.
@@ -210,7 +269,7 @@ class VirtualMultizoneEmitter(Emitter):
         for em in self._emitters:
             em.send_color(hue, sat, bri, kelvin, duration_ms=duration_ms)
 
-    # --- Lifecycle ---
+    # --- Engine-facing lifecycle -------------------------------------------
 
     def prepare_for_rendering(self) -> None:
         """Prepare all member emitters for rendering."""
@@ -218,22 +277,31 @@ class VirtualMultizoneEmitter(Emitter):
             em.prepare_for_rendering()
 
     def power_on(self, duration_ms: int = 0) -> None:
-        """Power on all member emitters."""
+        """Power on all member emitters.
+
+        Args:
+            duration_ms: Transition duration in milliseconds.
+        """
         for em in self._emitters:
             em.power_on(duration_ms=duration_ms)
 
     def power_off(self, duration_ms: int = 0) -> None:
-        """Power off all member emitters."""
+        """Power off all member emitters.
+
+        Args:
+            duration_ms: Transition duration in milliseconds.
+        """
         for em in self._emitters:
             em.power_off(duration_ms=duration_ms)
 
     def close(self) -> None:
-        """Close all member emitters (if this group owns them)."""
-        if self._owns_emitters:
-            for em in self._emitters:
-                em.close()
+        """Close all member emitters (if this group owns them).
 
-    # --- Group-specific ---
+        Delegates to :meth:`on_close`.
+        """
+        self.on_close()
+
+    # --- Group-specific ----------------------------------------------------
 
     def get_emitter_list(self) -> list[Emitter]:
         """Return a copy of the member emitter list.
@@ -243,8 +311,12 @@ class VirtualMultizoneEmitter(Emitter):
         """
         return list(self._emitters)
 
-    def get_info(self) -> EmitterInfo:
-        """Return group status with member details."""
+    def get_info(self) -> dict[str, Any]:
+        """Return group status with member details.
+
+        Returns:
+            JSON-serializable dict with group identity and member info.
+        """
         return {
             "id": self.emitter_id,
             "label": self.label,
