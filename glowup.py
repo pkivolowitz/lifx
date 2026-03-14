@@ -752,7 +752,7 @@ def cmd_play(args: argparse.Namespace) -> None:
         _print(f"Connecting to group '{args.group}' ({len(ips)} devices)...",
               flush=True)
         devices: list[LifxDevice] = _connect_group(ips)
-        member_emitters: list[Emitter] = [LifxEmitter(d) for d in devices]
+        member_emitters: list[Emitter] = [LifxEmitter.from_device(d) for d in devices]
         em = VirtualMultizoneEmitter(member_emitters, name=args.group)
         _print(f"  Virtual multizone: {em.zone_count} zones", flush=True)
     else:
@@ -780,7 +780,7 @@ def cmd_play(args: argparse.Namespace) -> None:
         else:
             _print("  Monochrome bulb (BT.709 luma mode)", flush=True)
 
-        em = LifxEmitter(dev)
+        em = LifxEmitter.from_device(dev)
 
     # --- Sim-only: extract geometry then close real sockets immediately --------
     # From this point on, if sim_only is active, em is a _NullEmitter and

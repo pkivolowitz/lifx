@@ -17,7 +17,7 @@ Typical usage::
     device = LifxDevice("<device-ip>")
     device.query_all()
 
-    emitter = LifxEmitter(device)
+    emitter = LifxEmitter.from_device(device)
     ctrl = Controller([emitter])
     ctrl.play("cylon", speed=1.5, width=12)
     # ... later ...

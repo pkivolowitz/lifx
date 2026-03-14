@@ -407,7 +407,7 @@ class DeviceManager:
             # Build emitter wrappers for all individual devices.
             new_emitters: dict[str, Emitter] = {}
             for ip, dev in new_map.items():
-                new_emitters[ip] = LifxEmitter(dev)
+                new_emitters[ip] = LifxEmitter.from_device(dev)
 
             # Build VirtualMultizoneEmitters for multi-device groups.
             for group_name, ips in self._group_config.items():

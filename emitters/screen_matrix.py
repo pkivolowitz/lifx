@@ -15,6 +15,9 @@ terminal window size or decreasing font size directly increases resolution.
 
 Uses 24-bit ANSI truecolor escape sequences.  No curses dependency.
 
+Not registered in the emitter registry — created programmatically for
+development and demo use.
+
 Usage::
 
     from emitters.screen_matrix import ScreenMatrixEmitter
@@ -28,15 +31,15 @@ Usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.1"
+__version__ = "2.0"
 
 import os
 import sys
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from effects import HSBK
-from emitters import Emitter
+from emitters import Emitter, EmitterCapabilities
 from emitters.screen import (
     _hsbk_to_rgb,
     ZONE_CHAR, CSI, RESET,
@@ -62,13 +65,24 @@ FPS_WINDOW: float = 1.0
 # 0.2 = responsive to changes, 0.5 = more stable reading.
 SEND_TIME_SMOOTHING: float = 0.2
 
+# Frame type identifier.
+_FRAME_TYPE_STRIP: str = "strip"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _move(row: int, col: int) -> str:
-    """Return ANSI cursor-position sequence (1-based row/col)."""
+    """Return ANSI cursor-position sequence (1-based row/col).
+
+    Args:
+        row: 1-based row number.
+        col: 1-based column number.
+
+    Returns:
+        ANSI escape sequence to position the cursor.
+    """
     return f"{CSI}{row};{col}H"
 
 
@@ -102,7 +116,14 @@ def _border_line(left: str, right: str, width: int,
 
 
 def _elapsed_str(seconds: float) -> str:
-    """Format elapsed seconds as ``MM:SS`` or ``H:MM:SS``."""
+    """Format elapsed seconds as ``MM:SS`` or ``H:MM:SS``.
+
+    Args:
+        seconds: Elapsed time in seconds.
+
+    Returns:
+        Formatted time string.
+    """
     t: int = int(seconds)
     h: int = t // 3600
     m: int = (t % 3600) // 60
@@ -130,12 +151,17 @@ class ScreenMatrixEmitter(Emitter):
         - ``Send: Xms`` — time to write one frame to the terminal
         - ``Frames: N`` — total frames rendered
 
+    Not registered in the emitter registry (``emitter_type`` is ``None``).
+    Created programmatically for development and demo use.
+
     Args:
         effect_name:  Effect name shown in the top border.
         fps:          Target FPS shown in the top border.
         pixel_width:  Grid width in characters (default: auto-fit terminal).
         pixel_height: Grid height in characters (default: auto-fit terminal).
     """
+
+    # Not registered — emitter_type stays None from the base class.
 
     def __init__(
         self,
@@ -155,6 +181,9 @@ class ScreenMatrixEmitter(Emitter):
             pixel_width:  Override pixel width (default: terminal_cols - 2).
             pixel_height: Override pixel height (default: terminal_rows - 2).
         """
+        # Initialize the Emitter base class.
+        super().__init__("matrix", {})
+
         term_size = os.get_terminal_size()
         self._pixel_width: int = pixel_width or (term_size.columns - 2)
         self._pixel_height: int = pixel_height or (term_size.lines - 2)
@@ -175,6 +204,45 @@ class ScreenMatrixEmitter(Emitter):
         self._send_time_ms: float = 0.0
         self._frame_count: int = 0
 
+    # --- SOE lifecycle -----------------------------------------------------
+
+    def on_open(self) -> None:
+        """Clear the screen and draw the border frame."""
+        self.prepare_for_rendering()
+
+    def on_emit(self, frame: Any, metadata: dict[str, Any]) -> bool:
+        """Render a 2D frame to the terminal.
+
+        Args:
+            frame:    ``list[HSBK]`` interpreted as row-major pixel grid.
+            metadata: Per-frame context dict.
+
+        Returns:
+            ``True`` on success.
+        """
+        if isinstance(frame, list):
+            self.send_zones(frame)
+            return True
+        return False
+
+    def on_close(self) -> None:
+        """Restore the terminal if still powered."""
+        if self._powered:
+            self.power_off()
+
+    def capabilities(self) -> EmitterCapabilities:
+        """Declare matrix emitter capabilities.
+
+        Returns:
+            An :class:`EmitterCapabilities` for this 2D emitter.
+        """
+        return EmitterCapabilities(
+            accepted_frame_types=[_FRAME_TYPE_STRIP],
+            zones=self._pixel_width * self._pixel_height,
+            width=self._pixel_width,
+            height=self._pixel_height,
+        )
+
     # --- Public pixel dimensions ---
 
     @property
@@ -187,7 +255,7 @@ class ScreenMatrixEmitter(Emitter):
         """Height of the pixel grid in characters."""
         return self._pixel_height
 
-    # --- Emitter properties ---
+    # --- Engine-facing properties ------------------------------------------
 
     @property
     def zone_count(self) -> Optional[int]:
@@ -214,7 +282,7 @@ class ScreenMatrixEmitter(Emitter):
         """Description with grid dimensions."""
         return f"Terminal Matrix ({self._pixel_width}x{self._pixel_height})"
 
-    # --- Frame dispatch ---
+    # --- Engine-facing frame dispatch --------------------------------------
 
     def send_zones(self, colors: list[HSBK], duration_ms: int = 0,
                    rapid: bool = True) -> None:
@@ -291,11 +359,19 @@ class ScreenMatrixEmitter(Emitter):
 
     def send_color(self, hue: int, sat: int, bri: int, kelvin: int,
                    duration_ms: int = 0) -> None:
-        """Fill the entire grid with a single color."""
+        """Fill the entire grid with a single color.
+
+        Args:
+            hue:         Hue (0--65535).
+            sat:         Saturation (0--65535).
+            bri:         Brightness (0--65535).
+            kelvin:      Color temperature (ignored).
+            duration_ms: Ignored.
+        """
         total: int = self._pixel_width * self._pixel_height
         self.send_zones([(hue, sat, bri, kelvin)] * total)
 
-    # --- Lifecycle ---
+    # --- Engine-facing lifecycle -------------------------------------------
 
     def prepare_for_rendering(self) -> None:
         """Clear the screen and draw the border frame."""
@@ -328,17 +404,39 @@ class ScreenMatrixEmitter(Emitter):
         sys.stdout.flush()
 
     def power_on(self, duration_ms: int = 0) -> None:
-        """Enable rendering and start the elapsed timer."""
+        """Enable rendering and start the elapsed timer.
+
+        Args:
+            duration_ms: Ignored.
+        """
         self._powered = True
         self._start_time = time.monotonic()
 
     def power_off(self, duration_ms: int = 0) -> None:
-        """Disable rendering and restore the terminal."""
+        """Disable rendering and restore the terminal.
+
+        Args:
+            duration_ms: Ignored.
+        """
         self._powered = False
         sys.stdout.write(SHOW_CURSOR + RESET + "\n")
         sys.stdout.flush()
 
     def close(self) -> None:
         """Restore the terminal if still powered."""
-        if self._powered:
-            self.power_off()
+        self.on_close()
+
+    def get_info(self) -> dict[str, Any]:
+        """Return matrix emitter status information.
+
+        Returns:
+            JSON-serializable dict with emitter identity and dimensions.
+        """
+        return {
+            "id": self.emitter_id,
+            "label": self.label,
+            "product": self.product_name,
+            "zones": self.zone_count,
+            "width": self._pixel_width,
+            "height": self._pixel_height,
+        }
