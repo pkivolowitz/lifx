@@ -10,8 +10,9 @@ if you've written an effect, the emitter framework will feel familiar.
 emitters/
     ├── __init__.py          Emitter ABC, EmitterManager, Param reuse, auto-registry
     ├── lifx.py              LIFX LAN protocol driver (first concrete emitter)
+    ├── audio_out.py         Audio tone synthesizer (CoreAudio/PortAudio)
     ├── virtual.py           Virtual multizone composite device
-    ├── screen.py            tkinter simulator (1D strip)
+    ├── screen.py            ANSI terminal simulator (1D strip)
     └── screen_matrix.py     tkinter simulator (2D matrix)
 ```
 
@@ -199,6 +200,7 @@ frame format.  Standard types:
 |------|---------|
 | `"strip"` | `list[HSBK]` — multizone color strip |
 | `"single"` | `HSBK` tuple — single color |
+| `"scalar"` | `dict` with named float values (e.g., frequency + amplitude) |
 | `"snapshot"` | `dict[str, float]` — signal bus snapshot |
 | `"binary"` | `bool` — on/off |
 | `"raw"` | `bytes` — raw media buffer |
@@ -449,6 +451,80 @@ The Engine currently calls the legacy methods (`send_zones`,
 (`on_open`, `on_emit`, `on_close`).  Both paths work simultaneously
 — the LifxEmitter bridges both interfaces to the same underlying
 `LifxDevice` transport.
+
+## AudioOutEmitter — Remote Audio Emitter
+
+The `AudioOutEmitter` (`emitters/audio_out.py`) is the first remote
+emitter — it runs on a Mac (or any machine with audio output) and
+receives frames via MQTT from the pipeline.  It demonstrates the
+distributed emitter pattern: any node with a speaker can be an audio
+output endpoint.
+
+### Frame Format
+
+Accepts `scalar` frames as a dict:
+
+```python
+{"frequency": 440.0, "amplitude": 0.8}
+```
+
+Both keys are optional — partial updates leave the other value
+unchanged.  Frequency is clamped to [20, 20000] Hz; amplitude to
+[0.0, 1.0].
+
+### Audio Synthesis
+
+The emitter generates a continuous multi-harmonic waveform with:
+
+- **4 harmonics** — fundamental + 2nd (octave) + 3rd (fifth) + 4th
+  (warmth), producing a Theremin-like timbre
+- **Portamento** — exponential pitch glide (default 50 ms time
+  constant) for smooth note transitions
+- **Vibrato** — LFO modulates both pitch (±1.5%) and amplitude
+  (±8%) at 5.5 Hz, producing the characteristic Theremin "sound
+  of the ether"
+
+### Parameters
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| `master_volume` | 0.3 | 0.0–1.0 | Output volume multiplier |
+| `portamento` | 0.05 | 0.001–2.0 | Pitch glide time constant (seconds) |
+| `vibrato_rate` | 5.5 | 0.0–20.0 | Vibrato LFO rate in Hz (0 = off) |
+| `vibrato_depth` | 0.015 | 0.0–0.1 | Pitch modulation depth (fraction) |
+| `vibrato_amp_depth` | 0.08 | 0.0–0.5 | Amplitude modulation depth |
+
+### Mute Support
+
+The emitter has a `toggle_mute()` method that silences output without
+tearing down the audio stream.  The MQTT test harness
+(`distributed/test_audio_emitter.py`) maps the `h` key to this toggle.
+
+### Standalone Test
+
+```bash
+# Tone sweep (no MQTT needed)
+~/venv/bin/python3 -m emitters.audio_out
+
+# MQTT integration (requires Pi + theremin effect)
+cd ~/lifx && ~/venv/bin/python3 -m distributed.test_audio_emitter
+```
+
+### Agent Configuration
+
+For use with the distributed worker agent, declare the emitter in
+the agent's JSON config:
+
+```json
+{
+    "node_id": "bed",
+    "mqtt_broker": "10.0.0.48",
+    "roles": ["emitter"],
+    "emitters": [
+        {"type": "audio_out", "id": "bed:speaker", "topology": "scalar"}
+    ]
+}
+```
 
 ## Emitter Checklist
 
