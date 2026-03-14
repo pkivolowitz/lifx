@@ -968,4 +968,11 @@ import pkgutil    # noqa: E402
 
 _pkg_dir: str = os.path.dirname(__file__)
 for _importer, _modname, _ispkg in pkgutil.iter_modules([_pkg_dir]):
-    importlib.import_module(f".{_modname}", __package__)
+    try:
+        importlib.import_module(f".{_modname}", __package__)
+    except ImportError as _exc:
+        # Optional-dependency emitters (e.g. audio_out needs sounddevice/numpy)
+        # are silently skipped on machines that lack those packages.
+        logging.getLogger(__name__).debug(
+            "Skipping emitter module %s: %s", _modname, _exc,
+        )
