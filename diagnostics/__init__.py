@@ -229,3 +229,75 @@ class DiagnosticsLogger:
             )
         """
         return self._execute(sql, (stop_reason, device_ip))
+
+    # -- Query methods -------------------------------------------------------
+
+    def _query(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
+        """Execute a SELECT and return rows as dicts.
+
+        Args:
+            sql:    Parameterized SQL string.
+            params: Parameter tuple for the query.
+
+        Returns:
+            List of dicts (one per row), or empty list on failure.
+        """
+        with self._lock:
+            for attempt in range(2):
+                try:
+                    if self._conn is None or self._conn.closed:
+                        if not self._connect():
+                            return []
+                    with self._conn.cursor() as cur:
+                        cur.execute(sql, params)
+                        cols: list[str] = [d[0] for d in cur.description]
+                        rows: list[dict[str, Any]] = []
+                        for row in cur.fetchall():
+                            d: dict[str, Any] = {}
+                            for i, col in enumerate(cols):
+                                val = row[i]
+                                # Convert datetimes to ISO strings for JSON.
+                                if hasattr(val, 'isoformat'):
+                                    val = val.isoformat()
+                                d[col] = val
+                            rows.append(d)
+                        return rows
+                except Exception as exc:
+                    logger.debug("Diagnostics query failed (attempt %d): %s",
+                                 attempt + 1, exc)
+                    self._conn = None
+        return []
+
+    def query_now_playing(self) -> list[dict[str, Any]]:
+        """Return all currently playing effects (open records).
+
+        Returns:
+            List of dicts with ``device_ip``, ``device_label``,
+            ``effect_name``, ``params``, ``started_by``, ``started_at``.
+        """
+        sql: str = """
+            SELECT device_ip, device_label, effect_name, params,
+                   started_by, started_at
+            FROM effect_history
+            WHERE stopped_at IS NULL
+            ORDER BY started_at DESC
+        """
+        return self._query(sql)
+
+    def query_history(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return recent effect history records.
+
+        Args:
+            limit: Maximum number of records to return.
+
+        Returns:
+            List of dicts with all effect_history columns.
+        """
+        sql: str = """
+            SELECT device_ip, device_label, effect_name, params,
+                   started_by, started_at, stopped_at, stop_reason
+            FROM effect_history
+            ORDER BY started_at DESC
+            LIMIT %s
+        """
+        return self._query(sql, (limit,))
