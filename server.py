@@ -597,19 +597,13 @@ class DeviceManager:
                   signal_bus=signal_bus, **params)
         if self._diag is not None:
             em_info: dict[str, Any] = em.get_info() if em else {}
-            try:
-                row_id = self._diag.log_play(
-                    device_ip=ip,
-                    device_label=em_info.get("label"),
-                    effect_name=effect_name,
-                    params=params,
-                    started_by="api",
-                )
-                logging.info("Diagnostics: logged play id=%s for %s", row_id, ip)
-            except Exception as exc:
-                logging.error("Diagnostics: log_play FAILED for %s: %s", ip, exc)
-        else:
-            logging.warning("Diagnostics: _diag is None, skipping log_play")
+            self._diag.log_play(
+                device_ip=ip,
+                device_label=em_info.get("label"),
+                effect_name=effect_name,
+                params=params,
+                started_by="api",
+            )
         result: dict[str, Any] = ctrl.get_status()
         result["overridden"] = self.is_overridden(ip)
         return result
