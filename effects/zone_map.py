@@ -97,14 +97,15 @@ class ZoneMap(Effect):
     description: str = "Diagnostic tool — walk, fill, or stride-strobe to reveal zone layout"
 
     mode = Param(MODE_STRIDE, min=MODE_STRIDE, max=MODE_FILL,
-                 description="0=stride (R/G/B cycle), 1=walk (single zone), 2=fill (progressive)",
-                 choices=MODE_CHOICES)
+                 description="0=stride (R/G/B cycle), 1=walk (single zone), 2=fill (progressive)")
     stride = Param(DEFAULT_STRIDE, min=1, max=82,
                    description="Zones per bulb group (stride mode only)")
     hold = Param(DEFAULT_HOLD_SECONDS, min=0.1, max=10.0,
                  description="Seconds each step is held before advancing")
     solo = Param(-1, min=-1, max=81,
                  description="Solo one zone offset (-1=off, 0+=solo that offset with rainbow)")
+    hue = Param(-1.0, min=-1.0, max=360.0,
+                description="Fixed hue in degrees (-1=rainbow gradient, 0-360=constant color)")
 
     def on_start(self, zone_count: int) -> None:
         """Reset per-run state when the effect starts.
@@ -205,18 +206,16 @@ class ZoneMap(Effect):
         """
         step: int = int(t / self.hold) % zone_count
 
-        # Print zone index on advance.
+        # Track step for external consumers (no terminal I/O in render thread).
         if step != getattr(self, '_last_printed_step', -1):
             self._last_printed_step = step
-            # Position hue for human reference.
-            hue_deg: float = step * DEGREES_FULL / zone_count
-            sys.stdout.write(f"\r  zone {step:3d}/{zone_count}  "
-                             f"({hue_deg:5.1f}°)  ")
-            sys.stdout.flush()
 
-        # Rainbow-encode the lit zone's position.
-        hue: int = hue_to_u16(step * DEGREES_FULL / zone_count)
-        lit: HSBK = (hue, HSBK_MAX, HSBK_MAX, KELVIN_DEFAULT)
+        # Use fixed hue if set, otherwise rainbow-encode position.
+        if self.hue >= 0:
+            hue_val: int = hue_to_u16(self.hue)
+        else:
+            hue_val = hue_to_u16(step * DEGREES_FULL / zone_count)
+        lit: HSBK = (hue_val, HSBK_MAX, HSBK_MAX, KELVIN_DEFAULT)
 
         colors: list[HSBK] = [BLACK] * zone_count
         colors[step] = lit
