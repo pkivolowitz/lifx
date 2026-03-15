@@ -871,7 +871,8 @@ def cmd_play(args: argparse.Namespace) -> None:
 
     # --- Start the render engine ----------------------------------------------
     ctrl: Controller = Controller([em], fps=args.fps,
-                                  frame_callback=frame_cb)
+                                  frame_callback=frame_cb,
+                                  transition_ms=getattr(args, 'transition', None))
     ctrl.play(effect_name, **effect_params)
 
     status: dict = ctrl.get_status()
@@ -1431,6 +1432,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_play.add_argument(
         "--zoom", type=int, default=1,
         help="Simulator zoom factor 1-10 (nearest-neighbor scaling, default: 1)",
+    )
+    p_play.add_argument(
+        "--transition", type=int, default=None,
+        help="Firmware transition time in ms per frame (default: 2000/fps). "
+             "0=snap, higher=smoother but adds latency",
     )
     p_play.add_argument(
         "--lerp", type=str, default="lab",
