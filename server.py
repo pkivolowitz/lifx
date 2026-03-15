@@ -1896,10 +1896,15 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         """Route GET requests to the appropriate handler."""
-        if not self._authenticate():
+        path: str = self.path.split("?")[0]
+
+        # Dashboard serves its own login page — no server-side auth.
+        if path == "/dashboard":
+            self._handle_get_dashboard()
             return
 
-        path: str = self.path.split("?")[0]  # strip query string
+        if not self._authenticate():
+            return  # strip query string
         parts: list[str] = path.strip("/").split("/")
         # URL-decode the device identifier (handles %3A for colon in
         # group:name identifiers).
@@ -1979,11 +1984,6 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         # /api/diagnostics/history
         if path == "/api/diagnostics/history":
             self._handle_get_diag_history()
-            return
-
-        # /dashboard — serve the static HTML dashboard
-        if path == "/dashboard":
-            self._handle_get_dashboard()
             return
 
         self._send_json(404, {"error": "Not found"})
