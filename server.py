@@ -363,6 +363,8 @@ class DeviceManager:
         self._diag: Optional[Any] = None
         if _HAS_DIAGNOSTICS:
             self._diag = DiagnosticsLogger.from_env()
+            if self._diag is not None:
+                self._diag.close_stale_records()
 
     def load_devices(self) -> list[dict[str, Any]]:
         """Query each configured device IP and cache the results.

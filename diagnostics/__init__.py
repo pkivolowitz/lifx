@@ -230,6 +230,43 @@ class DiagnosticsLogger:
         """
         return self._execute(sql, (stop_reason, device_ip))
 
+    def close_stale_records(self) -> int:
+        """Close all open effect records on startup.
+
+        Called when the server starts to clean up records left open
+        by a previous crash or restart.  Sets ``stop_reason`` to
+        ``'server_restart'``.
+
+        Returns:
+            Number of records closed.
+        """
+        sql: str = """
+            UPDATE effect_history
+            SET stopped_at = now(), stop_reason = 'server_restart'
+            WHERE stopped_at IS NULL
+        """
+        with self._lock:
+            for attempt in range(2):
+                try:
+                    if self._conn is None or self._conn.closed:
+                        if not self._connect():
+                            return 0
+                    with self._conn.cursor() as cur:
+                        cur.execute(sql)
+                        count: int = cur.rowcount
+                        if count > 0:
+                            logger.info(
+                                "Closed %d stale diagnostics records", count,
+                            )
+                        return count
+                except Exception as exc:
+                    logger.debug(
+                        "close_stale_records failed (attempt %d): %s",
+                        attempt + 1, exc,
+                    )
+                    self._conn = None
+        return 0
+
     # -- Query methods -------------------------------------------------------
 
     def _query(self, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
