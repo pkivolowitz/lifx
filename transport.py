@@ -122,6 +122,7 @@ MULTIZONE_PRODUCTS: set[int] = {
     31,             # LIFX Z
     32,             # LIFX Z
     38,             # LIFX Beam
+    125,            # LIFX Neon
     117,            # LIFX Z US
     118,            # LIFX Z Intl
     119,            # LIFX Beam US
