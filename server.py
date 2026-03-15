@@ -97,6 +97,14 @@ except ImportError:
     Orchestrator = None  # type: ignore[assignment,misc]
     _HAS_DISTRIBUTED = False
 
+# Optional diagnostics subsystem (requires psycopg2 + PostgreSQL).
+try:
+    from diagnostics import DiagnosticsLogger
+    _HAS_DIAGNOSTICS: bool = True
+except ImportError:
+    DiagnosticsLogger = None  # type: ignore[assignment,misc]
+    _HAS_DIAGNOSTICS = False
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -348,6 +356,10 @@ class DeviceManager:
             self._load_effect_defaults()
         # Readiness flag: False until initial load completes.
         self._ready: bool = False
+        # Optional diagnostics logger (None if psycopg2 or DB unavailable).
+        self._diag: Optional[Any] = None
+        if _HAS_DIAGNOSTICS:
+            self._diag = DiagnosticsLogger.from_env()
 
     def load_devices(self) -> list[dict[str, Any]]:
         """Query each configured device IP and cache the results.
@@ -572,8 +584,21 @@ class DeviceManager:
                 em.power_on(duration_ms=0)
             except Exception:
                 pass
+        # Close the previous effect's diagnostics record before starting
+        # a new one, so replaced effects get a proper stop_reason.
+        if self._diag is not None:
+            self._diag.log_stop(ip, stop_reason="replaced")
         ctrl.play(effect_name, bindings=bindings,
                   signal_bus=signal_bus, **params)
+        if self._diag is not None:
+            em_info: dict[str, Any] = em.get_info() if em else {}
+            self._diag.log_play(
+                device_ip=ip,
+                device_label=em_info.get("label"),
+                effect_name=effect_name,
+                params=params,
+                started_by="api",
+            )
         result: dict[str, Any] = ctrl.get_status()
         result["overridden"] = self.is_overridden(ip)
         return result
@@ -599,6 +624,8 @@ class DeviceManager:
             raise KeyError(f"Unknown device: {ip}")
         ctrl.stop(fade_ms=DEFAULT_FADE_MS)
         ctrl.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
+        if self._diag is not None:
+            self._diag.log_stop(ip, stop_reason="user")
         result: dict[str, Any] = ctrl.get_status()
         result["overridden"] = self.is_overridden(ip)
         return result
