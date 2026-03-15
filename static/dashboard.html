@@ -255,7 +255,7 @@ async function refresh() {
     if (!devices) return;  // auth failed
 
     // Stats
-    const devList = devices || [];
+    const devList = devices.devices || devices || [];
     document.getElementById('stat-devices').textContent = devList.length;
 
     const playing = nowPlaying || [];
