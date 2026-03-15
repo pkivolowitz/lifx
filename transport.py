@@ -140,6 +140,17 @@ MULTIZONE_PRODUCTS: set[int] = {
     214,            # LIFX Permanent Outdoor Intl
 }
 
+#: Product IDs for Neon-class strips (firmware needs slow FPS + long transitions).
+NEON_PRODUCTS: set[int] = {
+    125,            # LIFX Neon
+    141,            # LIFX Neon US
+    142,            # LIFX Neon Intl
+    161,            # LIFX Outdoor Neon US
+    162,            # LIFX Outdoor Neon Intl
+    205,            # LIFX Indoor Neon US
+    206,            # LIFX Indoor Neon Intl
+}
+
 #: Product IDs for monochrome-only bulbs (brightness + kelvin, no hue/saturation).
 MONOCHROME_PRODUCTS: set[int] = {
     10, 11, 18, 50, 51, 60, 61, 87, 88, 113, 114, 115, 116,
@@ -549,6 +560,23 @@ class LifxDevice:
         if self.product is None:
             return None
         return self.product in MULTIZONE_PRODUCTS
+
+    @property
+    def is_neon(self) -> Optional[bool]:
+        """Whether this device is a Neon-class strip.
+
+        Neon firmware requires lower FPS and longer transition times
+        for smooth animation.  The engine uses this to auto-tune
+        send parameters.
+
+        Returns:
+            ``True`` if the product ID is in :data:`NEON_PRODUCTS`,
+            ``False`` if the product is known but not a Neon, or
+            ``None`` if the product ID has not been queried yet.
+        """
+        if self.product is None:
+            return None
+        return self.product in NEON_PRODUCTS
 
     @property
     def is_polychrome(self) -> Optional[bool]:

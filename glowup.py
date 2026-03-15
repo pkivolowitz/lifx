@@ -870,9 +870,12 @@ def cmd_play(args: argparse.Namespace) -> None:
     frame_cb = sim.update if sim is not None else None
 
     # --- Start the render engine ----------------------------------------------
-    ctrl: Controller = Controller([em], fps=args.fps,
+    fps_explicit: bool = args.fps is not None
+    fps: int = args.fps if fps_explicit else DEFAULT_FPS
+    ctrl: Controller = Controller([em], fps=fps,
                                   frame_callback=frame_cb,
-                                  transition_ms=getattr(args, 'transition', None))
+                                  transition_ms=getattr(args, 'transition', None),
+                                  fps_explicit=fps_explicit)
     ctrl.play(effect_name, **effect_params)
 
     status: dict = ctrl.get_status()
@@ -1403,8 +1406,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Device group name (requires --config)",
     )
     p_play.add_argument(
-        "--fps", type=int, default=DEFAULT_FPS,
-        help=f"Frames per second (default: {DEFAULT_FPS})",
+        "--fps", type=int, default=None,
+        help=f"Frames per second (default: {DEFAULT_FPS}, auto-tuned for Neon)",
     )
     p_play.add_argument(
         "--sim", action="store_true", default=False,

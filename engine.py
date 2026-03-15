@@ -55,6 +55,11 @@ from emitters.virtual import VirtualMultizoneEmitter as VirtualMultizoneDevice  
 # Default rendering frame rate in frames per second.
 DEFAULT_FPS: int = 20
 
+# Neon-class devices stutter at high FPS with short transitions.
+# Empirically tested: 10 fps with 1000 ms transition is smooth.
+NEON_FPS: int = 10
+NEON_TRANSITION_MS: int = 1000
+
 # How long to wait (seconds) for the render thread to finish on stop().
 THREAD_JOIN_TIMEOUT: float = 5.0
 
@@ -96,6 +101,7 @@ class Engine:
         fps: int = DEFAULT_FPS,
         frame_callback: Optional[Callable] = None,
         transition_ms: Optional[int] = None,
+        fps_explicit: bool = False,
     ) -> None:
         """Initialize the engine.
 
@@ -110,6 +116,10 @@ class Engine:
                             ``None`` uses the default (``2000 / fps``).
                             Set to 0 for instant snap, higher for smoother
                             interpolation at the cost of latency.
+            fps_explicit:   ``True`` if the caller explicitly set FPS
+                            (e.g. via ``--fps``).  When ``False``, the
+                            engine may auto-tune FPS for Neon-class
+                            devices.
 
         Raises:
             ValueError: If *emitters* is empty or *fps* is not positive.
@@ -122,6 +132,12 @@ class Engine:
         self.emitters: list[Emitter] = list(emitters)  # defensive copy
         self.fps: int = fps
         self._transition_ms_override: Optional[int] = transition_ms
+        self._fps_explicit: bool = fps_explicit
+
+        # Auto-tune for Neon-class devices when the user didn't explicitly
+        # set FPS or transition.  Neon firmware needs slower frame rates
+        # with longer transitions for smooth animation.
+        self._apply_neon_tuning()
         self.effect: Optional[Effect] = None
         self.running: bool = False
         self._send_thread: Optional[threading.Thread] = None
@@ -154,6 +170,28 @@ class Engine:
         # Generation counter: incremented on each effect swap so the send
         # thread can discard stale pre-rendered frames from the old effect.
         self._effect_generation: int = 0
+
+    def _apply_neon_tuning(self) -> None:
+        """Auto-tune FPS and transition for Neon-class devices.
+
+        Neon firmware stutters at high frame rates with short
+        transitions.  When the user hasn't explicitly set ``--fps``
+        or ``--transition``, this method detects Neon emitters and
+        applies empirically proven defaults (10 fps, 1000 ms).
+        """
+        if self._fps_explicit and self._transition_ms_override is not None:
+            return  # User set both — respect their choices.
+
+        has_neon: bool = any(
+            getattr(em, "is_neon", False) for em in self.emitters
+        )
+        if not has_neon:
+            return
+
+        if not self._fps_explicit:
+            self.fps = NEON_FPS
+        if self._transition_ms_override is None:
+            self._transition_ms_override = NEON_TRANSITION_MS
 
     def start(self, effect: Effect,
               bindings: Optional[dict[str, dict]] = None,
@@ -525,6 +563,7 @@ class Controller:
         fps: int = DEFAULT_FPS,
         frame_callback: Optional[Callable] = None,
         transition_ms: Optional[int] = None,
+        fps_explicit: bool = False,
     ) -> None:
         """Initialize the controller.
 
@@ -536,6 +575,7 @@ class Controller:
                             (e.g., live simulator preview).
             transition_ms:  Override firmware transition time per frame (ms).
                             ``None`` uses the default (``2000 / fps``).
+            fps_explicit:   ``True`` if the caller explicitly set ``--fps``.
 
         Raises:
             ValueError: If *emitters* is empty or *fps* is not positive
@@ -543,7 +583,8 @@ class Controller:
         """
         self.engine: Engine = Engine(emitters, fps,
                                      frame_callback=frame_callback,
-                                     transition_ms=transition_ms)
+                                     transition_ms=transition_ms,
+                                     fps_explicit=fps_explicit)
         self.emitters: list[Emitter] = list(emitters)  # defensive copy
         self._current_effect_name: Optional[str] = None
         self._last_effect_name: Optional[str] = None
