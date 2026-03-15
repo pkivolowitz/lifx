@@ -48,6 +48,9 @@ Endpoints::
     POST /api/media/sources/{name}/start Manually start a media source
     POST /api/media/sources/{name}/stop  Manually stop a media source
     POST /api/media/signals/ingest       Write signals from external source
+    GET  /api/diagnostics/now_playing    Currently playing effects (from DB)
+    GET  /api/diagnostics/history        Recent effect history (from DB)
+    GET  /dashboard                      Web dashboard (HTML)
 Usage::
 
     python3 server.py server.json
@@ -1968,6 +1971,21 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_get_fleet()
             return
 
+        # /api/diagnostics/now_playing
+        if path == "/api/diagnostics/now_playing":
+            self._handle_get_diag_now_playing()
+            return
+
+        # /api/diagnostics/history
+        if path == "/api/diagnostics/history":
+            self._handle_get_diag_history()
+            return
+
+        # /dashboard — serve the static HTML dashboard
+        if path == "/dashboard":
+            self._handle_get_dashboard()
+            return
+
         self._send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
@@ -2797,6 +2815,61 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 written += 1
 
         self._send_json(200, {"written": written})
+
+    # -- Diagnostics endpoints ----------------------------------------------
+
+    def _handle_get_diag_now_playing(self) -> None:
+        """GET /api/diagnostics/now_playing — effects currently playing.
+
+        Returns open effect_history records (no ``stopped_at``).
+        Falls back to an empty list if diagnostics is unavailable.
+        """
+        diag = self.device_manager._diag
+        if diag is None or not _HAS_DIAGNOSTICS:
+            self._send_json(200, [])
+            return
+        try:
+            rows: list[dict[str, Any]] = diag.query_now_playing()
+            self._send_json(200, rows)
+        except Exception as exc:
+            logging.warning("Diagnostics query failed: %s", exc)
+            self._send_json(200, [])
+
+    def _handle_get_diag_history(self) -> None:
+        """GET /api/diagnostics/history — recent effect events.
+
+        Returns the most recent 50 effect_history records (both
+        open and closed).  Falls back to an empty list if diagnostics
+        is unavailable.
+        """
+        diag = self.device_manager._diag
+        if diag is None or not _HAS_DIAGNOSTICS:
+            self._send_json(200, [])
+            return
+        try:
+            rows: list[dict[str, Any]] = diag.query_history(limit=50)
+            self._send_json(200, rows)
+        except Exception as exc:
+            logging.warning("Diagnostics query failed: %s", exc)
+            self._send_json(200, [])
+
+    def _handle_get_dashboard(self) -> None:
+        """GET /dashboard — serve the static HTML dashboard page."""
+        dashboard_path: str = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "static", "dashboard.html",
+        )
+        try:
+            with open(dashboard_path, "r") as f:
+                html: str = f.read()
+            body: bytes = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self._send_json(404, {"error": "Dashboard page not found"})
 
     def _save_config_field(self, key: str, value: Any) -> None:
         """Persist a single config field to the config file.
