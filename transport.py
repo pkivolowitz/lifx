@@ -170,6 +170,12 @@ PRODUCT_MAP: dict[int, str] = {
     116: "Mini White Intl", 117: "GU10", 118: "GU10",
     119: "Color A19", 120: "Color BR30",
     123: "String Light", 124: "String Light", 125: "Neon",
+    141: "Neon US", 142: "Neon Intl",
+    143: "String Light US", 144: "String Light Intl",
+    161: "Outdoor Neon US", 162: "Outdoor Neon Intl",
+    203: "String Light US", 204: "String Light Intl",
+    205: "Indoor Neon US", 206: "Indoor Neon Intl",
+    213: "Permanent Outdoor US", 214: "Permanent Outdoor Intl",
     143: "String Light", 144: "String Light",
 }
 
