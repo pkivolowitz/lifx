@@ -273,6 +273,17 @@ class LifxEmitter(Emitter):
             return "LIFX (not connected)"
         return self._device.product_name or "Unknown LIFX"
 
+    @property
+    def is_neon(self) -> bool:
+        """Whether this device is a Neon-class strip.
+
+        Neon firmware requires lower FPS and longer transition times
+        for smooth animation.
+        """
+        if self._device is None:
+            return False
+        return bool(self._device.is_neon)
+
     # --- Engine-facing frame dispatch --------------------------------------
     # The Engine's send thread calls these directly.  They are NOT part
     # of the Emitter ABC — they are LIFX-specific public methods.
