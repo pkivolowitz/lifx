@@ -95,6 +95,7 @@ class Engine:
         emitters: list[Emitter],
         fps: int = DEFAULT_FPS,
         frame_callback: Optional[Callable] = None,
+        transition_ms: Optional[int] = None,
     ) -> None:
         """Initialize the engine.
 
@@ -105,6 +106,10 @@ class Engine:
                             with the rendered color list.  Used by the
                             simulator to display a live preview.  Must
                             accept a single argument: ``list[HSBK]``.
+            transition_ms:  Firmware transition time per frame in ms.
+                            ``None`` uses the default (``2000 / fps``).
+                            Set to 0 for instant snap, higher for smoother
+                            interpolation at the cost of latency.
 
         Raises:
             ValueError: If *emitters* is empty or *fps* is not positive.
@@ -116,6 +121,7 @@ class Engine:
 
         self.emitters: list[Emitter] = list(emitters)  # defensive copy
         self.fps: int = fps
+        self._transition_ms_override: Optional[int] = transition_ms
         self.effect: Optional[Effect] = None
         self.running: bool = False
         self._send_thread: Optional[threading.Thread] = None
@@ -361,7 +367,12 @@ class Engine:
         # Transition duration = 2x frame interval.  This keeps the firmware
         # mid-interpolation when the next frame arrives, so a single dropped
         # UDP packet never exposes the committed layer.
-        transition_ms: int = int(2000.0 / self.fps)
+        # The CLI --transition flag overrides this for tuning on devices
+        # with different firmware interpolation behavior.
+        if self._transition_ms_override is not None:
+            transition_ms: int = self._transition_ms_override
+        else:
+            transition_ms = int(2000.0 / self.fps)
 
         last_colors: dict[int, list] = {}
 
@@ -513,6 +524,7 @@ class Controller:
         emitters: list[Emitter],
         fps: int = DEFAULT_FPS,
         frame_callback: Optional[Callable] = None,
+        transition_ms: Optional[int] = None,
     ) -> None:
         """Initialize the controller.
 
@@ -522,13 +534,16 @@ class Controller:
             frame_callback: Optional callable forwarded to the
                             :class:`Engine` for per-frame notifications
                             (e.g., live simulator preview).
+            transition_ms:  Override firmware transition time per frame (ms).
+                            ``None`` uses the default (``2000 / fps``).
 
         Raises:
             ValueError: If *emitters* is empty or *fps* is not positive
                         (propagated from :class:`Engine`).
         """
         self.engine: Engine = Engine(emitters, fps,
-                                     frame_callback=frame_callback)
+                                     frame_callback=frame_callback,
+                                     transition_ms=transition_ms)
         self.emitters: list[Emitter] = list(emitters)  # defensive copy
         self._current_effect_name: Optional[str] = None
         self._last_effect_name: Optional[str] = None
