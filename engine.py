@@ -172,15 +172,18 @@ class Engine:
         self._effect_generation: int = 0
 
     def _apply_neon_tuning(self) -> None:
-        """Auto-tune FPS and transition for Neon-class devices.
+        """Auto-tune FPS for Neon-class devices.
 
-        Neon firmware stutters at high frame rates with short
-        transitions.  When the user hasn't explicitly set ``--fps``
-        or ``--transition``, this method detects Neon emitters and
-        applies empirically proven defaults (10 fps, 1000 ms).
+        Neon firmware stutters at the default 20 fps packet rate.
+        When the user hasn't explicitly set ``--fps``, this method
+        detects Neon emitters and lowers FPS to :data:`NEON_FPS`.
+
+        Transition time is NOT overridden — the normal default
+        (``2000 / fps``) preserves sharp detail for effects like
+        morse code while still reducing stutter.
         """
-        if self._fps_explicit and self._transition_ms_override is not None:
-            return  # User set both — respect their choices.
+        if self._fps_explicit:
+            return  # User explicitly set FPS — respect their choice.
 
         has_neon: bool = any(
             getattr(em, "is_neon", False) for em in self.emitters
@@ -188,10 +191,7 @@ class Engine:
         if not has_neon:
             return
 
-        if not self._fps_explicit:
-            self.fps = NEON_FPS
-        if self._transition_ms_override is None:
-            self._transition_ms_override = NEON_TRANSITION_MS
+        self.fps = NEON_FPS
 
     def start(self, effect: Effect,
               bindings: Optional[dict[str, dict]] = None,
