@@ -180,6 +180,45 @@ during discovery.  No need to turn lights on manually first.
 devices at a steady frame rate (default 15 fps), decoupled from
 the MIDI event rate.
 
+### N-body Particle Visualizer (`distributed/nbody_visualizer.py`)
+
+A combined operator + WebGL emitter that turns MIDI events into a
+particle simulation rendered in the browser.  Each note_on spawns
+a cluster of particles; gravity pulls them together, same-charge
+repulsion pushes them apart.  The result looks like atomic
+spectroscopy driven by music.
+
+```bash
+# O(n) independent particles (smooth on any machine)
+python3 -m distributed.nbody_visualizer --particles-per-note 50
+
+# O(n²) pairwise forces (GPU stress test)
+python3 -m distributed.nbody_visualizer --particles-per-note 30 \
+  --max-particles 2000 --forces
+```
+
+Open `http://localhost:8421` in a browser.  The WebGL page polls
+for frames via HTTP — no WebSocket needed.
+
+**Parameters:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--particles-per-note` | 50 | Particles spawned per note_on |
+| `--max-particles` | 5000 | Total particle cap |
+| `--fps` | 20 | Simulation and publish rate |
+| `--forces` | off | Enable O(n²) gravitational + electrostatic forces |
+| `--http-port` | 8421 | Browser page port |
+
+Without `--forces`, particles fall with gravity, bounce off walls,
+and fade out independently (O(n) — smooth on any hardware).  With
+`--forces`, particles attract via gravity and repel same-charge via
+electrostatics (O(n²) — needs GPU for large particle counts).
+
+For distributed operation (compute on a GPU node, display anywhere),
+use `distributed/nbody_operator.py` + `distributed/webgl_emitter.py`
+as separate processes connected via MQTT.
+
 ### PostgreSQL Schema (`sql/midi_events.sql`)
 
 Structured storage for MIDI events — one row per event, fully
