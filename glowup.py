@@ -246,6 +246,15 @@ class _NullEmitter(Emitter):
     def close(self) -> None:
         """No-op — the real socket was closed before this stub was created."""
 
+    def get_info(self) -> dict:
+        """Return device info for status reporting."""
+        return {
+            "id": self._ip,
+            "label": self._label,
+            "product": self._product_name,
+            "zones": self._zone_count,
+        }
+
 
 # ---------------------------------------------------------------------------
 # Config file helpers
