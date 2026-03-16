@@ -23,6 +23,7 @@ where you are and add layers when you need them.
     - **[Distributed](#distributed)** — Multi-machine MQTT bus, SOE pipeline, agents.
       - **[Audio Pipeline](#audio-pipeline)** — Mic → FFT → lights.
       - **[MIDI Pipeline](#midi-pipeline)** — MIDI files → synth + lights + N-body visualizer.
+  - **[Persistent Services](#persistent-services)** — Make any component survive reboots (systemd, launchd).
   - **[Developer](#developer)** — Write your own effects, sensors, operators, emitters.
 
 Pick the section that matches what you want to do.  Everything
@@ -177,6 +178,26 @@ file.
 
 ---
 
+## Persistent Services
+
+**You want:** Any GlowUp component to run unattended — survive
+reboots, restart on failure, start on boot.
+
+**Requires:** [Core](#core) and whichever component you want to
+make persistent.
+
+**You get:** systemd (Linux) and launchd (macOS) setup for the
+server, agents, light bridge, audio emitter, MQTT broker, and any
+custom component.
+
+| Section | Description |
+|---------|-------------|
+| [Persistent Services](docs/24-persistent-services.md) | systemd and launchd patterns for every component |
+
+**Back:** [Core](#core)
+
+---
+
 ## Developer
 
 **You want:** To write your own effects, sensors, operators, or
@@ -231,3 +252,4 @@ Every chapter in one flat list, for reference.
 | [SOE Pipeline](docs/21-soe-pipeline.md) | Core → Server → Distributed |
 | [Emitter Developer Guide](docs/22-emitter-dev-guide.md) | Core → Developer |
 | [MIDI Pipeline](docs/23-midi-pipeline.md) | Core → Server → Distributed → MIDI |
+| [Persistent Services](docs/24-persistent-services.md) | Core → any component |
