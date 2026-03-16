@@ -325,6 +325,20 @@ mosquitto_pub -h 10.0.0.48 -t glowup/midi_emitter/control \
 | Emitter (rtmidi) | python-rtmidi | `pip install python-rtmidi` |
 | Light bridge | paho-mqtt | `pip install paho-mqtt` |
 | SoundFont | FluidR3_GM_GS.sf2 | [archive.org](https://archive.org/download/fluidr3-gm-gs/FluidR3_GM_GS.sf2) |
+| MIDI files | Standard MIDI Files (.mid) | User-supplied — search for "free MIDI files" or convert from sheet music |
+
+**MIDI files:** GlowUp does not ship MIDI files.  Standard MIDI
+Files (.mid) are widely available online — search for "free MIDI
+files" for classical, jazz, pop, and game music.  Any SMF format
+0 or 1 file will work.
+
+**SoundFont quality:** The FluidR3_GM_GS soundfont (144 MB) is a
+good general-purpose choice.  For specific genres (jazz guitar,
+orchestral brass), specialized soundfonts will sound better.
+The `--soundfont` flag makes it easy to swap.
+
+**Linux install:** On Debian/Ubuntu, use `sudo apt install fluidsynth`
+and `pip install pyfluidsynth` (the brew command above is for macOS).
 
 ## Design Decisions
 

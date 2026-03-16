@@ -201,13 +201,18 @@ class MidiSensor:
                             i, len(events))
                 break
 
-            # Sleep to match event timing (if real-time mode).
+            # Wait for the right time (if real-time mode).
+            # Sleep for most of the interval, then busy-wait for
+            # the last millisecond — time.sleep() granularity is
+            # too coarse for tight MIDI timing, especially in VMs.
             if realtime and i > 0:
                 target_wall: float = wall_start + (event.time_s / self._speed)
                 now: float = time.monotonic()
                 sleep_s: float = target_wall - now
-                if sleep_s > 0:
-                    time.sleep(sleep_s)
+                if sleep_s > 0.002:
+                    time.sleep(sleep_s - 0.001)
+                while time.monotonic() < target_wall:
+                    pass
 
             # Publish the event.
             payload: str = json.dumps(event.to_dict(), separators=(",", ":"))
