@@ -137,16 +137,33 @@ Status is published to `glowup/midi_emitter/status`.
 ### MIDI Light Bridge (`distributed/midi_light_bridge.py`)
 
 Subscribes to the same MIDI events and translates them into colors
-on a LIFX multizone device (string light, beam, neon flex).
+on LIFX multizone devices (string lights, beams, neon flex).
+
+**Virtual multizone:** Pass multiple ``--ip`` arguments to combine
+devices into a single virtual strip.  Zones are concatenated in
+order — a Neon (24 zones) + String (36 zones) = 60-zone strip.
+More devices = more spatial resolution = finer musical detail.
+
+```bash
+# Single device
+python3 -m distributed.midi_light_bridge --ip 10.0.0.34
+
+# Virtual strip — two devices stitched together
+python3 -m distributed.midi_light_bridge --ip 10.0.0.34 10.0.0.23
+```
+
+**Note tracking:** Lights follow MIDI note on/off exactly — a held
+note stays lit for its full duration, and goes dark on note_off.
+No fixed decay timer.  This matches how the audio emitter works.
 
 **Mapping:**
 
 | MIDI property | Light property |
 |---------------|----------------|
 | Note pitch | Zone position (low=left, high=right) |
-| Velocity | Brightness (50%-100% range) |
+| Velocity | Brightness |
 | Channel | Hue (each channel gets a distinct color) |
-| Note off | Fade via configurable decay |
+| Note off | Zone goes dark (immediate) |
 
 **Default channel colors:**
 
@@ -156,10 +173,12 @@ on a LIFX multizone device (string light, beam, neon flex).
 | 1 | Great organ | Blue |
 | 2 | Pedal organ | Green |
 
-**Rendering:** A dedicated render thread pushes zone colors to the
-LIFX device at a steady frame rate (default 15 fps), decoupled from
-the MIDI event rate.  Brightness decays each frame for natural
-fade-out.
+**Device power:** The bridge automatically powers on each device
+during discovery.  No need to turn lights on manually first.
+
+**Rendering:** A dedicated render thread pushes zone colors to all
+devices at a steady frame rate (default 15 fps), decoupled from
+the MIDI event rate.
 
 ### PostgreSQL Schema (`sql/midi_events.sql`)
 
@@ -291,3 +310,21 @@ mosquitto_pub -h 10.0.0.48 -t glowup/midi_emitter/control \
 - **Station switching at runtime** — emitters can change their MQTT
   subscription without restart via a control channel.  Multiple
   stations can broadcast simultaneously.
+
+- **FluidSynth API pitfalls** — three lessons learned:
+  (1) Use ``program_change()``, not ``program_select()`` — the latter
+  hardcodes bank 0, ignoring bank select CCs the MIDI file already sent.
+  (2) pyfluidsynth's ``pitch_bend()`` expects -8192..+8191 (center=0),
+  but MIDI wire format is 0..16383 (center=8192) — subtract 8192 before
+  calling.  (3) Call ``sfload(path, update_midi_preset=1)`` so FluidSynth
+  assigns the soundfont to all channels on load.
+
+- **Note tracking, not decay** — the light bridge tracks note_on/off
+  directly.  A held note stays lit for its full duration.  No fixed
+  decay timer.  This matches how the audio emitter works — the light
+  follows the music, not an approximation of it.
+
+- **Virtual multizone for lights** — multiple ``--ip`` arguments
+  combine devices into a single strip.  More devices = more zones =
+  higher spatial resolution for the music.  Devices are auto-powered
+  on during discovery.
