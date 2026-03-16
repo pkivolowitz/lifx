@@ -35,3 +35,4 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
 | 20 | [Media Pipeline](docs/20-media-pipeline.md) | Audio-reactive lighting, Mosaic Warfare architecture |
 | 21 | [SOE Pipeline](docs/21-soe-pipeline.md) | Sensors → Operators → Emitters architecture, dispatch modes, vision |
 | 22 | [Emitter Developer Guide](docs/22-emitter-dev-guide.md) | Emitter ABC, lifecycle hooks, Param system, creating new emitters |
+| 23 | [MIDI Pipeline](docs/23-midi-pipeline.md) | MIDI sensor, emitter, light bridge, multi-station broadcasting |
