@@ -76,10 +76,10 @@ MIDI_NOTE_HIGH: int = 108
 
 # Brightness decay per frame (multiplicative).
 # 0.92 means ~8% decay per frame at 15 fps — notes fade in ~1s.
-DEFAULT_DECAY: float = 0.92
+DEFAULT_DECAY: float = 0.0
 
 # Minimum brightness before snapping to zero (prevents dim tails).
-BRIGHTNESS_FLOOR: float = 0.02
+BRIGHTNESS_FLOOR: float = 0.0
 
 # Hue assignments per MIDI channel (0-15).
 # Spread around the color wheel so channels are visually distinct.
@@ -127,7 +127,7 @@ class MidiLightBridge:
         decay:       Per-frame brightness decay factor (0-1).
     """
 
-    def __init__(self, device_ip: str,
+    def __init__(self, device_ips: list[str],
                  broker: str = DEFAULT_BROKER,
                  port: int = DEFAULT_MQTT_PORT,
                  signal_name: str = DEFAULT_SIGNAL_NAME,
@@ -136,14 +136,14 @@ class MidiLightBridge:
         """Initialize the MIDI light bridge.
 
         Args:
-            device_ip:   Target LIFX device IP.
+            device_ips:  List of LIFX device IPs (combined as virtual multizone).
             broker:      MQTT broker host.
             port:        MQTT broker port.
             signal_name: Bus signal name.
             fps:         LIFX update rate.
             decay:       Brightness decay factor.
         """
-        self._device_ip: str = device_ip
+        self._device_ips: list[str] = device_ips
         self._broker: str = broker
         self._port: int = port
         self._signal_name: str = signal_name
@@ -154,13 +154,14 @@ class MidiLightBridge:
         self._connected: bool = False
         self._stop_event: threading.Event = threading.Event()
 
-        # LIFX device handle.
-        self._device: Optional[Any] = None
+        # Discovered devices and their zone ranges in the virtual strip.
+        # Each entry: (device, start_zone, zone_count)
+        self._devices: list[tuple[Any, int, int]] = []
         self._zone_count: int = 0
 
-        # Per-zone state: brightness (0.0-1.0) and hue (0-65535).
-        self._zone_brightness: list[float] = []
-        self._zone_hue: list[int] = []
+        # Active notes: (channel, note) → {velocity, zone, hue}.
+        # Notes stay active until note_off — no decay timer.
+        self._active_notes: dict[tuple[int, int], dict] = {}
         self._lock: threading.Lock = threading.Lock()
 
         # Render thread.
@@ -176,15 +177,14 @@ class MidiLightBridge:
 
         Blocks until stopped.
         """
-        # Discover the LIFX device.
-        self._discover_device()
-        if self._device is None:
-            logger.error("No LIFX device found at %s", self._device_ip)
+        # Discover all LIFX devices.
+        self._discover_devices()
+        if not self._devices:
+            logger.error("No LIFX devices found")
             return
 
-        # Initialize zone buffers.
-        self._zone_brightness = [0.0] * self._zone_count
-        self._zone_hue = [0] * self._zone_count
+        # Clear active notes.
+        self._active_notes = {}
 
         # Connect to MQTT.
         self._connect_mqtt()
@@ -204,8 +204,8 @@ class MidiLightBridge:
         self._render_thread.start()
 
         logger.info(
-            "MidiLightBridge running — %s (%d zones) at %d fps",
-            self._device_ip, self._zone_count, self._fps,
+            "MidiLightBridge running — %d devices, %d zones at %d fps",
+            len(self._devices), self._zone_count, self._fps,
         )
 
         # Block until stopped.
@@ -230,13 +230,13 @@ class MidiLightBridge:
         if self._render_thread is not None:
             self._render_thread.join(timeout=3)
 
-        # Black out the device.
-        if self._device is not None:
+        # Black out all devices.
+        for dev, _start, count in self._devices:
             try:
                 black: list[tuple[int, int, int, int]] = [
                     (0, 0, 0, KELVIN_DEFAULT)
-                ] * self._zone_count
-                self._device.set_zones(black, duration_ms=500)
+                ] * count
+                dev.set_zones(black, duration_ms=500)
             except Exception:
                 pass
 
@@ -252,22 +252,32 @@ class MidiLightBridge:
     # LIFX device discovery
     # -------------------------------------------------------------------
 
-    def _discover_device(self) -> None:
-        """Find and connect to the LIFX device."""
+    def _discover_devices(self) -> None:
+        """Find and connect to all LIFX devices, building a virtual strip."""
         from transport import discover_devices
 
-        logger.info("Discovering LIFX device at %s...", self._device_ip)
-        devices = discover_devices(target_ip=self._device_ip, timeout=5)
+        offset: int = 0
+        for ip in self._device_ips:
+            logger.info("Discovering LIFX device at %s...", ip)
+            found = discover_devices(target_ip=ip, timeout=5)
+            if not found:
+                logger.warning("Device not found at %s — skipping", ip)
+                continue
 
-        if not devices:
-            return
+            dev = found[0]
+            dev.set_power(True)
+            zones: int = dev.zone_count
+            self._devices.append((dev, offset, zones))
+            logger.info(
+                "  %s — %d zones (offset %d, powered on)",
+                dev.label, zones, offset,
+            )
+            offset += zones
 
-        self._device = devices[0]
-        self._zone_count = self._device.zone_count
-        logger.info(
-            "Found: %s — %d zones",
-            self._device.label, self._zone_count,
-        )
+        self._zone_count = offset
+        if self._zone_count > 0:
+            logger.info("Virtual strip: %d total zones across %d devices",
+                        self._zone_count, len(self._devices))
 
     # -------------------------------------------------------------------
     # MIDI event handling
@@ -285,6 +295,10 @@ class MidiLightBridge:
             channel: int = event.get("channel", 0)
             note: int = event.get("note", 60)
             velocity: int = event.get("velocity", 100)
+            self._notes_received += 1
+            if self._notes_received <= 3:
+                logger.info("Note %d: ch=%d note=%d vel=%d",
+                            self._notes_received, channel, note, velocity)
             self._note_on(channel, note, velocity)
 
         elif event_type == "note_off":
@@ -293,10 +307,7 @@ class MidiLightBridge:
             self._note_off(channel, note)
 
     def _note_on(self, channel: int, note: int, velocity: int) -> None:
-        """Light up zones corresponding to a note.
-
-        Maps the note pitch to a zone range and sets brightness
-        based on velocity.
+        """Register an active note — light stays on until note_off.
 
         Args:
             channel:  MIDI channel (determines hue).
@@ -306,46 +317,32 @@ class MidiLightBridge:
         if self._zone_count == 0:
             return
 
-        self._notes_received += 1
-
-        # Map note to zone position (0.0 - 1.0).
+        # Map note to zone position.
         note_frac: float = (note - MIDI_NOTE_LOW) / max(
             MIDI_NOTE_HIGH - MIDI_NOTE_LOW, 1,
         )
         note_frac = max(0.0, min(1.0, note_frac))
-
-        # Map to zone index.
         center_zone: int = int(note_frac * (self._zone_count - 1))
 
-        # Light up a small spread of zones around the center
-        # (3 zones = 1 bulb on a string light with zpb=3).
-        spread: int = 3
         hue: int = CHANNEL_HUES[channel & 0x0F]
-        # Boost brightness — minimum 50%, scale velocity into top half.
-        brightness: float = 0.5 + (velocity / 127.0) * 0.5
+        brightness: float = velocity / 127.0
 
         with self._lock:
-            for offset in range(-spread // 2, spread // 2 + 1):
-                zone: int = center_zone + offset
-                if 0 <= zone < self._zone_count:
-                    # Brightest takes priority (don't dim an active zone).
-                    if brightness > self._zone_brightness[zone]:
-                        self._zone_brightness[zone] = brightness
-                        self._zone_hue[zone] = hue
+            self._active_notes[(channel, note)] = {
+                "zone": center_zone,
+                "hue": hue,
+                "brightness": brightness,
+            }
 
     def _note_off(self, channel: int, note: int) -> None:
-        """Mark zones for a note to begin decaying.
-
-        The actual fade happens in the render loop via the decay
-        factor — note_off just lets the decay take over naturally.
-        No immediate action needed.
+        """Remove an active note — zone goes dark.
 
         Args:
             channel: MIDI channel.
             note:    MIDI note number.
         """
-        # Decay handles the fade — nothing to do here.
-        pass
+        with self._lock:
+            self._active_notes.pop((channel, note), None)
 
     # -------------------------------------------------------------------
     # Render loop
@@ -362,30 +359,39 @@ class MidiLightBridge:
         while not self._stop_event.is_set():
             frame_start: float = time.monotonic()
 
-            # Build the color frame.
+            # Build the color frame from active notes.
             with self._lock:
+                # Start with all zones black.
+                zone_bri: list[float] = [0.0] * self._zone_count
+                zone_hue: list[int] = [0] * self._zone_count
+
+                # Light zones for every held note.
+                for info in self._active_notes.values():
+                    z: int = info["zone"]
+                    if 0 <= z < self._zone_count:
+                        if info["brightness"] > zone_bri[z]:
+                            zone_bri[z] = info["brightness"]
+                            zone_hue[z] = info["hue"]
+
                 colors: list[tuple[int, int, int, int]] = []
                 for i in range(self._zone_count):
-                    bri: float = self._zone_brightness[i]
-                    if bri < BRIGHTNESS_FLOOR:
-                        # Below floor — snap to black.
-                        self._zone_brightness[i] = 0.0
-                        colors.append((0, 0, 0, KELVIN_DEFAULT))
+                    if zone_bri[i] > 0.0:
+                        colors.append((
+                            zone_hue[i], NOTE_SATURATION,
+                            int(zone_bri[i] * BRI_MAX), KELVIN_DEFAULT,
+                        ))
                     else:
-                        hue: int = self._zone_hue[i]
-                        bri_int: int = int(bri * BRI_MAX)
-                        colors.append(
-                            (hue, NOTE_SATURATION, bri_int, KELVIN_DEFAULT),
-                        )
-                        # Apply decay for next frame.
-                        self._zone_brightness[i] *= self._decay
+                        colors.append((0, 0, 0, KELVIN_DEFAULT))
 
-            # Push to device.
-            try:
-                self._device.set_zones(colors, duration_ms=0, rapid=True)
-                self._frames_pushed += 1
-            except Exception as exc:
-                logger.debug("set_zones failed: %s", exc)
+            # Push each device's slice of the virtual strip.
+            for dev, start, count in self._devices:
+                device_colors = colors[start:start + count]
+                try:
+                    dev.set_zones(device_colors, duration_ms=0, rapid=True)
+                except Exception as exc:
+                    logger.warning("set_zones failed on %s: %s",
+                                   dev.label, exc)
+            self._frames_pushed += 1
 
             # Sleep for remainder of frame interval.
             elapsed: float = time.monotonic() - frame_start
@@ -471,8 +477,8 @@ def main() -> None:
         description="GlowUp MIDI Light Bridge — MIDI events to LIFX colors",
     )
     parser.add_argument(
-        "--ip", required=True,
-        help="LIFX device IP address",
+        "--ip", required=True, nargs="+",
+        help="LIFX device IP address(es) — multiple IPs form a virtual strip",
     )
     parser.add_argument(
         "--broker", default=DEFAULT_BROKER,
@@ -509,7 +515,7 @@ def main() -> None:
     )
 
     bridge: MidiLightBridge = MidiLightBridge(
-        device_ip=args.ip,
+        device_ips=args.ip,
         broker=args.broker,
         port=args.port,
         signal_name=args.signal_name,
