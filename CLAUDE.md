@@ -2,8 +2,14 @@
 
 Modular effect engine for LIFX devices. See README.md for overview, MANUAL.md for full docs.
 
-## NAS Memory Check
-At the start of every conversation, verify the NAS is mounted:
+## Bootstrap (start of every conversation)
+1. Identify the current machine:
+```
+scutil --get ComputerName 2>/dev/null || hostname -s 2>/dev/null || hostname
+```
+Report the machine name to Perry (e.g. "Running on **Bed**.").
+
+2. Verify the NAS is mounted:
 ```
 ls ~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/MEMORY.md
 ```
