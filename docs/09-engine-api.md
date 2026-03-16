@@ -10,13 +10,14 @@ today and a REST API in the future.
 ### Controller Methods
 
 ```python
-from transport import LifxDevice
+from transport import discover_devices
+from emitters.lifx import LifxEmitter
 from engine import Controller
 
-# Create a controller with one or more devices
-device = LifxDevice("<device-ip>")
-device.query_all()
-ctrl = Controller([device], fps=20)
+# Discover and wrap in an emitter
+devices = discover_devices(target_ip="<device-ip>", timeout=5)
+emitter = LifxEmitter.from_device(devices[0])
+ctrl = Controller([emitter], fps=20)
 ```
 
 **`play(effect_name: str, **params) -> None`**

@@ -22,7 +22,7 @@ where you are and add layers when you need them.
     - **[Database](#database)** — PostgreSQL logging, diagnostics, dashboard.
     - **[Distributed](#distributed)** — Multi-machine MQTT bus, SOE pipeline, agents.
       - **[Audio Pipeline](#audio-pipeline)** — Mic → FFT → lights.
-      - **[MIDI Pipeline](#midi-pipeline)** — MIDI files → synth + lights.
+      - **[MIDI Pipeline](#midi-pipeline)** — MIDI files → synth + lights + N-body visualizer.
   - **[Developer](#developer)** — Write your own effects, sensors, operators, emitters.
 
 Pick the section that matches what you want to do.  Everything
@@ -116,7 +116,8 @@ signal snapshots, live dashboard at `/dashboard`.
 
 | Section | Description |
 |---------|-------------|
-| PostgreSQL setup | See [Troubleshooting](docs/14-troubleshooting.md) and `sql/` directory |
+| [Troubleshooting — PostgreSQL](docs/14-troubleshooting.md#postgresql-setup) | Connection string, schema setup, psycopg2 install |
+| [Troubleshooting — Dashboard](docs/14-troubleshooting.md#dashboard) | Web dashboard at /dashboard, device inventory, effect history |
 
 **Back:** [Server](#server)
 
