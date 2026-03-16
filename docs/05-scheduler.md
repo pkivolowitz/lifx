@@ -1,5 +1,8 @@
 # Scheduler (Daemon)
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 The scheduler (`scheduler.py`) runs effects on a timed schedule, with
 sunrise/sunset awareness. It manages multiple independent device groups,
 each running its own effect on its own schedule. Designed to run as a
@@ -229,4 +232,3 @@ sudo systemctl restart glowup-scheduler
 The scheduler logs to the systemd journal, including solar event times
 (recalculated daily), schedule transitions, subprocess starts/stops,
 and any errors.
-

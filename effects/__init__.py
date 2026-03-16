@@ -31,10 +31,10 @@ Example::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "0.4"
+__version__ = "0.5"
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 # ---------------------------------------------------------------------------
 # Constants — shared by all effects to eliminate magic numbers
@@ -253,6 +253,73 @@ class Effect(metaclass=EffectMeta):
 
         Override to release resources or reset state.
         """
+
+
+# ---------------------------------------------------------------------------
+# MediaEffect — base class for effects with direct signal bus access
+# ---------------------------------------------------------------------------
+
+class MediaEffect(Effect):
+    """Effect subclass with direct access to the media signal bus.
+
+    Use this as a base class for effects that need raw signal data
+    (frequency bands, beat triggers, video features) rather than simple
+    parameter modulation via bindings.
+
+    The engine injects ``_signal_bus`` when starting a MediaEffect.
+    Subclasses read signals via :meth:`signal` — if the bus is not
+    available (e.g., running without media), the default value is
+    returned silently so the effect still renders.
+
+    Example::
+
+        class Spectrum(MediaEffect):
+            name = "spectrum"
+            description = "Audio spectrum visualizer"
+            source = Param("backyard", description="Signal source name")
+
+            def render(self, t: float, zone_count: int) -> list[HSBK]:
+                bands = self.signal(f"{self.source}:audio:bands", [0.0] * zone_count)
+                # ... map bands to zone colors ...
+    """
+
+    # Set by Engine.start() when the effect is activated.  None when
+    # running without a media pipeline (graceful degradation).
+    _signal_bus: Any = None
+
+    def signal(self, name: str,
+               default: Union[float, list[float]] = 0.0
+               ) -> Union[float, list[float]]:
+        """Read a named signal from the media bus.
+
+        This is the primary interface for MediaEffect subclasses to
+        consume media-derived data each frame.
+
+        Args:
+            name:    Hierarchical signal name
+                     (e.g., ``"backyard:audio:bass"``).
+            default: Value returned when the signal is unavailable
+                     or the bus is not connected.
+
+        Returns:
+            The current signal value (scalar or array), or *default*.
+        """
+        if self._signal_bus is not None:
+            return self._signal_bus.read(name, default)
+        return default
+
+    def signal_names(self) -> list[str]:
+        """Return available signal names, or an empty list if no bus.
+
+        Useful for effects that adapt to whatever signals exist
+        (e.g., auto-detecting available audio sources).
+
+        Returns:
+            Sorted list of registered signal names.
+        """
+        if self._signal_bus is not None:
+            return self._signal_bus.signal_names()
+        return []
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,8 @@
 # macOS Remote Control
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 The `shortcuts/` directory contains a shell-based remote control for
 GlowUp.  No app installation required — just a terminal or a
 double-clickable `.command` file from Finder.
@@ -97,4 +100,3 @@ your own by copying any existing one and changing the arguments.
   are left as an exercise for the reader.
 - **Remote access:** If your server is reachable via Cloudflare
   Tunnel, set `GLOWUP_HOST` to your tunnel hostname.
-

@@ -1,5 +1,8 @@
 # Requirements
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 - **Python 3.10+**
 - One or more LIFX devices on the same LAN subnet (multizone, single color, or monochrome)
 - No external Python packages — the entire stack is pure Python stdlib
@@ -36,11 +39,21 @@ tkinter (needed only for the `--sim` live preview):
 
 ```bash
 sudo apt update
-sudo apt install python3 python3-tk
+sudo apt install python3 python3-tk python3.12-venv
 
 # For the record subcommand (optional)
 sudo apt install ffmpeg
 ```
+
+Create a virtual environment (Ubuntu blocks system-wide pip installs):
+
+```bash
+python3 -m venv ~/venv
+~/venv/bin/pip install --upgrade pip
+```
+
+Then run GlowUp with `~/venv/bin/python3` instead of `python3`,
+or activate the venv first with `source ~/venv/bin/activate`.
 
 On Raspberry Pi OS (Bookworm), Python 3.11+ is included by default.
 Install tkinter only if you plan to use the simulator on a desktop —
@@ -78,4 +91,3 @@ python server.py server.json
 > **Note:** `discover` may still work on simple single-subnet networks
 > because the fallback broadcast address `255.255.255.255` is used
 > automatically.  Results vary by network configuration.
-

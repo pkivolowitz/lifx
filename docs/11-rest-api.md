@@ -1,5 +1,8 @@
 # REST API Server
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 The REST API server (`server.py`) exposes all GlowUp functionality over
 HTTP, enabling remote control from the iOS app or any HTTP client.  It
 replaces `scheduler.py` by managing effects directly through the
@@ -104,6 +107,13 @@ Authorization: Bearer your-secret-token-here
 | `POST` | `/api/devices/{ip}/stop` | Stop current effect (fade to black) |
 | `POST` | `/api/devices/{ip}/resume` | Clear phone override, resume schedule |
 | `POST` | `/api/devices/{ip}/power` | Power on/off (body: `{"on": true}`) |
+| `GET` | `/api/schedule` | Schedule entries with resolved times |
+| `POST` | `/api/schedule/{index}/enabled` | Enable or disable a schedule entry |
+| `GET` | `/api/media/sources` | List media sources with status (see [Media Pipeline](20-media-pipeline.md)) |
+| `GET` | `/api/media/signals` | List available signal names |
+| `POST` | `/api/media/sources/{name}/start` | Manually start a media source |
+| `POST` | `/api/media/sources/{name}/stop` | Manually stop a media source |
+| `POST` | `/api/media/signals/ingest` | Write signals from external source |
 
 **Examples:**
 
@@ -229,3 +239,84 @@ sudo systemctl stop glowup-scheduler
 sudo systemctl disable glowup-scheduler
 ```
 
+### Installing the Server as a macOS launchd Service
+
+Create `~/Library/LaunchAgents/com.glowup.server.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.glowup.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>server.py</string>
+    <string>server.json</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/path/to/lifx</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/glowup-server.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/glowup-server.err</string>
+</dict>
+</plist>
+```
+
+Replace `/path/to/lifx` with your actual repo path and
+`/usr/bin/python3` with your Python path (e.g.,
+`/opt/homebrew/bin/python3` for Homebrew).
+
+Load and start:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.glowup.server.plist
+```
+
+Stop and unload:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.glowup.server.plist
+```
+
+The server will start automatically on login and restart if it
+crashes (``KeepAlive`` is true).
+
+### Running Distributed Agents as Services
+
+Worker agents (on Jetsons, Macs, or any Linux machine) can be
+made persistent using the same patterns.
+
+**Linux (systemd):**
+
+```bash
+sudo cp glowup-agent.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable glowup-agent
+sudo systemctl start glowup-agent
+```
+
+**macOS (launchd):** Create a plist similar to the server plist
+above, replacing `server.py` with the agent command:
+
+```xml
+<key>ProgramArguments</key>
+<array>
+  <string>/path/to/venv/bin/python3</string>
+  <string>-m</string>
+  <string>distributed.worker_agent</string>
+  <string>agent.json</string>
+</array>
+```
+
+**MIDI light bridge, audio emitter, or N-body visualizer** can also
+be made persistent using the same plist/service pattern — just change
+the ``ProgramArguments`` to the appropriate command.

@@ -4,11 +4,11 @@ Rockets launch from random ends of the strip, trail bright exhaust as
 they decelerate toward their zenith, then detonate into an expanding halo
 of color that fades to black.
 
-Multiple simultaneous rockets blend **additively**: where two rockets
-illuminate the same zone their brightnesses sum (clamped to maximum).
-Hue is taken from whichever rocket contributes the most brightness to
-that zone, so overlapping bursts paint the strip in layers of light
-rather than fighting for a single color slot.
+Multiple simultaneous rockets blend **additively in RGB space**: each
+rocket's HSB contribution is converted to linear RGB, the channels are
+summed per zone, and the result is converted back to HSB.  This is
+physically correct — overlapping red and green bursts produce yellow,
+two reds produce brighter red, just like real light.
 
 This effect is designed for multizone (string-light) LIFX devices.
 On single-zone bulbs the effect degenerates to simple on-off flashes.
@@ -17,7 +17,7 @@ On single-zone bulbs the effect degenerates to simple on-off flashes.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.2"
+__version__ = "1.3"
 
 import math
 import random
@@ -82,6 +82,10 @@ ZENITH_MARGIN: float = 0.25
 # Absolute minimum zenith travel distance in zones (guards tiny zone counts).
 MIN_ZENITH_ZONES: int = 3
 
+# HSB color space has 6 sextants (60 degrees each).  Used by the RGB
+# conversion helpers for additive compositing.
+HUE_SEXTANTS: int = 6
+
 
 # ---------------------------------------------------------------------------
 # Rocket state
@@ -99,9 +103,6 @@ class _Rocket:
         ascent_dur:  Seconds from launch to zenith.
         burst_hue:   Hue of the explosion in degrees (0-360).
         burst_dur:   Seconds for the burst to fade completely to black.
-        z_order:     Monotonically increasing launch counter; higher value
-                     wins when two rockets contribute equal brightness to
-                     the same zone.
     """
 
     origin: int
@@ -111,7 +112,6 @@ class _Rocket:
     ascent_dur: float
     burst_hue: float
     burst_dur: float
-    z_order: int
 
     def is_done(self, t: float) -> bool:
         """Return True once the burst has fully faded.
@@ -141,9 +141,9 @@ class Fireworks(Effect):
     3. Detonates at zenith: a gaussian bloom of color expands outward in
        both directions and fades quadratically to black.
 
-    Multiple rockets overlap additively: brightness contributions are
-    summed per zone (clamped to the LIFX maximum) so bright overlaps look
-    even brighter rather than fighting for color priority.
+    Multiple rockets overlap additively in RGB space: each rocket's
+    color contribution is summed as linear RGB per zone, producing
+    physically correct color mixing (red + green = yellow, etc.).
     """
 
     name: str = "fireworks"
@@ -191,7 +191,6 @@ class Fireworks(Effect):
         super().__init__(**overrides)
         self._rockets: list[_Rocket] = []
         self._next_launch_t: float = 0.0
-        self._next_z_order: int = 0
         self._last_t: Optional[float] = None
 
     def period(self) -> None:
@@ -206,7 +205,6 @@ class Fireworks(Effect):
         """
         self._rockets.clear()
         self._next_launch_t = 0.0
-        self._next_z_order = 0
         self._last_t = None
 
     # ------------------------------------------------------------------
@@ -252,9 +250,7 @@ class Fireworks(Effect):
             ascent_dur=ascent_dur,
             burst_hue=random.uniform(0.0, 360.0),
             burst_dur=self.burst_duration,
-            z_order=self._next_z_order,
         ))
-        self._next_z_order += 1
 
     # ------------------------------------------------------------------
     # Per-rocket rendering
@@ -422,38 +418,115 @@ class Fireworks(Effect):
         # Remove fully-faded rockets to keep the active list short.
         self._rockets = [r for r in self._rockets if not r.is_done(t)]
 
-        # Per-zone accumulators (floating-point for headroom before clamping).
-        zone_bri: list[float] = [0.0] * zone_count
-        zone_hue: list[float] = [0.0] * zone_count
-        zone_sat: list[float] = [0.0] * zone_count
-        # Track which rocket contributes the dominant brightness per zone.
-        zone_dom: list[float] = [0.0] * zone_count
+        # Per-zone RGB accumulators.  Additive mixing is physically correct
+        # in linear RGB: overlapping red + green bursts produce yellow, two
+        # reds produce brighter red.  Accumulated values are clamped to 1.0
+        # per channel before conversion back to HSB.
+        zone_r: list[float] = [0.0] * zone_count
+        zone_g: list[float] = [0.0] * zone_count
+        zone_b: list[float] = [0.0] * zone_count
 
-        # Higher z_order was launched later; when two rockets contribute the
-        # same brightness to a zone the newer one wins the hue slot.
-        for rocket in sorted(self._rockets, key=lambda r: r.z_order):
-            for z, (h, s, b) in enumerate(
+        for rocket in self._rockets:
+            for z, (h_deg, s_01, b_01) in enumerate(
                 self._contribution(rocket, t, zone_count)
             ):
-                if b <= 0.0:
+                if b_01 <= 0.0:
                     continue
-                # Additive brightness — sum, then clamp when converting to HSBK.
-                zone_bri[z] = min(1.0, zone_bri[z] + b)
-                # Hue/saturation: the strongest contributor wins.
-                if b > zone_dom[z]:
-                    zone_dom[z] = b
-                    zone_hue[z] = h
-                    zone_sat[z] = s
+                # Convert this rocket's HSB contribution to linear RGB
+                # so the addition is physically meaningful.
+                r, g, bl = _hsb_to_rgb(h_deg, s_01, b_01)
+                zone_r[z] += r
+                zone_g[z] += g
+                zone_b[z] += bl
 
-        # Convert accumulated floats to HSBK tuples.
+        # Convert accumulated RGB back to HSBK tuples.
         colors: list[HSBK] = []
         for z in range(zone_count):
-            if zone_bri[z] > 0.0:
-                h: int = hue_to_u16(zone_hue[z])
-                s: int = int(zone_sat[z] * HSBK_MAX)
-                b: int = int(zone_bri[z] * HSBK_MAX)
-                colors.append((h, s, b, self.kelvin))
-            else:
+            r: float = min(1.0, zone_r[z])
+            g: float = min(1.0, zone_g[z])
+            bl: float = min(1.0, zone_b[z])
+            if r + g + bl <= 0.0:
                 colors.append((0, 0, 0, self.kelvin))
+            else:
+                h_deg, s_01, b_01 = _rgb_to_hsb(r, g, bl)
+                h_u16: int = hue_to_u16(h_deg)
+                s_u16: int = int(s_01 * HSBK_MAX)
+                b_u16: int = int(b_01 * HSBK_MAX)
+                colors.append((h_u16, s_u16, b_u16, self.kelvin))
 
         return colors
+
+
+# ---------------------------------------------------------------------------
+# Color space helpers for additive compositing
+# ---------------------------------------------------------------------------
+
+def _hsb_to_rgb(h_deg: float, s: float, b: float) -> tuple[float, float, float]:
+    """Convert HSB (hue in degrees, saturation and brightness 0-1) to RGB 0-1.
+
+    Uses the standard sextant algorithm.
+
+    Args:
+        h_deg: Hue in degrees (0-360).
+        s:     Saturation (0.0-1.0).
+        b:     Brightness (0.0-1.0).
+
+    Returns:
+        Tuple of ``(r, g, b)`` each in 0.0-1.0.
+    """
+    h: float = (h_deg / 360.0) * HUE_SEXTANTS  # 0.0 - 6.0
+    c: float = b * s
+    x: float = c * (1.0 - abs(h % 2.0 - 1.0))
+    m: float = b - c
+
+    sextant: int = int(h) % HUE_SEXTANTS
+    if sextant == 0:
+        return (c + m, x + m, m)
+    elif sextant == 1:
+        return (x + m, c + m, m)
+    elif sextant == 2:
+        return (m, c + m, x + m)
+    elif sextant == 3:
+        return (m, x + m, c + m)
+    elif sextant == 4:
+        return (x + m, m, c + m)
+    else:
+        return (c + m, m, x + m)
+
+
+def _rgb_to_hsb(r: float, g: float, b: float) -> tuple[float, float, float]:
+    """Convert RGB (0-1) to HSB (hue in degrees, saturation and brightness 0-1).
+
+    Args:
+        r: Red (0.0-1.0).
+        g: Green (0.0-1.0).
+        b: Blue (0.0-1.0).
+
+    Returns:
+        Tuple of ``(hue_degrees, saturation, brightness)``.
+    """
+    max_c: float = max(r, g, b)
+    min_c: float = min(r, g, b)
+    delta: float = max_c - min_c
+
+    # Brightness is the maximum channel.
+    bri: float = max_c
+
+    if delta == 0.0:
+        return (0.0, 0.0, bri)
+
+    # Saturation.
+    sat: float = delta / max_c
+
+    # Hue.
+    if max_c == r:
+        hue: float = 60.0 * (((g - b) / delta) % 6.0)
+    elif max_c == g:
+        hue = 60.0 * (((b - r) / delta) + 2.0)
+    else:
+        hue = 60.0 * (((r - g) / delta) + 4.0)
+
+    if hue < 0.0:
+        hue += 360.0
+
+    return (hue, sat, bri)

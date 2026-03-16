@@ -1,5 +1,8 @@
 # Built-in Effects
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 ### cylon
 
 **Larson scanner** — a bright eye sweeps back and forth with a smooth
@@ -1012,3 +1015,26 @@ python3 glowup.py play plasma --ip <device-ip> --zpb 3 --tendril-rate 20 --hue-s
 python3 glowup.py play plasma --ip <device-ip> --zpb 3 --speed 5 --tendril-rate 4
 ```
 
+---
+
+## Audio-Reactive Effects
+
+The following effects require the media pipeline (microphone or
+audio source).  See [Media Pipeline](20-media-pipeline.md) for
+setup instructions.
+
+| Effect | Description |
+|--------|-------------|
+| `soundlevel` | VU meter — brightness tracks audio RMS level |
+| `waveform` | Oscilloscope — maps the audio waveform to zones |
+| `spectrum2d` | 2D frequency spectrum — requires terminal matrix emitter |
+| `plasma2d` | 2D plasma — requires terminal matrix emitter |
+
+## Distributed Pipeline Effects
+
+The following effects require the distributed framework (MQTT,
+worker agents).  See [SOE Pipeline](21-soe-pipeline.md) for setup.
+
+| Effect | Description |
+|--------|-------------|
+| `theremin` | Maps hand-distance sensor data to a continuous tone |

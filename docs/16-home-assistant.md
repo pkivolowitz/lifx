@@ -1,5 +1,8 @@
 # Home Assistant Integration
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 GlowUp's REST API works with [Home Assistant](https://www.home-assistant.io/)
 out of the box using HA's built-in
 [`rest_command`](https://www.home-assistant.io/integrations/rest_command/)
@@ -120,4 +123,3 @@ tap_action:
   live Home Assistant instance.  If you try it, please open an issue
   at the [GitHub repo](https://github.com/pkivolowitz/lifx/issues)
   with any corrections or suggestions.
-

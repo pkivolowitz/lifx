@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GlowUp Dashboard</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --border: #0f3460;
+    --text: #e0e0e0;
+    --dim: #888;
+    --accent: #e94560;
+    --green: #4ecca3;
+    --orange: #f5a623;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Mono", Menlo, monospace;
+    background: var(--bg);
+    color: var(--text);
+    padding: 20px;
+    font-size: 14px;
+  }
+  h1 {
+    font-size: 22px;
+    margin-bottom: 6px;
+    color: var(--accent);
+  }
+  .subtitle {
+    color: var(--dim);
+    font-size: 12px;
+    margin-bottom: 20px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  @media (max-width: 768px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .card h2 {
+    font-size: 14px;
+    color: var(--accent);
+    margin-bottom: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .device-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .device-row:last-child { border-bottom: none; }
+  .device-name { font-weight: 600; }
+  .device-effect { color: var(--green); }
+  .device-idle { color: var(--dim); }
+  .history-row {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .history-row:last-child { border-bottom: none; }
+  .history-time { color: var(--dim); font-size: 11px; }
+  .history-effect { color: var(--green); font-weight: 600; }
+  .history-device { color: var(--orange); }
+  .history-reason { color: var(--dim); font-style: italic; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-playing { background: var(--green); color: #000; }
+  .badge-stopped { background: var(--border); color: var(--dim); }
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    text-align: center;
+  }
+  .stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+  .stat-label {
+    font-size: 11px;
+    color: var(--dim);
+    text-transform: uppercase;
+  }
+  .error {
+    color: var(--accent);
+    padding: 20px;
+    text-align: center;
+  }
+  .refresh-note {
+    color: var(--dim);
+    font-size: 11px;
+    text-align: right;
+    margin-top: 8px;
+  }
+  #auth-form {
+    max-width: 400px;
+    margin: 100px auto;
+    text-align: center;
+  }
+  #auth-form input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 16px;
+    border-radius: 6px;
+    font-size: 14px;
+    width: 100%;
+    margin: 12px 0;
+    font-family: inherit;
+  }
+  #auth-form button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 10px 24px;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+</style>
+</head>
+<body>
+
+<div id="auth-form">
+  <h1>GlowUp Dashboard</h1>
+  <p style="color: var(--dim); margin-top: 8px;">Enter your API token</p>
+  <input type="password" id="token-input" placeholder="Bearer token">
+  <br>
+  <button onclick="authenticate()">Connect</button>
+</div>
+
+<div id="dashboard" style="display:none;">
+  <h1>GlowUp Dashboard</h1>
+  <div class="subtitle">Auto-refreshes every 5 seconds</div>
+
+  <div class="card" style="margin-bottom: 16px;">
+    <div class="stat-grid" id="stats">
+      <div><div class="stat-value" id="stat-devices">-</div><div class="stat-label">Devices</div></div>
+      <div><div class="stat-value" id="stat-playing">-</div><div class="stat-label">Playing</div></div>
+      <div><div class="stat-value" id="stat-today">-</div><div class="stat-label">Events Today</div></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Now Playing</h2>
+      <div id="now-playing"><div class="error">Loading...</div></div>
+    </div>
+    <div class="card">
+      <h2>Recent History</h2>
+      <div id="history"><div class="error">Loading...</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Devices</h2>
+    <div id="devices"><div class="error">Loading...</div></div>
+  </div>
+
+  <div class="refresh-note">Last update: <span id="last-update">-</span></div>
+</div>
+
+<script>
+let TOKEN = '';
+const BASE = window.location.origin;
+
+function authenticate() {
+  TOKEN = document.getElementById('token-input').value.trim();
+  if (!TOKEN) return;
+  localStorage.setItem('glowup_token', TOKEN);
+  document.getElementById('auth-form').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+  refresh();
+  setInterval(refresh, 5000);
+}
+
+// Auto-login if token is stored
+window.addEventListener('load', () => {
+  const saved = localStorage.getItem('glowup_token');
+  if (saved) {
+    TOKEN = saved;
+    document.getElementById('auth-form').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+    refresh();
+    setInterval(refresh, 5000);
+  }
+});
+
+async function api(path) {
+  const r = await fetch(BASE + path, {
+    headers: { 'Authorization': 'Bearer ' + TOKEN }
+  });
+  if (r.status === 401) {
+    localStorage.removeItem('glowup_token');
+    document.getElementById('auth-form').style.display = 'block';
+    document.getElementById('dashboard').style.display = 'none';
+    return null;
+  }
+  return r.json();
+}
+
+function timeAgo(iso) {
+  const d = new Date(iso);
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+
+function formatTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function duration(start, stop) {
+  if (!start || !stop) return '';
+  const ms = new Date(stop) - new Date(start);
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+  return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+}
+
+async function refresh() {
+  try {
+    const [devices, nowPlaying, history] = await Promise.all([
+      api('/api/devices'),
+      api('/api/diagnostics/now_playing'),
+      api('/api/diagnostics/history'),
+    ]);
+
+    if (!devices) return;  // auth failed
+
+    // Stats
+    const devList = devices.devices || devices || [];
+    document.getElementById('stat-devices').textContent = devList.length;
+
+    const playing = nowPlaying || [];
+    document.getElementById('stat-playing').textContent = playing.length;
+
+    const hist = history || [];
+    document.getElementById('stat-today').textContent = hist.length;
+
+    // Now Playing
+    const npEl = document.getElementById('now-playing');
+    if (playing.length === 0) {
+      npEl.innerHTML = '<div class="device-idle" style="padding:8px 0;">Nothing playing</div>';
+    } else {
+      npEl.innerHTML = playing.map(r => `
+        <div class="device-row">
+          <div>
+            <div class="device-name">${r.device_label || r.device_ip}</div>
+            <div class="device-effect">${r.effect_name}</div>
+          </div>
+          <div>
+            <span class="badge badge-playing">LIVE</span>
+            <div class="history-time">${timeAgo(r.started_at)}</div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // History
+    const hEl = document.getElementById('history');
+    if (hist.length === 0) {
+      hEl.innerHTML = '<div class="device-idle" style="padding:8px 0;">No events yet</div>';
+    } else {
+      hEl.innerHTML = hist.map(r => `
+        <div class="history-row">
+          <span class="history-device">${r.device_label || r.device_ip}</span>
+          <span class="history-effect">${r.effect_name}</span>
+          ${r.stop_reason ? '<span class="history-reason">' + r.stop_reason + '</span>' : '<span class="badge badge-playing">LIVE</span>'}
+          <br>
+          <span class="history-time">
+            ${formatTime(r.started_at)}
+            ${r.stopped_at ? ' - ' + formatTime(r.stopped_at) + ' (' + duration(r.started_at, r.stopped_at) + ')' : ''}
+          </span>
+        </div>
+      `).join('');
+    }
+
+    // Devices
+    const dEl = document.getElementById('devices');
+    dEl.innerHTML = devList.map(d => {
+      const isPlaying = playing.some(p => p.device_ip === d.ip);
+      return `
+        <div class="device-row">
+          <div>
+            <div class="device-name">${d.label || d.ip}</div>
+            <div style="color:var(--dim);font-size:12px;">${d.product || ''} &middot; ${d.zones || 1} zones</div>
+          </div>
+          <span class="badge ${isPlaying ? 'badge-playing' : 'badge-stopped'}">${isPlaying ? 'PLAYING' : 'IDLE'}</span>
+        </div>
+      `;
+    }).join('');
+
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+  } catch (e) {
+    console.error('Refresh failed:', e);
+  }
+}
+</script>
+</body>
+</html>

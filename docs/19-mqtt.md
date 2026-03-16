@@ -1,5 +1,8 @@
 # MQTT Integration
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 GlowUp includes a native MQTT bridge that connects the server to any
 MQTT broker (Mosquitto, EMQX, HiveMQ, etc.).  Once enabled, any MQTT
 client can control your lights and subscribe to real-time state
@@ -146,4 +149,3 @@ this topic to detect when GlowUp is unreachable.
   live MQTT broker.  If you try it, please open an issue at the
   [GitHub repo](https://github.com/pkivolowitz/lifx/issues) with
   any corrections or suggestions.
-

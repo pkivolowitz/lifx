@@ -27,12 +27,6 @@ struct DeviceListView: View {
     /// Whether a request is in progress.
     @State private var isLoading: Bool = false
 
-    /// Controls presentation of the settings sheet.
-    @State private var showSettings: Bool = false
-
-    /// Controls presentation of the schedule sheet.
-    @State private var showSchedule: Bool = false
-
     /// Device being renamed (drives the rename alert).
     @State private var renamingDevice: Device?
 
@@ -68,36 +62,13 @@ struct DeviceListView: View {
                 DeviceDetailView(device: device)
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Label("Settings", systemImage: "gear")
-                        }
-                        Button(role: .destructive) {
-                            apiClient.isAuthenticated = false
-                        } label: {
-                            Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
-                        }
-                    } label: {
-                        Image(systemName: "gear")
-                    }
-                }
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 16) {
-                        Button {
-                            showSchedule = true
-                        } label: {
-                            Image(systemName: "calendar")
-                        }
-                        Button {
-                            Task { await refreshDevices() }
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .disabled(isLoading)
+                    Button {
+                        Task { await refreshDevices() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
                     }
+                    .disabled(isLoading)
                 }
             }
             .refreshable {
@@ -113,12 +84,6 @@ struct DeviceListView: View {
                         )
                     )
                 }
-            }
-            .sheet(isPresented: $showSettings) {
-                SettingsView()
-            }
-            .sheet(isPresented: $showSchedule) {
-                ScheduleView()
             }
             .alert(
                 "Rename Device",
