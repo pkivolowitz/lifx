@@ -9,6 +9,8 @@ Usage::
     python3 glowup.py monitor --ip <device-ip>           # monitor device in real time
     python3 glowup.py play cylon --ip <device-ip>    # run an effect on one device
     python3 glowup.py play cylon --config conf.json --group office  # virtual multizone
+    python3 glowup.py replay --file song.mid             # replay MIDI at real-time tempo
+    python3 glowup.py replay --file song.mid --speed 0   # bulk ingest (fast as possible)
 
 All effect parameters are auto-generated from each effect's :class:`Param`
 declarations.
@@ -17,7 +19,7 @@ declarations.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.9"
+__version__ = "2.0"
 
 import argparse
 import json
@@ -26,11 +28,15 @@ import signal
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from transport import LifxDevice, discover_devices
-from engine import Controller, VirtualMultizoneDevice
-from effects import get_registry, get_effect_names, create_effect, HSBK_MAX, KELVIN_DEFAULT
+from emitters import Emitter
+from emitters.lifx import LifxEmitter
+from emitters.virtual import VirtualMultizoneEmitter
+from engine import Controller
+from effects import get_registry, get_effect_names, create_effect, HSBK, HSBK_MAX, KELVIN_DEFAULT
 from colorspace import set_lerp_method
 
 # ---------------------------------------------------------------------------
@@ -95,6 +101,19 @@ MIN_MONITOR_POLL_HZ: float = 0.5
 MAX_MONITOR_POLL_HZ: float = 20.0
 """Maximum polling rate for monitor mode."""
 
+# Replay subcommand defaults.
+DEFAULT_REPLAY_SPEED: float = 1.0
+"""Replay speed multiplier.  1.0 = real-time, 0 = as fast as possible."""
+
+DEFAULT_REPLAY_BROKER: str = "10.0.0.48"
+"""Default MQTT broker for replay (Pi)."""
+
+DEFAULT_REPLAY_PORT: int = 1883
+"""Default MQTT broker port."""
+
+DEFAULT_REPLAY_SIGNAL: str = "sensor:midi:events"
+"""Default signal name for MIDI replay events on the bus."""
+
 # Minimum column widths for the discovery table display.
 # These prevent columns from collapsing when device labels are short.
 _COL_MIN_LABEL: int = 12
@@ -135,33 +154,21 @@ def _print(*args: Any, **kwargs: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Null device — geometry-only stub for --sim-only mode
+# Null emitter — geometry-only stub for --sim-only mode
 # ---------------------------------------------------------------------------
 
-class _NullDevice:
-    """Geometry-only device stub used by ``--sim-only``.
+class _NullEmitter(Emitter):
+    """Geometry-only emitter stub used by ``--sim-only``.
 
-    Mirrors the properties that :class:`Engine` and :class:`Controller`
-    read from a real device (zone count, label, etc.) but makes every
-    write method a silent no-op.  This guarantees that ``--sim-only``
-    never sends a single UDP packet to physical hardware after the
-    initial query.
+    Implements the :class:`Emitter` ABC with no-op write methods.
+    This guarantees that ``--sim-only`` never sends a single UDP packet
+    to physical hardware after the initial query.
 
     Attributes:
-        zone_count:   Number of zones copied from the real device.
-        is_multizone: Always ``True`` so the engine uses the
-                      ``set_zones`` path (zone-accurate rendering).
-        is_polychrome: Always ``True`` (unused for the multizone path).
-        label:        Device or group label for display.
-        product_name: Human-readable product string.
-        product:      Non-``None`` so engine readiness checks pass.
-        ip:           Display-only address string.
-        mac_str:      Fixed ``"sim-only"`` sentinel.
-        group:        Empty string placeholder.
         _pre_poly_map: Pre-computed per-zone polychrome list extracted
-                      from the real device before it was closed.  Used
-                      by :func:`_build_polychrome_map` to produce an
-                      accurate simulator colour map.
+                       from the real device before it was closed.  Used
+                       by :func:`_build_polychrome_map` to produce an
+                       accurate simulator colour map.
     """
 
     def __init__(
@@ -182,33 +189,71 @@ class _NullDevice:
             pre_poly_map:  Per-zone polychrome flags from the real
                            device, extracted before it was closed.
         """
-        self.zone_count: int = zone_count
-        self.is_multizone: bool = True
-        self.is_polychrome: bool = True
-        self.label: str = label
-        self.product_name: str = product_name
-        self.product: int = 0       # non-None so engine checks pass
-        self.ip: str = ip
-        self.mac_str: str = "sim-only"
-        self.group: str = ""
+        self._zone_count: int = zone_count
+        self._label: str = label
+        self._product_name: str = product_name
+        self._ip: str = ip
         self._pre_poly_map: list[bool] = pre_poly_map
 
-    # All write methods are silent no-ops — no packets reach the lights.
+    # --- Emitter properties ---
 
-    def set_zones(self, *args: Any, **kwargs: Any) -> None:
+    @property
+    def zone_count(self) -> Optional[int]:
+        """Number of zones copied from the real device."""
+        return self._zone_count
+
+    @property
+    def is_multizone(self) -> bool:
+        """Always ``True`` so the engine uses the zone-accurate path."""
+        return True
+
+    @property
+    def emitter_id(self) -> str:
+        """Display-only address string."""
+        return self._ip
+
+    @property
+    def label(self) -> str:
+        """Device or group label for display."""
+        return self._label
+
+    @property
+    def product_name(self) -> str:
+        """Human-readable product string."""
+        return self._product_name
+
+    # --- Frame dispatch (all no-ops) ---
+
+    def send_zones(self, colors: list[HSBK], duration_ms: int = 0,
+                   rapid: bool = True) -> None:
         """No-op — sim-only mode never writes to physical devices."""
 
-    def set_color(self, *args: Any, **kwargs: Any) -> None:
+    def send_color(self, hue: int, sat: int, bri: int, kelvin: int,
+                   duration_ms: int = 0) -> None:
         """No-op — sim-only mode never writes to physical devices."""
 
-    def set_power(self, *args: Any, **kwargs: Any) -> None:
+    # --- Lifecycle (all no-ops) ---
+
+    def prepare_for_rendering(self) -> None:
+        """No-op — no hardware to prepare."""
+
+    def power_on(self, duration_ms: int = 0) -> None:
+        """No-op — sim-only mode never writes to physical devices."""
+
+    def power_off(self, duration_ms: int = 0) -> None:
         """No-op — sim-only mode never writes to physical devices."""
 
     def close(self) -> None:
         """No-op — the real socket was closed before this stub was created."""
 
-    def query_all(self) -> None:
-        """No-op — geometry was already obtained from the real device."""
+    def get_info(self) -> dict:
+        """Return device info for status reporting."""
+        return {
+            "id": self._ip,
+            "label": self._label,
+            "product": self._product_name,
+            "zones": self._zone_count,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -615,35 +660,44 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     _print("Done.")
 
 
-def _build_polychrome_map(dev: Any) -> list[bool]:
+def _build_polychrome_map(em: Any) -> list[bool]:
     """Build a per-zone list indicating color vs. monochrome capability.
 
-    For a :class:`_NullDevice` (``--sim-only``), uses the pre-computed
+    For a :class:`_NullEmitter` (``--sim-only``), uses the pre-computed
     map that was extracted from the real device before it was closed.
 
-    For a :class:`VirtualMultizoneDevice`, each zone inherits the
-    polychrome status of its underlying physical device.  For a plain
-    :class:`LifxDevice`, all zones share the device's status.
+    For a :class:`VirtualMultizoneEmitter`, each zone inherits the
+    polychrome status of its underlying physical emitter.  For a
+    :class:`LifxEmitter`, all zones share the device's status.
 
     Args:
-        dev: A device, virtual multizone device, or null device stub.
+        em: An emitter, virtual multizone emitter, or null emitter stub.
 
     Returns:
         A list of booleans, one per zone.  ``True`` = color,
         ``False`` = monochrome (simulator renders in grayscale).
     """
-    # _NullDevice carries a pre-computed map extracted before real device
+    # _NullEmitter carries a pre-computed map extracted before real device
     # sockets were closed.
-    if hasattr(dev, "_pre_poly_map") and dev._pre_poly_map is not None:
-        return dev._pre_poly_map
+    if hasattr(em, "_pre_poly_map") and em._pre_poly_map is not None:
+        return em._pre_poly_map
 
-    # VirtualMultizoneDevice exposes _zone_map with (device, zone_idx) tuples.
-    if hasattr(dev, "_zone_map"):
-        return [d.is_polychrome for d, _ in dev._zone_map]
+    # VirtualMultizoneEmitter exposes _zone_map with (emitter, zone_idx) tuples.
+    if hasattr(em, "_zone_map"):
+        result: list[bool] = []
+        for member_em, _ in em._zone_map:
+            if isinstance(member_em, LifxEmitter):
+                result.append(bool(member_em.transport.is_polychrome))
+            else:
+                result.append(True)  # Non-LIFX: assume polychrome.
+        return result
 
-    # Single device: all zones share the same polychrome status.
-    zones: int = dev.zone_count if dev.zone_count else 1
-    poly: bool = bool(getattr(dev, "is_polychrome", True))
+    # Single LifxEmitter: all zones share the same polychrome status.
+    zones: int = em.zone_count if em.zone_count else 1
+    if isinstance(em, LifxEmitter):
+        poly: bool = bool(em.transport.is_polychrome)
+    else:
+        poly = True
     return [poly] * zones
 
 
@@ -696,7 +750,7 @@ def cmd_play(args: argparse.Namespace) -> None:
 
     # --- Device-free simulator mode ------------------------------------------
     # When --zones is specified, skip all network I/O and create a
-    # _NullDevice directly with the requested geometry.
+    # _NullEmitter directly with the requested geometry.
     if virtual_zones > 0:
         if has_ip or has_group:
             _print(
@@ -706,7 +760,7 @@ def cmd_play(args: argparse.Namespace) -> None:
             )
             sys.exit(1)
         poly_map: list[bool] = [True] * virtual_zones
-        dev = _NullDevice(
+        em: Emitter = _NullEmitter(
             zone_count=virtual_zones,
             label="virtual",
             product_name="Virtual Device",
@@ -718,18 +772,19 @@ def cmd_play(args: argparse.Namespace) -> None:
 
     # --- Connect to device(s) ------------------------------------------------
     elif has_group:
-        # Virtual multizone: load group, connect all devices, wrap.
+        # Virtual multizone: load group, connect all devices, wrap in emitters.
         ips: list[str] = _load_group(args.config, args.group)
         _print(f"Connecting to group '{args.group}' ({len(ips)} devices)...",
               flush=True)
         devices: list[LifxDevice] = _connect_group(ips)
-        dev = VirtualMultizoneDevice(devices)
-        _print(f"  Virtual multizone: {dev.zone_count} zones", flush=True)
+        member_emitters: list[Emitter] = [LifxEmitter.from_device(d) for d in devices]
+        em = VirtualMultizoneEmitter(member_emitters, name=args.group)
+        _print(f"  Virtual multizone: {em.zone_count} zones", flush=True)
     else:
         # Single device mode.
         _print(f"Connecting to {args.ip}...", flush=True)
         try:
-            dev = LifxDevice(args.ip)
+            dev: LifxDevice = LifxDevice(args.ip)
         except ValueError as exc:
             _print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -750,19 +805,21 @@ def cmd_play(args: argparse.Namespace) -> None:
         else:
             _print("  Monochrome bulb (BT.709 luma mode)", flush=True)
 
+        em = LifxEmitter.from_device(dev)
+
     # --- Sim-only: extract geometry then close real sockets immediately --------
-    # From this point on, if sim_only is active, dev is a _NullDevice and
+    # From this point on, if sim_only is active, em is a _NullEmitter and
     # no further packets will be sent to the physical lights.
-    # Skip when --zones was used — dev is already a _NullDevice.
+    # Skip when --zones was used — em is already a _NullEmitter.
     if sim_only and virtual_zones <= 0:
-        pre_poly: list[bool] = _build_polychrome_map(dev)
-        null_label: str = getattr(dev, "label", None) or "?"
-        null_product: str = getattr(dev, "product_name", None) or "?"
-        null_ip: str = getattr(dev, "ip", None) or "sim-only"
-        null_zones: int = dev.zone_count or 1
+        pre_poly: list[bool] = _build_polychrome_map(em)
+        null_label: str = em.label or "?"
+        null_product: str = em.product_name or "?"
+        null_ip: str = em.emitter_id or "sim-only"
+        null_zones: int = em.zone_count or 1
         # Close real sockets — the null stub takes over from here.
-        dev.close()
-        dev = _NullDevice(
+        em.close()
+        em = _NullEmitter(
             zone_count=null_zones,
             label=null_label,
             product_name=null_product,
@@ -787,7 +844,7 @@ def cmd_play(args: argparse.Namespace) -> None:
             f"Available: {', '.join(get_effect_names())}",
             file=sys.stderr,
         )
-        dev.close()
+        em.close()
         sys.exit(1)
 
     # Collect only the parameters the user explicitly provided on the CLI.
@@ -808,20 +865,20 @@ def cmd_play(args: argparse.Namespace) -> None:
         zpb_val: int = getattr(args, "zpb", 1)
         effect_params["zones_per_bulb"] = zpb_val
 
-    # --- Ensure device is powered on before sending colors --------------------
-    # Skipped in sim-only mode: _NullDevice.set_power is a no-op, but
+    # --- Ensure emitter is powered on before sending colors --------------------
+    # Skipped in sim-only mode: _NullEmitter methods are no-ops, but
     # being explicit avoids confusing log output about powering on.
     if not sim_only:
-        dev.set_power(on=True, duration_ms=0)
+        em.power_on(duration_ms=0)
 
     # --- Optional simulator window (--sim or --sim-only) ----------------------
     sim = None
     if getattr(args, "sim", False) or sim_only:
         from simulator import create_simulator
-        poly_map: list[bool] = _build_polychrome_map(dev)
+        poly_map: list[bool] = _build_polychrome_map(em)
         zpb: int = getattr(args, "zpb", 1)
         zoom_val: int = getattr(args, "zoom", 1)
-        sim = create_simulator(dev.zone_count or 1, effect_name,
+        sim = create_simulator(em.zone_count or 1, effect_name,
                                polychrome_map=poly_map,
                                zones_per_bulb=zpb,
                                zoom=zoom_val)
@@ -832,14 +889,18 @@ def cmd_play(args: argparse.Namespace) -> None:
                 "Install it (e.g. brew install python-tk) and retry.",
                 file=sys.stderr,
             )
-            dev.close()
+            em.close()
             sys.exit(1)
 
     frame_cb = sim.update if sim is not None else None
 
     # --- Start the render engine ----------------------------------------------
-    ctrl: Controller = Controller([dev], fps=args.fps,
-                                  frame_callback=frame_cb)
+    fps_explicit: bool = args.fps is not None
+    fps: int = args.fps if fps_explicit else DEFAULT_FPS
+    ctrl: Controller = Controller([em], fps=fps,
+                                  frame_callback=frame_cb,
+                                  transition_ms=getattr(args, 'transition', None),
+                                  fps_explicit=fps_explicit)
     ctrl.play(effect_name, **effect_params)
 
     status: dict = ctrl.get_status()
@@ -877,14 +938,14 @@ def cmd_play(args: argparse.Namespace) -> None:
         stop_requested.wait()
 
     _print("\nStopping...")
-    # In sim-only mode dev is a _NullDevice; skip the fade and power-off
+    # In sim-only mode em is a _NullEmitter; skip the fade and power-off
     # so the intent is clear even though the no-ops would be harmless.
     if sim_only:
         ctrl.stop(fade_ms=0)
     else:
         ctrl.stop(fade_ms=DEFAULT_FADE_MS)
-        dev.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
-    dev.close()
+        em.power_off(duration_ms=DEFAULT_FADE_MS)
+    em.close()
     _print("Done.")
 
 
@@ -1260,6 +1321,59 @@ def _print_effect_help(effect_name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# replay subcommand
+# ---------------------------------------------------------------------------
+
+def cmd_replay(args: argparse.Namespace) -> None:
+    """Replay a MIDI file onto the signal bus via MQTT.
+
+    Parses the MIDI file and publishes structured events to the bus
+    at the requested speed.  At real-time speed (default), events are
+    timed to match the original tempo.  At speed 0, events are sent
+    as fast as possible for bulk data loading via the persistence emitter.
+
+    Args:
+        args: Parsed CLI arguments (file, broker, port, speed, signal_name).
+    """
+    from distributed.midi_sensor import MidiSensor
+
+    file_path: str = args.file
+    if not Path(file_path).exists():
+        _print(f"ERROR: MIDI file not found: {file_path}", file=sys.stderr)
+        sys.exit(1)
+
+    sensor: MidiSensor = MidiSensor(
+        file_path=file_path,
+        broker=args.broker,
+        port=args.port,
+        signal_name=args.signal_name,
+        speed=args.speed,
+    )
+
+    # Handle Ctrl+C gracefully.
+    def _shutdown(signum: int, frame: object) -> None:
+        """Signal handler for clean shutdown."""
+        _print("\nStopping replay...")
+        sensor.stop()
+
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+
+    speed_label: str = (
+        "unlimited (bulk)" if args.speed == 0.0
+        else f"{args.speed}x"
+    )
+    _print(f"Replaying {file_path} at {speed_label} speed...")
+    _print(f"  Broker: {args.broker}:{args.port}")
+    _print(f"  Signal: {args.signal_name}")
+    _print()
+
+    sensor.start()
+
+    _print("Done.")
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -1370,8 +1484,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Device group name (requires --config)",
     )
     p_play.add_argument(
-        "--fps", type=int, default=DEFAULT_FPS,
-        help=f"Frames per second (default: {DEFAULT_FPS})",
+        "--fps", type=int, default=None,
+        help=f"Frames per second (default: {DEFAULT_FPS}, auto-tuned for Neon)",
     )
     p_play.add_argument(
         "--sim", action="store_true", default=False,
@@ -1399,6 +1513,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_play.add_argument(
         "--zoom", type=int, default=1,
         help="Simulator zoom factor 1-10 (nearest-neighbor scaling, default: 1)",
+    )
+    p_play.add_argument(
+        "--transition", type=int, default=None,
+        help="Firmware transition time in ms per frame (default: 2000/fps). "
+             "0=snap, higher=smoother but adds latency",
     )
     p_play.add_argument(
         "--lerp", type=str, default="lab",
@@ -1548,6 +1667,45 @@ def build_parser() -> argparse.ArgumentParser:
                 **kwargs_rec,
             )
 
+    # -- replay ----------------------------------------------------------------
+    p_replay = sub.add_parser(
+        "replay",
+        help="Replay a MIDI file onto the signal bus via MQTT",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Replays MIDI events at the original tempo (real-time) or\n"
+            "as fast as possible (--speed 0) for bulk data loading.\n\n"
+            "Examples:\n"
+            "  python3 glowup.py replay --file song.mid\n"
+            "  python3 glowup.py replay --file song.mid --speed 0\n"
+            "  python3 glowup.py replay --file song.mid --speed 2"
+        ),
+    )
+    p_replay.add_argument(
+        "--file", required=True,
+        help="Path to a Standard MIDI File (.mid)",
+    )
+    p_replay.add_argument(
+        "--broker", default=DEFAULT_REPLAY_BROKER,
+        help=f"MQTT broker host (default: {DEFAULT_REPLAY_BROKER})",
+    )
+    p_replay.add_argument(
+        "--port", type=int, default=DEFAULT_REPLAY_PORT,
+        help=f"MQTT broker port (default: {DEFAULT_REPLAY_PORT})",
+    )
+    p_replay.add_argument(
+        "--speed", type=float, default=DEFAULT_REPLAY_SPEED,
+        help=(
+            f"Replay speed multiplier (default: {DEFAULT_REPLAY_SPEED}).  "
+            f"0 = as fast as possible (bulk ingest)."
+        ),
+    )
+    p_replay.add_argument(
+        "--signal-name", dest="signal_name",
+        default=DEFAULT_REPLAY_SIGNAL,
+        help=f"Signal name on the bus (default: '{DEFAULT_REPLAY_SIGNAL}')",
+    )
+
     return parser
 
 
@@ -1603,6 +1761,7 @@ def main() -> None:
         "monitor": cmd_monitor,
         "play": cmd_play,
         "record": cmd_record,
+        "replay": cmd_replay,
     }
 
     handler: Optional[Callable[[argparse.Namespace], None]] = commands.get(

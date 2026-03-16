@@ -43,6 +43,14 @@ Endpoints::
     POST /api/effects/{name}/defaults    Save tuned params as effect defaults
     GET  /api/schedule                   Schedule entries with resolved times
     POST /api/schedule/{index}/enabled   Enable or disable a schedule entry
+    GET  /api/media/sources              List media sources with status
+    GET  /api/media/signals              List available signal names
+    POST /api/media/sources/{name}/start Manually start a media source
+    POST /api/media/sources/{name}/stop  Manually stop a media source
+    POST /api/media/signals/ingest       Write signals from external source
+    GET  /api/diagnostics/now_playing    Currently playing effects (from DB)
+    GET  /api/diagnostics/history        Recent effect history (from DB)
+    GET  /dashboard                      Web dashboard (HTML)
 Usage::
 
     python3 server.py server.json
@@ -54,7 +62,7 @@ Usage::
 
 from __future__ import annotations
 
-__version__ = "1.8"
+__version__ = "2.0"
 
 import hmac
 import http.server
@@ -74,11 +82,31 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
-from effects import get_registry, create_effect, HSBK_MAX, KELVIN_DEFAULT
-from engine import Controller, VirtualMultizoneDevice
+from effects import get_registry, create_effect, HSBK, HSBK_MAX, KELVIN_DEFAULT
+from emitters import Emitter
+from emitters.lifx import LifxEmitter
+from emitters.virtual import VirtualMultizoneEmitter
+from engine import Controller
 from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
+from media import MediaManager, SignalBus
 from solar import SunTimes, sun_times
 from transport import LifxDevice
+
+# Optional distributed compute subsystem.
+try:
+    from distributed.orchestrator import Orchestrator
+    _HAS_DISTRIBUTED: bool = True
+except ImportError:
+    Orchestrator = None  # type: ignore[assignment,misc]
+    _HAS_DISTRIBUTED = False
+
+# Optional diagnostics subsystem (requires psycopg2 + PostgreSQL).
+try:
+    from diagnostics import DiagnosticsLogger
+    _HAS_DIAGNOSTICS: bool = True
+except ImportError:
+    DiagnosticsLogger = None  # type: ignore[assignment,misc]
+    _HAS_DIAGNOSTICS = False
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -309,6 +337,7 @@ class DeviceManager:
                         multizone devices with a unified zone canvas.
         """
         self._devices: dict[str, LifxDevice] = {}
+        self._emitters: dict[str, Emitter] = {}
         self._controllers: dict[str, Controller] = {}
         self._lock: threading.Lock = threading.Lock()
         # Override tracking: maps device ID (IP or group:name) to the
@@ -330,6 +359,12 @@ class DeviceManager:
             self._load_effect_defaults()
         # Readiness flag: False until initial load completes.
         self._ready: bool = False
+        # Optional diagnostics logger (None if psycopg2 or DB unavailable).
+        self._diag: Optional[Any] = None
+        if _HAS_DIAGNOSTICS:
+            self._diag = DiagnosticsLogger.from_env()
+            if self._diag is not None:
+                self._diag.close_stale_records()
 
     def load_devices(self) -> list[dict[str, Any]]:
         """Query each configured device IP and cache the results.
@@ -340,9 +375,10 @@ class DeviceManager:
         are logged as warnings but do not prevent the server from
         starting.
 
-        After loading individual devices, creates a
-        :class:`VirtualMultizoneDevice` for every multi-device group
-        in the config.  The virtual device combines member zones into
+        After loading individual devices, wraps each in a
+        :class:`LifxEmitter` and creates a
+        :class:`VirtualMultizoneEmitter` for every multi-device group
+        in the config.  The virtual emitter combines member zones into
         a single unified canvas.  The order of IPs in the group array
         determines the zone layout (first IP's zones come first).
 
@@ -385,19 +421,24 @@ class DeviceManager:
 
             self._devices = new_map
 
-            # Build VirtualMultizoneDevices for multi-device groups.
+            # Build emitter wrappers for all individual devices.
+            new_emitters: dict[str, Emitter] = {}
+            for ip, dev in new_map.items():
+                new_emitters[ip] = LifxEmitter.from_device(dev)
+
+            # Build VirtualMultizoneEmitters for multi-device groups.
             for group_name, ips in self._group_config.items():
                 if len(ips) < 2:
                     continue
-                member_devs: list[LifxDevice] = [
-                    self._devices[ip] for ip in ips
-                    if ip in self._devices
+                member_emitters: list[Emitter] = [
+                    new_emitters[ip] for ip in ips
+                    if ip in new_emitters
                 ]
-                if len(member_devs) < 2:
+                if len(member_emitters) < 2:
                     logging.warning(
                         "Group '%s' has fewer than 2 reachable devices "
-                        "(%d/%d) — skipping virtual device",
-                        group_name, len(member_devs), len(ips),
+                        "(%d/%d) — skipping virtual emitter",
+                        group_name, len(member_emitters), len(ips),
                     )
                     continue
                 group_id: str = _group_id_from_name(group_name)
@@ -408,15 +449,27 @@ class DeviceManager:
                 if old_ctrl is not None:
                     old_ctrl.stop(fade_ms=0)
                     del self._controllers[group_id]
-                vdev: VirtualMultizoneDevice = VirtualMultizoneDevice(
-                    member_devs, name=group_name, owns_devices=False,
+                vem: VirtualMultizoneEmitter = VirtualMultizoneEmitter(
+                    member_emitters, name=group_name, owns_emitters=False,
                 )
-                self._devices[group_id] = vdev
+                new_emitters[group_id] = vem
                 logging.info(
-                    "  group '%s' — %d devices, %d zones",
-                    group_name, len(member_devs), vdev.zone_count,
+                    "  group '%s' — %d emitters, %d zones",
+                    group_name, len(member_emitters), vem.zone_count,
                 )
 
+            # Clean up controllers for emitter IDs that no longer exist
+            # (e.g., groups whose members all went offline).
+            gone_ids: set[str] = set(self._emitters) - set(new_emitters)
+            for eid in gone_ids:
+                stale_ctrl: Optional[Controller] = self._controllers.pop(
+                    eid, None,
+                )
+                if stale_ctrl is not None:
+                    stale_ctrl.stop(fade_ms=0)
+                self._overrides.pop(eid, None)
+
+            self._emitters = new_emitters
             self._ready = True
 
         return self._devices_as_list()
@@ -427,7 +480,11 @@ class DeviceManager:
         return self._ready
 
     def get_device(self, ip: str) -> Optional[LifxDevice]:
-        """Look up a cached device by IP.
+        """Look up a cached LIFX device by IP.
+
+        Only returns individual :class:`LifxDevice` instances — not
+        virtual groups.  Use :meth:`get_emitter` for the universal
+        registry that includes groups.
 
         Args:
             ip: Device IP address.
@@ -437,6 +494,23 @@ class DeviceManager:
         """
         with self._lock:
             return self._devices.get(ip)
+
+    def get_emitter(self, device_id: str) -> Optional[Emitter]:
+        """Look up an emitter by device ID (IP or group identifier).
+
+        This is the universal lookup — covers both individual
+        :class:`LifxEmitter` instances and :class:`VirtualMultizoneEmitter`
+        groups.
+
+        Args:
+            device_id: Device IP address or group identifier
+                       (e.g., ``"group:porch"``).
+
+        Returns:
+            The :class:`Emitter`, or ``None`` if not found.
+        """
+        with self._lock:
+            return self._emitters.get(device_id)
 
     def get_controller(self, ip: str) -> Optional[Controller]:
         """Look up an existing Controller by IP (does not create one).
@@ -451,20 +525,20 @@ class DeviceManager:
             return self._controllers.get(ip)
 
     def get_or_create_controller(self, ip: str) -> Optional[Controller]:
-        """Get or lazily create a Controller for a device.
+        """Get or lazily create a Controller for an emitter.
 
         Args:
-            ip: Device IP address.
+            ip: Device IP address or group identifier.
 
         Returns:
-            A :class:`Controller`, or ``None`` if the device is unknown.
+            A :class:`Controller`, or ``None`` if the emitter is unknown.
         """
         with self._lock:
-            if ip not in self._devices:
+            if ip not in self._emitters:
                 return None
             if ip not in self._controllers:
-                dev: LifxDevice = self._devices[ip]
-                self._controllers[ip] = Controller([dev])
+                em: Emitter = self._emitters[ip]
+                self._controllers[ip] = Controller([em])
             return self._controllers[ip]
 
     def play(
@@ -472,6 +546,8 @@ class DeviceManager:
         ip: str,
         effect_name: str,
         params: dict[str, Any],
+        bindings: Optional[dict[str, Any]] = None,
+        signal_bus: Optional[SignalBus] = None,
     ) -> dict[str, Any]:
         """Start an effect on a device.
 
@@ -479,6 +555,12 @@ class DeviceManager:
             ip:          Device IP address.
             effect_name: Registered effect name.
             params:      Parameter overrides.
+            bindings:    Optional signal-to-param bindings for media
+                         reactivity.  Each key is a param name, each
+                         value is a dict with ``signal``, optional
+                         ``reduce``, and optional ``scale`` fields.
+            signal_bus:  Optional :class:`SignalBus` instance for
+                         reading media signals during rendering.
 
         Returns:
             A status dict for the device.
@@ -498,16 +580,30 @@ class DeviceManager:
             merged: dict[str, Any] = dict(saved)
             merged.update(params)
             params = merged
-        # Power on the device before playing.  The persistent committed
+        # Power on the emitter before playing.  The persistent committed
         # state is managed by stop() and reset() — not here — so the
         # render loop's rapid writes don't flicker against a black fallback.
-        dev: Optional[LifxDevice] = self.get_device(ip)
-        if dev is not None:
+        em: Optional[Emitter] = self.get_emitter(ip)
+        if em is not None:
             try:
-                dev.set_power(on=True, duration_ms=0)
+                em.power_on(duration_ms=0)
             except Exception:
                 pass
-        ctrl.play(effect_name, **params)
+        # Close the previous effect's diagnostics record before starting
+        # a new one, so replaced effects get a proper stop_reason.
+        if self._diag is not None:
+            self._diag.log_stop(ip, stop_reason="replaced")
+        ctrl.play(effect_name, bindings=bindings,
+                  signal_bus=signal_bus, **params)
+        if self._diag is not None:
+            em_info: dict[str, Any] = em.get_info() if em else {}
+            self._diag.log_play(
+                device_ip=ip,
+                device_label=em_info.get("label"),
+                effect_name=effect_name,
+                params=params,
+                started_by="api",
+            )
         result: dict[str, Any] = ctrl.get_status()
         result["overridden"] = self.is_overridden(ip)
         return result
@@ -533,6 +629,8 @@ class DeviceManager:
             raise KeyError(f"Unknown device: {ip}")
         ctrl.stop(fade_ms=DEFAULT_FADE_MS)
         ctrl.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
+        if self._diag is not None:
+            self._diag.log_stop(ip, stop_reason="user")
         result: dict[str, Any] = ctrl.get_status()
         result["overridden"] = self.is_overridden(ip)
         return result
@@ -541,7 +639,7 @@ class DeviceManager:
         """Get the current effect status for a device.
 
         Args:
-            ip: Device IP address.
+            ip: Device IP address or group identifier.
 
         Returns:
             A status dict, or a minimal dict if no controller exists.
@@ -550,7 +648,7 @@ class DeviceManager:
             KeyError: If the device IP is not configured.
         """
         with self._lock:
-            if ip not in self._devices:
+            if ip not in self._emitters:
                 raise KeyError(f"Unknown device: {ip}")
             ctrl: Optional[Controller] = self._controllers.get(ip)
 
@@ -561,21 +659,15 @@ class DeviceManager:
             result["overridden"] = overridden
             return result
 
-        # No controller yet — return idle status.
-        dev: LifxDevice = self._devices[ip]
+        # No controller yet — return idle status from the emitter.
+        em: Emitter = self._emitters[ip]
         return {
             "running": False,
             "effect": None,
             "params": {},
             "fps": 0,
             "overridden": overridden,
-            "devices": [{
-                "ip": dev.ip,
-                "mac": dev.mac_str,
-                "label": dev.label,
-                "product": dev.product_name,
-                "zones": dev.zone_count,
-            }],
+            "devices": [em.get_info()],
         }
 
     def set_power(self, ip: str, on: bool) -> dict[str, Any]:
@@ -586,8 +678,11 @@ class DeviceManager:
         Without this, the device shows old effect colors the next time
         it powers on — even hours or days later.
 
+        Works for both individual devices and virtual groups — the
+        emitter interface handles fan-out to group members.
+
         Args:
-            ip: Device IP address.
+            ip: Device IP address or group identifier.
             on: ``True`` to power on, ``False`` to power off.
 
         Returns:
@@ -596,20 +691,23 @@ class DeviceManager:
         Raises:
             KeyError: If the device IP is not configured.
         """
-        dev: Optional[LifxDevice] = self.get_device(ip)
-        if dev is None:
+        em: Optional[Emitter] = self.get_emitter(ip)
+        if em is None:
             raise KeyError(f"Unknown device: {ip}")
 
         # Blank all zones before powering off so the firmware's stored
         # state is clean.  Without this, the device flashes stale colors
         # the next time it powers on.
-        if not on and dev.is_multizone and dev.zone_count:
-            blank: list[tuple[int, int, int, int]] = [
+        if not on and em.is_multizone and em.zone_count:
+            blank: list[HSBK] = [
                 (0, 0, 0, KELVIN_DEFAULT)
-            ] * dev.zone_count
-            dev.set_zones(blank, duration_ms=0, rapid=False)
+            ] * em.zone_count
+            em.send_zones(blank, duration_ms=0, rapid=False)
 
-        dev.set_power(on=on, duration_ms=DEFAULT_FADE_MS)
+        if on:
+            em.power_on(duration_ms=DEFAULT_FADE_MS)
+        else:
+            em.power_off(duration_ms=DEFAULT_FADE_MS)
         return {"ip": ip, "power": "on" if on else "off"}
 
     def reset(self, ip: str) -> dict[str, Any]:
@@ -617,7 +715,10 @@ class DeviceManager:
 
         This is the nuclear option for cleaning a device that has stale
         zone colors or a firmware-level multizone effect running inside
-        the hardware.  Steps:
+        the hardware.  For virtual groups, resets each member device
+        individually.
+
+        Steps per device:
 
         1. Stop any running software effect (immediate, no fade).
         2. Disable any firmware-level multizone effect (type 508 OFF).
@@ -626,7 +727,7 @@ class DeviceManager:
         5. Power off.
 
         Args:
-            ip: Device IP address.
+            ip: Device IP address or group identifier.
 
         Returns:
             A dict confirming the reset.
@@ -634,8 +735,8 @@ class DeviceManager:
         Raises:
             KeyError: If the device IP is not configured.
         """
-        dev: Optional[LifxDevice] = self.get_device(ip)
-        if dev is None:
+        em: Optional[Emitter] = self.get_emitter(ip)
+        if em is None:
             raise KeyError(f"Unknown device: {ip}")
 
         # 1. Stop any running software effect immediately.
@@ -643,35 +744,49 @@ class DeviceManager:
         if ctrl is not None:
             ctrl.stop(fade_ms=0)
 
-        # 2. Clear any firmware-level multizone effect.
-        if dev.is_multizone:
-            try:
-                dev.clear_firmware_effect()
-                logging.info("Reset %s: firmware effect cleared", ip)
-            except Exception as exc:
-                logging.warning(
-                    "Reset %s: clear_firmware_effect failed: %s", ip, exc,
-                )
+        # Collect the LifxEmitters to reset (single device or group members).
+        if isinstance(em, VirtualMultizoneEmitter):
+            lifx_members: list[LifxEmitter] = [
+                m for m in em.get_emitter_list()
+                if isinstance(m, LifxEmitter)
+            ]
+        elif isinstance(em, LifxEmitter):
+            lifx_members = [em]
+        else:
+            # Non-LIFX emitters don't need firmware reset.
+            return {"ip": ip, "reset": False}
 
-        # 3. Power on so zone writes are accepted.
-        dev.set_power(on=True, duration_ms=0)
-        time_mod.sleep(0.1)  # Brief delay for device to wake up.
+        for lem in lifx_members:
+            dev: LifxDevice = lem.transport
 
-        # 4. Clear the persistent committed state with set_color (type 102)
-        # and also blank zones with set_zones (type 510).  set_color
-        # updates the device's persistent fallback state; set_zones
-        # only updates the live overlay.
-        dev.set_color(0, 0, 0, KELVIN_DEFAULT, duration_ms=0)
-        if dev.is_multizone and dev.zone_count:
-            blank: list[tuple[int, int, int, int]] = [
-                (0, 0, 0, KELVIN_DEFAULT)
-            ] * dev.zone_count
-            dev.set_zones(blank, duration_ms=0, rapid=False)
+            # 2. Clear any firmware-level multizone effect.
+            if dev.is_multizone:
+                try:
+                    dev.clear_firmware_effect()
+                    logging.info("Reset %s: firmware effect cleared", dev.ip)
+                except Exception as exc:
+                    logging.warning(
+                        "Reset %s: clear_firmware_effect failed: %s",
+                        dev.ip, exc,
+                    )
 
-        # 5. Power off.
-        dev.set_power(on=False, duration_ms=0)
+            # 3. Power on so zone writes are accepted.
+            dev.set_power(on=True, duration_ms=0)
+            time_mod.sleep(0.1)  # Brief delay for device to wake up.
 
-        logging.info("Reset %s: device cleaned and powered off", ip)
+            # 4. Clear the persistent committed state with set_color
+            # (type 102) and also blank zones with set_zones (type 510).
+            dev.set_color(0, 0, 0, KELVIN_DEFAULT, duration_ms=0)
+            if dev.is_multizone and dev.zone_count:
+                blank: list[HSBK] = [
+                    (0, 0, 0, KELVIN_DEFAULT)
+                ] * dev.zone_count
+                dev.set_zones(blank, duration_ms=0, rapid=False)
+
+            # 5. Power off.
+            dev.set_power(on=False, duration_ms=0)
+
+        logging.info("Reset %s: device(s) cleaned and powered off", ip)
         return {"ip": ip, "reset": True}
 
     def identify(
@@ -687,16 +802,19 @@ class DeviceManager:
         in a sine wave for :data:`IDENTIFY_DURATION_SECONDS`, then powers
         the device off.
 
+        Works for both individual devices and virtual groups — the
+        emitter interface handles fan-out to group members.
+
         Args:
-            ip:          Device IP address.
+            ip:          Device IP address or group identifier.
             on_complete: Optional callback invoked when the pulse finishes
                          (e.g. to clear a phone override).
 
         Raises:
             KeyError: If the device IP is not configured.
         """
-        dev: Optional[LifxDevice] = self.get_device(ip)
-        if dev is None:
+        em: Optional[Emitter] = self.get_emitter(ip)
+        if em is None:
             raise KeyError(f"Unknown device: {ip}")
 
         # Stop any running effect so identify is visible.
@@ -707,7 +825,7 @@ class DeviceManager:
         def _pulse() -> None:
             """Background pulse loop."""
             try:
-                dev.set_power(on=True, duration_ms=0)
+                em.power_on(duration_ms=0)
                 start: float = time_mod.monotonic()
                 while time_mod.monotonic() - start < IDENTIFY_DURATION_SECONDS:
                     elapsed: float = time_mod.monotonic() - start
@@ -720,16 +838,16 @@ class DeviceManager:
                     )
                     bri: int = int(bri_frac * HSBK_MAX)
 
-                    if dev.is_multizone:
-                        color = (0, 0, bri, KELVIN_DEFAULT)
-                        colors = [color] * dev.zone_count
-                        dev.set_zones(colors, duration_ms=0, rapid=True)
+                    if em.is_multizone:
+                        color: HSBK = (0, 0, bri, KELVIN_DEFAULT)
+                        colors: list[HSBK] = [color] * (em.zone_count or 1)
+                        em.send_zones(colors, duration_ms=0, rapid=True)
                     else:
-                        dev.set_color(0, 0, bri, KELVIN_DEFAULT, duration_ms=0)
+                        em.send_color(0, 0, bri, KELVIN_DEFAULT, duration_ms=0)
 
                     time_mod.sleep(IDENTIFY_FRAME_INTERVAL)
 
-                dev.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
+                em.power_off(duration_ms=DEFAULT_FADE_MS)
             except Exception as exc:
                 logging.warning("Identify pulse failed for %s: %s", ip, exc)
             finally:
@@ -760,13 +878,13 @@ class DeviceManager:
         Raises:
             KeyError: If the device/group is not configured.
         """
-        dev = self.get_device(ip)
-        if dev is None:
+        em: Optional[Emitter] = self.get_emitter(ip)
+        if em is None:
             raise KeyError(f"Unknown device: {ip}")
 
         # Virtual group: query each member device and concatenate.
-        if isinstance(dev, VirtualMultizoneDevice):
-            return self._get_group_colors(dev)
+        if isinstance(em, VirtualMultizoneEmitter):
+            return self._get_group_colors(em)
 
         # Individual device: use a temporary device to avoid contention.
         tmp: LifxDevice = LifxDevice(ip)
@@ -793,20 +911,26 @@ class DeviceManager:
             tmp.close()
 
     def _get_group_colors(
-        self, vdev: VirtualMultizoneDevice,
+        self, vem: VirtualMultizoneEmitter,
     ) -> Optional[list[dict[str, int]]]:
         """Query each member device of a virtual group and concatenate.
 
+        Iterates member emitters, accesses the LIFX transport for each,
+        and queries zone colors directly from the hardware.
+
         Args:
-            vdev: The virtual multizone device.
+            vem: The virtual multizone emitter.
 
         Returns:
             A list of ``{h, s, b, k}`` dicts across all members, or
             ``None`` if all queries fail.
         """
         all_colors: list[dict[str, int]] = []
-        for member in vdev.get_device_list():
-            tmp: LifxDevice = LifxDevice(member.ip)
+        for member_em in vem.get_emitter_list():
+            if not isinstance(member_em, LifxEmitter):
+                continue
+            member_ip: str = member_em.transport.ip
+            tmp: LifxDevice = LifxDevice(member_ip)
             try:
                 tmp.query_version()
                 if tmp.is_multizone:
@@ -822,7 +946,9 @@ class DeviceManager:
                         for h, s, b, k in colors
                     )
             except Exception as exc:
-                logging.warning("get_colors member %s failed: %s", member.ip, exc)
+                logging.warning(
+                    "get_colors member %s failed: %s", member_ip, exc,
+                )
             finally:
                 tmp.close()
         return all_colors if all_colors else None
@@ -1042,41 +1168,45 @@ class DeviceManager:
     # -- Internal helpers ---------------------------------------------------
 
     def _devices_as_list(self) -> list[dict[str, Any]]:
-        """Build a JSON-safe list of device info dicts.
+        """Build a JSON-safe list of emitter info dicts.
 
-        Virtual group devices include ``is_group: true`` and a
-        ``member_ips`` array.  Individual devices have
+        Virtual group emitters include ``is_group: true`` and a
+        ``member_ips`` array.  Individual emitters have
         ``is_group: false``.
 
         Returns:
-            A sorted list of device metadata dicts.
+            A sorted list of emitter metadata dicts.
         """
         result: list[dict[str, Any]] = []
-        for dev_id, dev in sorted(self._devices.items()):
+        for dev_id, em in sorted(self._emitters.items()):
             with self._lock:
                 ctrl: Optional[Controller] = self._controllers.get(dev_id)
             current_effect: Optional[str] = None
             if ctrl is not None:
                 status: dict[str, Any] = ctrl.get_status()
                 current_effect = status.get("effect")
-            is_group: bool = isinstance(dev, VirtualMultizoneDevice)
+            is_group: bool = isinstance(em, VirtualMultizoneEmitter)
             nickname: Optional[str] = self._nicknames.get(dev_id)
             entry: dict[str, Any] = {
                 "ip": dev_id,
-                "mac": dev.mac_str,
-                "label": dev.label,
+                "label": em.label,
                 "nickname": nickname,
-                "product": dev.product_name,
-                "group": dev.group,
-                "zones": dev.zone_count,
-                "is_multizone": dev.is_multizone,
+                "product": em.product_name,
+                "zones": em.zone_count,
+                "is_multizone": em.is_multizone,
                 "current_effect": current_effect,
                 "overridden": self.is_overridden(dev_id),
                 "is_group": is_group,
             }
-            if is_group:
+            # LIFX-specific fields from the transport layer.
+            if isinstance(em, LifxEmitter):
+                entry["mac"] = em.transport.mac_str
+                entry["group"] = em.transport.group
+            elif is_group:
+                entry["mac"] = ""
+                entry["group"] = em.label
                 entry["member_ips"] = [
-                    d.ip for d in dev.get_device_list()
+                    m.emitter_id for m in em.get_emitter_list()
                 ]
             result.append(entry)
         return result
@@ -1098,6 +1228,8 @@ class DeviceManager:
         dev: Optional[LifxDevice] = self._devices.pop(ip, None)
         if dev is not None:
             dev.close()
+        # Remove from emitter registry (socket already closed via dev).
+        self._emitters.pop(ip, None)
         self._overrides.pop(ip, None)
 
     def shutdown(self) -> None:
@@ -1495,6 +1627,16 @@ class SchedulerThread(threading.Thread):
                             params: dict[str, Any] = active.get(
                                 "params", {},
                             )
+                            # Pass bindings from schedule entry if present.
+                            sched_bindings: Optional[dict] = active.get(
+                                "bindings",
+                            )
+                            sched_bus: Optional[SignalBus] = None
+                            mm: Optional[MediaManager] = (
+                                GlowUpRequestHandler.media_manager
+                            )
+                            if sched_bindings and mm is not None:
+                                sched_bus = mm.bus
                             logging.info(
                                 "[%s] Starting '%s' (%s)",
                                 group_name, active_name, effect,
@@ -1502,6 +1644,8 @@ class SchedulerThread(threading.Thread):
                             try:
                                 self._dm.play(
                                     device_id, effect, params,
+                                    bindings=sched_bindings,
+                                    signal_bus=sched_bus,
                                 )
                             except (KeyError, ValueError, Exception) as exc:
                                 logging.warning(
@@ -1531,6 +1675,15 @@ class SchedulerThread(threading.Thread):
                             params_restart: dict = active.get(
                                 "params", {},
                             )
+                            restart_bindings: Optional[dict] = (
+                                active.get("bindings")
+                            )
+                            restart_bus: Optional[SignalBus] = None
+                            rmm: Optional[MediaManager] = (
+                                GlowUpRequestHandler.media_manager
+                            )
+                            if restart_bindings and rmm is not None:
+                                restart_bus = rmm.bus
                             logging.info(
                                 "[%s] Restarting '%s' on %s",
                                 group_name, active_name, device_id,
@@ -1539,6 +1692,8 @@ class SchedulerThread(threading.Thread):
                                 self._dm.play(
                                     device_id, effect_name,
                                     params_restart,
+                                    bindings=restart_bindings,
+                                    signal_bus=restart_bus,
                                 )
                             except Exception as exc:
                                 logging.warning(
@@ -1578,6 +1733,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     scheduler: Optional[SchedulerThread] = None
     config: dict[str, Any] = {}
     config_path: Optional[str] = None
+    media_manager: Optional[MediaManager] = None
+    orchestrator: Optional[Any] = None
 
     # Silence per-request logging from BaseHTTPRequestHandler.
     def log_message(self, format: str, *args: Any) -> None:
@@ -1741,10 +1898,15 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         """Route GET requests to the appropriate handler."""
-        if not self._authenticate():
+        path: str = self.path.split("?")[0]
+
+        # Dashboard serves its own login page — no server-side auth.
+        if path == "/dashboard":
+            self._handle_get_dashboard()
             return
 
-        path: str = self.path.split("?")[0]  # strip query string
+        if not self._authenticate():
+            return  # strip query string
         parts: list[str] = path.strip("/").split("/")
         # URL-decode the device identifier (handles %3A for colon in
         # group:name identifiers).
@@ -1799,6 +1961,31 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         # /api/schedule
         if path == "/api/schedule":
             self._handle_get_schedule()
+            return
+
+        # /api/media/sources
+        if path == "/api/media/sources":
+            self._handle_get_media_sources()
+            return
+
+        # /api/media/signals
+        if path == "/api/media/signals":
+            self._handle_get_media_signals()
+            return
+
+        # /api/fleet
+        if path == "/api/fleet":
+            self._handle_get_fleet()
+            return
+
+        # /api/diagnostics/now_playing
+        if path == "/api/diagnostics/now_playing":
+            self._handle_get_diag_now_playing()
+            return
+
+        # /api/diagnostics/history
+        if path == "/api/diagnostics/history":
+            self._handle_get_diag_history()
             return
 
         self._send_json(404, {"error": "Not found"})
@@ -1899,6 +2086,36 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "Invalid schedule index"})
                 return
             self._handle_post_schedule_enabled(index)
+            return
+
+        # /api/media/sources/{name}/start
+        if (len(parts) == 5 and parts[0] == "api" and parts[1] == "media"
+                and parts[2] == "sources" and parts[4] == "start"):
+            self._handle_post_media_source_start(parts[3])
+            return
+
+        # /api/media/sources/{name}/stop
+        if (len(parts) == 5 and parts[0] == "api" and parts[1] == "media"
+                and parts[2] == "sources" and parts[4] == "stop"):
+            self._handle_post_media_source_stop(parts[3])
+            return
+
+        # /api/media/signals/ingest
+        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "media"
+                and parts[2] == "signals" and parts[3] == "ingest"):
+            self._handle_post_signal_ingest()
+            return
+
+        # /api/assign — issue a work assignment to a compute node
+        if (len(parts) == 2 and parts[0] == "api"
+                and parts[1] == "assign"):
+            self._handle_post_assign()
+            return
+
+        # /api/assign/{node_id}/cancel/{assignment_id}
+        if (len(parts) == 5 and parts[0] == "api" and parts[1] == "assign"
+                and parts[3] == "cancel"):
+            self._handle_post_cancel_assignment(parts[2], parts[4])
             return
 
         self._send_json(404, {"error": "Not found"})
@@ -2034,8 +2251,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         queries to avoid socket contention with the engine.  The stream
         runs until the client disconnects.
         """
-        dev: Optional[LifxDevice] = self.device_manager.get_device(ip)
-        if dev is None:
+        em: Optional[Emitter] = self.device_manager.get_emitter(ip)
+        if em is None:
             self._send_json(404, {"error": "Device not found"})
             return
 
@@ -2092,8 +2309,19 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
             {
                 "effect": "cylon",
-                "params": {"speed": 2.0, "hue": 120}
+                "params": {"speed": 2.0, "hue": 120},
+                "bindings": {
+                    "brightness": {
+                        "signal": "backyard:audio:bass",
+                        "scale": [20, 100]
+                    }
+                }
             }
+
+        The optional ``bindings`` field maps parameter names to media
+        signals.  Each binding specifies a signal name and optional
+        ``scale`` (output range) and ``reduce`` (for array signals:
+        ``"max"``, ``"mean"``, or ``"sum"``).
         """
         body: Optional[dict[str, Any]] = self._read_json_body()
         if body is None:
@@ -2109,6 +2337,18 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(400, {"error": "'params' must be an object"})
             return
 
+        # Extract optional signal bindings for media-reactive effects.
+        bindings: Optional[dict[str, Any]] = body.get("bindings")
+        if bindings is not None and not isinstance(bindings, dict):
+            self._send_json(400, {"error": "'bindings' must be an object"})
+            return
+
+        # Resolve signal bus — pass if we have bindings OR a media manager
+        # (MediaEffects need the bus even without explicit bindings).
+        signal_bus: Optional[SignalBus] = None
+        if self.media_manager is not None:
+            signal_bus = self.media_manager.bus
+
         try:
             # Track override so the scheduler knows to back off.
             active_entry: Optional[str] = self._get_active_entry_for_ip(ip)
@@ -2116,10 +2356,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
             status: dict[str, Any] = self.device_manager.play(
                 ip, effect_name, params,
+                bindings=bindings, signal_bus=signal_bus,
             )
             logging.info(
-                "API: playing '%s' on %s (params: %s)",
+                "API: playing '%s' on %s (params: %s, bindings: %s)",
                 effect_name, ip, params,
+                list(bindings.keys()) if bindings else None,
             )
             self._send_json(200, status)
         except KeyError:
@@ -2331,6 +2573,305 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             "name": name,
             "enabled": enabled,
         })
+
+    # -- Media handlers -----------------------------------------------------
+
+    def _handle_get_media_sources(self) -> None:
+        """GET /api/media/sources — list media sources with status.
+
+        Returns source names, types, and alive status.  Never exposes
+        RTSP URLs or credentials.
+        """
+        mm: Optional[MediaManager] = self.media_manager
+        if mm is None:
+            self._send_json(200, {"sources": []})
+            return
+        self._send_json(200, {"sources": mm.get_status()})
+
+    def _handle_get_media_signals(self) -> None:
+        """GET /api/media/signals — list available signal names.
+
+        Returns signal metadata for the iOS signal picker UI.
+        """
+        mm: Optional[MediaManager] = self.media_manager
+        if mm is None:
+            self._send_json(200, {"signals": []})
+            return
+        self._send_json(200, {"signals": mm.bus.list_signals()})
+
+    def _handle_get_fleet(self) -> None:
+        """GET /api/fleet — distributed fleet status.
+
+        Returns the orchestrator's fleet inventory: online nodes,
+        capabilities, assignments, and allocated UDP ports.
+        """
+        orch: Optional[Any] = self.orchestrator
+        if orch is None:
+            self._send_json(200, {
+                "enabled": False,
+                "nodes": [],
+                "node_count": 0,
+                "message": "Distributed compute not configured",
+            })
+            return
+        status: dict[str, Any] = orch.get_fleet_status()
+        status["enabled"] = True
+        self._send_json(200, status)
+
+    def _handle_post_assign(self) -> None:
+        """POST /api/assign — issue a work assignment to a compute node.
+
+        Request body::
+
+            {
+                "node_id": "judy",
+                "operator": "AudioExtractor",
+                "config": {"source_name": "conway", "bands": 8},
+                "inputs": [
+                    {"signal_name": "conway:audio:pcm_raw",
+                     "transport": "udp", "udp_port": 9420}
+                ],
+                "outputs": [
+                    {"signal_name": "judy:audio:bands",
+                     "transport": "mqtt"}
+                ]
+            }
+        """
+        orch: Optional[Any] = self.orchestrator
+        if orch is None:
+            self._send_json(503, {
+                "error": "Distributed compute not configured",
+            })
+            return
+
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        node_id: str = body.get("node_id", "")
+        operator_name: str = body.get("operator", "")
+        if not node_id or not operator_name:
+            self._send_json(400, {
+                "error": "Missing required fields: node_id, operator",
+            })
+            return
+
+        # Import SignalBinding and WorkAssignment from distributed module.
+        try:
+            from distributed.orchestrator import SignalBinding, WorkAssignment
+        except ImportError:
+            self._send_json(503, {"error": "Distributed module not available"})
+            return
+
+        # Build input/output bindings.
+        inputs: list[SignalBinding] = [
+            SignalBinding.from_dict(b) for b in body.get("inputs", [])
+        ]
+        outputs: list[SignalBinding] = [
+            SignalBinding.from_dict(b) for b in body.get("outputs", [])
+        ]
+
+        # Generate assignment ID.
+        import time as _time
+        assignment_id: str = (
+            f"{node_id}-{operator_name.lower()}-{int(_time.time())}"
+        )
+
+        assignment: WorkAssignment = WorkAssignment(
+            assignment_id=assignment_id,
+            operator_name=operator_name,
+            operator_config=body.get("config", {}),
+            inputs=inputs,
+            outputs=outputs,
+            action="start",
+        )
+
+        success: bool = orch.assign_work(node_id, assignment)
+        if success:
+            logging.info(
+                "API: assigned '%s' to node '%s' (id: %s)",
+                operator_name, node_id, assignment_id,
+            )
+            self._send_json(200, {
+                "assigned": True,
+                "assignment_id": assignment_id,
+                "node_id": node_id,
+                "operator": operator_name,
+            })
+        else:
+            self._send_json(409, {
+                "error": f"Cannot assign to node '{node_id}'",
+                "assigned": False,
+            })
+
+    def _handle_post_cancel_assignment(self, node_id: str,
+                                       assignment_id: str) -> None:
+        """POST /api/assign/{node_id}/cancel/{assignment_id}."""
+        orch: Optional[Any] = self.orchestrator
+        if orch is None:
+            self._send_json(503, {
+                "error": "Distributed compute not configured",
+            })
+            return
+        success: bool = orch.cancel_assignment(node_id, assignment_id)
+        if success:
+            self._send_json(200, {
+                "cancelled": True,
+                "assignment_id": assignment_id,
+            })
+        else:
+            self._send_json(404, {
+                "error": f"Assignment '{assignment_id}' not found",
+            })
+
+    def _handle_post_media_source_start(self, name: str) -> None:
+        """POST /api/media/sources/{name}/start — manually start a source."""
+        mm: Optional[MediaManager] = self.media_manager
+        if mm is None:
+            self._send_json(503, {
+                "error": "Media pipeline not configured",
+            })
+            return
+        if mm.start_source(name):
+            logging.info("API: started media source '%s'", name)
+            self._send_json(200, {"source": name, "started": True})
+        else:
+            self._send_json(404, {
+                "error": f"Unknown media source: {name}",
+            })
+
+    def _handle_post_media_source_stop(self, name: str) -> None:
+        """POST /api/media/sources/{name}/stop — manually stop a source."""
+        mm: Optional[MediaManager] = self.media_manager
+        if mm is None:
+            self._send_json(503, {
+                "error": "Media pipeline not configured",
+            })
+            return
+        try:
+            mm.stop_source(name)
+            logging.info("API: stopped media source '%s'", name)
+            self._send_json(200, {"source": name, "stopped": True})
+        except KeyError:
+            self._send_json(404, {
+                "error": f"Unknown media source: {name}",
+            })
+
+    def _handle_post_signal_ingest(self) -> None:
+        """POST /api/media/signals/ingest — write signals from an external source.
+
+        Accepts a JSON body with a ``source`` name and a ``signals`` dict
+        mapping signal suffixes to values (scalar float or float array).
+        Each signal is written to the bus as ``{source}:audio:{name}``.
+
+        This endpoint enables any device (iPhone, ESP32, browser) to act
+        as a media source by posting computed signal values directly to
+        the signal bus, bypassing the ffmpeg/extractor pipeline.
+
+        Request body::
+
+            {
+                "source": "iphone",
+                "signals": {
+                    "bands": [0.1, 0.3, 0.8, 0.2, 0.0, 0.1, 0.5, 0.9],
+                    "rms": 0.42,
+                    "beat": 1.0,
+                    "bass": 0.2,
+                    "mid": 0.5,
+                    "treble": 0.7,
+                    "energy": 0.45,
+                    "centroid": 0.6
+                }
+            }
+        """
+        mm: Optional[MediaManager] = self.media_manager
+        if mm is None:
+            self._send_json(503, {
+                "error": "Media pipeline not configured",
+            })
+            return
+
+        body: dict = self._read_json_body()
+        if body is None:
+            return
+
+        source: str = body.get("source", "")
+        if not source:
+            self._send_json(400, {"error": "'source' is required"})
+            return
+
+        signals: dict = body.get("signals", {})
+        if not isinstance(signals, dict):
+            self._send_json(400, {"error": "'signals' must be an object"})
+            return
+
+        bus = mm.bus
+        written: int = 0
+        for name, value in signals.items():
+            signal_name: str = f"{source}:audio:{name}"
+            if isinstance(value, (int, float)):
+                bus.write(signal_name, float(value))
+                written += 1
+            elif isinstance(value, list):
+                bus.write(signal_name, [float(v) for v in value])
+                written += 1
+
+        self._send_json(200, {"written": written})
+
+    # -- Diagnostics endpoints ----------------------------------------------
+
+    def _handle_get_diag_now_playing(self) -> None:
+        """GET /api/diagnostics/now_playing — effects currently playing.
+
+        Returns open effect_history records (no ``stopped_at``).
+        Falls back to an empty list if diagnostics is unavailable.
+        """
+        diag = self.device_manager._diag
+        if diag is None or not _HAS_DIAGNOSTICS:
+            self._send_json(200, [])
+            return
+        try:
+            rows: list[dict[str, Any]] = diag.query_now_playing()
+            self._send_json(200, rows)
+        except Exception as exc:
+            logging.warning("Diagnostics query failed: %s", exc)
+            self._send_json(200, [])
+
+    def _handle_get_diag_history(self) -> None:
+        """GET /api/diagnostics/history — recent effect events.
+
+        Returns the most recent 50 effect_history records (both
+        open and closed).  Falls back to an empty list if diagnostics
+        is unavailable.
+        """
+        diag = self.device_manager._diag
+        if diag is None or not _HAS_DIAGNOSTICS:
+            self._send_json(200, [])
+            return
+        try:
+            rows: list[dict[str, Any]] = diag.query_history(limit=50)
+            self._send_json(200, rows)
+        except Exception as exc:
+            logging.warning("Diagnostics query failed: %s", exc)
+            self._send_json(200, [])
+
+    def _handle_get_dashboard(self) -> None:
+        """GET /dashboard — serve the static HTML dashboard page."""
+        dashboard_path: str = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "static", "dashboard.html",
+        )
+        try:
+            with open(dashboard_path, "r") as f:
+                html: str = f.read()
+            body: bytes = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self._send_json(404, {"error": "Dashboard page not found"})
 
     def _save_config_field(self, key: str, value: Any) -> None:
         """Persist a single config field to the config file.
@@ -2810,10 +3351,14 @@ def main() -> None:
     # accepting connections while we query each device.
     # MQTT bridge reference — set by _background_startup if configured.
     mqtt_bridge: Optional[MqttBridge] = None
+    # MediaManager reference — set by _background_startup if configured.
+    media_mgr: Optional[MediaManager] = None
+    # Orchestrator reference — set by _background_startup if configured.
+    orch: Optional[Any] = None
 
     def _background_startup() -> None:
         """Load devices from config IPs, then start the scheduler."""
-        nonlocal mqtt_bridge
+        nonlocal mqtt_bridge, media_mgr, orch
 
         try:
             logging.info(
@@ -2844,6 +3389,49 @@ def main() -> None:
                         dm, config, scheduler=sched,
                     )
                     mqtt_bridge.start()
+
+            # Start the distributed orchestrator if configured.
+            if config.get("distributed") and _HAS_DISTRIBUTED:
+                if mqtt_bridge is not None and mqtt_bridge._client is not None:
+                    orch = Orchestrator(
+                        mqtt_bridge._client,
+                        config.get("distributed", {}),
+                    )
+                    orch.start()
+                    GlowUpRequestHandler.orchestrator = orch
+                    logging.info("Distributed orchestrator started")
+                else:
+                    logging.warning(
+                        "Distributed section found but MQTT bridge is not "
+                        "active — orchestrator requires MQTT"
+                    )
+            elif config.get("distributed") and not _HAS_DISTRIBUTED:
+                logging.warning(
+                    "Distributed section found but distributed module "
+                    "not available"
+                )
+
+            # Start the media pipeline if configured.  Also start the
+            # SignalBus MQTT bridge if signal_bus.mqtt is true — this allows
+            # the server to ingest signals from remote compute nodes (e.g.
+            # Judy's AudioExtractor output) even without local media sources.
+            if config.get("media_sources") or config.get("signal_bus"):
+                media_mgr = MediaManager()
+                media_mgr.configure(config)
+                GlowUpRequestHandler.media_manager = media_mgr
+                source_count: int = len(config.get("media_sources", {}))
+                if source_count:
+                    logging.info(
+                        "Media pipeline configured — %d source(s)",
+                        source_count,
+                    )
+                else:
+                    logging.info(
+                        "SignalBus started (no local sources — "
+                        "listening for remote signals)"
+                    )
+            else:
+                logging.info("No media_sources configured — media idle")
         except Exception:
             logging.exception("Background startup failed")
 
@@ -2856,6 +3444,10 @@ def main() -> None:
         server.serve_forever()
     finally:
         logging.info("Shutting down...")
+        if media_mgr is not None:
+            media_mgr.shutdown()
+        if orch is not None:
+            orch.stop()
         if mqtt_bridge is not None:
             mqtt_bridge.stop()
         scheduler: Optional[SchedulerThread] = GlowUpRequestHandler.scheduler

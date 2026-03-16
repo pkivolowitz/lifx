@@ -1,5 +1,8 @@
 # Overview
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 The GLOWUP LIFX Effect Engine drives animated lighting effects on LIFX
 devices (string lights, beams, Z strips, single color bulbs, and monochrome
 bulbs) over the local network using the LIFX LAN protocol. It replaces the
@@ -31,4 +34,3 @@ hardware modifications.
 Effects are **pure renderers** — they know nothing about devices or
 networking. Given a timestamp and a zone count, they return a list of
 colors. The engine handles framing, timing, and transport.
-

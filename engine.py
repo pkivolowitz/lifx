@@ -1,7 +1,8 @@
-"""Animation engine for LIFX effects.
+"""Animation engine for GlowUp effects.
 
 The :class:`Engine` runs in a background thread, rendering the current effect
-at a target frame rate and pushing frames to one or more devices.
+at a target frame rate and pushing frames to one or more :class:`Emitter`
+instances.
 
 The :class:`Controller` is the public interface -- it wraps the engine and
 provides methods that are safe to call from any thread: CLI, REST API,
@@ -9,13 +10,15 @@ scheduler, etc.
 
 Typical usage::
 
+    from emitters.lifx import LifxEmitter
     from transport import LifxDevice
     from engine import Controller
 
     device = LifxDevice("<device-ip>")
     device.query_all()
 
-    ctrl = Controller([device])
+    emitter = LifxEmitter.from_device(device)
+    ctrl = Controller([emitter])
     ctrl.play("cylon", speed=1.5, width=12)
     # ... later ...
     ctrl.update_params(speed=3.0, hue=240)
@@ -28,15 +31,22 @@ Typical usage::
 
 from __future__ import annotations
 
-__version__ = "1.6"
+__version__ = "2.0"
 
 import queue
 import threading
 import time
 from typing import Any, Callable, Optional
 
-from effects import Effect, create_effect, get_registry, KELVIN_DEFAULT, hsbk_to_luminance
-from transport import LifxDevice
+from effects import Effect, create_effect, get_registry, KELVIN_DEFAULT
+from emitters import Emitter
+
+# ---------------------------------------------------------------------------
+# Backward compatibility — VirtualMultizoneDevice moved to emitters/virtual.py
+# ---------------------------------------------------------------------------
+# Existing code that imports VirtualMultizoneDevice from engine will continue
+# to work.  The class is now VirtualMultizoneEmitter in its canonical home.
+from emitters.virtual import VirtualMultizoneEmitter as VirtualMultizoneDevice  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Named constants — no magic numbers
@@ -44,6 +54,11 @@ from transport import LifxDevice
 
 # Default rendering frame rate in frames per second.
 DEFAULT_FPS: int = 20
+
+# Neon-class devices stutter at high FPS with short transitions.
+# Empirically tested: 10 fps with 1000 ms transition is smooth.
+NEON_FPS: int = 10
+NEON_TRANSITION_MS: int = 1000
 
 # How long to wait (seconds) for the render thread to finish on stop().
 THREAD_JOIN_TIMEOUT: float = 5.0
@@ -53,10 +68,6 @@ DEFAULT_FADE_MS: int = 500
 
 # Minimum allowed fade duration in milliseconds (0 disables fade).
 MIN_FADE_MS: int = 0
-
-# Sentinel zone index for single-bulb devices in VirtualMultizoneDevice.
-# Distinguishes single bulbs (set_color) from multizone zones (batched set_zones).
-SINGLE_BULB_ZONE_SENTINEL: int = -1
 
 # Pipeline buffer capacity (high water mark).
 # At 20 FPS this is 500 ms of lookahead — enough to absorb OS scheduling
@@ -71,250 +82,62 @@ PIPELINE_HIGH_WATER: int = 10
 PIPELINE_LOW_WATER: int = 5
 
 
-class VirtualMultizoneDevice:
-    """Wrap N devices as a virtual multizone device.
-
-    Multizone devices (string lights, beams) contribute all their zones.
-    Single-bulb devices contribute one zone each.  The total virtual zone
-    count is the sum across all devices.
-
-    For example, a group containing a 108-zone string light and 4 single
-    bulbs becomes a 112-zone virtual device.  Effects render all 112 zones
-    in one ``render()`` call, and :meth:`set_zones` routes each virtual
-    zone's color back to the correct physical device — batching multizone
-    updates into a single ``set_zones()`` call per device and dispatching
-    single-bulb colors via ``set_color()``.
-
-    Monochrome devices automatically receive BT.709 luma-converted brightness.
-
-    The class implements the same interface that :class:`Engine` expects from
-    a :class:`LifxDevice`, so no engine changes are needed.
-    """
-
-    def __init__(
-        self,
-        devices: list[LifxDevice],
-        name: str = "",
-        owns_devices: bool = True,
-    ) -> None:
-        """Initialize with a list of connected, queried devices.
-
-        Builds a zone map that records which physical device and zone index
-        each virtual zone corresponds to.  Multizone devices expand to
-        their full zone count; single-bulb devices occupy one zone.
-
-        The order of *devices* determines the virtual zone layout — the
-        first device's zones come first.  For grouped string lights this
-        means the list order defines left-to-right position on the canvas.
-
-        Args:
-            devices:      :class:`LifxDevice` instances, each already
-                          connected and queried via
-                          :meth:`LifxDevice.query_all`.  The list order
-                          determines the zone assignment.
-            name:         Optional group name (used for display and as the
-                          device identifier in the server API).
-            owns_devices: If ``True`` (default), :meth:`close` closes all
-                          member device sockets.  Set to ``False`` when
-                          the caller manages device lifetimes separately
-                          (e.g., the server stores devices individually).
-
-        Raises:
-            ValueError: If *devices* is empty.
-        """
-        if not devices:
-            raise ValueError("VirtualMultizoneDevice requires at least one device.")
-
-        self._devices: list[LifxDevice] = list(devices)
-        self._owns_devices: bool = owns_devices
-        self.is_multizone: bool = True
-
-        # Build the zone map: list of (device, zone_index) tuples.
-        # For multizone devices, zone_index is the physical zone number.
-        # For single-bulb devices, zone_index is -1 (sentinel).
-        self._zone_map: list[tuple[LifxDevice, int]] = []
-        for dev in self._devices:
-            zones: int = dev.zone_count if dev.zone_count else 1
-            if dev.is_multizone:
-                # Multizone device: each physical zone becomes a virtual zone.
-                for z in range(zones):
-                    self._zone_map.append((dev, z))
-            else:
-                # Single bulb: one virtual zone, sentinel zone_index.
-                self._zone_map.append((dev, SINGLE_BULB_ZONE_SENTINEL))
-
-        self.zone_count: int = len(self._zone_map)
-
-        # Synthesize display properties for status reporting.
-        if name:
-            self.ip: str = f"group:{name}"
-            self.label: str = name
-        else:
-            self.ip: str = f"group({len(devices)} devices)"
-            self.label: str = "Virtual group"
-        self.product_name: str = f"{self.zone_count}-zone virtual multizone"
-        self.mac_str: str = "virtual"
-        self.product: int = 0  # non-None so engine query checks pass
-        self.group: str = name
-
-    @property
-    def is_polychrome(self) -> bool:
-        """Always True — not reached since is_multizone is True."""
-        return True
-
-    def set_zones(
-        self,
-        colors: list,
-        duration_ms: int = 0,
-        rapid: bool = True,
-    ) -> None:
-        """Route each virtual zone's color to the correct physical device.
-
-        Multizone devices receive a single batched ``set_zones()`` call.
-        Single-bulb color devices receive ``set_color()`` with full HSBK.
-        Monochrome single bulbs receive BT.709 luma-converted brightness.
-
-        Args:
-            colors:      List of HSBK tuples (one per virtual zone).
-            duration_ms: Transition time in milliseconds.
-            rapid:       Passed through to multizone ``set_zones()`` calls.
-        """
-        # Collect colors destined for each multizone device so we can
-        # batch them into one set_zones() call per device.
-        multizone_batches: dict[int, list] = {}
-
-        for vz, (dev, zone_idx) in enumerate(self._zone_map):
-            if vz >= len(colors):
-                break
-
-            if zone_idx == SINGLE_BULB_ZONE_SENTINEL:
-                # Single bulb — dispatch immediately.
-                h, s, b, k = colors[vz]
-                if dev.is_polychrome is False:
-                    dev.set_color(*hsbk_to_luminance(h, s, b, k),
-                                  duration_ms=duration_ms)
-                else:
-                    dev.set_color(h, s, b, k, duration_ms=duration_ms)
-            else:
-                # Multizone device — accumulate colors for batching.
-                dev_id: int = id(dev)
-                if dev_id not in multizone_batches:
-                    # Pre-allocate the full zone list for this device.
-                    multizone_batches[dev_id] = {
-                        "dev": dev,
-                        "colors": [None] * dev.zone_count,
-                    }
-                multizone_batches[dev_id]["colors"][zone_idx] = colors[vz]
-
-        # Flush batched multizone updates.
-        for batch in multizone_batches.values():
-            dev = batch["dev"]
-            batch_colors: list = batch["colors"]
-            # Fill any gaps (shouldn't happen, but be safe).
-            for i in range(len(batch_colors)):
-                if batch_colors[i] is None:
-                    batch_colors[i] = (0, 0, 0, KELVIN_DEFAULT)
-            dev.set_zones(batch_colors, duration_ms=duration_ms, rapid=rapid)
-
-    def set_color(
-        self,
-        hue: int,
-        sat: int,
-        bri: int,
-        kelvin: int,
-        duration_ms: int = 0,
-    ) -> None:
-        """Set all wrapped devices to the same color.
-
-        Used by the engine's fade-to-black on stop.
-
-        Args:
-            hue:         Hue (0--65535).
-            sat:         Saturation (0--65535).
-            bri:         Brightness (0--65535).
-            kelvin:      Color temperature (1500--9000).
-            duration_ms: Transition time in milliseconds.
-        """
-        for dev in self._devices:
-            dev.set_color(hue, sat, bri, kelvin, duration_ms=duration_ms)
-
-    def set_power(self, on: bool, duration_ms: int = 0) -> None:
-        """Turn all wrapped devices on or off.
-
-        Args:
-            on:          ``True`` to turn on, ``False`` to turn off.
-            duration_ms: Transition duration in milliseconds.
-        """
-        for dev in self._devices:
-            dev.set_power(on=on, duration_ms=duration_ms)
-
-    def clear_firmware_effect(self) -> None:
-        """Clear firmware-level effects on all multizone member devices."""
-        for dev in self._devices:
-            if dev.is_multizone:
-                dev.clear_firmware_effect()
-
-    def close(self) -> None:
-        """Close all wrapped device sockets.
-
-        Only closes sockets if this instance owns the devices (see
-        *owns_devices* constructor parameter).  When the server manages
-        device lifetimes separately, this is a no-op.
-        """
-        if self._owns_devices:
-            for dev in self._devices:
-                dev.close()
-
-    def get_device_list(self) -> list[LifxDevice]:
-        """Return the list of wrapped devices (for status reporting).
-
-        Returns:
-            The underlying :class:`LifxDevice` list.
-        """
-        return list(self._devices)
-
-
 class Engine:
     """Low-level animation engine that runs in a background thread.
 
     Renders the active :class:`Effect` at a target frame rate and pushes
-    each frame to every attached device.
+    each frame to every attached :class:`Emitter`.
 
     Attributes:
-        devices: List of :class:`LifxDevice` to drive.
-        fps:     Target frames per second.
-        effect:  Currently active effect (or ``None``).
-        running: Whether the render loop is active.
+        emitters: List of :class:`Emitter` to drive.
+        fps:      Target frames per second.
+        effect:   Currently active effect (or ``None``).
+        running:  Whether the render loop is active.
     """
 
     def __init__(
         self,
-        devices: list[LifxDevice],
+        emitters: list[Emitter],
         fps: int = DEFAULT_FPS,
         frame_callback: Optional[Callable] = None,
+        transition_ms: Optional[int] = None,
+        fps_explicit: bool = False,
     ) -> None:
         """Initialize the engine.
 
         Args:
-            devices:        List of :class:`LifxDevice` (must have
-                            ``zone_count`` populated via
-                            :meth:`LifxDevice.query_all`).
+            emitters:       List of :class:`Emitter` instances to drive.
             fps:            Target frames per second.  Must be positive.
             frame_callback: Optional callable invoked after each frame
                             with the rendered color list.  Used by the
                             simulator to display a live preview.  Must
                             accept a single argument: ``list[HSBK]``.
+            transition_ms:  Firmware transition time per frame in ms.
+                            ``None`` uses the default (``2000 / fps``).
+                            Set to 0 for instant snap, higher for smoother
+                            interpolation at the cost of latency.
+            fps_explicit:   ``True`` if the caller explicitly set FPS
+                            (e.g. via ``--fps``).  When ``False``, the
+                            engine may auto-tune FPS for Neon-class
+                            devices.
 
         Raises:
-            ValueError: If *devices* is empty or *fps* is not positive.
+            ValueError: If *emitters* is empty or *fps* is not positive.
         """
-        if not devices:
-            raise ValueError("At least one device is required.")
+        if not emitters:
+            raise ValueError("At least one emitter is required.")
         if fps <= 0:
             raise ValueError(f"fps must be positive, got {fps}.")
 
-        self.devices: list[LifxDevice] = list(devices)  # defensive copy
+        self.emitters: list[Emitter] = list(emitters)  # defensive copy
         self.fps: int = fps
+        self._transition_ms_override: Optional[int] = transition_ms
+        self._fps_explicit: bool = fps_explicit
+
+        # Auto-tune for Neon-class devices when the user didn't explicitly
+        # set FPS or transition.  Neon firmware needs slower frame rates
+        # with longer transitions for smooth animation.
+        self._apply_neon_tuning()
         self.effect: Optional[Effect] = None
         self.running: bool = False
         self._send_thread: Optional[threading.Thread] = None
@@ -326,6 +149,14 @@ class Engine:
         # Last rendered frame, stored for SSE streaming without UDP queries.
         self._last_frame: Optional[list[tuple[int, int, int, int]]] = None
         self._last_frame_lock: threading.Lock = threading.Lock()
+
+        # --- Signal bindings (media pipeline integration) ---
+        # When an effect is played with bindings, the render thread reads
+        # signal values from the bus and overwrites the bound effect params
+        # each frame before calling render().  This lets any existing effect
+        # respond to audio/video without modification.
+        self._bindings: Optional[dict[str, dict]] = None
+        self._signal_bus: Optional[Any] = None
 
         # --- Frame pipeline ---
         # Pre-rendered frames flow from the render thread (producer) through
@@ -340,7 +171,31 @@ class Engine:
         # thread can discard stale pre-rendered frames from the old effect.
         self._effect_generation: int = 0
 
-    def start(self, effect: Effect) -> None:
+    def _apply_neon_tuning(self) -> None:
+        """Auto-tune FPS for Neon-class devices.
+
+        Neon firmware stutters at the default 20 fps packet rate.
+        When the user hasn't explicitly set ``--fps``, this method
+        detects Neon emitters and lowers FPS to :data:`NEON_FPS`.
+
+        Transition time is NOT overridden — the normal default
+        (``2000 / fps``) preserves sharp detail for effects like
+        morse code while still reducing stutter.
+        """
+        if self._fps_explicit:
+            return  # User explicitly set FPS — respect their choice.
+
+        has_neon: bool = any(
+            getattr(em, "is_neon", False) for em in self.emitters
+        )
+        if not has_neon:
+            return
+
+        self.fps = NEON_FPS
+
+    def start(self, effect: Effect,
+              bindings: Optional[dict[str, dict]] = None,
+              signal_bus: Optional[Any] = None) -> None:
         """Start or hot-swap the current effect.
 
         If the engine thread is not yet running it is spawned automatically.
@@ -348,7 +203,12 @@ class Engine:
         before the new effect takes over.
 
         Args:
-            effect: The new :class:`Effect` instance to render.
+            effect:     The new :class:`Effect` instance to render.
+            bindings:   Optional dict mapping param names to binding dicts.
+                        Each binding has ``"signal"`` (signal bus name) and
+                        optional ``"scale"`` ([lo, hi]) and ``"reduce"``
+                        (for array signals: ``"max"``, ``"mean"``, ``"sum"``).
+            signal_bus: Optional :class:`SignalBus` for reading bound signals.
 
         Raises:
             TypeError: If *effect* is not an :class:`Effect` instance.
@@ -358,14 +218,10 @@ class Engine:
                 f"Expected an Effect instance, got {type(effect).__name__}."
             )
 
-        # Clear the persistent committed state to black on every device
-        # before starting the render loop.  The extended multizone protocol
-        # (type 510) writes to a temporary overlay; if a UDP frame is lost
-        # the firmware briefly reveals the committed layer.  Ensuring it is
-        # black makes those glitches invisible.
-        for dev in self.devices:
-            if dev.is_multizone and dev.zone_count:
-                dev.set_color(0, 0, 0, KELVIN_DEFAULT, duration_ms=0)
+        # Let each emitter perform its own startup ritual (e.g., clearing
+        # the LIFX firmware committed state to black).
+        for em in self.emitters:
+            em.prepare_for_rendering()
 
         with self._lock:
             # Cleanly shut down the previous effect before swapping.
@@ -373,14 +229,20 @@ class Engine:
                 self.effect.on_stop()
             self.effect = effect
             self._effect_start_time = time.time()
+            # Store signal bindings for the render thread.
+            self._bindings = bindings
+            self._signal_bus = signal_bus
+            # If this is a MediaEffect, give it direct bus access.
+            if signal_bus is not None and hasattr(effect, '_signal_bus'):
+                effect._signal_bus = signal_bus
             # Increment generation so the send thread discards stale frames
             # pre-rendered by the old effect.
             self._effect_generation += 1
-            # Notify the new effect of each device's zone count so it can
+            # Notify the new effect of each emitter's zone count so it can
             # perform any one-time setup (e.g., pre-allocating buffers).
-            for dev in self.devices:
-                if dev.zone_count:
-                    effect.on_start(dev.zone_count)
+            for em in self.emitters:
+                if em.zone_count:
+                    effect.on_start(em.zone_count)
 
         # Flush any stale pre-rendered frames from the pipeline.
         self._flush_pipeline()
@@ -438,18 +300,18 @@ class Engine:
                 self.effect = None
 
         # Snap the overlay to black immediately.  The caller (glowup.py)
-        # handles the visual fade via set_power(on=False, duration_ms=...).
+        # handles the visual fade via power_off(duration_ms=...).
         # Using duration_ms=0 here prevents conflicts with any in-progress
         # transition from the render loop's non-zero duration.
         if fade_ms > 0:
-            for dev in self.devices:
-                if dev.zone_count:
-                    if dev.is_multizone:
-                        off = [(0, 0, 0, KELVIN_DEFAULT)] * dev.zone_count
-                        dev.set_zones(off, duration_ms=0, rapid=False)
+            for em in self.emitters:
+                if em.zone_count:
+                    if em.is_multizone:
+                        off = [(0, 0, 0, KELVIN_DEFAULT)] * em.zone_count
+                        em.send_zones(off, duration_ms=0, rapid=False)
                     else:
-                        # Single bulb (color or monochrome): fade to black.
-                        dev.set_color(0, 0, 0, KELVIN_DEFAULT,
+                        # Single-zone emitter: fade to black.
+                        em.send_color(0, 0, 0, KELVIN_DEFAULT,
                                       duration_ms=fade_ms)
 
     def _render_thread(self) -> None:
@@ -461,8 +323,8 @@ class Engine:
         the send thread drains it to low water.  This lets rendering
         happen in efficient bursts rather than waking per frame.
 
-        Each frame_dict maps ``id(dev)`` to the rendered color list for
-        that device, so multi-device setups get per-device zone counts
+        Each frame_dict maps ``id(em)`` to the rendered color list for
+        that emitter, so multi-emitter setups get per-emitter zone counts
         handled correctly.
         """
         interval: float = 1.0 / self.fps
@@ -485,10 +347,19 @@ class Engine:
                 effect: Optional[Effect] = self.effect
                 start_time: float = self._effect_start_time
                 gen: int = self._effect_generation
+                bindings: Optional[dict] = self._bindings
+                signal_bus = self._signal_bus
 
             if effect is None:
                 self._stop_event.wait(interval)
                 continue
+
+            # --- Signal binding resolution ---
+            # Before rendering, overwrite bound effect params with live
+            # signal values from the bus.  This lets any existing effect
+            # respond to audio/video/sensor data without modification.
+            if bindings and signal_bus:
+                self._resolve_bindings(effect, bindings, signal_bus)
 
             # Use wall-clock time.  The pipeline depth is small enough
             # (500 ms at high water) that the time skew between render
@@ -496,13 +367,13 @@ class Engine:
             # real elapsed time for their random processes.
             t: float = time.time() - start_time
 
-            # Render for every device.
+            # Render for every emitter.
             frame: dict[int, list] = {}
-            for dev in self.devices:
-                if dev.zone_count is None:
+            for em in self.emitters:
+                if em.zone_count is None:
                     continue
                 try:
-                    frame[id(dev)] = effect.render(t, dev.zone_count)
+                    frame[id(em)] = effect.render(t, em.zone_count)
                 except Exception:
                     pass
 
@@ -521,7 +392,7 @@ class Engine:
         """Consumer thread — sends pre-rendered frames on a strict clock.
 
         Pops frames from the pipeline buffer and transmits them to
-        devices at exact frame intervals.  Because rendering happened
+        emitters at exact frame intervals.  Because rendering happened
         asynchronously in the producer thread, OS scheduling jitter
         and render-time variance do not affect send timing.
 
@@ -531,10 +402,15 @@ class Engine:
         """
         # Pre-compute the target interval to avoid division every frame.
         interval: float = 1.0 / self.fps
-        # Transition duration = 2× frame interval.  This keeps the firmware
+        # Transition duration = 2x frame interval.  This keeps the firmware
         # mid-interpolation when the next frame arrives, so a single dropped
         # UDP packet never exposes the committed layer.
-        transition_ms: int = int(2000.0 / self.fps)
+        # The CLI --transition flag overrides this for tuning on devices
+        # with different firmware interpolation behavior.
+        if self._transition_ms_override is not None:
+            transition_ms: int = self._transition_ms_override
+        else:
+            transition_ms = int(2000.0 / self.fps)
 
         last_colors: dict[int, list] = {}
 
@@ -568,25 +444,23 @@ class Engine:
                     self._flush_pipeline()
                     frame = None
 
-            # Send the frame to all devices.
+            # Send the frame to all emitters.
             colors: list = []
-            for dev in self.devices:
-                if dev.zone_count is None:
+            for em in self.emitters:
+                if em.zone_count is None:
                     continue
-                dev_colors: Optional[list] = last_colors.get(id(dev))
-                if dev_colors is None:
+                em_colors: Optional[list] = last_colors.get(id(em))
+                if em_colors is None:
                     continue
-                colors = dev_colors
+                colors = em_colors
                 try:
-                    if dev.is_multizone:
-                        dev.set_zones(dev_colors, duration_ms=transition_ms,
+                    if em.is_multizone:
+                        em.send_zones(em_colors,
+                                      duration_ms=transition_ms,
                                       rapid=True)
-                    elif dev.is_polychrome:
-                        h, s, b, k = dev_colors[0]
-                        dev.set_color(h, s, b, k, duration_ms=0)
                     else:
-                        dev.set_color(*hsbk_to_luminance(*dev_colors[0]),
-                                      duration_ms=0)
+                        h, s, b, k = em_colors[0]
+                        em.send_color(h, s, b, k, duration_ms=0)
                 except Exception:
                     pass
 
@@ -608,6 +482,58 @@ class Engine:
             if sleep_time > 0:
                 self._stop_event.wait(sleep_time)
 
+    @staticmethod
+    def _resolve_bindings(effect: Effect, bindings: dict[str, dict],
+                          signal_bus: Any) -> None:
+        """Overwrite effect params with live signal values from the bus.
+
+        For each binding, reads the named signal, applies optional array
+        reduction and scaling, then sets the param on the effect.
+
+        Args:
+            effect:     The active effect instance.
+            bindings:   Dict mapping param names to binding specifications.
+            signal_bus: The :class:`SignalBus` to read from.
+        """
+        for param_name, binding in bindings.items():
+            signal_name: str = binding.get("signal", "")
+            if not signal_name:
+                continue
+
+            value = signal_bus.read(signal_name, 0.0)
+
+            # Reduce array signals to a scalar.
+            if isinstance(value, list):
+                reduce_fn: str = binding.get("reduce", "max")
+                if not value:
+                    value = 0.0
+                elif reduce_fn == "max":
+                    value = max(value)
+                elif reduce_fn == "mean":
+                    value = sum(value) / len(value)
+                elif reduce_fn == "sum":
+                    value = min(1.0, sum(value))
+                else:
+                    value = max(value)
+
+            # Scale the normalized [0, 1] value to the param's range.
+            scale = binding.get("scale")
+            if scale and len(scale) >= 2:
+                lo, hi = float(scale[0]), float(scale[1])
+            else:
+                # Use the param's own min/max from the Param definition.
+                param_def = effect._param_defs.get(param_name)
+                if param_def:
+                    lo, hi = param_def.min, param_def.max
+                else:
+                    lo, hi = 0.0, 1.0
+
+            scaled: float = lo + float(value) * (hi - lo)
+            try:
+                setattr(effect, param_name, scaled)
+            except Exception:
+                pass
+
     def _flush_pipeline(self) -> None:
         """Drain all frames from the pipeline buffer.
 
@@ -627,41 +553,57 @@ class Controller:
     Designed to be wrapped by a CLI today and a REST API tomorrow.
 
     Attributes:
-        engine:  The underlying :class:`Engine`.
-        devices: List of :class:`LifxDevice` being driven.
+        engine:   The underlying :class:`Engine`.
+        emitters: List of :class:`Emitter` being driven.
     """
 
     def __init__(
         self,
-        devices: list[LifxDevice],
+        emitters: list[Emitter],
         fps: int = DEFAULT_FPS,
         frame_callback: Optional[Callable] = None,
+        transition_ms: Optional[int] = None,
+        fps_explicit: bool = False,
     ) -> None:
         """Initialize the controller.
 
         Args:
-            devices:        List of :class:`LifxDevice` to drive.
+            emitters:       List of :class:`Emitter` to drive.
             fps:            Target frames per second.
             frame_callback: Optional callable forwarded to the
                             :class:`Engine` for per-frame notifications
                             (e.g., live simulator preview).
+            transition_ms:  Override firmware transition time per frame (ms).
+                            ``None`` uses the default (``2000 / fps``).
+            fps_explicit:   ``True`` if the caller explicitly set ``--fps``.
 
         Raises:
-            ValueError: If *devices* is empty or *fps* is not positive
+            ValueError: If *emitters* is empty or *fps* is not positive
                         (propagated from :class:`Engine`).
         """
-        self.engine: Engine = Engine(devices, fps,
-                                     frame_callback=frame_callback)
-        self.devices: list[LifxDevice] = list(devices)  # defensive copy
+        self.engine: Engine = Engine(emitters, fps,
+                                     frame_callback=frame_callback,
+                                     transition_ms=transition_ms,
+                                     fps_explicit=fps_explicit)
+        self.emitters: list[Emitter] = list(emitters)  # defensive copy
         self._current_effect_name: Optional[str] = None
         self._last_effect_name: Optional[str] = None
         self._last_params: dict[str, Any] = {}
+        self._bindings: Optional[dict[str, dict]] = None
 
-    def play(self, effect_name: str, **params: Any) -> None:
+    def play(self, effect_name: str,
+             bindings: Optional[dict[str, dict]] = None,
+             signal_bus: Optional[Any] = None,
+             **params: Any) -> None:
         """Start playing an effect by name.
 
         Args:
             effect_name: Registered effect name (e.g., ``"cylon"``).
+            bindings:    Optional dict mapping param names to signal bindings.
+                         Each binding has ``"signal"`` (bus signal name) and
+                         optional ``"scale"`` ([lo, hi]) and ``"reduce"``
+                         (``"max"``, ``"mean"``, ``"sum"``).
+            signal_bus:  Optional :class:`SignalBus` for reading signals.
             **params:    Parameter overrides forwarded to the effect.
 
         Raises:
@@ -679,7 +621,8 @@ class Controller:
         self._current_effect_name = effect_name
         self._last_effect_name = effect_name
         self._last_params = dict(params)
-        self.engine.start(effect)
+        self._bindings = bindings
+        self.engine.start(effect, bindings=bindings, signal_bus=signal_bus)
 
     def stop(self, fade_ms: int = DEFAULT_FADE_MS) -> None:
         """Stop the current effect and optionally fade to black.
@@ -692,14 +635,17 @@ class Controller:
         self._current_effect_name = None
 
     def set_power(self, on: bool, duration_ms: int = 0) -> None:
-        """Turn all devices on or off.
+        """Turn all emitters on or off.
 
         Args:
             on:          ``True`` to power on, ``False`` to power off.
-            duration_ms: Firmware transition duration in milliseconds.
+            duration_ms: Transition duration in milliseconds.
         """
-        for dev in self.devices:
-            dev.set_power(on=on, duration_ms=duration_ms)
+        for em in self.emitters:
+            if on:
+                em.power_on(duration_ms=duration_ms)
+            else:
+                em.power_off(duration_ms=duration_ms)
 
     def update_params(self, **kwargs: Any) -> None:
         """Update parameters on the running effect.
@@ -723,7 +669,7 @@ class Controller:
 
         Returns:
             A dict with keys ``running``, ``effect``, ``params``, ``fps``,
-            and ``devices``.
+            and ``emitters``.
         """
         with self.engine._lock:
             effect: Optional[Effect] = self.engine.effect
@@ -735,22 +681,16 @@ class Controller:
             else:
                 effect_name = self._last_effect_name
                 params = self._last_params
-            return {
+            status: dict[str, Any] = {
                 "running": self.engine.running,
                 "effect": effect_name,
                 "params": params,
                 "fps": self.engine.fps,
-                "devices": [
-                    {
-                        "ip": dev.ip,
-                        "mac": dev.mac_str,
-                        "label": dev.label,
-                        "product": dev.product_name,
-                        "zones": dev.zone_count,
-                    }
-                    for dev in self.devices
-                ],
+                "devices": [em.get_info() for em in self.emitters],
             }
+            if self._bindings:
+                status["bindings"] = self._bindings
+            return status
 
     def get_last_frame(self) -> Optional[list[tuple[int, int, int, int]]]:
         """Return the most recently rendered frame of HSBK colors.

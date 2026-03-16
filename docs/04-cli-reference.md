@@ -1,5 +1,8 @@
 # CLI Reference
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 The program is invoked as:
 
 ```
@@ -209,4 +212,3 @@ python3 glowup.py record fireworks --help     # effect parameters
 ```
 
 **Requires:** [ffmpeg](https://ffmpeg.org/) must be installed and on your PATH.
-

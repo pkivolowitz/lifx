@@ -262,7 +262,7 @@ class APIClient: ObservableObject {
     }
 
     /// Perform a GET request and decode the JSON response.
-    private func get<T: Decodable>(_ path: String) async throws -> T {
+    func get<T: Decodable>(_ path: String) async throws -> T {
         guard let url = buildURL(path) else {
             throw APIError.invalidURL
         }
@@ -275,7 +275,7 @@ class APIClient: ObservableObject {
     }
 
     /// Perform a POST request with a Codable body and decode the response.
-    private func post<B: Encodable, T: Decodable>(
+    func post<B: Encodable, T: Decodable>(
         _ path: String,
         body: B
     ) async throws -> T {
@@ -345,7 +345,7 @@ class APIClient: ObservableObject {
 }
 
 /// Empty JSON body (``{}``) for POST endpoints that need no payload.
-private struct EmptyBody: Encodable {}
+struct EmptyBody: Encodable {}
 
 /// Generic ``{"ok": true}`` response from endpoints that return no data.
 struct GenericOKResponse: Codable {

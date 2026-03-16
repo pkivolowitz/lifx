@@ -122,6 +122,7 @@ MULTIZONE_PRODUCTS: set[int] = {
     31,             # LIFX Z
     32,             # LIFX Z
     38,             # LIFX Beam
+    125,            # LIFX Neon
     117,            # LIFX Z US
     118,            # LIFX Z Intl
     119,            # LIFX Beam US
@@ -138,6 +139,17 @@ MULTIZONE_PRODUCTS: set[int] = {
     206,            # LIFX Indoor Neon Intl
     213,            # LIFX Permanent Outdoor US
     214,            # LIFX Permanent Outdoor Intl
+}
+
+#: Product IDs for Neon-class strips (firmware needs slow FPS + long transitions).
+NEON_PRODUCTS: set[int] = {
+    125,            # LIFX Neon
+    141,            # LIFX Neon US
+    142,            # LIFX Neon Intl
+    161,            # LIFX Outdoor Neon US
+    162,            # LIFX Outdoor Neon Intl
+    205,            # LIFX Indoor Neon US
+    206,            # LIFX Indoor Neon Intl
 }
 
 #: Product IDs for monochrome-only bulbs (brightness + kelvin, no hue/saturation).
@@ -170,6 +182,12 @@ PRODUCT_MAP: dict[int, str] = {
     116: "Mini White Intl", 117: "GU10", 118: "GU10",
     119: "Color A19", 120: "Color BR30",
     123: "String Light", 124: "String Light", 125: "Neon",
+    141: "Neon US", 142: "Neon Intl",
+    143: "String Light US", 144: "String Light Intl",
+    161: "Outdoor Neon US", 162: "Outdoor Neon Intl",
+    203: "String Light US", 204: "String Light Intl",
+    205: "Indoor Neon US", 206: "Indoor Neon Intl",
+    213: "Permanent Outdoor US", 214: "Permanent Outdoor Intl",
     143: "String Light", 144: "String Light",
 }
 
@@ -543,6 +561,23 @@ class LifxDevice:
         if self.product is None:
             return None
         return self.product in MULTIZONE_PRODUCTS
+
+    @property
+    def is_neon(self) -> Optional[bool]:
+        """Whether this device is a Neon-class strip.
+
+        Neon firmware requires lower FPS and longer transition times
+        for smooth animation.  The engine uses this to auto-tune
+        send parameters.
+
+        Returns:
+            ``True`` if the product ID is in :data:`NEON_PRODUCTS`,
+            ``False`` if the product is known but not a Neon, or
+            ``None`` if the product ID has not been queried yet.
+        """
+        if self.product is None:
+            return None
+        return self.product in NEON_PRODUCTS
 
     @property
     def is_polychrome(self) -> Optional[bool]:
