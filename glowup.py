@@ -9,6 +9,8 @@ Usage::
     python3 glowup.py monitor --ip <device-ip>           # monitor device in real time
     python3 glowup.py play cylon --ip <device-ip>    # run an effect on one device
     python3 glowup.py play cylon --config conf.json --group office  # virtual multizone
+    python3 glowup.py replay --file song.mid             # replay MIDI at real-time tempo
+    python3 glowup.py replay --file song.mid --speed 0   # bulk ingest (fast as possible)
 
 All effect parameters are auto-generated from each effect's :class:`Param`
 declarations.
@@ -26,6 +28,7 @@ import signal
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from transport import LifxDevice, discover_devices
@@ -97,6 +100,19 @@ MIN_MONITOR_POLL_HZ: float = 0.5
 
 MAX_MONITOR_POLL_HZ: float = 20.0
 """Maximum polling rate for monitor mode."""
+
+# Replay subcommand defaults.
+DEFAULT_REPLAY_SPEED: float = 1.0
+"""Replay speed multiplier.  1.0 = real-time, 0 = as fast as possible."""
+
+DEFAULT_REPLAY_BROKER: str = "10.0.0.48"
+"""Default MQTT broker for replay (Pi)."""
+
+DEFAULT_REPLAY_PORT: int = 1883
+"""Default MQTT broker port."""
+
+DEFAULT_REPLAY_SIGNAL: str = "sensor:midi:events"
+"""Default signal name for MIDI replay events on the bus."""
 
 # Minimum column widths for the discovery table display.
 # These prevent columns from collapsing when device labels are short.
@@ -1296,6 +1312,59 @@ def _print_effect_help(effect_name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# replay subcommand
+# ---------------------------------------------------------------------------
+
+def cmd_replay(args: argparse.Namespace) -> None:
+    """Replay a MIDI file onto the signal bus via MQTT.
+
+    Parses the MIDI file and publishes structured events to the bus
+    at the requested speed.  At real-time speed (default), events are
+    timed to match the original tempo.  At speed 0, events are sent
+    as fast as possible for bulk data loading via the persistence emitter.
+
+    Args:
+        args: Parsed CLI arguments (file, broker, port, speed, signal_name).
+    """
+    from distributed.midi_sensor import MidiSensor
+
+    file_path: str = args.file
+    if not Path(file_path).exists():
+        _print(f"ERROR: MIDI file not found: {file_path}", file=sys.stderr)
+        sys.exit(1)
+
+    sensor: MidiSensor = MidiSensor(
+        file_path=file_path,
+        broker=args.broker,
+        port=args.port,
+        signal_name=args.signal_name,
+        speed=args.speed,
+    )
+
+    # Handle Ctrl+C gracefully.
+    def _shutdown(signum: int, frame: object) -> None:
+        """Signal handler for clean shutdown."""
+        _print("\nStopping replay...")
+        sensor.stop()
+
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+
+    speed_label: str = (
+        "unlimited (bulk)" if args.speed == 0.0
+        else f"{args.speed}x"
+    )
+    _print(f"Replaying {file_path} at {speed_label} speed...")
+    _print(f"  Broker: {args.broker}:{args.port}")
+    _print(f"  Signal: {args.signal_name}")
+    _print()
+
+    sensor.start()
+
+    _print("Done.")
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -1589,6 +1658,45 @@ def build_parser() -> argparse.ArgumentParser:
                 **kwargs_rec,
             )
 
+    # -- replay ----------------------------------------------------------------
+    p_replay = sub.add_parser(
+        "replay",
+        help="Replay a MIDI file onto the signal bus via MQTT",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Replays MIDI events at the original tempo (real-time) or\n"
+            "as fast as possible (--speed 0) for bulk data loading.\n\n"
+            "Examples:\n"
+            "  python3 glowup.py replay --file song.mid\n"
+            "  python3 glowup.py replay --file song.mid --speed 0\n"
+            "  python3 glowup.py replay --file song.mid --speed 2"
+        ),
+    )
+    p_replay.add_argument(
+        "--file", required=True,
+        help="Path to a Standard MIDI File (.mid)",
+    )
+    p_replay.add_argument(
+        "--broker", default=DEFAULT_REPLAY_BROKER,
+        help=f"MQTT broker host (default: {DEFAULT_REPLAY_BROKER})",
+    )
+    p_replay.add_argument(
+        "--port", type=int, default=DEFAULT_REPLAY_PORT,
+        help=f"MQTT broker port (default: {DEFAULT_REPLAY_PORT})",
+    )
+    p_replay.add_argument(
+        "--speed", type=float, default=DEFAULT_REPLAY_SPEED,
+        help=(
+            f"Replay speed multiplier (default: {DEFAULT_REPLAY_SPEED}).  "
+            f"0 = as fast as possible (bulk ingest)."
+        ),
+    )
+    p_replay.add_argument(
+        "--signal-name", dest="signal_name",
+        default=DEFAULT_REPLAY_SIGNAL,
+        help=f"Signal name on the bus (default: '{DEFAULT_REPLAY_SIGNAL}')",
+    )
+
     return parser
 
 
@@ -1644,6 +1752,7 @@ def main() -> None:
         "monitor": cmd_monitor,
         "play": cmd_play,
         "record": cmd_record,
+        "replay": cmd_replay,
     }
 
     handler: Optional[Callable[[argparse.Namespace], None]] = commands.get(
