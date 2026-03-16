@@ -89,7 +89,8 @@ luma-converted brightness.  You can mix any device types freely.
 | `--fps`     | 20      | Frames per second for the render loop     |
 | `--sim`     | off     | Open a live simulator window alongside the real lights               |
 | `--sim-only` | off    | Query device geometry then run the effect in the simulator only — no commands sent to the lights (see [Sim-Only Mode](#sim-only-mode)) |
-| `--zpb`     | 1       | Zones per bulb — group adjacent zones into single displayed bulbs |
+| `--zpb`     | 3       | Zones per bulb.  Effects render one color per bulb; the engine replicates it across all zones in the bulb.  Default 3 matches LIFX string lights (36 zones = 12 bulbs).  Use 1 for per-zone rendering. |
+| `--lerp`    | oklab   | Color interpolation: `oklab` (best), `lab` (classic CIELAB), `hsb` (cheap) |
 
 You must specify either `--ip` or both `--config` and `--group` (not both).
 

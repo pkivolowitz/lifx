@@ -55,6 +55,11 @@ from emitters.virtual import VirtualMultizoneEmitter as VirtualMultizoneDevice  
 # Default rendering frame rate in frames per second.
 DEFAULT_FPS: int = 20
 
+# Default zones per bulb.  LIFX string lights use 3 zones per
+# physical bulb.  Effects render to logical bulbs (zone_count // zpb)
+# and the engine replicates each color zpb times.
+DEFAULT_ZPB: int = 3
+
 # Neon-class devices stutter at high FPS with short transitions.
 # Empirically tested: 10 fps with 1000 ms transition is smooth.
 NEON_FPS: int = 10
@@ -102,6 +107,7 @@ class Engine:
         frame_callback: Optional[Callable] = None,
         transition_ms: Optional[int] = None,
         fps_explicit: bool = False,
+        zones_per_bulb: int = DEFAULT_ZPB,
     ) -> None:
         """Initialize the engine.
 
@@ -120,6 +126,10 @@ class Engine:
                             (e.g. via ``--fps``).  When ``False``, the
                             engine may auto-tune FPS for Neon-class
                             devices.
+            zones_per_bulb: Number of zones per physical bulb.  The
+                            effect renders ``zone_count // zpb`` logical
+                            bulbs and each color is replicated ``zpb``
+                            times.  Default is 3 (LIFX string lights).
 
         Raises:
             ValueError: If *emitters* is empty or *fps* is not positive.
@@ -131,6 +141,7 @@ class Engine:
 
         self.emitters: list[Emitter] = list(emitters)  # defensive copy
         self.fps: int = fps
+        self.zones_per_bulb: int = max(1, zones_per_bulb)
         self._transition_ms_override: Optional[int] = transition_ms
         self._fps_explicit: bool = fps_explicit
 
@@ -368,12 +379,28 @@ class Engine:
             t: float = time.time() - start_time
 
             # Render for every emitter.
+            # If zpb > 1, tell the effect to render fewer zones (one
+            # per bulb) and replicate each color zpb times.  This
+            # gives every effect uniform bulb grouping without needing
+            # per-effect zpb awareness.
+            zpb: int = self.zones_per_bulb
             frame: dict[int, list] = {}
             for em in self.emitters:
                 if em.zone_count is None:
                     continue
                 try:
-                    frame[id(em)] = effect.render(t, em.zone_count)
+                    logical_zones: int = max(1, em.zone_count // zpb)
+                    colors: list = effect.render(t, logical_zones)
+                    if zpb > 1:
+                        # Replicate each color zpb times.
+                        expanded: list = []
+                        for c in colors:
+                            expanded.extend([c] * zpb)
+                        # Trim or pad to exact zone count.
+                        colors = expanded[:em.zone_count]
+                        while len(colors) < em.zone_count:
+                            colors.append(colors[-1] if colors else (0, 0, 0, 3500))
+                    frame[id(em)] = colors
                 except Exception:
                     pass
 
@@ -564,6 +591,7 @@ class Controller:
         frame_callback: Optional[Callable] = None,
         transition_ms: Optional[int] = None,
         fps_explicit: bool = False,
+        zones_per_bulb: int = DEFAULT_ZPB,
     ) -> None:
         """Initialize the controller.
 
@@ -576,6 +604,7 @@ class Controller:
             transition_ms:  Override firmware transition time per frame (ms).
                             ``None`` uses the default (``2000 / fps``).
             fps_explicit:   ``True`` if the caller explicitly set ``--fps``.
+            zones_per_bulb: Zones per physical bulb (default 3).
 
         Raises:
             ValueError: If *emitters* is empty or *fps* is not positive
@@ -584,7 +613,8 @@ class Controller:
         self.engine: Engine = Engine(emitters, fps,
                                      frame_callback=frame_callback,
                                      transition_ms=transition_ms,
-                                     fps_explicit=fps_explicit)
+                                     fps_explicit=fps_explicit,
+                                     zones_per_bulb=zones_per_bulb)
         self.emitters: list[Emitter] = list(emitters)  # defensive copy
         self._current_effect_name: Optional[str] = None
         self._last_effect_name: Optional[str] = None
