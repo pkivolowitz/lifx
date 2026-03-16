@@ -1,5 +1,8 @@
 # Media Pipeline
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 The media pipeline turns GlowUp from a static effect engine into a
 real-time reactive lighting platform.  Any audio or video source —
 camera microphones, iPhone mics, media files — can drive any effect

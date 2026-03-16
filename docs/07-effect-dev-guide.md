@@ -1,5 +1,8 @@
 # Effect Developer Guide
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 ### Architecture Overview
 
 ```
@@ -417,4 +420,3 @@ class Rainbow(Effect):
 
 Save this as `effects/rainbow.py` and it will automatically appear in
 `python3 glowup.py effects` and be playable via `python3 glowup.py play rainbow --ip ...`.
-

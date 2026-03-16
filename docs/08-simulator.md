@@ -1,5 +1,8 @@
 # Live Simulator
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 The `--sim` flag on the `play` command opens a tkinter window that
 displays the effect output in real-time as colored rectangles — one per
 zone.  This lets you preview effects without physical hardware, or watch
@@ -159,4 +162,3 @@ not prompt again.
 If you prefer not to grant the permission, simply dismiss the dialog.
 The simulator will still work; the window just won't automatically
 come to the front on launch.
-

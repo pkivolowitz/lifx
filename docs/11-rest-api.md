@@ -1,5 +1,8 @@
 # REST API Server
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 The REST API server (`server.py`) exposes all GlowUp functionality over
 HTTP, enabling remote control from the iOS app or any HTTP client.  It
 replaces `scheduler.py` by managing effects directly through the
@@ -235,4 +238,3 @@ If migrating from `scheduler.py`, disable the old service first:
 sudo systemctl stop glowup-scheduler
 sudo systemctl disable glowup-scheduler
 ```
-

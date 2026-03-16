@@ -1,5 +1,8 @@
 # GlowUp iOS App
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 The GlowUp iOS app is a native SwiftUI remote control for your LIFX
 devices.  It communicates with `server.py` over HTTP(S) and provides
 live color monitoring, auto-generated parameter UI, and
@@ -115,4 +118,3 @@ and 10.0.0.62) combined into a single 144-zone animation surface.
 <p align="center">
   <img src="multizone.PNG" alt="Virtual multizone group detail" width="300">
 </p>
-

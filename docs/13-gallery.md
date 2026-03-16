@@ -1,5 +1,8 @@
 # Effect Gallery
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 An online gallery showcasing animated previews of every effect is
 available at the project's GitHub Pages site.  Each preview was rendered
 headlessly using the `record` subcommand — no physical hardware needed.
@@ -36,4 +39,3 @@ git add docs/ && git commit -m "Add aurora to gallery" && git push
 
 To enable GitHub Pages: repo Settings > Pages > Source: "Deploy from a
 branch" > Branch: `master`, folder: `/docs`.
-

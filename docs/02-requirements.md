@@ -1,5 +1,8 @@
 # Requirements
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 - **Python 3.10+**
 - One or more LIFX devices on the same LAN subnet (multizone, single color, or monochrome)
 - No external Python packages — the entire stack is pure Python stdlib
@@ -78,4 +81,3 @@ python server.py server.json
 > **Note:** `discover` may still work on simple single-subnet networks
 > because the fallback broadcast address `255.255.255.255` is used
 > automatically.  Results vary by network configuration.
-

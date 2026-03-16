@@ -1,5 +1,8 @@
 # Testing
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 GlowUp includes a comprehensive test suite that validates the core engine
 without requiring physical LIFX hardware or network access.  All tests
 use mock objects, temporary files, or pure math — no sockets are opened.
@@ -62,4 +65,3 @@ the group ID and every member IP.  Tests verify:
 - Overriding a non-member does not affect the group
 - Clearing the member override restores normal scheduling
 - Both group and member overridden simultaneously works correctly
-

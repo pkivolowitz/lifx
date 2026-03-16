@@ -1,5 +1,8 @@
 # Troubleshooting
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 LIFX devices maintain internal state that persists across sessions.
 Occasionally — particularly after switching between different control
 sources (this engine, the LIFX app, HomeKit) — a device may display
@@ -13,4 +16,3 @@ device can help clear its internal state.
 
 This is a characteristic of the LIFX firmware's internal state
 management and may not be specific to GlowUp.
-

@@ -1,5 +1,8 @@
 # Emitter Developer Guide
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 This guide explains how to create new emitters for the SOE pipeline.
 It parallels the [Effect Developer Guide](07-effect-dev-guide.md) —
 if you've written an effect, the emitter framework will feel familiar.

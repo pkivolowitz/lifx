@@ -1,5 +1,8 @@
 # Node-RED Integration
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 [Node-RED](https://nodered.org/) is a flow-based visual programming
 tool popular in the home-automation community.  GlowUp's REST API
 integrates with Node-RED using the built-in **http request** node —
@@ -113,4 +116,3 @@ logic.
   live Node-RED instance.  If you try it, please open an issue
   at the [GitHub repo](https://github.com/pkivolowitz/lifx/issues)
   with any corrections or suggestions.
-
