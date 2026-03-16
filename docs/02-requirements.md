@@ -34,6 +34,9 @@ No external Python packages — the core is pure stdlib.
 
 No additional packages beyond core.  Just run `python3 server.py server.json`.
 
+To run the server (or any component) as a persistent service that
+survives reboots, see [Persistent Services](24-persistent-services.md).
+
 ### Database (diagnostics, dashboard)
 
 | Requirement | Install |
