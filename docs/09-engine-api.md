@@ -1,5 +1,8 @@
 # Engine and Controller API
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 The `Controller` class in `engine.py` is the thread-safe public interface
 for controlling the effect engine. It is designed to be driven by the CLI
 today and a REST API in the future.
@@ -178,4 +181,3 @@ dev.set_power(on=True, duration_ms=1000)
 # Cleanup
 dev.close()
 ```
-

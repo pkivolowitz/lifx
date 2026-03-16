@@ -1,5 +1,8 @@
 # SOE Pipeline Architecture
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 The SOE pipeline — **Sensors, Operators, Emitters** — is the core
 abstraction that makes GlowUp a general-purpose platform rather than
 a lighting controller.  It is the fifth iteration of the

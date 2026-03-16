@@ -1,5 +1,8 @@
 # Built-in Effects
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 ### cylon
 
 **Larson scanner** — a bright eye sweeps back and forth with a smooth
@@ -1011,4 +1014,3 @@ python3 glowup.py play plasma --ip <device-ip> --zpb 3 --tendril-rate 20 --hue-s
 # Slow, menacing pulse
 python3 glowup.py play plasma --ip <device-ip> --zpb 3 --speed 5 --tendril-rate 4
 ```
-

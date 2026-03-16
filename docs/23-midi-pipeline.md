@@ -1,5 +1,8 @@
 # 23 — MIDI Pipeline
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 The MIDI pipeline extends the SOE (Sensors → Operators → Emitters)
 architecture with MIDI as a first-class modality.  MIDI files are
 parsed, replayed onto the MQTT signal bus, and consumed by any

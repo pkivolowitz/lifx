@@ -1,5 +1,8 @@
 # Quick Start
 
+> Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+> Licensed under the [MIT License](../LICENSE).
+
 ```bash
 # 1. Find your LIFX devices
 python3 glowup.py discover
@@ -15,4 +18,3 @@ python3 glowup.py play cylon --config schedule.json --group office
 
 # 5. Press Ctrl+C to stop (fades to black gracefully)
 ```
-
