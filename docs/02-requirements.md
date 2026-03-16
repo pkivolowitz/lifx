@@ -3,91 +3,127 @@
 > Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 > Licensed under the [MIT License](../LICENSE).
 
-- **Python 3.10+**
-- One or more LIFX devices on the same LAN subnet (multizone, single color, or monochrome)
-- No external Python packages — the entire stack is pure Python stdlib
-- **Optional:** [ffmpeg](https://ffmpeg.org/) for the `record` subcommand (rendering effects to GIF/MP4/WebM)
+## What You Need Depends on What You Want
 
-### Platform Support
+GlowUp is modular.  The core requires nothing beyond Python and
+LIFX bulbs.  Each additional capability has its own dependencies.
+Install only what you need.
+
+### Core (pretty lights from the CLI)
+
+| Requirement | Install |
+|-------------|---------|
+| Python 3.10+ | macOS: `brew install python@3.12` · Linux: included · Windows: [python.org](https://www.python.org/downloads/) |
+| LIFX devices on your LAN | Any multizone, single color, or monochrome bulb |
+
+No external Python packages — the core is pure stdlib.
+
+### Simulator preview (`--sim`, `--sim-only`)
+
+| Requirement | Install |
+|-------------|---------|
+| tkinter | macOS: included · Linux: `sudo apt install python3-tk` · Windows: included |
+
+### Recording effects to GIF/MP4/WebM (`record`)
+
+| Requirement | Install |
+|-------------|---------|
+| ffmpeg | macOS: `brew install ffmpeg` · Linux: `sudo apt install ffmpeg` |
+
+### Server (REST API, scheduling, dashboard)
+
+| Requirement | Install |
+|-------------|---------|
+| (core only) | No additional packages for the server itself |
+| psycopg2 *(optional, for diagnostics/dashboard)* | `pip install psycopg2-binary` |
+| PostgreSQL *(optional, for diagnostics/dashboard)* | Any accessible PostgreSQL instance |
+
+### Remote Access (iOS app, Cloudflare Tunnel)
+
+| Requirement | Install |
+|-------------|---------|
+| Server (above) | Running `server.py` |
+| cloudflared *(for tunnel)* | See [Cloudflare Tunnel](15-tunnel.md) |
+| Xcode *(for iOS app)* | App Store |
+
+### MQTT / Distributed Framework
+
+| Requirement | Install |
+|-------------|---------|
+| MQTT broker | macOS: `brew install mosquitto` · Linux: `sudo apt install mosquitto` |
+| paho-mqtt | `pip install paho-mqtt` |
+
+### MIDI Pipeline (replay, audio, lights)
+
+| Requirement | Install |
+|-------------|---------|
+| paho-mqtt | `pip install paho-mqtt` |
+| MQTT broker | See MQTT above |
+| FluidSynth *(for audio playback)* | macOS: `brew install fluid-synth` · Linux: `sudo apt install fluidsynth` |
+| pyfluidsynth *(for audio playback)* | `pip install pyfluidsynth` |
+| SoundFont (.sf2 file) | [FluidR3_GM_GS](https://archive.org/download/fluidr3-gm-gs/FluidR3_GM_GS.sf2) (144 MB, free) |
+| MIDI files (.mid) | User-supplied — search for "free MIDI files" |
+
+### N-body Visualizer (WebGL particle display)
+
+| Requirement | Install |
+|-------------|---------|
+| numpy | `pip install numpy` |
+| paho-mqtt | `pip install paho-mqtt` |
+| MQTT broker | See MQTT above |
+| A web browser | Any modern browser with WebGL |
+
+---
+
+## Platform Support
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| **macOS** | Fully supported | Primary development platform. Broadcast auto-detection via `ifconfig`, simulator window focus via `osascript`. |
-| **Linux (Raspberry Pi, Ubuntu, etc.)** | Fully supported | Broadcast auto-detection via `ioctl`. Recommended deployment target. |
-| **Windows** | Degraded (untested) | Broadcast discovery is unavailable — use `--ip` to address devices directly. Effects, simulator, and server should work. See [Windows notes](#windows) below. |
+| **macOS** | Fully supported | Primary development platform |
+| **Linux (Pi, Ubuntu, etc.)** | Fully supported | Recommended deployment target |
+| **Windows** | Untested | Use `--ip` for discovery; effects and server should work |
 
-### Platform-Specific Setup
+## Platform-Specific Setup
 
-**macOS** — Python 3.10+ from Homebrew, the Xcode command-line tools,
-or a conda environment.  tkinter ships with the standard Python
-distribution on macOS:
+### macOS
 
 ```bash
-# Homebrew
 brew install python@3.12
-
-# For the record subcommand (optional)
-brew install ffmpeg
-
-# Or conda
-conda create -n glowup python=3.12
-conda activate glowup
 ```
 
-**Linux (Debian / Ubuntu / Raspberry Pi OS)** — install Python and
-tkinter (needed only for the `--sim` live preview):
+### Linux (Debian / Ubuntu / Raspberry Pi OS)
 
 ```bash
 sudo apt update
 sudo apt install python3 python3-tk python3.12-venv
-
-# For the record subcommand (optional)
-sudo apt install ffmpeg
 ```
 
-Create a virtual environment (Ubuntu blocks system-wide pip installs):
+Create a virtual environment (Ubuntu blocks system-wide pip
+installs):
 
 ```bash
 python3 -m venv ~/venv
 ~/venv/bin/pip install --upgrade pip
 ```
 
-Then run GlowUp with `~/venv/bin/python3` instead of `python3`,
-or activate the venv first with `source ~/venv/bin/activate`.
+Then use `~/venv/bin/python3` or activate with
+`source ~/venv/bin/activate`.
 
-On Raspberry Pi OS (Bookworm), Python 3.11+ is included by default.
-Install tkinter only if you plan to use the simulator on a desktop —
-headless Pi deployments (server, scheduler) do not need it.
+On Raspberry Pi OS (Bookworm), Python 3.11+ is included.  Install
+tkinter only if using the simulator on a desktop — headless
+deployments don't need it.
 
-#### Windows
+### Windows
 
-> **Windows support has not been tested.**  The guidance below is based
-> on code analysis, not hands-on verification.  If you try it, we would
-> appreciate a report — good or bad — via a GitHub issue.
-
-GlowUp should run on Windows with one limitation: the `discover`
-command cannot auto-detect your subnet's broadcast address (this
-requires Unix-specific `fcntl`/ioctl calls).  Everything else should
-work — effects, the simulator, and the server.
+> **Windows support has not been tested.**  If you try it, please
+> report results via a GitHub issue.
 
 Install Python 3.10+ from [python.org](https://www.python.org/downloads/)
-(tkinter is included by default on Windows).
-
-To work around the discovery limitation, find your device IPs using the
-official LIFX app or your router's DHCP lease table, then address
-devices directly:
+(tkinter is included).  Discovery requires `--ip` to address
+devices directly — broadcast auto-detection uses Unix-specific
+calls that are unavailable on Windows.
 
 ```bash
-# Play an effect by IP (no broadcast discovery needed)
 python glowup.py play aurora --ip 10.0.0.62
-
-# Simulator-only mode works with no devices at all
-python glowup.py play aurora --ip 10.0.0.62 --sim-only
-
-# Server mode — list device IPs in server.json
-python server.py server.json
+python glowup.py play aurora --sim-only --zones 36
 ```
-
-> **Note:** `discover` may still work on simple single-subnet networks
-> because the fallback broadcast address `255.255.255.255` is used
-> automatically.  Results vary by network configuration.
