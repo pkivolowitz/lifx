@@ -47,10 +47,10 @@ DEFAULT_MAX_PARTICLES: int = 5000
 DEFAULT_SIM_FPS: int = 20
 DEFAULT_DT: float = 0.016
 DEFAULT_PARTICLE_LIFETIME: int = 200
-VELOCITY_DAMPING: float = 0.998
+VELOCITY_DAMPING: float = 0.98
 DOMAIN_MIN: float = -1.0
 DOMAIN_MAX: float = 1.0
-SPAWN_VELOCITY_SPREAD: float = 0.3
+SPAWN_VELOCITY_SPREAD: float = 0.05
 MIDI_NOTE_LOW: int = 24
 MIDI_NOTE_HIGH: int = 108
 
@@ -75,9 +75,11 @@ class ParticleSystem:
     """
 
     def __init__(self, max_particles: int = DEFAULT_MAX_PARTICLES,
-                 lifetime: int = DEFAULT_PARTICLE_LIFETIME) -> None:
+                 lifetime: int = DEFAULT_PARTICLE_LIFETIME,
+                 forces: bool = False) -> None:
         self._max: int = max_particles
         self._lifetime: int = lifetime
+        self._forces: bool = forces
         self._next: int = 0
 
         self.px: np.ndarray = np.zeros(max_particles, dtype=np.float32)
@@ -86,6 +88,8 @@ class ParticleSystem:
         self.vy: np.ndarray = np.zeros(max_particles, dtype=np.float32)
         self.color: np.ndarray = np.zeros(max_particles, dtype=np.int32)
         self.age: np.ndarray = np.zeros(max_particles, dtype=np.int32)
+        self.mass: np.ndarray = np.ones(max_particles, dtype=np.float32)
+        self.charge: np.ndarray = np.zeros(max_particles, dtype=np.float32)
         self.alive: np.ndarray = np.zeros(max_particles, dtype=bool)
         self.step_count: int = 0
         self.step_ms: float = 0.0
@@ -106,6 +110,8 @@ class ParticleSystem:
             self.vy[s] = vy + np.random.uniform(
                 -SPAWN_VELOCITY_SPREAD, SPAWN_VELOCITY_SPREAD)
             self.color[s] = color
+            self.mass[s] = 1.0 + np.random.uniform(0, 1)
+            self.charge[s] = 1.0 if color % 2 == 0 else -1.0
             self.age[s] = 0
             self.alive[s] = True
 
@@ -117,7 +123,28 @@ class ParticleSystem:
             self.step_count += 1
             return
 
-        self.vy[idx] -= 0.15 * dt
+        if self._forces and len(idx) >= 2:
+            # O(n²) pairwise forces.
+            pos = np.column_stack([self.px[idx], self.py[idx]])
+            dx = pos[np.newaxis, :, :] - pos[:, np.newaxis, :]
+            dist_sq = np.sum(dx ** 2, axis=2) + 0.1
+            dist = np.sqrt(dist_sq)
+            m = self.mass[idx]
+            q = self.charge[idx]
+            grav = 0.3 * m[:, np.newaxis] * m[np.newaxis, :] / dist_sq
+            elec = 0.2 * q[:, np.newaxis] * q[np.newaxis, :] / dist_sq
+            net = grav - elec
+            unit = dx / dist[:, :, np.newaxis]
+            forces = net[:, :, np.newaxis] * unit
+            np.fill_diagonal(forces[:, :, 0], 0)
+            np.fill_diagonal(forces[:, :, 1], 0)
+            total = np.sum(forces, axis=1)
+            accel = total / m[:, np.newaxis]
+            self.vx[idx] += accel[:, 0] * dt
+            self.vy[idx] += accel[:, 1] * dt
+        else:
+            self.vy[idx] -= 0.15 * dt
+
         self.vx[idx] *= VELOCITY_DAMPING
         self.vy[idx] *= VELOCITY_DAMPING
         self.px[idx] += self.vx[idx] * dt
@@ -305,7 +332,8 @@ class NBodyVisualizer:
                  http_port: int = DEFAULT_HTTP_PORT,
                  particles_per_note: int = DEFAULT_PARTICLES_PER_NOTE,
                  max_particles: int = DEFAULT_MAX_PARTICLES,
-                 sim_fps: int = DEFAULT_SIM_FPS) -> None:
+                 sim_fps: int = DEFAULT_SIM_FPS,
+                 forces: bool = False) -> None:
         self._broker: str = broker
         self._mqtt_port: int = mqtt_port
         self._input_signal: str = input_signal
@@ -314,7 +342,7 @@ class NBodyVisualizer:
         self._sim_fps: int = sim_fps
 
         self._sim: ParticleSystem = ParticleSystem(
-            max_particles=max_particles,
+            max_particles=max_particles, forces=forces,
         )
 
         self._mqtt_client: Optional[Any] = None
@@ -436,11 +464,8 @@ class NBodyVisualizer:
         note: int = event.get("note", 60)
         velocity: int = event.get("velocity", 100)
 
-        frac: float = (note - MIDI_NOTE_LOW) / max(
-            MIDI_NOTE_HIGH - MIDI_NOTE_LOW, 1)
-        frac = max(0.0, min(1.0, frac))
-        x: float = DOMAIN_MIN + frac * (DOMAIN_MAX - DOMAIN_MIN)
-        vy: float = (velocity / 127.0) * 0.5
+        x: float = 0.0  # Spawn at center — let gravity sort them out.
+        vy: float = (velocity / 127.0) * 0.1
 
         with self._sim_lock:
             self._sim.spawn(
@@ -516,6 +541,10 @@ def main() -> None:
         help=f"Sim rate (default: {DEFAULT_SIM_FPS})",
     )
     parser.add_argument(
+        "--forces", action="store_true",
+        help="Enable O(n²) pairwise forces (gravity + electrostatics)",
+    )
+    parser.add_argument(
         "--broker", default=DEFAULT_BROKER,
         help=f"MQTT broker (default: {DEFAULT_BROKER})",
     )
@@ -538,6 +567,7 @@ def main() -> None:
         particles_per_note=args.ppn,
         max_particles=args.max_p,
         sim_fps=args.fps,
+        forces=args.forces,
     )
 
     signal.signal(signal.SIGINT, lambda *_: viz.stop())
