@@ -900,7 +900,8 @@ def cmd_play(args: argparse.Namespace) -> None:
     ctrl: Controller = Controller([em], fps=fps,
                                   frame_callback=frame_cb,
                                   transition_ms=getattr(args, 'transition', None),
-                                  fps_explicit=fps_explicit)
+                                  fps_explicit=fps_explicit,
+                                  zones_per_bulb=getattr(args, 'zpb', 3))
     ctrl.play(effect_name, **effect_params)
 
     status: dict = ctrl.get_status()
@@ -1444,9 +1445,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Polling rate in Hz (default: {DEFAULT_MONITOR_POLL_HZ})",
     )
     p_mon.add_argument(
-        "--zpb", type=int, default=1,
-        help="Zones per bulb for the simulator display "
-             "(3 for LIFX string lights, default: 1)",
+        "--zpb", type=int, default=3,
+        help="Zones per bulb (default: 3 for LIFX string lights)",
     )
     p_mon.add_argument(
         "--zoom", type=int, default=1,
@@ -1506,9 +1506,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_play.add_argument(
-        "--zpb", type=int, default=1,
-        help="Zones per bulb for the simulator display "
-             "(3 for LIFX string lights, default: 1)",
+        "--zpb", type=int, default=3,
+        help="Zones per bulb (default: 3 for LIFX string lights)",
     )
     p_play.add_argument(
         "--zoom", type=int, default=1,
