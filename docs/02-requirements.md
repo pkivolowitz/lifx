@@ -30,13 +30,17 @@ No external Python packages — the core is pure stdlib.
 |-------------|---------|
 | ffmpeg | macOS: `brew install ffmpeg` · Linux: `sudo apt install ffmpeg` |
 
-### Server (REST API, scheduling, dashboard)
+### Server (REST API, scheduling)
+
+No additional packages beyond core.  Just run `python3 server.py server.json`.
+
+### Database (diagnostics, dashboard)
 
 | Requirement | Install |
 |-------------|---------|
-| (core only) | No additional packages for the server itself |
-| psycopg2 *(optional, for diagnostics/dashboard)* | `pip install psycopg2-binary` |
-| PostgreSQL *(optional, for diagnostics/dashboard)* | Any accessible PostgreSQL instance |
+| Server (above) | Running `server.py` |
+| psycopg2 | `pip install psycopg2-binary` |
+| PostgreSQL | Any accessible PostgreSQL instance (NAS, Docker, cloud) |
 
 ### Remote Access (iOS app, Cloudflare Tunnel)
 
