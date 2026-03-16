@@ -213,15 +213,16 @@ class FluidSynthBackend(SynthBackend):
 
         self._fs = fluidsynth.Synth(gain=self._gain)
         self._fs.start(driver="coreaudio")
-        self._sfid = self._fs.sfload(self._soundfont_path)
+        self._sfid = self._fs.sfload(self._soundfont_path, update_midi_preset=1)
         if self._sfid < 0:
             raise RuntimeError(
                 f"FluidSynth failed to load SoundFont: {self._soundfont_path}"
             )
 
-        # Assign the soundfont to all 16 channels, bank 0, preset 0.
-        for ch in range(16):
-            self._fs.program_select(ch, self._sfid, 0, 0)
+        # Don't pre-assign programs — let the MIDI file's own
+        # program_change and bank select CCs configure everything.
+        # Pre-setting with program_select can conflict with later
+        # program_change calls that use different internal paths.
 
         logger.info(
             "FluidSynth started — soundfont=%s, gain=%.1f",
@@ -254,14 +255,24 @@ class FluidSynthBackend(SynthBackend):
             self._fs.cc(channel, cc, min(value, MIDI_MAX))
 
     def program_change(self, channel: int, program: int) -> None:
-        """Change program via FluidSynth (re-selects from loaded SoundFont)."""
+        """Change program via FluidSynth using standard MIDI program change.
+
+        Uses program_change (not program_select) so FluidSynth
+        respects bank select CCs already sent on the channel.
+        This matters for channel 9 (drums) which uses a different bank.
+        """
         if self._fs is not None:
-            self._fs.program_select(channel, self._sfid, 0, program)
+            self._fs.program_change(channel, program)
 
     def pitch_bend(self, channel: int, value: int) -> None:
-        """Send pitch bend via FluidSynth."""
+        """Send pitch bend via FluidSynth.
+
+        The MIDI wire format uses 0-16383 (center=8192).
+        pyfluidsynth expects -8192 to +8191 (center=0) and
+        adds 8192 internally.  We convert here.
+        """
         if self._fs is not None:
-            self._fs.pitch_bend(channel, value)
+            self._fs.pitch_bend(channel, value - 8192)
 
     def all_notes_off(self) -> None:
         """Silence all channels via FluidSynth system reset."""
@@ -564,9 +575,10 @@ class MidiOutEmitter:
             )
 
         elif event_type == "program_change":
-            self._backend.program_change(
-                event.get("channel", 0),
-                event.get("program", 0),
+            ch = event.get("channel", 0)
+            prog = event.get("program", 0)
+            logger.info("Program change: ch=%d prog=%d", ch, prog)
+            self._backend.program_change(ch, prog,
             )
 
         elif event_type == "pitch_bend":
