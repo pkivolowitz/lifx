@@ -1,30 +1,30 @@
 """Colorspace conversions for perceptually uniform color interpolation.
 
-Provides a complete pipeline between LIFX HSBK and CIELAB color spaces,
-enabling perceptually uniform interpolation that avoids the artifacts of
-naive HSB hue interpolation (uneven perceptual steps, brightness dips,
-muddy intermediate colors).
+Provides pipelines between LIFX HSBK and perceptual color spaces,
+enabling smooth interpolation that avoids the artifacts of naive HSB
+hue interpolation (uneven perceptual steps, brightness dips, muddy
+intermediate colors).
 
-The conversion chain:
+Three interpolation methods are available:
 
-    HSBK → sRGB → linear RGB → CIEXYZ (D65) → CIELAB
-    CIELAB → CIEXYZ (D65) → linear RGB → sRGB → HSBK
+* **oklab** (default) — Björn Ottosson's Oklab (2020).  More
+  perceptually uniform than CIELAB, especially in blues and purples.
+  Simpler math (one matrix multiply + cube root per direction).
+  The modern choice for color blending.
 
-All conversions are pure math with no external dependencies.  The CIELAB
-color space was designed so that equal numeric distances correspond to
-equal perceived color differences — making it ideal for smooth color
-transitions on LED hardware.
+* **lab** — CIELAB via CIEXYZ (D65).  The classic perceptual space.
+  Still accurate, but has known non-uniformities that Oklab fixes.
 
-Historical context: this is the same hub-and-spoke architecture that
-solved the camera-monitor-printer color matching problem.  Instead of
-N×M device-specific conversions, every device converts to/from a
-perceptual interchange space (CIELAB), reducing the problem to N+M.
+* **hsb** — Naive shortest-path HSB blending.  Cheap but produces
+  brightness dips and muddy intermediates on large hue jumps.
+
+All conversions are pure math with no external dependencies.
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.1"
+__version__ = "2.0"
 
 import math
 
@@ -313,6 +313,161 @@ def lab_to_xyz(L: float, a: float, b: float) -> tuple[float, float, float]:
 
 
 # ---------------------------------------------------------------------------
+# sRGB ↔ Oklab  (Björn Ottosson, 2020)
+# ---------------------------------------------------------------------------
+#
+# Oklab is a perceptual color space designed for uniform color blending.
+# It fixes the non-uniformities in CIELAB (especially blues/purples)
+# and uses simpler math: one 3×3 matrix, cube root, second 3×3 matrix.
+#
+# Conversion chain:
+#     sRGB → linear RGB → LMS (via M1) → cube root → Oklab (via M2)
+#     Oklab → cube (via M2⁻¹) → LMS → linear RGB (via M1⁻¹) → sRGB
+#
+# Reference: https://bottosson.github.io/posts/oklab/
+
+# sRGB linear → LMS cone responses (M1).
+_OK_M1: list[list[float]] = [
+    [0.4122214708, 0.5363325363, 0.0514459929],
+    [0.2119034982, 0.6806995451, 0.1073969566],
+    [0.0883024619, 0.2817188376, 0.6299787005],
+]
+
+# LMS cube root → Oklab (M2).
+_OK_M2: list[list[float]] = [
+    [0.2104542553, 0.7936177850, -0.0040720468],
+    [1.9779984951, -2.4285922050, 0.4505937099],
+    [0.0259040371, 0.7827717662, -0.8086757660],
+]
+
+# Oklab → LMS cube root (M2 inverse).
+_OK_M2_INV: list[list[float]] = [
+    [1.0000000000, 0.3963377774, 0.2158037573],
+    [1.0000000000, -0.1055613458, -0.0638541728],
+    [1.0000000000, -0.0894841775, -1.2914855480],
+]
+
+# LMS → sRGB linear (M1 inverse).
+_OK_M1_INV: list[list[float]] = [
+    [ 4.0767416621, -3.3077115913, 0.2309699292],
+    [-1.2684380046,  2.6097574011, -0.3413193965],
+    [-0.0041960863, -0.7034186147, 1.7076147010],
+]
+
+
+def srgb_to_oklab(r: float, g: float, b: float) -> tuple[float, float, float]:
+    """Convert sRGB to Oklab.
+
+    Args:
+        r, g, b: sRGB channels in [0.0, 1.0].
+
+    Returns:
+        Tuple of (L, a, b) in Oklab space.  L is 0–1 (not 0–100).
+    """
+    # sRGB → linear.
+    rl: float = srgb_to_linear(r)
+    gl: float = srgb_to_linear(g)
+    bl: float = srgb_to_linear(b)
+
+    # Linear RGB → LMS.
+    l: float = _OK_M1[0][0] * rl + _OK_M1[0][1] * gl + _OK_M1[0][2] * bl
+    m: float = _OK_M1[1][0] * rl + _OK_M1[1][1] * gl + _OK_M1[1][2] * bl
+    s: float = _OK_M1[2][0] * rl + _OK_M1[2][1] * gl + _OK_M1[2][2] * bl
+
+    # Cube root.
+    l_ = math.copysign(abs(l) ** LAB_ONE_THIRD, l) if l != 0.0 else 0.0
+    m_ = math.copysign(abs(m) ** LAB_ONE_THIRD, m) if m != 0.0 else 0.0
+    s_ = math.copysign(abs(s) ** LAB_ONE_THIRD, s) if s != 0.0 else 0.0
+
+    # LMS cube root → Oklab.
+    L: float = _OK_M2[0][0] * l_ + _OK_M2[0][1] * m_ + _OK_M2[0][2] * s_
+    a: float = _OK_M2[1][0] * l_ + _OK_M2[1][1] * m_ + _OK_M2[1][2] * s_
+    ob: float = _OK_M2[2][0] * l_ + _OK_M2[2][1] * m_ + _OK_M2[2][2] * s_
+
+    return (L, a, ob)
+
+
+def oklab_to_srgb(L: float, a: float, b: float) -> tuple[float, float, float]:
+    """Convert Oklab to sRGB.
+
+    Args:
+        L: Lightness (0–1).
+        a: Green–red axis.
+        b: Blue–yellow axis.
+
+    Returns:
+        Tuple of (r, g, b) each in [0.0, 1.0], clamped to gamut.
+    """
+    # Oklab → LMS cube root.
+    l_: float = _OK_M2_INV[0][0] * L + _OK_M2_INV[0][1] * a + _OK_M2_INV[0][2] * b
+    m_: float = _OK_M2_INV[1][0] * L + _OK_M2_INV[1][1] * a + _OK_M2_INV[1][2] * b
+    s_: float = _OK_M2_INV[2][0] * L + _OK_M2_INV[2][1] * a + _OK_M2_INV[2][2] * b
+
+    # Cube (inverse of cube root).
+    l: float = l_ * l_ * l_
+    m: float = m_ * m_ * m_
+    s: float = s_ * s_ * s_
+
+    # LMS → linear RGB.
+    rl: float = _OK_M1_INV[0][0] * l + _OK_M1_INV[0][1] * m + _OK_M1_INV[0][2] * s
+    gl: float = _OK_M1_INV[1][0] * l + _OK_M1_INV[1][1] * m + _OK_M1_INV[1][2] * s
+    bl: float = _OK_M1_INV[2][0] * l + _OK_M1_INV[2][1] * m + _OK_M1_INV[2][2] * s
+
+    # Clamp and apply sRGB gamma.
+    rl = max(0.0, min(1.0, rl))
+    gl = max(0.0, min(1.0, gl))
+    bl = max(0.0, min(1.0, bl))
+
+    return (linear_to_srgb(rl), linear_to_srgb(gl), linear_to_srgb(bl))
+
+
+# ---------------------------------------------------------------------------
+# HSBK ↔ Oklab  (convenience: the full pipeline)
+# ---------------------------------------------------------------------------
+
+def hsbk_to_oklab(hue: int, sat: int, bri: int) -> tuple[float, float, float]:
+    """Convert LIFX HSBK to Oklab in one call.
+
+    Args:
+        hue: LIFX hue (0–65535).
+        sat: LIFX saturation (0–65535).
+        bri: LIFX brightness (0–65535).
+
+    Returns:
+        Tuple of (L, a, b) in Oklab space.
+    """
+    h: float = hue / HSBK_MAX
+    s: float = sat / HSBK_MAX
+    b: float = bri / HSBK_MAX
+
+    r, g, bl = hsb_to_srgb(h, s, b)
+    return srgb_to_oklab(r, g, bl)
+
+
+def oklab_to_hsbk(L: float, a: float, b: float, kelvin: int) -> tuple[int, int, int, int]:
+    """Convert Oklab back to LIFX HSBK in one call.
+
+    Args:
+        L:      Lightness (0–1).
+        a:      Green–red axis.
+        b:      Blue–yellow axis.
+        kelvin: Color temperature to preserve.
+
+    Returns:
+        An HSBK tuple (hue, sat, bri, kelvin), each channel 0–65535.
+    """
+    r, g, bl = oklab_to_srgb(L, a, b)
+    h, s, bri = srgb_to_hsb(r, g, bl)
+
+    return (
+        int(h * HSBK_MAX) % (HSBK_MAX + 1),
+        int(s * HSBK_MAX),
+        int(bri * HSBK_MAX),
+        kelvin,
+    )
+
+
+# ---------------------------------------------------------------------------
 # HSBK ↔ CIELAB  (convenience: the full pipeline)
 # ---------------------------------------------------------------------------
 
@@ -440,17 +595,50 @@ def lerp_hsb(
 
 
 # ---------------------------------------------------------------------------
+# Interpolation in Oklab
+# ---------------------------------------------------------------------------
+
+def lerp_oklab(
+    hsbk1: tuple[int, int, int, int],
+    hsbk2: tuple[int, int, int, int],
+    blend: float,
+) -> tuple[int, int, int, int]:
+    """Interpolate between two HSBK colors through Oklab space.
+
+    More perceptually uniform than CIELAB, especially in blues and
+    purples.  Simpler and faster math.  The recommended default.
+
+    Args:
+        hsbk1:  Start color as (hue, sat, bri, kelvin).
+        hsbk2:  End color as (hue, sat, bri, kelvin).
+        blend:  Blend factor 0.0 (pure hsbk1) to 1.0 (pure hsbk2).
+
+    Returns:
+        Interpolated HSBK tuple.  Kelvin is taken from hsbk1.
+    """
+    L1, a1, b1 = hsbk_to_oklab(hsbk1[0], hsbk1[1], hsbk1[2])
+    L2, a2, b2 = hsbk_to_oklab(hsbk2[0], hsbk2[1], hsbk2[2])
+
+    L: float = L1 + (L2 - L1) * blend
+    a: float = a1 + (a2 - a1) * blend
+    b: float = b1 + (b2 - b1) * blend
+
+    return oklab_to_hsbk(L, a, b, hsbk1[3])
+
+
+# ---------------------------------------------------------------------------
 # Interpolation dispatch — global method switch
 # ---------------------------------------------------------------------------
 
 # Available interpolation methods, keyed by name.
 LERP_METHODS: dict[str, callable] = {
+    "oklab": lerp_oklab,
     "lab": lerp_lab,
     "hsb": lerp_hsb,
 }
 
 # Module-level switch — the active interpolation method name.
-_lerp_method: str = "lab"
+_lerp_method: str = "oklab"
 
 
 def set_lerp_method(method: str) -> None:

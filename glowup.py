@@ -1520,10 +1520,10 @@ def build_parser() -> argparse.ArgumentParser:
              "0=snap, higher=smoother but adds latency",
     )
     p_play.add_argument(
-        "--lerp", type=str, default="lab",
-        choices=["lab", "hsb"],
-        help="Color interpolation method: lab (perceptually uniform, "
-             "heavier CPU) or hsb (cheap, default: lab)",
+        "--lerp", type=str, default="oklab",
+        choices=["oklab", "lab", "hsb"],
+        help="Color interpolation method: oklab (best, default), "
+             "lab (classic CIELAB), or hsb (cheap)",
     )
 
     # Auto-add every effect's Param declarations as CLI flags.
@@ -1610,9 +1610,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output file path (default: <effect>.<format>)",
     )
     p_record.add_argument(
-        "--lerp", type=str, default="lab",
-        choices=["lab", "hsb"],
-        help="Color interpolation method (default: lab)",
+        "--lerp", type=str, default="oklab",
+        choices=["oklab", "lab", "hsb"],
+        help="Color interpolation method (default: oklab)",
     )
     p_record.add_argument(
         "--author", type=str, default=None,
