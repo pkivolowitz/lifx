@@ -1910,4 +1910,14 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # Clean exit on Ctrl+C — no ugly traceback.
+        print("\nInterrupted.", file=sys.stderr)
+        sys.exit(130)
+    except BrokenPipeError:
+        # Piped output closed early (e.g. glowup.py effects | head).
+        # Suppress the traceback and flush stderr quietly.
+        sys.stderr.close()
+        sys.exit(1)
