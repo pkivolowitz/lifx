@@ -41,6 +41,7 @@ Endpoints::
     POST /api/devices/{ip}/identify      Pulse brightness to locate device
     POST /api/devices/{ip}/nickname      Set a custom display name
     POST /api/effects/{name}/defaults    Save tuned params as effect defaults
+    GET  /api/groups                     Device groups from config
     GET  /api/schedule                   Schedule entries with resolved times
     POST /api/schedule/{index}/enabled   Enable or disable a schedule entry
     GET  /api/media/sources              List media sources with status
@@ -1958,6 +1959,11 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_get_device_colors_stream(ip)
             return
 
+        # /api/groups
+        if path == "/api/groups":
+            self._handle_get_groups()
+            return
+
         # /api/schedule
         if path == "/api/schedule":
             self._handle_get_schedule()
@@ -2147,6 +2153,24 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         """GET /api/effects — list effects with param metadata."""
         effects: dict[str, Any] = self.device_manager.list_effects()
         self._send_json(200, {"effects": effects})
+
+    def _handle_get_groups(self) -> None:
+        """GET /api/groups — device groups from config.
+
+        Returns all device groups defined in the server config,
+        excluding comment keys (those starting with ``_``).
+
+        Response::
+
+            {
+                "groups": {
+                    "porch": ["10.0.0.25", "10.0.0.26"],
+                    "office": ["10.0.0.30"]
+                }
+            }
+        """
+        groups: dict[str, list[str]] = _get_groups(self.config)
+        self._send_json(200, {"groups": groups})
 
     def _handle_get_schedule(self) -> None:
         """GET /api/schedule — schedule entries with resolved times.

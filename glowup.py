@@ -8,7 +8,8 @@ Usage::
     python3 glowup.py identify --ip <device-ip>   # pulse a device to locate it
     python3 glowup.py monitor --ip <device-ip>           # monitor device in real time
     python3 glowup.py play cylon --ip <device-ip>    # run an effect on one device
-    python3 glowup.py play cylon --config conf.json --group office  # virtual multizone
+    python3 glowup.py play cylon --group office               # virtual multizone (from server)
+    python3 glowup.py play cylon --group office --config c.json  # virtual multizone (local file)
     python3 glowup.py replay --file song.mid             # replay MIDI at real-time tempo
     python3 glowup.py replay --file song.mid --speed 0   # bulk ingest (fast as possible)
 
@@ -28,6 +29,8 @@ import signal
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -113,6 +116,19 @@ DEFAULT_REPLAY_PORT: int = 1883
 
 DEFAULT_REPLAY_SIGNAL: str = "sensor:midi:events"
 """Default signal name for MIDI replay events on the bus."""
+
+# Server connection defaults (for fetching groups remotely).
+DEFAULT_SERVER_HOST: str = "10.0.0.48"
+"""Default GlowUp server hostname (the Pi)."""
+
+DEFAULT_SERVER_PORT: int = 8420
+"""Default GlowUp server port."""
+
+TOKEN_PATH: Path = Path.home() / ".glowup_token"
+"""Path to the bearer-token file for server authentication."""
+
+SERVER_TIMEOUT_SECONDS: float = 5.0
+"""HTTP timeout for server API requests."""
 
 # Minimum column widths for the discovery table display.
 # These prevent columns from collapsing when device labels are short.
@@ -302,6 +318,92 @@ def _load_group(config_path: str, group_name: str) -> list[str]:
     ips: list = groups[group_name]
     if not ips:
         _print(f"ERROR: Group '{group_name}' is empty.", file=sys.stderr)
+        sys.exit(1)
+
+    return ips
+
+
+def _fetch_group_from_server(
+    group_name: str,
+    server: str,
+) -> list[str]:
+    """Fetch a device group from the GlowUp server via its REST API.
+
+    Reads the bearer token from :data:`TOKEN_PATH`, calls
+    ``GET /api/groups`` on the server, and extracts the requested
+    group.
+
+    Args:
+        group_name: Name of the group to retrieve.
+        server:     ``host:port`` of the GlowUp server.
+
+    Returns:
+        A list of IP addresses / hostnames in the group.
+
+    Raises:
+        SystemExit: If the token file is missing, the server is
+                    unreachable, or the group does not exist.
+    """
+    # --- Read auth token -----------------------------------------------------
+    if not TOKEN_PATH.is_file():
+        _print(
+            f"ERROR: Token file not found: {TOKEN_PATH}\n"
+            "       Create it with the server's auth_token value "
+            "(chmod 600).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    token: str = TOKEN_PATH.read_text().strip()
+    if not token:
+        _print(
+            f"ERROR: Token file is empty: {TOKEN_PATH}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # --- Fetch groups from the server ----------------------------------------
+    url: str = f"http://{server}/api/groups"
+    req: urllib.request.Request = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=SERVER_TIMEOUT_SECONDS) as resp:
+            body: dict = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        _print(
+            f"ERROR: Server returned {exc.code} for {url}: {exc.reason}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except (urllib.error.URLError, OSError) as exc:
+        _print(
+            f"ERROR: Cannot reach server at {server}: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # --- Extract the requested group -----------------------------------------
+    groups: dict = body.get("groups", {})
+    if group_name not in groups:
+        available: str = (
+            ", ".join(sorted(groups.keys())) if groups else "(none)"
+        )
+        _print(
+            f"ERROR: Group '{group_name}' not found on server. "
+            f"Available: {available}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    ips: list = groups[group_name]
+    if not ips:
+        _print(
+            f"ERROR: Group '{group_name}' is empty on server.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     return ips
@@ -704,12 +806,15 @@ def _build_polychrome_map(em: Any) -> list[bool]:
 def cmd_play(args: argparse.Namespace) -> None:
     """Connect to a LIFX device (or group) and run the named effect.
 
-    Supports two modes:
+    Supports three modes:
 
     * **Single device** — ``--ip <address>`` targets one device.
-    * **Virtual multizone** — ``--config <file> --group <name>`` loads
-      a device group from the config file and treats every device in
-      the group as one zone in a virtual multizone strip.
+    * **Virtual multizone (server)** — ``--group <name>`` fetches the
+      group's device list from the GlowUp server and treats every
+      device in the group as one zone in a virtual multizone strip.
+    * **Virtual multizone (local)** — ``--group <name> --config <file>``
+      loads the group from a local JSON config file instead of the
+      server.
 
     This function blocks until SIGINT or SIGTERM is received, then
     gracefully fades the device(s) to black and disconnects.
@@ -719,14 +824,22 @@ def cmd_play(args: argparse.Namespace) -> None:
     args : argparse.Namespace
         Parsed CLI arguments.  Expected attributes: ``ip`` (str or None),
         ``config`` (str or None), ``group`` (str or None),
-        ``effect`` (str), ``fps`` (int), plus any effect-specific
-        parameters.
+        ``server`` (str or None), ``effect`` (str), ``fps`` (int),
+        plus any effect-specific parameters.
     """
     has_ip: bool = bool(getattr(args, "ip", None))
-    has_group: bool = bool(getattr(args, "config", None) and
-                           getattr(args, "group", None))
+    has_group: bool = bool(getattr(args, "group", None))
+    has_config: bool = bool(getattr(args, "config", None))
     sim_only: bool = bool(getattr(args, "sim_only", False))
     virtual_zones: int = getattr(args, "zones", None) or 0
+
+    # --config without --group is meaningless.
+    if has_config and not has_group:
+        _print(
+            "ERROR: --config requires --group.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # --zones implies --sim-only (no device needed).
     if virtual_zones > 0:
@@ -735,15 +848,16 @@ def cmd_play(args: argparse.Namespace) -> None:
 
     if not has_ip and not has_group and virtual_zones <= 0:
         _print(
-            "ERROR: Specify either --ip or both --config and --group.\n"
-            "       For device-free simulator mode, use --zones <count>.",
+            "ERROR: Specify --ip, --group, or --zones.\n"
+            "       --group fetches device IPs from the server\n"
+            "       (or from a local file with --config).",
             file=sys.stderr,
         )
         sys.exit(1)
 
     if has_ip and has_group:
         _print(
-            "ERROR: --ip and --config/--group are mutually exclusive.",
+            "ERROR: --ip and --group are mutually exclusive.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -755,7 +869,7 @@ def cmd_play(args: argparse.Namespace) -> None:
         if has_ip or has_group:
             _print(
                 "ERROR: --zones is for device-free mode; "
-                "do not combine with --ip or --config/--group.",
+                "do not combine with --ip or --group.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -773,7 +887,16 @@ def cmd_play(args: argparse.Namespace) -> None:
     # --- Connect to device(s) ------------------------------------------------
     elif has_group:
         # Virtual multizone: load group, connect all devices, wrap in emitters.
-        ips: list[str] = _load_group(args.config, args.group)
+        # If --config is provided, use the local file; otherwise ask the server.
+        if has_config:
+            ips: list[str] = _load_group(args.config, args.group)
+        else:
+            server: str = getattr(args, "server", None) or (
+                f"{DEFAULT_SERVER_HOST}:{DEFAULT_SERVER_PORT}"
+            )
+            _print(f"Fetching group '{args.group}' from server ({server})...",
+                   flush=True)
+            ips = _fetch_group_from_server(args.group, server)
         _print(f"Connecting to group '{args.group}' ({len(ips)} devices)...",
               flush=True)
         devices: list[LifxDevice] = _connect_group(ips)
@@ -1313,7 +1436,9 @@ def _print_effect_help(effect_name: str) -> None:
     print(f"\nUsage:")
     print(f"  python3 glowup.py play {effect_name} --ip <device-ip> [parameters]")
     print(f"  python3 glowup.py play {effect_name} "
-          f"--config <file> --group <name> [parameters]")
+          f"--group <name> [parameters]")
+    print(f"  python3 glowup.py play {effect_name} "
+          f"--group <name> --config <file> [parameters]")
     print(f"  python3 glowup.py play {effect_name} "
           f"--ip <device-ip> --sim-only [parameters]")
     print(f"  python3 glowup.py play {effect_name} "
@@ -1477,11 +1602,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_play.add_argument(
         "--config", default=None,
-        help="Path to config file containing device groups",
+        help="Path to local config file containing device groups",
     )
     p_play.add_argument(
         "--group", default=None,
-        help="Device group name (requires --config)",
+        help=(
+            "Device group name. Fetched from the server unless "
+            "--config provides a local file"
+        ),
+    )
+    p_play.add_argument(
+        "--server", default=None,
+        help=(
+            f"Server host:port for remote group lookup "
+            f"(default: {DEFAULT_SERVER_HOST}:{DEFAULT_SERVER_PORT})"
+        ),
     )
     p_play.add_argument(
         "--fps", type=int, default=None,
