@@ -107,6 +107,7 @@ Authorization: Bearer your-secret-token-here
 | `POST` | `/api/devices/{ip}/stop` | Stop current effect (fade to black) |
 | `POST` | `/api/devices/{ip}/resume` | Clear phone override, resume schedule |
 | `POST` | `/api/devices/{ip}/power` | Power on/off (body: `{"on": true}`) |
+| `GET` | `/api/groups` | Device groups from config |
 | `GET` | `/api/schedule` | Schedule entries with resolved times |
 | `POST` | `/api/schedule/{index}/enabled` | Enable or disable a schedule entry |
 | `GET` | `/api/media/sources` | List media sources with status (see [Media Pipeline](20-media-pipeline.md)) |
@@ -133,6 +134,9 @@ curl -X POST -H "Authorization: Bearer $TOKEN" \
 # Stop the effect
 curl -X POST -H "Authorization: Bearer $TOKEN" \
      $BASE/api/devices/10.0.0.62/stop
+
+# List device groups (used by glowup.py --group)
+curl -H "Authorization: Bearer $TOKEN" $BASE/api/groups
 ```
 
 ### Server Readiness

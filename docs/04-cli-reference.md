@@ -64,17 +64,28 @@ Run an effect on a device or device group. Blocks until Ctrl+C or SIGTERM.
 python3 glowup.py play <effect> --ip <device_ip> [--fps N] [--param value ...]
 ```
 
-**Virtual multizone (device group):**
+**Virtual multizone (device group from server):**
 
 ```bash
-python3 glowup.py play <effect> --config <file> --group <name> [--fps N] [--param value ...]
+python3 glowup.py play <effect> --group <name> [--fps N] [--param value ...]
 ```
 
-When using `--config`/`--group`, devices are combined into a virtual
-multizone strip.  Multizone devices (string lights, beams) contribute all
-their physical zones; single bulbs contribute one zone each.  A group
-containing a 108-zone string light and 4 single bulbs becomes a 112-zone
-virtual device.  Effects that spread patterns across zones (cylon, aurora,
+**Virtual multizone (device group from local file):**
+
+```bash
+python3 glowup.py play <effect> --group <name> --config <file> [--fps N] [--param value ...]
+```
+
+When using `--group`, the device list is fetched from the GlowUp server
+via `GET /api/groups`.  The server returns groups defined in its config
+file, authenticated by a bearer token stored in `~/.glowup_token`.
+Add `--config <file>` to load the group from a local JSON file instead.
+
+Devices in a group are combined into a virtual multizone strip.
+Multizone devices (string lights, beams) contribute all their physical
+zones; single bulbs contribute one zone each.  A group containing a
+108-zone string light and 4 single bulbs becomes a 112-zone virtual
+device.  Effects that spread patterns across zones (cylon, aurora,
 wave, twinkle) animate across all devices as if they were a single strip.
 Multizone devices receive efficient batched updates (the same 2-packet
 extended multizone protocol); single bulbs receive individual `set_color()`
@@ -84,15 +95,16 @@ luma-converted brightness.  You can mix any device types freely.
 | Option      | Default | Description                               |
 |-------------|---------|-------------------------------------------|
 | `--ip`      | *(none)* | Target device IP address (single device mode) |
-| `--config`  | *(none)* | Path to config file containing device groups |
-| `--group`   | *(none)* | Device group name (requires `--config`)   |
+| `--group`   | *(none)* | Device group name (fetched from server, or from local file with `--config`) |
+| `--config`  | *(none)* | Path to local config file containing device groups |
+| `--server`  | `10.0.0.48:8420` | Server host:port for remote group lookup |
 | `--fps`     | 20      | Frames per second for the render loop     |
 | `--sim`     | off     | Open a live simulator window alongside the real lights               |
 | `--sim-only` | off    | Query device geometry then run the effect in the simulator only — no commands sent to the lights (see [Sim-Only Mode](#sim-only-mode)) |
 | `--zpb`     | 3       | Zones per bulb.  Effects render one color per bulb; the engine replicates it across all zones in the bulb.  Default 3 matches LIFX string lights (36 zones = 12 bulbs).  Use 1 for per-zone rendering. |
 | `--lerp`    | oklab   | Color interpolation: `oklab` (best), `lab` (classic CIELAB), `hsb` (cheap) |
 
-You must specify either `--ip` or both `--config` and `--group` (not both).
+You must specify `--ip`, `--group`, or `--zones` (not combinations).
 
 Effect-specific parameters are auto-generated as `--flag` options using
 hyphenated names (e.g. `--launch-rate`, `--burst-spread`).  Any parameter
@@ -134,11 +146,11 @@ python3 glowup.py play aurora --ip <device-ip> --brightness 40 --speed 15
 # Waving French flag
 python3 glowup.py play flag --ip <device-ip> --country france
 
-# Cylon scanner across 5 room lamps (virtual multizone)
-python3 glowup.py play cylon --config schedule.json --group office --speed 3
+# Cylon scanner across 5 room lamps (group fetched from server)
+python3 glowup.py play cylon --group office --speed 3
 
-# Aurora drifting around a room
-python3 glowup.py play aurora --config schedule.json --group living-room
+# Aurora drifting around a room (group from local config file)
+python3 glowup.py play aurora --group living-room --config schedule.json
 
 # Preview an effect in the simulator window alongside the real lights
 python3 glowup.py play cylon --ip <device-ip> --sim
