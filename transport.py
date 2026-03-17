@@ -16,6 +16,7 @@ Typical usage::
 
 __version__ = "1.3"
 
+import logging
 import math
 import random
 import re
@@ -648,7 +649,10 @@ class LifxDevice:
             msg_type, len(payload), self.source_id,
             target=self.mac, tagged=tagged, ack=ack, res=res,
         )
-        self.sock.sendto(header + payload, (self.ip, LIFX_PORT))
+        try:
+            self.sock.sendto(header + payload, (self.ip, LIFX_PORT))
+        except OSError as exc:
+            logging.debug("Send to %s failed: %s", self.ip, exc)
 
     def _send_and_recv(
         self,
@@ -696,6 +700,9 @@ class LifxDevice:
                         return msg["payload"]  # type: ignore[return-value]
                 except socket.timeout:
                     break
+                except OSError:
+                    # Host unreachable, network down, etc.
+                    break
         return None
 
     def fire_and_forget(self, msg_type: int, payload: bytes = b'') -> None:
@@ -712,7 +719,10 @@ class LifxDevice:
         header = _build_header(
             msg_type, len(payload), self.source_id, target=self.mac,
         )
-        self.sock.sendto(header + payload, (self.ip, LIFX_PORT))
+        try:
+            self.sock.sendto(header + payload, (self.ip, LIFX_PORT))
+        except OSError as exc:
+            logging.debug("Fire-and-forget to %s failed: %s", self.ip, exc)
 
     # -- Device info queries -------------------------------------------------
 
