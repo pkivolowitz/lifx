@@ -1062,6 +1062,26 @@ def cmd_play(args: argparse.Namespace) -> None:
         stop_requested.wait()
 
     _print("\nStopping...")
+
+    # Print ack-pacing statistics for each emitter before shutdown.
+    # VirtualMultizoneEmitter wraps member emitters — check both levels.
+    emitters_to_check: list = list(ctrl.emitters)
+    for e in ctrl.emitters:
+        members = getattr(e, '_emitters', None)
+        if members:
+            emitters_to_check.extend(members)
+    for e in emitters_to_check:
+        info = e.get_info()
+        ack = info.get("ack_stats")
+        if ack and ack.get("sends", 0) > 0:
+            _print(f"\n  Ack stats [{info.get('label', '?')}]:")
+            _print(f"    Sends:   {ack['sends']}")
+            _print(f"    Acked:   {ack['acked']}")
+            _print(f"    Drops:   {ack['drops']}")
+            _print(f"    RTT avg: {ack['rtt_avg_ms']:.1f} ms")
+            _print(f"    RTT min: {ack['rtt_min_ms']:.1f} ms")
+            _print(f"    RTT max: {ack['rtt_max_ms']:.1f} ms")
+
     # In sim-only mode em is a _NullEmitter; skip the fade and power-off
     # so the intent is clear even though the no-ops would be harmless.
     if sim_only:

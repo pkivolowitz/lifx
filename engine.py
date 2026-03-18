@@ -31,7 +31,7 @@ Typical usage::
 
 from __future__ import annotations
 
-__version__ = "2.0"
+__version__ = "2.1"
 
 import queue
 import threading
@@ -60,10 +60,11 @@ DEFAULT_FPS: int = 20
 # and the engine replicates each color zpb times.
 DEFAULT_ZPB: int = 3
 
-# Neon-class devices stutter at high FPS with short transitions.
-# Empirically tested: 10 fps with 1000 ms transition is smooth.
-NEON_FPS: int = 10
-NEON_TRANSITION_MS: int = 1000
+# Transition time multiplier.  The firmware interpolates between
+# frames over this duration.  2x the frame interval ensures smooth
+# crossfading — the device is always mid-interpolation when the
+# next frame arrives, hiding frame boundaries.
+TRANSITION_FACTOR: float = 2.0
 
 # How long to wait (seconds) for the render thread to finish on stop().
 THREAD_JOIN_TIMEOUT: float = 5.0
@@ -145,10 +146,9 @@ class Engine:
         self._transition_ms_override: Optional[int] = transition_ms
         self._fps_explicit: bool = fps_explicit
 
-        # Auto-tune for Neon-class devices when the user didn't explicitly
-        # set FPS or transition.  Neon firmware needs slower frame rates
-        # with longer transitions for smooth animation.
-        self._apply_neon_tuning()
+        # NOTE: Prior versions auto-tuned FPS for Neon devices here.
+        # Ack-paced sends in transport.py now provide natural back-pressure,
+        # so Neon-specific FPS hacks are no longer needed.
         self.effect: Optional[Effect] = None
         self.running: bool = False
         self._send_thread: Optional[threading.Thread] = None
@@ -181,28 +181,6 @@ class Engine:
         # Generation counter: incremented on each effect swap so the send
         # thread can discard stale pre-rendered frames from the old effect.
         self._effect_generation: int = 0
-
-    def _apply_neon_tuning(self) -> None:
-        """Auto-tune FPS for Neon-class devices.
-
-        Neon firmware stutters at the default 20 fps packet rate.
-        When the user hasn't explicitly set ``--fps``, this method
-        detects Neon emitters and lowers FPS to :data:`NEON_FPS`.
-
-        Transition time is NOT overridden — the normal default
-        (``2000 / fps``) preserves sharp detail for effects like
-        morse code while still reducing stutter.
-        """
-        if self._fps_explicit:
-            return  # User explicitly set FPS — respect their choice.
-
-        has_neon: bool = any(
-            getattr(em, "is_neon", False) for em in self.emitters
-        )
-        if not has_neon:
-            return
-
-        self.fps = NEON_FPS
 
     def start(self, effect: Effect,
               bindings: Optional[dict[str, dict]] = None,
@@ -429,15 +407,14 @@ class Engine:
         """
         # Pre-compute the target interval to avoid division every frame.
         interval: float = 1.0 / self.fps
-        # Transition duration = 2x frame interval.  This keeps the firmware
-        # mid-interpolation when the next frame arrives, so a single dropped
-        # UDP packet never exposes the committed layer.
-        # The CLI --transition flag overrides this for tuning on devices
-        # with different firmware interpolation behavior.
+        # Transition duration = 1x frame interval.  With ack-paced sends
+        # every frame is confirmed delivered, so the old 2x overlap that
+        # compensated for dropped UDP packets is no longer needed.
+        # The CLI --transition flag overrides this for fine-tuning.
         if self._transition_ms_override is not None:
             transition_ms: int = self._transition_ms_override
         else:
-            transition_ms = int(2000.0 / self.fps)
+            transition_ms = int(TRANSITION_FACTOR * 1000.0 / self.fps)
 
         last_colors: dict[int, list] = {}
 

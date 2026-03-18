@@ -14,7 +14,7 @@ Typical usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.3"
+__version__ = "1.4"
 
 import logging
 import math
@@ -22,6 +22,7 @@ import random
 import re
 import socket
 import struct
+import threading
 import time
 from typing import Optional
 
@@ -55,6 +56,12 @@ DISCOVERY_WAKE_BURSTS: int = 3       # Rapid GetService packets before main loop
 DISCOVERY_WAKE_DELAY: float = 0.1    # Seconds between wake burst packets
 MAX_UDP_PAYLOAD: int = 1500     # Standard MTU-safe UDP receive buffer
 
+# Ack worker constants — per-IP acked send pacing
+ACK_TIMEOUT: float = 0.2       # Seconds to wait for ack (observed avg ~5ms, spikes ~200ms)
+ACK_RETRIES: int = 0           # No retries — move on to the next frame immediately
+ACK_STATS_LOG_INTERVAL: int = 500  # Log RTT summary every N acked frames
+ACK_SEQ_WRAP: int = 256        # Sequence number wraps at 0-255 (u8)
+
 # Label / group payload sizes (from LIFX protocol spec)
 LABEL_FIELD_SIZE: int = 32
 GROUP_PAYLOAD_MIN: int = 48
@@ -70,6 +77,7 @@ LIGHT_STATE_POWER_OFFSET: int = 10  # Power field offset within LightState paylo
 
 MSG_GET_SERVICE: int = 2
 MSG_STATE_SERVICE: int = 3
+MSG_ACKNOWLEDGEMENT: int = 45
 MSG_GET_LABEL: int = 23
 MSG_STATE_LABEL: int = 25
 MSG_GET_VERSION: int = 32
@@ -366,6 +374,7 @@ def _build_header(
     tagged: bool = False,
     ack: bool = False,
     res: bool = False,
+    seq: int = 0,
 ) -> bytes:
     """Build a 36-byte LIFX protocol header.
 
@@ -383,6 +392,7 @@ def _build_header(
         tagged:       Whether this is a tagged (broadcast) message.
         ack:          Request an acknowledgement from the device.
         res:          Request a response from the device.
+        seq:          Sequence number (0--255) for ack correlation.
 
     Returns:
         A 36-byte ``bytes`` header ready to prepend to a payload.
@@ -411,7 +421,7 @@ def _build_header(
     reserved = b'\x00' * 6
     # Bit 1 = ack_required, bit 0 = res_required
     ack_res = (1 if ack else 0) << 1 | (1 if res else 0)
-    frame_addr = target + reserved + struct.pack("<BB", ack_res, 0)
+    frame_addr = target + reserved + struct.pack("<BB", ack_res, seq & 0xFF)
 
     # Protocol Header: timestamp (u64, always 0) + type (u16) + reserved (u16)
     proto_header = struct.pack("<QHH", 0, msg_type, 0)
@@ -472,6 +482,250 @@ def mac_bytes_to_str(mac_bytes: bytes) -> str:
 
 
 # ---------------------------------------------------------------------------
+# _AckWorker — per-device ack-paced send thread
+# ---------------------------------------------------------------------------
+
+# Module logger (used by _AckWorker and elsewhere).
+_log: logging.Logger = logging.getLogger("glowup.transport")
+
+
+class _AckWorker:
+    """Per-device daemon thread that sends frames with ack-pacing.
+
+    Maintains a size-1 frame slot: the engine overwrites it each frame
+    (non-blocking), and the worker sends the latest frame, waits for
+    the LIFX Acknowledgement (msg type 45), then grabs the next.
+
+    This provides natural back-pressure: slow devices pace themselves
+    while fast devices run at full speed.  Multiple devices run in
+    parallel (each has its own worker).
+
+    Attributes:
+        stats: Dict of RTT and delivery statistics.
+    """
+
+    def __init__(self, device: "LifxDevice") -> None:
+        """Initialize the ack worker for a specific device.
+
+        The worker thread is not started until the first :meth:`submit`
+        call (lazy start), avoiding socket contention during device
+        queries in :meth:`LifxDevice.query_all`.
+
+        Args:
+            device: The :class:`LifxDevice` whose socket we send on.
+        """
+        self._device: "LifxDevice" = device
+        self._slot_lock: threading.Lock = threading.Lock()
+        self._slot: Optional[list[tuple[int, bytes]]] = None
+        self._slot_event: threading.Event = threading.Event()
+        self._stop_event: threading.Event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._started: bool = False
+        self._seq: int = 0
+
+        # Cumulative statistics.
+        self._stats_lock: threading.Lock = threading.Lock()
+        self._rtt_count: int = 0
+        self._rtt_sum: float = 0.0
+        self._rtt_min: float = float('inf')
+        self._rtt_max: float = 0.0
+        self._drops: int = 0
+        self._sends: int = 0
+
+    def submit(self, packets: list[tuple[int, bytes]]) -> None:
+        """Submit a frame for acked delivery (non-blocking).
+
+        Replaces any pending frame in the slot.  The worker thread
+        picks up the latest frame on its next iteration, ensuring
+        latest-frame semantics (no stale playback).
+
+        Args:
+            packets: List of ``(msg_type, payload)`` tuples.  For
+                     multizone devices with >82 zones this may contain
+                     multiple staging packets followed by a final
+                     apply packet.
+        """
+        with self._slot_lock:
+            self._slot = packets
+        self._slot_event.set()
+        if not self._started:
+            self._start()
+
+    def _start(self) -> None:
+        """Spawn the worker thread on first submit (lazy start)."""
+        if self._started:
+            return
+        self._started = True
+        self._thread = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name=f"ack-{self._device.ip}",
+        )
+        self._thread.start()
+
+    def _run(self) -> None:
+        """Worker loop: wait for frame, send with ack, repeat."""
+        sock: socket.socket = self._device.sock
+        # Save the original timeout and switch to ack timeout.
+        original_timeout: Optional[float] = sock.gettimeout()
+        sock.settimeout(ACK_TIMEOUT)
+
+        try:
+            while not self._stop_event.is_set():
+                # Wait for a new frame (or stop signal).
+                self._slot_event.wait(timeout=ACK_TIMEOUT)
+                if self._stop_event.is_set():
+                    break
+
+                # Atomically read-and-clear the slot.
+                with self._slot_lock:
+                    packets = self._slot
+                    self._slot = None
+                self._slot_event.clear()
+
+                if packets is None:
+                    continue
+
+                self._send_with_ack(sock, packets)
+        finally:
+            # Restore the original socket timeout.
+            try:
+                sock.settimeout(original_timeout)
+            except OSError:
+                pass
+
+    def _send_with_ack(
+        self,
+        sock: socket.socket,
+        packets: list[tuple[int, bytes]],
+    ) -> None:
+        """Send all packets in a frame, ack-waiting on the last one.
+
+        Intermediate packets (APPLY_NO staging) are sent fire-and-forget.
+        Only the final packet (APPLY_YES) sets ack_required and waits
+        for Acknowledgement (msg type 45).
+
+        Args:
+            sock:    The device's UDP socket.
+            packets: Ordered list of ``(msg_type, payload)`` tuples.
+        """
+        if not packets:
+            return
+
+        dest: tuple[str, int] = (self._device.ip, LIFX_PORT)
+        seq: int = self._seq
+        self._seq = (self._seq + 1) % ACK_SEQ_WRAP
+
+        # Fire-and-forget all but the last packet (staging).
+        for msg_type, payload in packets[:-1]:
+            header = _build_header(
+                msg_type, len(payload), self._device.source_id,
+                target=self._device.mac, seq=seq,
+            )
+            try:
+                sock.sendto(header + payload, dest)
+            except OSError:
+                pass
+
+        # Final packet: send with ack_required and wait.
+        final_type, final_payload = packets[-1]
+        header = _build_header(
+            final_type, len(final_payload), self._device.source_id,
+            target=self._device.mac, ack=True, seq=seq,
+        )
+        pkt: bytes = header + final_payload
+
+        for attempt in range(1 + ACK_RETRIES):
+            t_send: float = time.monotonic()
+            try:
+                sock.sendto(pkt, dest)
+            except OSError:
+                with self._stats_lock:
+                    self._drops += 1
+                return
+
+            with self._stats_lock:
+                self._sends += 1
+
+            # Wait for ack.
+            acked: bool = self._wait_for_ack(sock, t_send)
+            if acked:
+                return
+
+        # All attempts exhausted — record drop.
+        with self._stats_lock:
+            self._drops += 1
+
+    def _wait_for_ack(self, sock: socket.socket, t_send: float) -> bool:
+        """Block until an Acknowledgement arrives or timeout expires.
+
+        Args:
+            sock:   The device's UDP socket.
+            t_send: Monotonic timestamp of the send for RTT calculation.
+
+        Returns:
+            ``True`` if an ack was received, ``False`` on timeout.
+        """
+        deadline: float = time.monotonic() + ACK_TIMEOUT
+        while time.monotonic() < deadline:
+            try:
+                data, _ = sock.recvfrom(MAX_UDP_PAYLOAD)
+                msg = _parse_message(data)
+                if msg and msg["type"] == MSG_ACKNOWLEDGEMENT:
+                    rtt_ms: float = (time.monotonic() - t_send) * 1000.0
+                    with self._stats_lock:
+                        self._rtt_count += 1
+                        self._rtt_sum += rtt_ms
+                        if rtt_ms < self._rtt_min:
+                            self._rtt_min = rtt_ms
+                        if rtt_ms > self._rtt_max:
+                            self._rtt_max = rtt_ms
+                        count = self._rtt_count
+                    if count % ACK_STATS_LOG_INTERVAL == 0:
+                        stats = self.get_stats()
+                        _log.info(
+                            "Ack stats [%s]: %d acked, "
+                            "rtt avg %.1fms min %.1fms max %.1fms, "
+                            "%d drops",
+                            self._device.ip, stats["acked"],
+                            stats["rtt_avg_ms"], stats["rtt_min_ms"],
+                            stats["rtt_max_ms"], stats["drops"],
+                        )
+                    return True
+            except socket.timeout:
+                return False
+            except OSError:
+                return False
+        return False
+
+    def get_stats(self) -> dict:
+        """Return a snapshot of cumulative ack statistics.
+
+        Returns:
+            Dict with keys: ``acked``, ``sends``, ``drops``,
+            ``rtt_avg_ms``, ``rtt_min_ms``, ``rtt_max_ms``.
+        """
+        with self._stats_lock:
+            count = self._rtt_count
+            return {
+                "acked": count,
+                "sends": self._sends,
+                "drops": self._drops,
+                "rtt_avg_ms": round(self._rtt_sum / count, 1) if count else 0.0,
+                "rtt_min_ms": round(self._rtt_min, 1) if count else 0.0,
+                "rtt_max_ms": round(self._rtt_max, 1) if count else 0.0,
+            }
+
+    def stop(self) -> None:
+        """Signal the worker thread to exit and wait for it."""
+        self._stop_event.set()
+        self._slot_event.set()  # Wake the thread if it's waiting.
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+
+
+# ---------------------------------------------------------------------------
 # LifxDevice
 # ---------------------------------------------------------------------------
 
@@ -499,6 +753,7 @@ class LifxDevice:
         ip: str,
         mac_bytes: Optional[bytes] = None,
         source_id: Optional[int] = None,
+        acked: bool = True,
     ) -> None:
         """Create a device handle and open a persistent UDP socket.
 
@@ -509,6 +764,12 @@ class LifxDevice:
             mac_bytes: 8-byte MAC address (default: all zeros).
             source_id: Session identifier (default: random value in
                        [SOURCE_ID_MIN, SOURCE_ID_MAX]).
+            acked:     If ``True`` (default), animation frames are sent
+                       via a per-device :class:`_AckWorker` that waits
+                       for LIFX Acknowledgement before sending the next
+                       frame.  This provides natural back-pressure and
+                       eliminates dropped frames.  Set to ``False`` for
+                       legacy fire-and-forget behavior.
 
         Raises:
             ValueError: If *ip* cannot be resolved to a valid IPv4 address.
@@ -539,6 +800,11 @@ class LifxDevice:
         self.product_name: Optional[str] = None
         self.zone_count: Optional[int] = None
 
+        # Per-device ack worker (lazy-started on first animation frame).
+        self._ack_worker: Optional[_AckWorker] = (
+            _AckWorker(self) if acked else None
+        )
+
     # -- Properties ----------------------------------------------------------
 
     @property
@@ -567,9 +833,9 @@ class LifxDevice:
     def is_neon(self) -> Optional[bool]:
         """Whether this device is a Neon-class strip.
 
-        Neon firmware requires lower FPS and longer transition times
-        for smooth animation.  The engine uses this to auto-tune
-        send parameters.
+        Neon products have distinct firmware behavior (e.g., fewer
+        zones, different LED driver timing).  With ack-paced sends
+        the engine no longer needs special FPS tuning for Neons.
 
         Returns:
             ``True`` if the product ID is in :data:`NEON_PRODUCTS`,
@@ -597,13 +863,31 @@ class LifxDevice:
             return None
         return self.product not in MONOCHROME_PRODUCTS
 
+    @property
+    def ack_stats(self) -> dict:
+        """Return cumulative ack-pacing statistics.
+
+        Returns an empty dict when the device was created with
+        ``acked=False``.
+
+        Returns:
+            Dict with keys: ``acked``, ``sends``, ``drops``,
+            ``rtt_avg_ms``, ``rtt_min_ms``, ``rtt_max_ms``.
+        """
+        if self._ack_worker is None:
+            return {}
+        return self._ack_worker.get_stats()
+
     # -- Lifecycle -----------------------------------------------------------
 
     def close(self) -> None:
-        """Close the persistent UDP socket.
+        """Stop the ack worker (if any) and close the UDP socket.
 
         Safe to call multiple times; subsequent calls are no-ops.
         """
+        if self._ack_worker is not None:
+            self._ack_worker.stop()
+            self._ack_worker = None
         try:
             self.sock.close()
         except OSError:
@@ -951,11 +1235,18 @@ class LifxDevice:
         chunk uses ``APPLY_YES`` to commit the entire frame atomically,
         preventing visible tearing.
 
+        When an :class:`_AckWorker` is active and ``rapid=True``, the
+        assembled packets are submitted to the worker for ack-paced
+        delivery (non-blocking).  When ``rapid=False`` (e.g., stop/fade),
+        packets are sent directly with ack for guaranteed delivery.
+
         Args:
             colors:      List of ``(hue, sat, brightness, kelvin)`` tuples,
                          one per zone.
             duration_ms: Transition duration in milliseconds.
-            rapid:       If ``True``, use fire-and-forget for speed.
+            rapid:       If ``True``, use ack-paced worker (or fire-and-
+                         forget if no worker).  If ``False``, send
+                         directly with ack for guaranteed delivery.
 
         Raises:
             ValueError: If *colors* is empty or *duration_ms* is negative.
@@ -968,11 +1259,12 @@ class LifxDevice:
         total = len(colors)
         num_packets = math.ceil(total / ZONES_PER_PACKET)
 
+        # Build all packet payloads.
+        packets: list[tuple[int, bytes]] = []
         for i in range(num_packets):
             start = i * ZONES_PER_PACKET
             chunk = colors[start:start + ZONES_PER_PACKET]
             is_last = (i == num_packets - 1)
-            # Stage all chunks silently; only the final one triggers rendering
             apply_flag = APPLY_YES if is_last else APPLY_NO
 
             # Payload: duration(u32) + apply(u8) + index(u16) + count(u8)
@@ -981,14 +1273,24 @@ class LifxDevice:
             )
             for h, s, b, k in chunk:
                 payload += struct.pack(HSBK_FMT, h, s, b, k)
-            # Pad to ZONES_PER_PACKET zones (protocol requires fixed-size color array)
+            # Pad to ZONES_PER_PACKET (protocol requires fixed-size color array)
             for _ in range(ZONES_PER_PACKET - len(chunk)):
                 payload += b'\x00' * HSBK_SIZE
 
-            if rapid:
-                self.fire_and_forget(MSG_SET_EXTENDED_COLOR_ZONES, payload)
-            else:
-                self._send(MSG_SET_EXTENDED_COLOR_ZONES, payload, ack=True)
+            packets.append((MSG_SET_EXTENDED_COLOR_ZONES, payload))
+
+        # Route: ack worker (animation), direct ack (commands), or
+        # fire-and-forget (legacy / no worker).
+        if rapid and self._ack_worker is not None:
+            self._ack_worker.submit(packets)
+        elif rapid:
+            # No ack worker — legacy fire-and-forget path.
+            for msg_type, payload in packets:
+                self.fire_and_forget(msg_type, payload)
+        else:
+            # Direct send with ack — guaranteed delivery for stop/fade.
+            for msg_type, payload in packets:
+                self._send(msg_type, payload, ack=True)
 
     def clear_firmware_effect(self) -> None:
         """Disable any firmware-level multizone effect on this device.

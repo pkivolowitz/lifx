@@ -33,7 +33,7 @@ EmitterManager calls the SOE lifecycle (``on_open``, ``on_emit``,
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "2.0"
+__version__ = "2.1"
 
 import logging
 from typing import Any, Optional
@@ -399,9 +399,9 @@ class LifxEmitter(Emitter):
     def get_info(self) -> dict[str, Any]:
         """Return LIFX-specific status information.
 
-        Includes IP and MAC address alongside the standard fields.
-        Compatible with the Engine's :meth:`Controller.get_status`
-        reporting interface.
+        Includes IP, MAC address, and ack-pacing statistics alongside
+        the standard fields.  Compatible with the Engine's
+        :meth:`Controller.get_status` reporting interface.
 
         Returns:
             JSON-serializable dict with device identity and metadata.
@@ -415,4 +415,7 @@ class LifxEmitter(Emitter):
         if self._device is not None:
             info["ip"] = self._device.ip
             info["mac"] = self._device.mac_str
+            ack_stats: dict = self._device.ack_stats
+            if ack_stats:
+                info["ack_stats"] = ack_stats
         return info
