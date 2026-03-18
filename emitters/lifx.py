@@ -33,9 +33,10 @@ EmitterManager calls the SOE lifecycle (``on_open``, ``on_emit``,
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "2.1"
+__version__ = "2.2"
 
 import logging
+import time
 from typing import Any, Optional
 
 from effects import HSBK, KELVIN_DEFAULT, hsbk_to_luminance
@@ -55,6 +56,9 @@ _FRAME_TYPE_SINGLE: str = "single"   # HSBK or single-element list
 
 # LIFX devices animate at up to 30 Hz over the LAN protocol.
 _MAX_RATE_HZ: float = 30.0
+# Pause between power-off and power-on during the wake cycle (seconds).
+# Gives the firmware time to fully process the state transition.
+_POWER_CYCLE_PAUSE_S: float = 0.5
 
 # Module logger.
 logger: logging.Logger = logging.getLogger("glowup.emitters.lifx")
@@ -331,15 +335,27 @@ class LifxEmitter(Emitter):
     # Called by the Engine and Controller at various pipeline stages.
 
     def prepare_for_rendering(self) -> None:
-        """Clear the LIFX firmware committed state to black.
+        """Power-cycle the device, then clear committed state to black.
 
-        The extended multizone protocol (type 510) writes to a temporary
-        overlay.  If a UDP frame is lost, the firmware briefly reveals the
-        committed layer underneath.  Setting it to black makes those
-        glitches invisible.
+        The power off/on cycle ensures the bulb's firmware is in a
+        responsive state before we start sending effect frames.  LIFX
+        bulbs can become unresponsive to unicast commands after a
+        factory reset or network disruption even while still answering
+        discovery broadcasts.
+
+        After the wake cycle, the extended multizone committed layer is
+        set to black so that dropped UDP frames reveal black instead of
+        stale colors.
         """
-        if self._device is not None and self.is_multizone and self.zone_count:
-            self._device.set_color(0, 0, 0, _CLEAR_KELVIN, duration_ms=0)
+        if self._device is not None:
+            # Wake cycle: power off, pause, power on.
+            self._device.set_power(on=False, duration_ms=0)
+            time.sleep(_POWER_CYCLE_PAUSE_S)
+            self._device.set_power(on=True, duration_ms=0)
+            time.sleep(_POWER_CYCLE_PAUSE_S)
+            # Clear the committed layer to black on multizone devices.
+            if self.is_multizone and self.zone_count:
+                self._device.set_color(0, 0, 0, _CLEAR_KELVIN, duration_ms=0)
 
     def power_on(self, duration_ms: int = 0) -> None:
         """Turn the LIFX device on (type 117).
