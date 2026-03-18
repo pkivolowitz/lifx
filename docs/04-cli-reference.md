@@ -97,7 +97,7 @@ luma-converted brightness.  You can mix any device types freely.
 | `--ip`      | *(none)* | Target device IP address (single device mode) |
 | `--group`   | *(none)* | Device group name (fetched from server, or from local file with `--config`) |
 | `--config`  | *(none)* | Path to local config file containing device groups |
-| `--server`  | `10.0.0.48:8420` | Server host:port for remote group lookup |
+| `--server`  | `192.0.2.48:8420` | Server host:port for remote group lookup |
 | `--fps`     | 20      | Frames per second for the render loop     |
 | `--sim`     | off     | Open a live simulator window alongside the real lights               |
 | `--sim-only` | off    | Query device geometry then run the effect in the simulator only — no commands sent to the lights (see [Sim-Only Mode](#sim-only-mode)) |

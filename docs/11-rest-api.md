@@ -27,10 +27,10 @@ with the same schedule format used by `scheduler.py`:
         "longitude": -89.40
     },
     "groups": {
-        "porch": ["10.0.0.62"]
+        "porch": ["192.0.2.62"]
     },
     "nicknames": {
-        "10.0.0.62": "Porch Lights"
+        "192.0.2.62": "Porch Lights"
     },
     "schedule": [
         {
@@ -129,11 +129,11 @@ curl -H "Authorization: Bearer $TOKEN" $BASE/api/devices
 curl -X POST -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"effect":"cylon","params":{"speed":2.0,"hue":120}}' \
-     $BASE/api/devices/10.0.0.62/play
+     $BASE/api/devices/192.0.2.62/play
 
 # Stop the effect
 curl -X POST -H "Authorization: Bearer $TOKEN" \
-     $BASE/api/devices/10.0.0.62/stop
+     $BASE/api/devices/192.0.2.62/stop
 
 # List device groups (used by glowup.py --group)
 curl -H "Authorization: Bearer $TOKEN" $BASE/api/groups
@@ -216,8 +216,8 @@ Overrides are cleared in two ways:
   a server restart or against a different entry are preserved.
 
 **Virtual multizone groups:** When multiple devices are stitched into a
-virtual multizone group (e.g., `group:porch` contains 10.0.0.62 and
-10.0.0.23), the scheduler checks both the group ID *and* every member
+virtual multizone group (e.g., `group:porch` contains 192.0.2.62 and
+192.0.2.23), the scheduler checks both the group ID *and* every member
 IP for overrides.  This means overriding a single member device via the
 app correctly pauses the entire group's schedule — the scheduler will
 not overwrite a manually controlled device.

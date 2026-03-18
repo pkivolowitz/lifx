@@ -6,7 +6,7 @@ emitter works end-to-end without needing the full worker agent
 assignment machinery.
 
 Requires:
-    - Pi running with MQTT broker (10.0.0.48:1883)
+    - Pi running with MQTT broker (192.0.2.48:1883)
     - Theremin effect active (or simulator publishing note signals)
     - sounddevice, numpy, paho-mqtt installed
 
@@ -35,13 +35,14 @@ import paho.mqtt.client as mqtt
 
 from emitters import create_emitter
 from emitters.audio_out import AudioOutEmitter
+from network_config import net
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-# MQTT broker (Pi).
-MQTT_BROKER: str = "10.0.0.48"
+# MQTT broker (from centralized network config).
+MQTT_BROKER: str = net.broker
 MQTT_PORT: int = 1883
 
 # Signal topics (must match theremin/__init__.py).

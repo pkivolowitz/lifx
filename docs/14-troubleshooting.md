@@ -24,7 +24,7 @@ management and may not be specific to GlowUp.
 Discovery uses UDP broadcast, which some mesh routers (e.g., TP-Link
 Deco) block between nodes.  If `discover` finds nothing:
 
-1. Try direct IP: `python3 glowup.py discover --ip 10.0.0.62`
+1. Try direct IP: `python3 glowup.py discover --ip 192.0.2.62`
 2. Check that your machine and the LIFX device are on the same
    subnet (same VLAN, same SSID).
 3. Try from a wired connection if wireless discovery fails.
@@ -91,7 +91,7 @@ the manual schema application above.
 **Default connection string:**
 
 ```
-postgresql://glowup:changeme@10.0.0.42:5432/glowup
+postgresql://glowup:changeme@localhost:5432/glowup
 ```
 
 Override with the `GLOWUP_DIAG_DSN` environment variable:
@@ -111,7 +111,7 @@ pip install psycopg2-binary
 ```bash
 python3 -c "
 import psycopg2
-conn = psycopg2.connect('postgresql://glowup:changeme@10.0.0.42:5432/glowup')
+conn = psycopg2.connect('postgresql://glowup:changeme@localhost:5432/glowup')
 cur = conn.cursor()
 cur.execute('SELECT version()')
 print(cur.fetchone()[0])

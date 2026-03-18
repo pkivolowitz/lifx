@@ -24,7 +24,7 @@ a Jetson drives a local LED matrix.
 Usage::
 
     python3 -m distributed.worker_agent /etc/glowup/agent.json
-    python3 -m distributed.worker_agent --node-id judy --broker 10.0.0.48
+    python3 -m distributed.worker_agent --node-id judy --broker 192.0.2.48
 
 Press Ctrl+C to stop.
 """
@@ -56,6 +56,7 @@ from .capability import (
 )
 from .orchestrator import WorkAssignment, SignalBinding, TRANSPORT_UDP, TRANSPORT_MQTT
 from .transport_adapter import UdpTransport, MqttTransport
+from network_config import net
 
 logger: logging.Logger = logging.getLogger("glowup.agent")
 
@@ -63,8 +64,8 @@ logger: logging.Logger = logging.getLogger("glowup.agent")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Default MQTT broker (assumes Pi at known IP).
-DEFAULT_BROKER: str = "localhost"
+# Default MQTT broker (from centralized network config).
+DEFAULT_BROKER: str = net.broker
 
 # Default MQTT port.
 DEFAULT_PORT: int = 1883

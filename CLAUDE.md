@@ -13,7 +13,7 @@ Report the machine name to Perry (e.g. "Running on **Bed**.").
 ```
 ls ~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/MEMORY.md
 ```
-If the file is missing, tell Perry: "The NAS at ~/NAS is not mounted. Run: `mount_smbfs //perryk@10.0.0.24/perryk ~/NAS` — shared memory is unavailable until it's mounted."
+If the file is missing, tell Perry: "The NAS at ~/NAS is not mounted. Run: `mount_smbfs //<user>@<nas-ip>/perryk ~/NAS` — shared memory is unavailable until it's mounted."
 
 ## Code Standards
 - PEP 257 docstrings on all public classes, methods, and functions

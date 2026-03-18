@@ -8,7 +8,7 @@ strategy the Neon handles smoothly.
 Usage::
 
     python3 diag_neon_stutter.py <ip>
-    python3 diag_neon_stutter.py 10.0.0.34
+    python3 diag_neon_stutter.py 192.0.2.34
 
 Each test runs for a fixed duration.  Watch the strip and rate
 smoothness when prompted.

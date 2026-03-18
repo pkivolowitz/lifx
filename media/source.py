@@ -47,12 +47,12 @@ def _resolve_credentials(config: dict[str, Any]) -> str:
 
     1. Direct URL (not recommended — credentials in config file)::
 
-        {"url": "rtsp://admin:pass@10.0.0.39:554/..."}
+        {"url": "rtsp://user:pass@camera-host:554/..."}
 
     2. Credentials file (recommended — keeps secrets out of config)::
 
         {
-            "url": "rtsp://{user}:{password}@10.0.0.39:554/...",
+            "url": "rtsp://{user}:{password}@camera-host:554/...",
             "credentials_file": "/etc/glowup/rtsp_creds.json"
         }
 
@@ -394,7 +394,7 @@ class RtspSource(MediaSource):
     PCM audio or raw video frames to registered extractors.
 
     Config keys:
-        url:         RTSP URL (e.g. ``rtsp://admin:pass@10.0.0.39:554/Preview_02_main``)
+        url:         RTSP URL (e.g. ``rtsp://user:pass@camera-host:554/Preview_02_main``)
         stream:      ``"audio"`` or ``"video"`` (default ``"audio"``)
         sample_rate: Audio sample rate in Hz (default 16000)
         channels:    Audio channels (default 1)

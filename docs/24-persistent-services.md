@@ -71,7 +71,7 @@ Any command you can run in a terminal can be a service.  Examples:
 **MIDI light bridge:**
 
 ```ini
-ExecStart=/usr/bin/python3 -m distributed.midi_light_bridge --ip 10.0.0.23 10.0.0.34
+ExecStart=/usr/bin/python3 -m distributed.midi_light_bridge --ip 192.0.2.23 192.0.2.34
 ```
 
 **MIDI audio emitter:**
@@ -184,8 +184,8 @@ launchctl load ~/Library/LaunchAgents/com.glowup.<name>.plist
   <string>-m</string>
   <string>distributed.midi_light_bridge</string>
   <string>--ip</string>
-  <string>10.0.0.23</string>
-  <string>10.0.0.34</string>
+  <string>192.0.2.23</string>
+  <string>192.0.2.34</string>
 </array>
 ```
 

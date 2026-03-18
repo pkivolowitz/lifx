@@ -148,7 +148,7 @@ Add a `media_sources` block to `server.json`:
     "media_sources": {
         "foyer": {
             "type": "rtsp",
-            "url": "rtsp://{user}:{password}@10.0.0.39:554/Preview_01_main",
+            "url": "rtsp://{user}:{password}@192.0.2.39:554/Preview_01_main",
             "stream": "audio",
             "credentials_file": "/etc/glowup/rtsp_creds.json"
         }

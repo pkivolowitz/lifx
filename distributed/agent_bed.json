@@ -1,6 +1,6 @@
 {
     "node_id": "bed",
-    "mqtt_broker": "10.0.0.48",
+    "mqtt_broker": "localhost",
     "mqtt_port": 1883,
     "roles": ["emitter"],
     "emitters": [

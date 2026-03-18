@@ -31,7 +31,7 @@ The config file is JSON with three sections: `location`, `groups`, and
     },
     "groups": {
         "porch": ["porch_string_lights"],
-        "living-room": ["10.0.0.10", "10.0.0.12"]
+        "living-room": ["192.0.2.10", "192.0.2.12"]
     },
     "schedule": [
         {

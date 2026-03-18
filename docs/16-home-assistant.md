@@ -67,7 +67,7 @@ automation:
     action:
       - service: rest_command.glowup_play
         data:
-          ip: "10.0.0.62"
+          ip: "192.0.2.62"
           effect: "aurora"
           params: '{"speed": 10.0, "brightness": 60}'
 
@@ -78,7 +78,7 @@ automation:
     action:
       - service: rest_command.glowup_stop
         data:
-          ip: "10.0.0.62"
+          ip: "192.0.2.62"
 ```
 
 For virtual multizone groups, use the group identifier (e.g.,
@@ -96,7 +96,7 @@ tap_action:
   action: call-service
   service: rest_command.glowup_play
   data:
-    ip: "10.0.0.62"
+    ip: "192.0.2.62"
     effect: "aurora"
     params: '{"speed": 10.0, "brightness": 80}'
 ```

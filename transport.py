@@ -256,8 +256,8 @@ def _get_broadcast_address() -> str:
     platforms.
 
     Returns:
-        A dotted-quad broadcast address string (e.g. ``"10.0.3.255"``
-        on a /22 or ``"10.0.0.255"`` on a /24).  Falls back to
+        A dotted-quad broadcast address string (e.g. ``"192.0.2.255"``
+        on a /22 or ``"192.0.2.255"`` on a /24).  Falls back to
         ``"255.255.255.255"`` if detection fails.
     """
     import platform
@@ -286,7 +286,7 @@ def _get_broadcast_address() -> str:
                 text=True,
             )
             for line in ifconfig_out.splitlines():
-                # Look for: "inet 10.0.0.38 netmask 0xfffffc00 broadcast 10.0.3.255"
+                # Look for: "inet 192.0.2.38 netmask 0xfffffc00 broadcast 192.0.2.255"
                 if "broadcast" in line:
                     tokens = line.split()
                     bcast_idx: int = tokens.index("broadcast")
@@ -348,7 +348,7 @@ def _get_broadcast_address() -> str:
 def _resolve_host(host: str) -> str:
     """Resolve a hostname or IPv4 address to a dotted-quad IPv4 string.
 
-    Accepts either a raw IPv4 address (``"10.0.0.62"``) or a DNS
+    Accepts either a raw IPv4 address (``"192.0.2.62"``) or a DNS
     hostname (``"string_lights"``).  Hostnames are resolved via
     :func:`socket.getaddrinfo` which consults ``/etc/hosts``, mDNS,
     and DNS in the platform's standard order.
@@ -930,7 +930,7 @@ class LifxDevice:
         then IP address.
 
         Returns:
-            A string like ``<LifxDevice String 2 (10.0.0.62)>``.
+            A string like ``<LifxDevice String 2 (192.0.2.62)>``.
         """
         name = self.label or self.product_name or self.ip
         return f"<LifxDevice {name} ({self.ip})>"

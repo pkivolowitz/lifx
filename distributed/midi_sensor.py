@@ -12,10 +12,10 @@ is a valid signal source, just like a microphone or a MIDI controller.
 Usage::
 
     # Real-time replay (drives lights, audio, etc.)
-    python3 -m distributed.midi_sensor --file song.mid --broker 10.0.0.48
+    python3 -m distributed.midi_sensor --file song.mid --broker 192.0.2.48
 
     # Bulk / fast-forward (for data loading via persistence emitter)
-    python3 -m distributed.midi_sensor --file song.mid --broker 10.0.0.48 --speed 0
+    python3 -m distributed.midi_sensor --file song.mid --broker 192.0.2.48 --speed 0
 
 The sensor publishes JSON events to ``glowup/signals/sensor:midi:events``
 on the MQTT broker.  Any subscriber (persistence emitter, LIFX operator,
@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Optional
 
 from .midi_parser import MidiEvent, MidiParser
+from network_config import net
 
 logger: logging.Logger = logging.getLogger("glowup.midi_sensor")
 
@@ -46,8 +47,8 @@ logger: logging.Logger = logging.getLogger("glowup.midi_sensor")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Default MQTT broker (Pi).
-DEFAULT_BROKER: str = "10.0.0.48"
+# Default MQTT broker (from centralized network config).
+DEFAULT_BROKER: str = net.broker
 
 # Default MQTT port.
 DEFAULT_MQTT_PORT: int = 1883

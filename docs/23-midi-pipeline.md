@@ -124,11 +124,11 @@ Publish a control command to the MQTT control channel:
 
 ```bash
 # Switch to a different signal (station)
-mosquitto_pub -h 10.0.0.48 -t glowup/midi_emitter/control \
+mosquitto_pub -h 192.0.2.48 -t glowup/midi_emitter/control \
   -m '{"tune": "sensor:midi:jazz"}'
 
 # Query current station
-mosquitto_pub -h 10.0.0.48 -t glowup/midi_emitter/control \
+mosquitto_pub -h 192.0.2.48 -t glowup/midi_emitter/control \
   -m '{"status": true}'
 ```
 
@@ -146,10 +146,10 @@ More devices = more spatial resolution = finer musical detail.
 
 ```bash
 # Single device
-python3 -m distributed.midi_light_bridge --ip 10.0.0.34
+python3 -m distributed.midi_light_bridge --ip 192.0.2.34
 
 # Virtual strip — two devices stitched together
-python3 -m distributed.midi_light_bridge --ip 10.0.0.34 10.0.0.23
+python3 -m distributed.midi_light_bridge --ip 192.0.2.34 192.0.2.23
 ```
 
 **Note tracking:** Lights follow MIDI note on/off exactly — a held
@@ -230,7 +230,7 @@ SELECT source_file, count(*) FROM midi_events GROUP BY source_file;
 ```
 
 The schema is applied to the `glowup` database on the PostgreSQL
-jail (10.0.0.42).  Events are stored by the persistence emitter
+jail (192.0.2.42).  Events are stored by the persistence emitter
 when it subscribes to `sensor:midi:events` — the sensor never
 writes to the database directly.
 
@@ -251,7 +251,7 @@ python3 glowup.py replay --file song.mid --speed 0
 python3 glowup.py replay --file song.mid --speed 2
 
 # Custom broker and signal name
-python3 glowup.py replay --file song.mid --broker 10.0.0.48 \
+python3 glowup.py replay --file song.mid --broker 192.0.2.48 \
   --signal-name sensor:midi:bach
 ```
 
@@ -259,14 +259,14 @@ python3 glowup.py replay --file song.mid --broker 10.0.0.48 \
 
 ```bash
 # MIDI sensor (direct, without glowup.py wrapper)
-python3 -m distributed.midi_sensor --file song.mid --broker 10.0.0.48
+python3 -m distributed.midi_sensor --file song.mid --broker 192.0.2.48
 
 # MIDI audio emitter
 python3 -m emitters.midi_out --backend fluidsynth \
   --soundfont /path/to/gm.sf2
 
 # MIDI light bridge
-python3 -m distributed.midi_light_bridge --ip 10.0.0.62
+python3 -m distributed.midi_light_bridge --ip 192.0.2.62
 ```
 
 ## Quick Start — Full Pipeline
@@ -281,7 +281,7 @@ python3 -m emitters.midi_out --backend fluidsynth \
 
 **Terminal 2 — Light bridge:**
 ```bash
-python3 -m distributed.midi_light_bridge --ip 10.0.0.62
+python3 -m distributed.midi_light_bridge --ip 192.0.2.62
 ```
 
 **Terminal 3 — Replay:**
@@ -311,7 +311,7 @@ python3 -m emitters.midi_out --backend fluidsynth \
   --signal-name sensor:midi:bach
 
 # Switch to jazz at runtime (no restart)
-mosquitto_pub -h 10.0.0.48 -t glowup/midi_emitter/control \
+mosquitto_pub -h 192.0.2.48 -t glowup/midi_emitter/control \
   -m '{"tune": "sensor:midi:jazz"}'
 ```
 

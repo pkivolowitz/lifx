@@ -11,8 +11,8 @@ Usage::
 
 Examples::
 
-    python3 diag_raw_send.py 10.0.0.34          # 1s hold
-    python3 diag_raw_send.py 10.0.0.34 0.5      # 0.5s hold
+    python3 diag_raw_send.py 192.0.2.34          # 1s hold
+    python3 diag_raw_send.py 192.0.2.34 0.5      # 0.5s hold
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.

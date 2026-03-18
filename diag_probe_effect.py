@@ -12,8 +12,8 @@ Usage::
 
 Examples::
 
-    python3 diag_probe_effect.py 10.0.0.34
-    python3 diag_probe_effect.py 10.0.0.34 0.5
+    python3 diag_probe_effect.py 192.0.2.34
+    python3 diag_probe_effect.py 192.0.2.34 0.5
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.

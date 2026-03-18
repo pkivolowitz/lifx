@@ -29,13 +29,15 @@ from typing import Any, Optional
 
 import numpy as np
 
+from network_config import net
+
 logger: logging.Logger = logging.getLogger("glowup.nbody_visualizer")
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_BROKER: str = "10.0.0.48"
+DEFAULT_BROKER: str = net.broker
 DEFAULT_MQTT_PORT: int = 1883
 MQTT_SIGNAL_PREFIX: str = "glowup/signals/"
 DEFAULT_INPUT_SIGNAL: str = "sensor:midi:events"

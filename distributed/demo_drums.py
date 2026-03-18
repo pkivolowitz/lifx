@@ -6,11 +6,11 @@ drum audio simultaneously.
 
 Light layout::
 
-    10.0.0.23 (STRING 2, 36 zones / 12 bulbs):
+    192.0.2.23 (STRING 2, 36 zones / 12 bulbs):
         zones  0–11 = kick drum
         zones 12–23 = snare
         zones 24–35 = tom
-    10.0.0.34 (Neon Indoor, 24 zones):
+    192.0.2.34 (Neon Indoor, 24 zones):
         zones  0–7  = hi-hat
         zones  8–15 = crash
         zones 16–23 = rim click
@@ -64,8 +64,8 @@ BEATS_PER_BAR: int = 4
 STEPS_PER_BAR: int = STEPS_PER_BEAT * BEATS_PER_BAR  # 16 steps.
 
 # Light addresses.
-LIGHT_KICK_IP: str = "10.0.0.23"
-LIGHT_NEON_IP: str = "10.0.0.34"
+LIGHT_KICK_IP: str = "192.0.2.23"
+LIGHT_NEON_IP: str = "192.0.2.34"
 
 # STRING 2 zone layout (36 zones / 12 bulbs, 3 zones per bulb).
 STRING_ZONE_COUNT: int = 36

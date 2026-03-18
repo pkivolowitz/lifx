@@ -11,7 +11,7 @@ so the existing ``AudioExtractor`` (FFT) works without changes.
 Usage::
 
     python3 -m distributed.file_audio_sensor \\
-        --file song.mp3 --target 10.0.0.63:9420
+        --file song.mp3 --target 192.0.2.63:9420
 
 The ``--target`` is the compute node running ``AudioExtractor``
 (FFT → MQTT bands → lights).  For local FFT (no remote node),
@@ -307,7 +307,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--target", required=True,
-        help="Target compute node as IP:PORT (e.g. 10.0.0.63:9420)",
+        help="Target compute node as IP:PORT (e.g. 192.0.2.63:9420)",
     )
     parser.add_argument(
         "--rate", type=int, default=DEFAULT_SAMPLE_RATE,
@@ -346,7 +346,7 @@ def main() -> None:
         target_ip: str = ip_str
         target_port: int = int(port_str)
     except (ValueError, IndexError):
-        parser.error("--target must be IP:PORT (e.g. 10.0.0.63:9420)")
+        parser.error("--target must be IP:PORT (e.g. 192.0.2.63:9420)")
         return
 
     # Configure logging.

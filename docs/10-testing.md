@@ -56,7 +56,7 @@ fireworks, rule30, and newtons_cradle.
 ### Override Tests (Detail)
 
 `test_override.py` covers the group-member override bug fixed in 8a27b45.
-When a user overrides an individual device (e.g., 10.0.0.62) that belongs
+When a user overrides an individual device (e.g., 192.0.2.62) that belongs
 to a group (e.g., group:porch), the scheduler must recognize the conflict
 and skip the group.  The `is_overridden_or_member()` method checks both
 the group ID and every member IP.  Tests verify:

@@ -233,8 +233,8 @@ difference.
 GlowUp ships two interpolation backends, selectable at runtime:
 
 ```bash
-python3 glowup.py play flag --ip 10.0.0.62 --lerp lab    # default — perceptually uniform
-python3 glowup.py play flag --ip 10.0.0.62 --lerp hsb    # lightweight fallback
+python3 glowup.py play flag --ip 192.0.2.62 --lerp lab    # default — perceptually uniform
+python3 glowup.py play flag --ip 192.0.2.62 --lerp hsb    # lightweight fallback
 ```
 
 The `--lerp` switch is available on the `play` subcommand and in the

@@ -41,19 +41,20 @@ from urllib.error import URLError
 
 from .audio_sensor import AudioSensor
 from .spectrum_display import SpectrumDisplay
+from network_config import net
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-# Pi server.
-PI_HOST: str = "10.0.0.48"
+# Pi server (from centralized network config).
+PI_HOST: str = net.broker
 PI_PORT: int = 8420
-MQTT_BROKER: str = PI_HOST
+MQTT_BROKER: str = net.broker
 MQTT_PORT: int = 1883
 
-# Judy compute node.
-JUDY_IP: str = "10.0.0.63"
+# Judy compute node (from centralized network config).
+JUDY_IP: str = net.server
 JUDY_UDP_PORT: int = 9420
 
 # Signal naming.

@@ -89,7 +89,7 @@ from transport import LifxDevice
 from emitters.lifx import LifxEmitter
 
 # Create an emitter from a queried device
-device = LifxDevice("10.0.0.62")
+device = LifxDevice("192.0.2.62")
 device.query_all()
 emitter = LifxEmitter.from_device(device)
 
@@ -116,9 +116,9 @@ from emitters.lifx import LifxEmitter
 from emitters.virtual import VirtualMultizoneDevice
 
 # Connect devices of any type
-string_light = LifxDevice("10.0.0.62")  # 108-zone multizone
-white_bulb_1 = LifxDevice("10.0.0.25")  # monochrome single
-color_bulb_1 = LifxDevice("10.0.0.30")  # color single
+string_light = LifxDevice("192.0.2.62")  # 108-zone multizone
+white_bulb_1 = LifxDevice("192.0.2.25")  # monochrome single
+color_bulb_1 = LifxDevice("192.0.2.30")  # color single
 
 for dev in [string_light, white_bulb_1, color_bulb_1]:
     dev.query_all()

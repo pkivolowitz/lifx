@@ -9,7 +9,7 @@ a :class:`WorkerAgent` running ``AudioExtractor`` on the receiving end.
 
 Usage::
 
-    python3 -m distributed.audio_sensor --target 10.0.0.63:9420
+    python3 -m distributed.audio_sensor --target 192.0.2.63:9420
 
 The script captures mono 16-bit PCM at the configured sample rate,
 chunks it into frames (~100ms each by default), and sends each frame
@@ -306,7 +306,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--target", required=True,
-        help="Target compute node as IP:PORT (e.g. 10.0.0.63:9420)",
+        help="Target compute node as IP:PORT (e.g. 192.0.2.63:9420)",
     )
     parser.add_argument(
         "--rate", type=int, default=DEFAULT_SAMPLE_RATE,
@@ -341,7 +341,7 @@ def main() -> None:
         target_ip: str = ip_str
         target_port: int = int(port_str)
     except (ValueError, IndexError):
-        parser.error("--target must be IP:PORT (e.g. 10.0.0.63:9420)")
+        parser.error("--target must be IP:PORT (e.g. 192.0.2.63:9420)")
         return  # Unreachable, but makes type checker happy.
 
     # Configure logging.

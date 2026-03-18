@@ -29,6 +29,8 @@ __version__ = "1.0"
 import math
 from typing import Final
 
+from network_config import net
+
 # ---------------------------------------------------------------------------
 # SignalBus Signal Names
 # ---------------------------------------------------------------------------
@@ -51,7 +53,7 @@ SIGNAL_TOPIC_PREFIX: Final[str] = "glowup/signals/"
 # MQTT Broker (Pi)
 # ---------------------------------------------------------------------------
 
-MQTT_BROKER: Final[str] = "10.0.0.48"
+MQTT_BROKER: Final[str] = net.broker
 MQTT_PORT: Final[int] = 1883
 
 # ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@ double-clickable `.command` file from Finder.
    Replace `YOUR_AUTH_TOKEN` with the `auth_token` value from your
    `server.json` (see [Server Configuration](#server-configuration)).
 
-2. If your server is not at `10.0.0.48`, edit the default in
+2. If your server is not at `192.0.2.48`, edit the default in
    `shortcuts/glowup.sh` or set the `GLOWUP_HOST` environment variable.
 
 ### The glowup.sh CLI
@@ -30,7 +30,7 @@ double-clickable `.command` file from Finder.
 # Play an effect on a group or device
 glowup.sh play porch aurora speed=10 brightness=80
 glowup.sh play living-room cylon hue=240
-glowup.sh play 10.0.0.62 breathe
+glowup.sh play 192.0.2.62 breathe
 
 # Stop the current effect (override stays active)
 glowup.sh stop porch
@@ -51,7 +51,7 @@ glowup.sh list
 ```
 
 **Targets** can be group names (`porch`, `living-room`, `all`,
-`testing`) or individual device IPs (`10.0.0.62`).  Group names
+`testing`) or individual device IPs (`192.0.2.62`).  Group names
 are automatically expanded to `group:NAME` for the API.
 
 Effect parameters are passed as `key=value` pairs after the effect
@@ -79,7 +79,7 @@ your own by copying any existing one and changing the arguments.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GLOWUP_HOST` | `10.0.0.48` | Server IP or hostname |
+| `GLOWUP_HOST` | `192.0.2.48` | Server IP or hostname |
 | `GLOWUP_PORT` | `8420` | Server port |
 | `GLOWUP_TOKEN` | *(reads `~/.glowup_token`)* | Auth token (overrides file) |
 

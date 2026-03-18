@@ -37,6 +37,8 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
+from network_config import net
+
 logger: logging.Logger = logging.getLogger("glowup.emitters.midi_out")
 
 # ---------------------------------------------------------------------------
@@ -44,7 +46,7 @@ logger: logging.Logger = logging.getLogger("glowup.emitters.midi_out")
 # ---------------------------------------------------------------------------
 
 # Default MQTT broker (Pi).
-DEFAULT_BROKER: str = "10.0.0.48"
+DEFAULT_BROKER: str = net.broker
 
 # Default MQTT port.
 DEFAULT_MQTT_PORT: int = 1883

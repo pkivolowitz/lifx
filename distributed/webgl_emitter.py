@@ -32,14 +32,16 @@ import time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from typing import Any, Optional
 
+from network_config import net
+
 logger: logging.Logger = logging.getLogger("glowup.webgl_emitter")
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-# Default MQTT broker (Pi).
-DEFAULT_BROKER: str = "10.0.0.48"
+# Default MQTT broker (from centralized network config).
+DEFAULT_BROKER: str = net.broker
 
 # Default MQTT port.
 DEFAULT_MQTT_PORT: int = 1883

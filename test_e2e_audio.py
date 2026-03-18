@@ -6,7 +6,7 @@ feeds it through the AudioExtractor pipeline, and verifies that
 meaningful signals appear on the SignalBus.
 
 Requirements:
-    - NVR at 10.0.0.39 reachable
+    - NVR reachable (set RTSP_URL env var)
     - ffmpeg installed
     - Run from the project root
 
@@ -19,6 +19,7 @@ Usage:
 
 __version__ = "1.0"
 
+import os
 import subprocess
 import sys
 import time
@@ -30,8 +31,12 @@ from media.extractors import AudioExtractor
 # Constants
 # ---------------------------------------------------------------------------
 
-# RTSP URL for backyard camera audio (channel 02 = sub stream).
-RTSP_URL: str = "rtsp://admin:REDACTED_PASSWORD@10.0.0.39:554/Preview_02_main"
+# RTSP URL for camera audio (channel 02 = sub stream).
+# Set via environment variable to avoid leaking credentials.
+RTSP_URL: str = os.environ.get(
+    "RTSP_URL",
+    "rtsp://user:pass@camera:554/Preview_02_main",
+)
 
 # Sample rate matching the Reolink AAC audio stream.
 SAMPLE_RATE: int = 16000

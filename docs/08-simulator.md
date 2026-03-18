@@ -10,10 +10,10 @@ what the engine is sending alongside real devices.
 
 ```bash
 # Preview cylon on your lights and in the simulator window
-python3 glowup.py play cylon --ip 10.0.0.62 --sim
+python3 glowup.py play cylon --ip 192.0.2.62 --sim
 
 # Show 36 bulbs instead of 108 zones (LIFX strings have 3 zones per bulb)
-python3 glowup.py play cylon --ip 10.0.0.62 --sim --zpb 3
+python3 glowup.py play cylon --ip 192.0.2.62 --sim --zpb 3
 
 # Works with virtual multizone groups too
 python3 glowup.py play aurora --config schedule.json --group office --sim
@@ -70,10 +70,10 @@ edges (nearest-neighbor scaling, no interpolation blur).
 
 ```bash
 # Double-size simulator window
-python3 glowup.py play aurora --ip 10.0.0.62 --sim --zoom 2
+python3 glowup.py play aurora --ip 192.0.2.62 --sim --zoom 2
 
 # Monitor mode also supports zoom
-python3 glowup.py monitor --ip 10.0.0.62 --zoom 3
+python3 glowup.py monitor --ip 192.0.2.62 --zoom 3
 ```
 
 Useful for presentations, demos, and high-DPI displays where the
@@ -97,10 +97,10 @@ scheduler on a Pi, the LIFX phone app, or any other controller).
 
 ```bash
 # Monitor a string light at 4 Hz (default)
-python3 glowup.py monitor --ip 10.0.0.62 --zpb 3
+python3 glowup.py monitor --ip 192.0.2.62 --zpb 3
 
 # Higher polling rate for smoother updates
-python3 glowup.py monitor --ip 10.0.0.62 --zpb 3 --hz 10
+python3 glowup.py monitor --ip 192.0.2.62 --zpb 3 --hz 10
 ```
 
 | Flag    | Default | Description                                      |

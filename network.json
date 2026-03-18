@@ -1,0 +1,7 @@
+{
+    "_comment": "Network defaults for public release. Override with GLOWUP_NETWORK env var pointing to a file with real IPs.",
+    "broker": "localhost",
+    "server": "localhost",
+    "db_host": "localhost",
+    "camera_host": "camera"
+}

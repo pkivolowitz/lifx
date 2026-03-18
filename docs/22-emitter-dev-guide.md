@@ -435,7 +435,7 @@ two creation paths:
 
 **Config-based** (via EmitterManager):
 ```python
-emitter = create_emitter("lifx", "porch", {"ip": "10.0.0.62"})
+emitter = create_emitter("lifx", "porch", {"ip": "192.0.2.62"})
 emitter.on_configure(full_server_config)
 ```
 
@@ -444,7 +444,7 @@ emitter.on_configure(full_server_config)
 from emitters.lifx import LifxEmitter
 from transport import LifxDevice
 
-device = LifxDevice("10.0.0.62")
+device = LifxDevice("192.0.2.62")
 device.query_all()
 emitter = LifxEmitter.from_device(device)
 ```
@@ -521,7 +521,7 @@ the agent's JSON config:
 ```json
 {
     "node_id": "bed",
-    "mqtt_broker": "10.0.0.48",
+    "mqtt_broker": "192.0.2.48",
     "roles": ["emitter"],
     "emitters": [
         {"type": "audio_out", "id": "bed:speaker", "topology": "scalar"}

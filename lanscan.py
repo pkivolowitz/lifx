@@ -233,7 +233,7 @@ def get_local_network() -> Optional[ipaddress.IPv4Network]:
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
 
-    # Match lines like: inet 10.0.0.38 netmask 0xfffffc00
+    # Match lines like: inet 192.0.2.38 netmask 0xfffffc00
     pattern = re.compile(
         r"inet (\d+\.\d+\.\d+\.\d+) netmask (0x[0-9a-fA-F]+)"
     )
@@ -337,7 +337,7 @@ def get_arp_table() -> dict[str, str]:
         return {}
 
     entries: dict[str, str] = {}
-    # macOS arp -an format: ? (10.0.0.1) at aa:bb:cc:dd:ee:ff on en0 ...
+    # macOS arp -an format: ? (192.0.2.1) at aa:bb:cc:dd:ee:ff on en0 ...
     pattern = re.compile(
         r"\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-fA-F:]+)"
     )

@@ -10,7 +10,7 @@
 -- Populated by the persistence emitter subscribing to sensor:midi:events,
 -- or by bulk ingest (replay --speed 0).
 --
--- Connection: postgresql://glowup:changeme@10.0.0.42:5432/glowup
+-- Connection: postgresql://glowup:changeme@localhost:5432/glowup
 
 CREATE TABLE IF NOT EXISTS midi_events (
     id           BIGSERIAL    PRIMARY KEY,

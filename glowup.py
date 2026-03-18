@@ -41,6 +41,7 @@ from emitters.virtual import VirtualMultizoneEmitter
 from engine import Controller
 from effects import get_registry, get_effect_names, create_effect, HSBK, HSBK_MAX, KELVIN_DEFAULT
 from colorspace import set_lerp_method
+from network_config import net
 
 # ---------------------------------------------------------------------------
 # Named constants -- no magic numbers
@@ -108,7 +109,7 @@ MAX_MONITOR_POLL_HZ: float = 20.0
 DEFAULT_REPLAY_SPEED: float = 1.0
 """Replay speed multiplier.  1.0 = real-time, 0 = as fast as possible."""
 
-DEFAULT_REPLAY_BROKER: str = "10.0.0.48"
+DEFAULT_REPLAY_BROKER: str = net.broker
 """Default MQTT broker for replay (Pi)."""
 
 DEFAULT_REPLAY_PORT: int = 1883
@@ -118,7 +119,7 @@ DEFAULT_REPLAY_SIGNAL: str = "sensor:midi:events"
 """Default signal name for MIDI replay events on the bus."""
 
 # Server connection defaults (for fetching groups remotely).
-DEFAULT_SERVER_HOST: str = "10.0.0.48"
+DEFAULT_SERVER_HOST: str = net.server
 """Default GlowUp server hostname (the Pi)."""
 
 DEFAULT_SERVER_PORT: int = 8420
@@ -282,7 +283,7 @@ def _load_group(config_path: str, group_name: str) -> list[str]:
     The config file must have a ``groups`` section mapping group names
     to lists of IP addresses or hostnames, e.g.::
 
-        {"groups": {"office": ["10.0.0.25", "10.0.0.26"]}}
+        {"groups": {"office": ["192.0.2.25", "192.0.2.26"]}}
 
     Args:
         config_path: Path to the JSON config file.

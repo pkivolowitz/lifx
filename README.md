@@ -39,7 +39,7 @@ python3 glowup.py record aurora --duration 8      # render to GIF
 python3 -m emitters.midi_out --backend fluidsynth --soundfont gm.sf2
 
 # Terminal 2 — lights
-python3 -m distributed.midi_light_bridge --ip 10.0.0.23 10.0.0.34
+python3 -m distributed.midi_light_bridge --ip 192.0.2.23 192.0.2.34
 
 # Terminal 3 — play
 python3 glowup.py replay --file song.mid

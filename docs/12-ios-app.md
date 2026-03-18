@@ -112,8 +112,8 @@ check **Connect via network**.
 #### Virtual Group Detail
 
 The screenshot below shows the Device Detail screen for a virtual
-multizone group named "porch" — two physical string lights (10.0.0.23
-and 10.0.0.62) combined into a single 144-zone animation surface.
+multizone group named "porch" — two physical string lights (192.0.2.23
+and 192.0.2.62) combined into a single 144-zone animation surface.
 
 <p align="center">
   <img src="multizone.PNG" alt="Virtual multizone group detail" width="300">

@@ -11,7 +11,7 @@ horizontal meter.
 
 Usage::
 
-    python3 -m distributed.spectrum_display --broker 10.0.0.48 --source conway
+    python3 -m distributed.spectrum_display --broker 192.0.2.48 --source conway
 
 Press Ctrl+C to stop.
 """
@@ -31,6 +31,8 @@ import sys
 import threading
 import time
 from typing import Any, Optional
+
+from network_config import net
 
 logger: logging.Logger = logging.getLogger("glowup.spectrum_display")
 
@@ -469,8 +471,8 @@ def main() -> None:
         description="GlowUp Spectrum Display — ANSI terminal visualizer",
     )
     parser.add_argument(
-        "--broker", default="10.0.0.48",
-        help="MQTT broker address (default: 10.0.0.48)",
+        "--broker", default=net.broker,
+        help=f"MQTT broker address (default: {net.broker})",
     )
     parser.add_argument(
         "--port", type=int, default=1883,

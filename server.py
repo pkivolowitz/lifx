@@ -1094,8 +1094,8 @@ class DeviceManager:
 
         This prevents the scheduler from clobbering an individually
         targeted device that belongs to a group.  Without this, playing
-        an effect on ``10.0.0.62`` while the scheduler manages
-        ``group:porch`` (which includes ``10.0.0.62``) would be
+        an effect on ``192.0.2.62`` while the scheduler manages
+        ``group:porch`` (which includes ``192.0.2.62``) would be
         overwritten on the next scheduler poll.
 
         Args:
@@ -1602,7 +1602,7 @@ class SchedulerThread(threading.Thread):
 
                     # Stop previous effect if not overridden.
                     # Use is_overridden_or_member so that an override
-                    # on an individual member device (e.g. 10.0.0.62)
+                    # on an individual member device (e.g. 192.0.2.62)
                     # prevents the scheduler from clobbering it when
                     # the group (e.g. group:porch) transitions.
                     if prev_name is not None:
@@ -2166,8 +2166,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
             {
                 "groups": {
-                    "porch": ["10.0.0.25", "10.0.0.26"],
-                    "office": ["10.0.0.30"]
+                    "porch": ["192.0.2.25", "192.0.2.26"],
+                    "office": ["192.0.2.30"]
                 }
             }
         """

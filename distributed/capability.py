@@ -69,7 +69,7 @@ class NodeCapability:
     Attributes:
         node_id:    Unique identifier (e.g. ``"judy"``, ``"pi"``).
         hostname:   Network hostname (e.g. ``"judy.local"``).
-        ip:         IPv4 address (e.g. ``"10.0.0.63"``).
+        ip:         IPv4 address (e.g. ``"192.0.2.63"``).
         roles:      List of roles (``"sensor"``, ``"compute"``, ``"emitter"``).
         resources:  Hardware resources (GPUs, CPU cores, RAM).
         operators:  List of operator descriptors this node can run.

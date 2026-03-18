@@ -61,7 +61,7 @@ runs identically without it — MQTT is purely optional.
 
 All topics are prefixed with `topic_prefix` (default `glowup`).
 Device IDs are the same identifiers used in the REST API: IP addresses
-for individual devices (e.g., `10.0.0.62`) and `group:name` for
+for individual devices (e.g., `192.0.2.62`) and `group:name` for
 virtual multizone groups (e.g., `group:porch`).
 
 #### Published by GlowUp (state)
@@ -99,14 +99,14 @@ pip install paho-mqtt
 python3 server.py server.json
 
 # In another terminal — play an effect:
-mosquitto_pub -t "glowup/device/10.0.0.62/command/play" \
+mosquitto_pub -t "glowup/device/192.0.2.62/command/play" \
   -m '{"effect":"aurora","params":{"speed":10.0,"brightness":60}}'
 
 # Stop it:
-mosquitto_pub -t "glowup/device/10.0.0.62/command/stop" -m ""
+mosquitto_pub -t "glowup/device/192.0.2.62/command/stop" -m ""
 
 # Resume the scheduler:
-mosquitto_pub -t "glowup/device/10.0.0.62/command/resume" -m ""
+mosquitto_pub -t "glowup/device/192.0.2.62/command/resume" -m ""
 
 # Watch state changes:
 mosquitto_sub -t "glowup/#" -v

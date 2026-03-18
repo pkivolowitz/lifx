@@ -28,6 +28,8 @@ import os
 import threading
 from typing import Any, Optional
 
+from network_config import net
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -47,7 +49,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 #: Default connection string (override with GLOWUP_DIAG_DSN env var).
-DEFAULT_DSN: str = "postgresql://glowup:changeme@10.0.0.55:5432/glowup"
+DEFAULT_DSN: str = f"postgresql://glowup:changeme@{net.db_host}:5432/glowup"
 
 #: Environment variable for the connection string.
 DSN_ENV_VAR: str = "GLOWUP_DIAG_DSN"

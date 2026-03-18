@@ -13,14 +13,14 @@ Two creation paths are supported:
 
 **Config-based** (via EmitterManager / ``create_emitter()``)::
 
-    emitter = create_emitter("lifx", "porch", {"ip": "10.0.0.62"})
+    emitter = create_emitter("lifx", "porch", {"ip": "192.0.2.62"})
 
 **Programmatic** (via factory classmethod)::
 
     from emitters.lifx import LifxEmitter
     from transport import LifxDevice
 
-    device = LifxDevice("10.0.0.62")
+    device = LifxDevice("192.0.2.62")
     device.query_all()
     emitter = LifxEmitter.from_device(device)
 
@@ -71,13 +71,13 @@ class LifxEmitter(Emitter):
 
     Typical creation via factory::
 
-        device = LifxDevice("10.0.0.62")
+        device = LifxDevice("192.0.2.62")
         device.query_all()
         emitter = LifxEmitter.from_device(device)
 
     Config-based creation (via ``create_emitter``)::
 
-        emitter = create_emitter("lifx", "porch", {"ip": "10.0.0.62"})
+        emitter = create_emitter("lifx", "porch", {"ip": "192.0.2.62"})
         emitter.on_configure(full_server_config)
     """
 

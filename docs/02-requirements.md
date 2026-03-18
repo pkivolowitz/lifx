@@ -131,6 +131,6 @@ devices directly — broadcast auto-detection uses Unix-specific
 calls that are unavailable on Windows.
 
 ```bash
-python glowup.py play aurora --ip 10.0.0.62
+python glowup.py play aurora --ip 192.0.2.62
 python glowup.py play aurora --sim-only --zones 36
 ```
