@@ -307,21 +307,20 @@ class VirtualMultizoneEmitter(Emitter):
             avg_interval_ms: float = (
                 (self._interval_sum_s / (n - 1)) * 1000.0 if n > 1 else 0.0
             )
-            logger.info(
-                "%s — %d frames | fanout avg %.2f ms, "
-                "min %.2f ms, max %.2f ms | interval avg %.1f ms, "
-                "min %.1f ms, max %.1f ms | slow (>%d ms): %d",
-                self._name or "group",
-                n,
-                avg_fanout_ms,
-                self._fanout_min_s * 1000.0,
-                self._fanout_max_s * 1000.0,
-                avg_interval_ms,
-                self._interval_min_s * 1000.0,
-                self._interval_max_s * 1000.0,
-                int(FANOUT_WARN_THRESHOLD_S * 1000),
-                self._fanout_warns,
+            msg: str = (
+                f"{self._name or 'group'} — {n} frames | "
+                f"fanout avg {avg_fanout_ms:.2f} ms, "
+                f"min {self._fanout_min_s * 1000.0:.2f} ms, "
+                f"max {self._fanout_max_s * 1000.0:.2f} ms | "
+                f"interval avg {avg_interval_ms:.1f} ms, "
+                f"min {self._interval_min_s * 1000.0:.1f} ms, "
+                f"max {self._interval_max_s * 1000.0:.1f} ms | "
+                f"slow (>{int(FANOUT_WARN_THRESHOLD_S * 1000)} ms): "
+                f"{self._fanout_warns}"
             )
+            # Print to stderr so it appears in both CLI and systemd journal.
+            print(msg, file=__import__("sys").stderr, flush=True)
+            logger.info(msg)
 
     def send_color(
         self,
