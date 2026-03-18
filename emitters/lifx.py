@@ -36,12 +36,15 @@ EmitterManager calls the SOE lifecycle (``on_open``, ``on_emit``,
 __version__ = "2.2"
 
 import logging
+import struct
 import time
 from typing import Any, Optional
 
 from effects import HSBK, KELVIN_DEFAULT, hsbk_to_luminance
 from emitters import Emitter, EmitterCapabilities
-from transport import LifxDevice
+from transport import (
+    LifxDevice, MSG_LIGHT_SET_POWER, POWER_OFF, POWER_ON,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -351,9 +354,23 @@ class LifxEmitter(Emitter):
         """
         if self._device is not None:
             # Wake cycle: power off, pause, power on.
-            self._device.set_power(on=False, duration_ms=0)
+            # Fire-and-forget — if the bulb is unresponsive we must not
+            # block server startup waiting for an ack that may never come.
+            try:
+                self._device.fire_and_forget(
+                    MSG_LIGHT_SET_POWER,
+                    struct.pack("<HI", POWER_OFF, 0),
+                )
+            except OSError:
+                pass
             time.sleep(_POWER_CYCLE_PAUSE_S)
-            self._device.set_power(on=True, duration_ms=0)
+            try:
+                self._device.fire_and_forget(
+                    MSG_LIGHT_SET_POWER,
+                    struct.pack("<HI", POWER_ON, 0),
+                )
+            except OSError:
+                pass
             time.sleep(_POWER_CYCLE_PAUSE_S)
             # Clear the committed layer to black on multizone devices.
             if self.is_multizone and self.zone_count:
