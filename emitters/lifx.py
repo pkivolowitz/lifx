@@ -33,18 +33,15 @@ EmitterManager calls the SOE lifecycle (``on_open``, ``on_emit``,
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "2.2"
+__version__ = "2.3"
 
 import logging
-import struct
 import time
 from typing import Any, Optional
 
 from effects import HSBK, KELVIN_DEFAULT, hsbk_to_luminance
 from emitters import Emitter, EmitterCapabilities
-from transport import (
-    LifxDevice, MSG_LIGHT_SET_POWER, POWER_OFF, POWER_ON,
-)
+from transport import LifxDevice, broadcast_wake
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -59,9 +56,6 @@ _FRAME_TYPE_SINGLE: str = "single"   # HSBK or single-element list
 
 # LIFX devices animate at up to 30 Hz over the LAN protocol.
 _MAX_RATE_HZ: float = 30.0
-# Pause between power-off and power-on during the wake cycle (seconds).
-# Gives the firmware time to fully process the state transition.
-_POWER_CYCLE_PAUSE_S: float = 0.5
 
 # Module logger.
 logger: logging.Logger = logging.getLogger("glowup.emitters.lifx")
@@ -340,38 +334,20 @@ class LifxEmitter(Emitter):
     # Called by the Engine and Controller at various pipeline stages.
 
     def prepare_for_rendering(self) -> None:
-        """Power-cycle the device, then clear committed state to black.
+        """Broadcast-wake sleeping bulbs, then clear committed state to black.
 
-        The power off/on cycle ensures the bulb's firmware is in a
-        responsive state before we start sending effect frames.  LIFX
-        bulbs can become unresponsive to unicast commands after a
-        factory reset or network disruption even while still answering
-        discovery broadcasts.
+        LIFX bulbs in power-save mode respond to broadcast frames but
+        may ignore unicast.  A burst of broadcast ``GetService`` packets
+        prods the radio back into an active state — the same mechanism
+        the LIFX app uses before sending commands.
 
-        After the wake cycle, the extended multizone committed layer is
+        After the wake burst, the extended multizone committed layer is
         set to black so that dropped UDP frames reveal black instead of
         stale colors.
         """
         if self._device is not None:
-            # Wake cycle: power off, pause, power on.
-            # Fire-and-forget — if the bulb is unresponsive we must not
-            # block server startup waiting for an ack that may never come.
-            try:
-                self._device.fire_and_forget(
-                    MSG_LIGHT_SET_POWER,
-                    struct.pack("<HI", POWER_OFF, 0),
-                )
-            except OSError:
-                pass
-            time.sleep(_POWER_CYCLE_PAUSE_S)
-            try:
-                self._device.fire_and_forget(
-                    MSG_LIGHT_SET_POWER,
-                    struct.pack("<HI", POWER_ON, 0),
-                )
-            except OSError:
-                pass
-            time.sleep(_POWER_CYCLE_PAUSE_S)
+            # Broadcast wake burst — wakes all bulbs on the network.
+            broadcast_wake()
             # Clear the committed layer to black on multizone devices.
             if self.is_multizone and self.zone_count:
                 self._device.set_color(0, 0, 0, _CLEAR_KELVIN, duration_ms=0)

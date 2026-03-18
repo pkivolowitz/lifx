@@ -14,7 +14,7 @@ Typical usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.5"
+__version__ = "1.6"
 
 import enum
 import logging
@@ -1400,6 +1400,45 @@ class LifxDevice:
         # Payload: reserved(u8) + HSBK(4 x u16) + duration(u32)
         payload = struct.pack("<xHHHHI", hue, sat, bri, kelvin, duration_ms)
         self._send(MSG_LIGHT_SET_COLOR, payload, ack=True)
+
+
+# ---------------------------------------------------------------------------
+# Broadcast wake
+# ---------------------------------------------------------------------------
+
+# Number of GetService packets in a broadcast wake burst.
+WAKE_BURST_COUNT: int = 3
+# Delay between wake burst packets (seconds).
+WAKE_BURST_DELAY: float = 0.1
+
+
+def broadcast_wake() -> None:
+    """Send a burst of broadcast GetService packets to wake sleeping bulbs.
+
+    LIFX bulbs in power-save mode respond to broadcast frames but may
+    ignore unicast.  This function fires a rapid burst of broadcast
+    ``GetService`` (type 2) packets — the same wake pattern used at the
+    start of :func:`discover_devices` — to prod their radios back into
+    an active state before unicast commands are sent.
+
+    No responses are collected; this is fire-and-forget.
+    """
+    broadcast_addr: str = _get_broadcast_address()
+    source_id: int = random.randint(SOURCE_ID_MIN, SOURCE_ID_MAX)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    msg: bytes = _build_header(
+        MSG_GET_SERVICE, 0, source_id, tagged=True, res=True,
+    )
+    try:
+        for _ in range(WAKE_BURST_COUNT):
+            sock.sendto(msg, (broadcast_addr, LIFX_PORT))
+            time.sleep(WAKE_BURST_DELAY)
+    except OSError as exc:
+        logger.debug("Broadcast wake failed: %s", exc)
+    finally:
+        sock.close()
 
 
 # ---------------------------------------------------------------------------

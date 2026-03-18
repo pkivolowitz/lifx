@@ -17,7 +17,7 @@ addressable canvas.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "2.2"
+__version__ = "2.3"
 
 import logging
 import time
@@ -25,7 +25,7 @@ from typing import Any, Optional
 
 from effects import HSBK, KELVIN_DEFAULT
 from emitters import Emitter, EmitterCapabilities
-from transport import SendMode
+from transport import SendMode, broadcast_wake
 
 # Module logger.
 logger: logging.Logger = logging.getLogger("glowup.emitters.virtual")
@@ -347,9 +347,16 @@ class VirtualMultizoneEmitter(Emitter):
     # --- Engine-facing lifecycle -------------------------------------------
 
     def prepare_for_rendering(self) -> None:
-        """Prepare all member emitters for rendering."""
+        """Broadcast-wake once, then prepare all member emitters.
+
+        A single broadcast wake prods all bulbs on the network.  Each
+        member then clears its committed layer individually.
+        """
+        broadcast_wake()
         for em in self._emitters:
-            em.prepare_for_rendering()
+            # Members skip their own broadcast_wake — already done above.
+            if em._device is not None and em.is_multizone and em.zone_count:
+                em._device.set_color(0, 0, 0, KELVIN_DEFAULT, duration_ms=0)
 
     def power_on(self, duration_ms: int = 0) -> None:
         """Power on all member emitters.
