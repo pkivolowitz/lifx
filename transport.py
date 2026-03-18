@@ -14,8 +14,9 @@ Typical usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.4"
+__version__ = "1.5"
 
+import enum
 import logging
 import math
 import random
@@ -61,6 +62,34 @@ ACK_TIMEOUT: float = 0.2       # Seconds to wait for ack (observed avg ~5ms, spi
 ACK_RETRIES: int = 0           # No retries — move on to the next frame immediately
 ACK_STATS_LOG_INTERVAL: int = 500  # Log RTT summary every N acked frames
 ACK_SEQ_WRAP: int = 256        # Sequence number wraps at 0-255 (u8)
+
+
+# ---------------------------------------------------------------------------
+# Send mode
+# ---------------------------------------------------------------------------
+
+class SendMode(enum.Enum):
+    """How :meth:`LifxDevice.set_zones` delivers packets to the device.
+
+    ``ACK_PACED``
+        Submit to the per-device :class:`_AckWorker` for back-pressure
+        pacing.  Used for solo devices during animation rendering.
+
+    ``IMMEDIATE``
+        Fire-and-forget — bypass the ack worker, send the UDP packet
+        directly with no acknowledgement.  Used by
+        :class:`VirtualMultizoneEmitter` for synchronized group fan-out
+        so all devices receive their frames simultaneously.
+
+    ``GUARANTEED``
+        Send with ack and block until acknowledged (or timeout).  Used
+        for stop/fade commands where delivery must be confirmed.
+    """
+
+    ACK_PACED = "ack_paced"
+    IMMEDIATE = "immediate"
+    GUARANTEED = "guaranteed"
+
 
 # Label / group payload sizes (from LIFX protocol spec)
 LABEL_FIELD_SIZE: int = 32
@@ -1226,7 +1255,7 @@ class LifxDevice:
         colors: list[tuple[int, int, int, int]],
         duration_ms: int = 0,
         *,
-        rapid: bool = True,
+        mode: SendMode = SendMode.ACK_PACED,
     ) -> None:
         """Set all zones atomically using the extended multizone protocol.
 
@@ -1235,18 +1264,22 @@ class LifxDevice:
         chunk uses ``APPLY_YES`` to commit the entire frame atomically,
         preventing visible tearing.
 
-        When an :class:`_AckWorker` is active and ``rapid=True``, the
-        assembled packets are submitted to the worker for ack-paced
-        delivery (non-blocking).  When ``rapid=False`` (e.g., stop/fade),
-        packets are sent directly with ack for guaranteed delivery.
-
         Args:
             colors:      List of ``(hue, sat, brightness, kelvin)`` tuples,
                          one per zone.
             duration_ms: Transition duration in milliseconds.
-            rapid:       If ``True``, use ack-paced worker (or fire-and-
-                         forget if no worker).  If ``False``, send
-                         directly with ack for guaranteed delivery.
+            mode:        Delivery strategy:
+
+                         - :attr:`SendMode.ACK_PACED` — submit to the
+                           per-device ack worker for back-pressure
+                           pacing.  Falls back to fire-and-forget if
+                           no worker is active.
+                         - :attr:`SendMode.IMMEDIATE` — fire-and-forget,
+                           bypass ack worker.  Used for synchronized
+                           group fan-out.
+                         - :attr:`SendMode.GUARANTEED` — send with ack,
+                           block until acknowledged.  Used for
+                           stop/fade commands.
 
         Raises:
             ValueError: If *colors* is empty or *duration_ms* is negative.
@@ -1279,18 +1312,16 @@ class LifxDevice:
 
             packets.append((MSG_SET_EXTENDED_COLOR_ZONES, payload))
 
-        # Route: ack worker (animation), direct ack (commands), or
-        # fire-and-forget (legacy / no worker).
-        if rapid and self._ack_worker is not None:
+        # Route based on send mode.
+        if mode is SendMode.ACK_PACED and self._ack_worker is not None:
             self._ack_worker.submit(packets)
-        elif rapid:
-            # No ack worker — legacy fire-and-forget path.
-            for msg_type, payload in packets:
-                self.fire_and_forget(msg_type, payload)
-        else:
-            # Direct send with ack — guaranteed delivery for stop/fade.
+        elif mode is SendMode.GUARANTEED:
             for msg_type, payload in packets:
                 self._send(msg_type, payload, ack=True)
+        else:
+            # IMMEDIATE, or ACK_PACED without a worker (legacy fallback).
+            for msg_type, payload in packets:
+                self.fire_and_forget(msg_type, payload)
 
     def clear_firmware_effect(self) -> None:
         """Disable any firmware-level multizone effect on this device.

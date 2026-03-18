@@ -91,7 +91,7 @@ from engine import Controller
 from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
 from media import MediaManager, SignalBus
 from solar import SunTimes, sun_times
-from transport import LifxDevice
+from transport import LifxDevice, SendMode
 
 # Optional distributed compute subsystem.
 try:
@@ -703,7 +703,8 @@ class DeviceManager:
             blank: list[HSBK] = [
                 (0, 0, 0, KELVIN_DEFAULT)
             ] * em.zone_count
-            em.send_zones(blank, duration_ms=0, rapid=False)
+            em.send_zones(blank, duration_ms=0,
+                         mode=SendMode.GUARANTEED)
 
         if on:
             em.power_on(duration_ms=DEFAULT_FADE_MS)
@@ -782,7 +783,8 @@ class DeviceManager:
                 blank: list[HSBK] = [
                     (0, 0, 0, KELVIN_DEFAULT)
                 ] * dev.zone_count
-                dev.set_zones(blank, duration_ms=0, rapid=False)
+                dev.set_zones(blank, duration_ms=0,
+                              mode=SendMode.GUARANTEED)
 
             # 5. Power off.
             dev.set_power(on=False, duration_ms=0)
@@ -842,7 +844,7 @@ class DeviceManager:
                     if em.is_multizone:
                         color: HSBK = (0, 0, bri, KELVIN_DEFAULT)
                         colors: list[HSBK] = [color] * (em.zone_count or 1)
-                        em.send_zones(colors, duration_ms=0, rapid=True)
+                        em.send_zones(colors, duration_ms=0)
                     else:
                         em.send_color(0, 0, bri, KELVIN_DEFAULT, duration_ms=0)
 

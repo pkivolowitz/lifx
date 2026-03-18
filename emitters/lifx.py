@@ -191,8 +191,7 @@ class LifxEmitter(Emitter):
             duration_ms: int = int(metadata.get("duration_ms", 0))
             if isinstance(frame, list):
                 if self.is_multizone:
-                    self.send_zones(frame, duration_ms=duration_ms,
-                                    rapid=True)
+                    self.send_zones(frame, duration_ms=duration_ms)
                 elif len(frame) > 0:
                     h, s, b, k = frame[0]
                     self.send_color(h, s, b, k, duration_ms=duration_ms)
@@ -293,7 +292,7 @@ class LifxEmitter(Emitter):
     # of the Emitter ABC — they are LIFX-specific public methods.
 
     def send_zones(self, colors: list[HSBK], duration_ms: int = 0,
-                   rapid: bool = True) -> None:
+                   mode: Optional["SendMode"] = None) -> None:
         """Send a multizone frame via LIFX extended protocol (type 510).
 
         Chunks colors into packets of up to 82 zones.  The final packet
@@ -302,11 +301,14 @@ class LifxEmitter(Emitter):
         Args:
             colors:      One HSBK tuple per zone.
             duration_ms: Firmware transition duration in milliseconds.
-            rapid:       Fire-and-forget if ``True`` (no UDP ack).
+            mode:        :class:`SendMode` delivery strategy.  Defaults
+                         to :attr:`SendMode.ACK_PACED`.
         """
         if self._device is not None:
+            from transport import SendMode
+            send_mode: SendMode = mode if mode is not None else SendMode.ACK_PACED
             self._device.set_zones(colors, duration_ms=duration_ms,
-                                   rapid=rapid)
+                                   mode=send_mode)
 
     def send_color(self, hue: int, sat: int, bri: int, kelvin: int,
                    duration_ms: int = 0) -> None:

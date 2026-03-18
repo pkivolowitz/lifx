@@ -76,7 +76,7 @@ def main() -> None:
                 colors: list[tuple[int, int, int, int]] = [BLACK] * zone_count
                 colors[z] = RED
                 t0: float = time.monotonic()
-                dev.set_zones(colors, duration_ms=100, rapid=True)
+                dev.set_zones(colors, duration_ms=100)
                 elapsed: float = time.monotonic() - t0
                 sys.stdout.write(f"\r  zone {z:3d}/{zone_count}  "
                                  f"send: {elapsed*1000:.1f}ms  ")
@@ -84,7 +84,7 @@ def main() -> None:
                 time.sleep(hold)
     except KeyboardInterrupt:
         # Blank the strip on exit.
-        dev.set_zones([BLACK] * zone_count, duration_ms=100, rapid=True)
+        dev.set_zones([BLACK] * zone_count, duration_ms=100)
         print("\nDone.")
 
     dev.close()

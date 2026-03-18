@@ -227,7 +227,7 @@ def run_test(dev: LifxDevice, zone_count: int, label: str,
                      f"({frame_num / TEST_DURATION:.1f} actual fps)\n")
 
     # Blank strip between tests
-    dev.set_zones([BLACK] * zone_count, duration_ms=0, rapid=True)
+    dev.set_zones([BLACK] * zone_count, duration_ms=0)
     time.sleep(0.3)
 
     rating: str = input("  Rate smoothness (1=terrible 5=perfect, q=quit): ").strip()
@@ -279,7 +279,7 @@ def main() -> None:
         print(f"  [{rating}] {label}")
     print()
 
-    dev.set_zones([BLACK] * zone_count, duration_ms=0, rapid=True)
+    dev.set_zones([BLACK] * zone_count, duration_ms=0)
     dev.close()
 
 

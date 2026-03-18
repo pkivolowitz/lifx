@@ -643,7 +643,7 @@ def cmd_identify(args: argparse.Namespace) -> None:
         if dev.is_multizone:
             color = (0, 0, bri, KELVIN_DEFAULT)
             colors = [color] * dev.zone_count
-            dev.set_zones(colors, duration_ms=0, rapid=True)
+            dev.set_zones(colors, duration_ms=0)
         else:
             dev.set_color(0, 0, bri, KELVIN_DEFAULT, duration_ms=0)
 

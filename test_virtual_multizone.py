@@ -72,8 +72,8 @@ class MockEmitter(Emitter):
         return self._product_name
 
     def send_zones(self, colors: list[HSBK], duration_ms: int = 0,
-                   rapid: bool = True) -> None:
-        self.send_zones_calls.append((list(colors), duration_ms, rapid))
+                   mode: object = None) -> None:
+        self.send_zones_calls.append((list(colors), duration_ms, mode))
 
     def send_color(self, hue: int, sat: int, bri: int, kelvin: int,
                    duration_ms: int = 0) -> None:
@@ -125,7 +125,7 @@ def test_send_zones_dispatch():
     colors: list[HSBK] = [
         (1000 * i, 65535, 32768, 3500) for i in range(8)
     ]
-    vem.send_zones(colors, duration_ms=0, rapid=True)
+    vem.send_zones(colors, duration_ms=0)
 
     # Strip should get ONE send_zones() call with 6 colors.
     assert len(strip.send_zones_calls) == 1, \

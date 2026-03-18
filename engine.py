@@ -40,6 +40,7 @@ from typing import Any, Callable, Optional
 
 from effects import Effect, create_effect, get_registry, KELVIN_DEFAULT
 from emitters import Emitter
+from transport import SendMode
 
 # ---------------------------------------------------------------------------
 # Backward compatibility — VirtualMultizoneDevice moved to emitters/virtual.py
@@ -297,7 +298,8 @@ class Engine:
                 if em.zone_count:
                     if em.is_multizone:
                         off = [(0, 0, 0, KELVIN_DEFAULT)] * em.zone_count
-                        em.send_zones(off, duration_ms=0, rapid=False)
+                        em.send_zones(off, duration_ms=0,
+                                      mode=SendMode.GUARANTEED)
                     else:
                         # Single-zone emitter: fade to black.
                         em.send_color(0, 0, 0, KELVIN_DEFAULT,
@@ -460,8 +462,7 @@ class Engine:
                 try:
                     if em.is_multizone:
                         em.send_zones(em_colors,
-                                      duration_ms=transition_ms,
-                                      rapid=True)
+                                      duration_ms=transition_ms)
                     else:
                         h, s, b, k = em_colors[0]
                         em.send_color(h, s, b, k, duration_ms=0)

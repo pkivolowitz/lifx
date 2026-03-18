@@ -387,7 +387,7 @@ class MidiLightBridge:
             for dev, start, count in self._devices:
                 device_colors = colors[start:start + count]
                 try:
-                    dev.set_zones(device_colors, duration_ms=0, rapid=True)
+                    dev.set_zones(device_colors, duration_ms=0)
                 except Exception as exc:
                     logger.warning("set_zones failed on %s: %s",
                                    dev.label, exc)

@@ -17,12 +17,13 @@ addressable canvas.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "2.0"
+__version__ = "2.1"
 
 from typing import Any, Optional
 
 from effects import HSBK, KELVIN_DEFAULT
 from emitters import Emitter, EmitterCapabilities
+from transport import SendMode
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -199,19 +200,24 @@ class VirtualMultizoneEmitter(Emitter):
         self,
         colors: list[HSBK],
         duration_ms: int = 0,
-        rapid: bool = True,
+        mode: Optional[SendMode] = None,
     ) -> None:
         """Route each virtual zone's color to the correct member emitter.
 
         Multizone members receive a single batched :meth:`send_zones`
-        call.  Single-zone members receive :meth:`send_color` — the
-        member emitter handles any hardware-specific conversion
-        (e.g., monochrome luma) internally.
+        call with :attr:`SendMode.IMMEDIATE` so all devices in the
+        group receive their frames simultaneously — no per-device ack
+        pacing drift.  Single-zone members receive :meth:`send_color`.
+
+        The *mode* parameter is accepted for API consistency but is
+        always overridden to :attr:`SendMode.IMMEDIATE` for member
+        dispatch.  Group fan-out is inherently fire-and-forget.
 
         Args:
             colors:      One HSBK tuple per virtual zone.
             duration_ms: Transition time in milliseconds.
-            rapid:       Passed through to multizone :meth:`send_zones`.
+            mode:        Ignored — member dispatch always uses
+                         :attr:`SendMode.IMMEDIATE`.
         """
         # Collect colors destined for each multizone emitter so we can
         # batch them into one send_zones() call per emitter.
@@ -237,7 +243,8 @@ class VirtualMultizoneEmitter(Emitter):
                     }
                 multizone_batches[em_id]["colors"][zone_idx] = colors[vz]
 
-        # Flush batched multizone updates.
+        # Flush batched multizone updates — IMMEDIATE for simultaneous
+        # delivery to all group members.
         for batch in multizone_batches.values():
             em = batch["em"]
             batch_colors: list = batch["colors"]
@@ -245,7 +252,8 @@ class VirtualMultizoneEmitter(Emitter):
             for i in range(len(batch_colors)):
                 if batch_colors[i] is None:
                     batch_colors[i] = (0, 0, 0, KELVIN_DEFAULT)
-            em.send_zones(batch_colors, duration_ms=duration_ms, rapid=rapid)
+            em.send_zones(batch_colors, duration_ms=duration_ms,
+                         mode=SendMode.IMMEDIATE)
 
     def send_color(
         self,
