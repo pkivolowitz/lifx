@@ -17,13 +17,18 @@ addressable canvas.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "2.1"
+__version__ = "2.2"
 
+import logging
+import time
 from typing import Any, Optional
 
 from effects import HSBK, KELVIN_DEFAULT
 from emitters import Emitter, EmitterCapabilities
 from transport import SendMode
+
+# Module logger.
+logger: logging.Logger = logging.getLogger("glowup.emitters.virtual")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -33,6 +38,12 @@ from transport import SendMode
 # Distinguishes single-zone emitters (send_color) from multizone zone
 # indices (batched send_zones).
 SINGLE_ZONE_SENTINEL: int = -1
+
+# Log fan-out timing stats every N frames.
+FANOUT_STATS_INTERVAL: int = 500
+
+# Warn if a single fan-out exceeds this threshold (seconds).
+FANOUT_WARN_THRESHOLD_S: float = 0.010  # 10 ms
 
 # Frame type identifiers.
 _FRAME_TYPE_STRIP: str = "strip"
@@ -121,6 +132,17 @@ class VirtualMultizoneEmitter(Emitter):
                 self._zone_map.append((em, SINGLE_ZONE_SENTINEL))
 
         self._zone_count: int = len(self._zone_map)
+
+        # Fan-out timing statistics.
+        self._fanout_count: int = 0
+        self._fanout_sum_s: float = 0.0
+        self._fanout_min_s: float = float("inf")
+        self._fanout_max_s: float = 0.0
+        self._fanout_warns: int = 0
+        self._fanout_last_t: float = 0.0  # monotonic time of last send
+        self._interval_sum_s: float = 0.0
+        self._interval_min_s: float = float("inf")
+        self._interval_max_s: float = 0.0
 
     # --- SOE lifecycle -----------------------------------------------------
 
@@ -245,6 +267,7 @@ class VirtualMultizoneEmitter(Emitter):
 
         # Flush batched multizone updates — IMMEDIATE for simultaneous
         # delivery to all group members.
+        t_start: float = time.monotonic()
         for batch in multizone_batches.values():
             em = batch["em"]
             batch_colors: list = batch["colors"]
@@ -254,6 +277,51 @@ class VirtualMultizoneEmitter(Emitter):
                     batch_colors[i] = (0, 0, 0, KELVIN_DEFAULT)
             em.send_zones(batch_colors, duration_ms=duration_ms,
                          mode=SendMode.IMMEDIATE)
+        t_end: float = time.monotonic()
+
+        # Record fan-out timing.
+        fanout_s: float = t_end - t_start
+        self._fanout_count += 1
+        self._fanout_sum_s += fanout_s
+        if fanout_s < self._fanout_min_s:
+            self._fanout_min_s = fanout_s
+        if fanout_s > self._fanout_max_s:
+            self._fanout_max_s = fanout_s
+        if fanout_s > FANOUT_WARN_THRESHOLD_S:
+            self._fanout_warns += 1
+
+        # Record frame-to-frame interval.
+        if self._fanout_last_t > 0.0:
+            interval_s: float = t_start - self._fanout_last_t
+            self._interval_sum_s += interval_s
+            if interval_s < self._interval_min_s:
+                self._interval_min_s = interval_s
+            if interval_s > self._interval_max_s:
+                self._interval_max_s = interval_s
+        self._fanout_last_t = t_start
+
+        # Periodic stats dump.
+        if self._fanout_count % FANOUT_STATS_INTERVAL == 0:
+            n: int = self._fanout_count
+            avg_fanout_ms: float = (self._fanout_sum_s / n) * 1000.0
+            avg_interval_ms: float = (
+                (self._interval_sum_s / (n - 1)) * 1000.0 if n > 1 else 0.0
+            )
+            logger.info(
+                "%s — %d frames | fanout avg %.2f ms, "
+                "min %.2f ms, max %.2f ms | interval avg %.1f ms, "
+                "min %.1f ms, max %.1f ms | slow (>%d ms): %d",
+                self._name or "group",
+                n,
+                avg_fanout_ms,
+                self._fanout_min_s * 1000.0,
+                self._fanout_max_s * 1000.0,
+                avg_interval_ms,
+                self._interval_min_s * 1000.0,
+                self._interval_max_s * 1000.0,
+                int(FANOUT_WARN_THRESHOLD_S * 1000),
+                self._fanout_warns,
+            )
 
     def send_color(
         self,
