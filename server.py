@@ -3049,13 +3049,20 @@ def _load_config(config_path: str) -> dict[str, Any]:
             "discovery — all devices must be listed explicitly."
         )
     groups: dict[str, list[str]] = config["groups"]
-    for group_name, ips in groups.items():
+    empty_groups: list[str] = []
+    for group_name, ips in list(groups.items()):
         if group_name.startswith("_"):
             continue
-        if not isinstance(ips, list) or not ips:
+        if not isinstance(ips, list):
             raise ValueError(
-                f"Group '{group_name}' must be a non-empty list"
-                )
+                f"Group '{group_name}' must be a list of IP addresses"
+            )
+        if not ips:
+            logger.warning("Group '%s' is empty — skipping", group_name)
+            empty_groups.append(group_name)
+    # Remove empty groups so downstream code never encounters them.
+    for name in empty_groups:
+        del groups[name]
 
     if "schedule" in config:
         known_groups: set[str] = set()
