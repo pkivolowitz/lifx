@@ -35,6 +35,7 @@ Usage::
 
 __version__ = "1.1"
 
+import asyncio
 import logging
 import os
 import platform
@@ -77,6 +78,12 @@ KEEPALIVE_BURST_DELAY: float = 0.05
 #: At the default 5-second scan interval, 24 misses ≈ 2 minutes.
 EXPIRY_MISS_COUNT: int = 24
 
+#: How often to ping-sweep the entire subnet to populate the kernel ARP cache
+#: (seconds).  The keepalive reads /proc/net/arp passively — it only sees
+#: bulbs that have already sent traffic to this host.  On a Deco mesh network
+#: bulbs associated with a distant node never appear until we ping them first.
+SUBNET_SWEEP_INTERVAL: float = 60.0
+
 #: LIFX protocol constants (duplicated from transport to keep this module
 #: importable standalone — e.g. on machines without the full codebase).
 _PROTOCOL: int = 1024
@@ -109,6 +116,16 @@ _UPSERT_SQL: str = """
 
 # Module logger.
 logger: logging.Logger = logging.getLogger("glowup.bulb_keepalive")
+
+# ---------------------------------------------------------------------------
+# Optional dependency — lanscan (subnet ping sweep)
+# ---------------------------------------------------------------------------
+
+try:
+    from lanscan import get_local_network, ping_sweep
+    _HAS_LANSCAN: bool = True
+except ImportError:
+    _HAS_LANSCAN = False
 
 # ---------------------------------------------------------------------------
 # Optional dependency — psycopg2
@@ -360,11 +377,13 @@ class BulbKeepAlive(threading.Thread):
         *,
         arp_interval: float = ARP_SCAN_INTERVAL,
         keepalive_interval: float = KEEPALIVE_INTERVAL,
+        sweep_interval: float = SUBNET_SWEEP_INTERVAL,
     ) -> None:
         super().__init__(daemon=True, name="bulb-keepalive")
         self._on_new_bulb: Optional[Callable[[str, str], None]] = on_new_bulb
         self._arp_interval: float = arp_interval
         self._keepalive_interval: float = keepalive_interval
+        self._sweep_interval: float = sweep_interval
         self._stop_event: threading.Event = threading.Event()
         # {IP: MAC} — currently-known LIFX bulbs.
         self._known: dict[str, str] = {}
@@ -398,8 +417,9 @@ class BulbKeepAlive(threading.Thread):
         self._db.connect()
 
         logger.info(
-            "Keepalive daemon started — ARP every %.1fs, ping every %.1fs",
-            self._arp_interval, self._keepalive_interval,
+            "Keepalive daemon started — ARP every %.1fs, ping every %.1fs, "
+            "subnet sweep every %.1fs",
+            self._arp_interval, self._keepalive_interval, self._sweep_interval,
         )
 
         sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -407,10 +427,16 @@ class BulbKeepAlive(threading.Thread):
 
         next_arp: float = 0.0        # scan immediately on first tick
         next_ping: float = 0.0       # ping immediately on first tick
+        next_sweep: float = 0.0      # sweep immediately on first tick
 
         try:
             while not self._stop_event.is_set():
                 now: float = time.monotonic()
+
+                # --- Subnet sweep (populate ARP cache before reading it) ---
+                if now >= next_sweep:
+                    self._sweep_subnet()
+                    next_sweep = now + self._sweep_interval
 
                 # --- ARP scan ---
                 if now >= next_arp:
@@ -423,7 +449,9 @@ class BulbKeepAlive(threading.Thread):
                     next_ping = now + self._keepalive_interval
 
                 # Sleep until the next event, but wake on stop.
-                sleep_for: float = min(next_arp, next_ping) - time.monotonic()
+                sleep_for: float = (
+                    min(next_arp, next_ping, next_sweep) - time.monotonic()
+                )
                 if sleep_for > 0:
                     self._stop_event.wait(timeout=sleep_for)
         finally:
@@ -433,6 +461,36 @@ class BulbKeepAlive(threading.Thread):
                         len(self._known))
 
     # -- Internals ---------------------------------------------------------
+
+    def _sweep_subnet(self) -> None:
+        """Ping every host on the local subnet to populate the kernel ARP cache.
+
+        The keepalive reads ``/proc/net/arp`` passively — it only discovers
+        bulbs that have already sent traffic to this host.  On a Deco mesh
+        network, bulbs associated with a distant node may never appear in the
+        ARP cache unless we reach out to them first.  This sweep sends one
+        ICMP echo to every host on the subnet; the kernel records their MAC
+        addresses in ``/proc/net/arp`` as replies arrive, making them visible
+        on the next :meth:`_scan_arp` call.
+
+        The sweep is a no-op if ``lanscan`` is not importable.
+        """
+        if not _HAS_LANSCAN:
+            logger.debug("Subnet sweep skipped — lanscan not available")
+            return
+        try:
+            network = get_local_network()
+            if network is None:
+                logger.debug("Subnet sweep: could not determine local network")
+                return
+            num_hosts: int = network.num_addresses - 2
+            logger.debug(
+                "Subnet sweep: pinging %d hosts on %s", num_hosts, network,
+            )
+            asyncio.run(ping_sweep(network))
+            logger.debug("Subnet sweep complete")
+        except Exception as exc:
+            logger.debug("Subnet sweep failed: %s", exc)
 
     def _scan_arp(self) -> None:
         """Read the ARP table, register new devices, and expire stale ones."""
