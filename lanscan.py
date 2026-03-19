@@ -385,8 +385,8 @@ def _get_arp_linux() -> dict[str, str]:
                 flags: str = parts[2]
                 mac: str = parts[3].lower()
 
-                # Skip header line and incomplete entries
-                if not mac[0].isdigit() and not mac[0].isalpha():
+                # Skip the header line ("IP address  HW type  ...")
+                if ip == "IP":
                     continue
                 if flags == "0x0":
                     continue
