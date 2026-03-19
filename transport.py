@@ -108,6 +108,7 @@ MSG_GET_SERVICE: int = 2
 MSG_STATE_SERVICE: int = 3
 MSG_ACKNOWLEDGEMENT: int = 45
 MSG_GET_LABEL: int = 23
+MSG_SET_LABEL: int = 24
 MSG_STATE_LABEL: int = 25
 MSG_GET_VERSION: int = 32
 MSG_STATE_VERSION: int = 33
@@ -1055,6 +1056,50 @@ class LifxDevice:
                 "utf-8", errors="replace",
             )
         return self.label
+
+    def set_label(self, label: str) -> bool:
+        """Write a label to the device firmware via SetLabel (type 24).
+
+        The label is a 32-byte UTF-8 field, null-padded.  Labels longer
+        than 32 bytes are truncated at the last valid UTF-8 boundary.
+
+        This is a metadata operation — not an animation command — so
+        bricking risk from rapid-fire is not a concern.  The write is
+        ack-required to confirm the device received it.
+
+        Args:
+            label: The new label (max 32 bytes UTF-8).
+
+        Returns:
+            ``True`` if the device acknowledged, ``False`` on timeout.
+        """
+        encoded: bytes = label.encode("utf-8")[:LABEL_FIELD_SIZE]
+        payload: bytes = encoded.ljust(LABEL_FIELD_SIZE, b'\x00')
+
+        # Send with ack_required to confirm the write.
+        self._send(MSG_SET_LABEL, payload, ack=True)
+
+        # Wait for acknowledgement.
+        try:
+            old_timeout: float = self.sock.gettimeout() or SOCKET_TIMEOUT
+            self.sock.settimeout(SOCKET_TIMEOUT)
+            deadline: float = time.time() + SOCKET_TIMEOUT
+            while time.time() < deadline:
+                try:
+                    data, _ = self.sock.recvfrom(MAX_UDP_PAYLOAD)
+                    msg = _parse_message(data)
+                    if msg and msg["type"] == MSG_ACKNOWLEDGEMENT:
+                        self.label = label
+                        return True
+                except socket.timeout:
+                    break
+                except OSError:
+                    break
+            self.sock.settimeout(old_timeout)
+        except Exception:
+            pass
+
+        return False
 
     def query_group(self) -> Optional[str]:
         """Query and cache the device group name.

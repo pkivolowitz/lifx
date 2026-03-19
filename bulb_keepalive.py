@@ -405,6 +405,31 @@ class BulbKeepAlive(threading.Thread):
         with self._lock:
             return dict(self._known)
 
+    @property
+    def known_bulbs_by_mac(self) -> dict[str, str]:
+        """Return a snapshot of {MAC: IP} — reverse of :attr:`known_bulbs`.
+
+        Used by :class:`DeviceRegistry` to resolve MAC addresses to
+        current IP addresses at runtime.
+        """
+        with self._lock:
+            return {mac: ip for ip, mac in self._known.items()}
+
+    def ip_for_mac(self, mac: str) -> Optional[str]:
+        """Return the current IP for a MAC address, or ``None`` if offline.
+
+        Thread-safe single-device lookup.
+
+        Args:
+            mac: Lowercase colon-separated MAC (e.g. ``d0:73:d5:69:70:db``).
+        """
+        mac_lower: str = mac.lower()
+        with self._lock:
+            for ip, known_mac in self._known.items():
+                if known_mac == mac_lower:
+                    return ip
+        return None
+
     def stop(self) -> None:
         """Signal the daemon to stop and wait for it to exit."""
         self._stop_event.set()
