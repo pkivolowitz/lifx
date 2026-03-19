@@ -549,6 +549,40 @@ def _server_post(server: str, path: str, body: dict, *, timeout: float = SERVER_
         sys.exit(1)
 
 
+def _server_delete(server: str, path: str, *, timeout: float = SERVER_TIMEOUT_SECONDS) -> dict:
+    """Perform an authenticated DELETE against the GlowUp server.
+
+    Args:
+        server:  ``host:port`` of the server.
+        path:    URL path (e.g. ``/api/command/identify/10.0.0.28``).
+        timeout: HTTP request timeout in seconds.
+
+    Returns:
+        Parsed JSON response body as a dict.
+
+    Raises:
+        SystemExit: On HTTP error, network failure, or auth failure.
+    """
+    token: str = _read_token()
+    url: str = f"http://{server}{path}"
+    req: urllib.request.Request = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        method="DELETE",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        body_text: str = exc.read().decode(errors="replace")
+        _print(f"ERROR: Server returned {exc.code} for {url}: {body_text}",
+               file=sys.stderr)
+        sys.exit(1)
+    except (urllib.error.URLError, OSError) as exc:
+        _print(f"ERROR: Cannot reach server at {server}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _connect_group(ips: list[str]) -> list[LifxDevice]:
     """Connect to and query a list of devices.
 
@@ -793,11 +827,11 @@ def cmd_identify(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     if _server_url:
-        # --- Server path: execute pulse from Pi, return immediately ----------
+        # --- Server path: execute pulse from Pi, cancel on Ctrl+C -----------
         duration: float = getattr(args, "duration", None) or IDENTIFY_DEFAULT_DURATION
         _print(
             f"Identifying {args.ip} via server "
-            f"(pulsing for {duration:.0f}s)...",
+            f"(pulsing for {duration:.0f}s — Ctrl+C to cancel early)...",
             flush=True,
         )
         resp: dict = _server_post(
@@ -812,7 +846,30 @@ def cmd_identify(args: argparse.Namespace) -> None:
         zones: Any = dev_info.get("zones")
         mac: str = dev_info.get("mac") or "?"
         _print(f"  {label} — {product}  |  MAC {mac}  |  zones: {zones}")
-        _print(f"Pulse running on server for {duration:.0f}s.")
+
+        # Wait for the pulse to finish; cancel via DELETE on Ctrl+C.
+        cancelled: bool = False
+
+        def _cancel_identify(sig: int, frame: Any) -> None:
+            """Send DELETE to cancel the server-side pulse on Ctrl+C."""
+            nonlocal cancelled
+            cancelled = True
+
+        signal.signal(signal.SIGINT, _cancel_identify)
+        signal.signal(signal.SIGTERM, _cancel_identify)
+
+        elapsed_wait: float = 0.0
+        while elapsed_wait < duration and not cancelled:
+            time.sleep(min(0.1, duration - elapsed_wait))
+            elapsed_wait += 0.1
+
+        if cancelled:
+            _print("\nCancelling pulse on server...", flush=True)
+            _server_delete(_server_url,
+                           f"/api/command/identify/{args.ip}",
+                           timeout=SERVER_TIMEOUT_SECONDS)
+
+        _print("Done.")
         return
 
     # --- Direct UDP path (server unreachable or --local) ---------------------

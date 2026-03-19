@@ -1750,6 +1750,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     orchestrator: Optional[Any] = None
     keepalive: Optional[BulbKeepAlive] = None
 
+    # Active /api/command/identify pulses: {ip: stop_event}.
+    # Populated by _handle_post_command_identify; cleared when pulse ends.
+    # DELETE /api/command/identify/{ip} sets the event to cancel early.
+    _command_identifies: dict[str, threading.Event] = {}
+    _command_identifies_lock: threading.Lock = threading.Lock()
+
     # Silence per-request logging from BaseHTTPRequestHandler.
     def log_message(self, format: str, *args: Any) -> None:
         """Route HTTP access logs through the logging module.
@@ -2151,6 +2157,26 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         if (len(parts) == 3 and parts[0] == "api" and parts[1] == "command"
                 and parts[2] == "identify"):
             self._handle_post_command_identify()
+            return
+
+        self._send_json(404, {"error": "Not found"})
+
+    def do_DELETE(self) -> None:
+        """Route DELETE requests to the appropriate handler."""
+        if not self._authenticate():
+            return
+
+        path: str = self.path.split("?")[0]
+        parts: list[str] = path.strip("/").split("/")
+
+        # DELETE /api/command/identify/{ip} — cancel a running identify pulse.
+        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "command"
+                and parts[2] == "identify"):
+            ip: str = unquote(parts[3])
+            if not _validate_device_id(ip):
+                self._send_json(400, {"error": "Invalid device identifier"})
+                return
+            self._handle_delete_command_identify(ip)
             return
 
         self._send_json(404, {"error": "Not found"})
@@ -2925,6 +2951,28 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         ]
         self._send_json(200, {"discovered_bulbs": bulbs})
 
+    def _handle_delete_command_identify(self, ip: str) -> None:
+        """DELETE /api/command/identify/{ip} — cancel a running identify pulse.
+
+        Sets the stop event for any pulse currently running on *ip*.
+        The pulse thread will power the device off and exit on its next
+        loop iteration (within :data:`IDENTIFY_FRAME_INTERVAL` seconds).
+
+        Returns 200 if a pulse was cancelled, 404 if none was running.
+        """
+        with GlowUpRequestHandler._command_identifies_lock:
+            event: Optional[threading.Event] = (
+                GlowUpRequestHandler._command_identifies.get(ip)
+            )
+        if event is None:
+            self._send_json(404, {
+                "error": f"No active identify pulse for {ip}"
+            })
+            return
+        event.set()
+        logging.info("API: command/identify — cancelled pulse on %s", ip)
+        self._send_json(200, {"ip": ip, "cancelled": True})
+
     def _handle_get_command_discover(self) -> None:
         """GET /api/command/discover[?ip=X] — query device(s) for full info.
 
@@ -3095,12 +3143,29 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(503, {"error": f"Device query failed: {exc}"})
             return
 
+        stop_event: threading.Event = threading.Event()
+
+        # Cancel any pulse already running on this IP before starting a new one.
+        with GlowUpRequestHandler._command_identifies_lock:
+            existing: Optional[threading.Event] = (
+                GlowUpRequestHandler._command_identifies.get(ip)
+            )
+            if existing is not None:
+                existing.set()
+                logging.info(
+                    "API: command/identify — cancelled existing pulse on %s", ip,
+                )
+            GlowUpRequestHandler._command_identifies[ip] = stop_event
+
         def _pulse() -> None:
             """Sine-wave brightness pulse loop running in a daemon thread."""
             try:
                 dev.set_power(True, duration_ms=0)
                 start: float = time_mod.monotonic()
-                while time_mod.monotonic() - start < duration:
+                while (
+                    not stop_event.is_set()
+                    and time_mod.monotonic() - start < duration
+                ):
                     elapsed: float = time_mod.monotonic() - start
                     phase: float = (
                         math.sin(
@@ -3118,7 +3183,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                         )
                     else:
                         dev.set_color(0, 0, bri, KELVIN_DEFAULT, duration_ms=0)
-                    time_mod.sleep(IDENTIFY_FRAME_INTERVAL)
+                    stop_event.wait(timeout=IDENTIFY_FRAME_INTERVAL)
                 dev.set_power(False, duration_ms=DEFAULT_FADE_MS)
             except Exception as exc:
                 logging.warning(
@@ -3126,6 +3191,10 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 )
             finally:
                 dev.close()
+                with GlowUpRequestHandler._command_identifies_lock:
+                    # Only remove our own entry — don't clobber a newer pulse.
+                    if GlowUpRequestHandler._command_identifies.get(ip) is stop_event:
+                        del GlowUpRequestHandler._command_identifies[ip]
 
         thread: threading.Thread = threading.Thread(
             target=_pulse, daemon=True, name=f"cmd-identify-{ip}",
