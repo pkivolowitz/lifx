@@ -26,6 +26,12 @@ python3 glowup.py discover [--timeout SECONDS] [--ip ADDRESS] [--json]
 Output is a formatted table showing each device's label, product type,
 group, IP address, MAC address, and zone count.
 
+When the GlowUp server is reachable, this command routes via the server
+and queries devices from the Pi (bypassing mesh router UDP filtering).
+Use `--local` to force direct UDP.
+
+See [Server Routing & Safety](docs/25-server-routing-safety.md) for details.
+
 ### effects
 
 List all registered effects and their tunable parameters.
@@ -40,19 +46,28 @@ including its default value and valid range.
 ### identify
 
 Pulse a device's brightness so you can visually locate which physical
-bulb corresponds to a given IP address. The device slowly breathes
-between dim and full brightness in warm white until you press Ctrl+C.
+bulb corresponds to a given IP address.
 
 ```bash
-python3 glowup.py identify --ip <device-ip>
+python3 glowup.py identify --ip <device-ip> [--duration SECONDS]
 ```
 
-| Option | Default | Description                          |
-|--------|---------|--------------------------------------|
+| Option | Default | Description |
+|--------|---------|-------------|
 | `--ip` | *(required)* | Target device IP address or hostname |
+| `--duration` | 10 | Pulse duration in seconds (server mode only; ignored locally) |
+
+**Local mode** (direct UDP): The device slowly breathes between dim and
+full brightness in warm white until you press Ctrl+C.  On stop, the device
+is powered off.
+
+**Server mode** (when server is reachable): The pulse runs asynchronously
+on the server for the specified duration and returns immediately.  The
+pulse can be cancelled early with Ctrl+C.
 
 Works with all device types (multizone, single color, monochrome).
-On stop, the device is powered off.
+
+See [Server Routing & Safety](docs/25-server-routing-safety.md) for details.
 
 ### play
 
@@ -223,5 +238,47 @@ The help system works the same as `play`:
 python3 glowup.py record --help              # record options
 python3 glowup.py record fireworks --help     # effect parameters
 ```
+
+### off
+
+⚠️  **EMERGENCY POWER-OFF** — Power off all LIFX devices on the network.
+
+```bash
+python3 glowup.py off
+```
+
+Requires explicit confirmation by typing "off" at the prompt.  No arguments.
+
+This command:
+1. Sends a direct UDP broadcast power-off to all devices on the local subnet
+2. Tells the server to power off all configured devices
+3. Cancels any running identify pulses
+4. Works even if the server is offline (broadcast is independent)
+
+**Use when:**
+- Physical distress from flashing lights (e.g., overlapping identify pulses)
+- Runaway effects with no easy stop
+- Any emergency requiring immediate darkness
+
+**Example:**
+```
+$ python3 glowup.py off
+
+⚠️  EMERGENCY POWER-OFF ⚠️
+This will immediately power off ALL LIFX devices on the network.
+Type 'off' to confirm, or press Ctrl+C to cancel.
+
+Confirm: off
+
+Powering off all devices...
+
+✓ Broadcast power-off sent to local subnet
+✓ Server powered off 6 configured device(s)
+✓ Cancelled 0 identify pulse(s) on server
+
+✓ Emergency power-off complete
+```
+
+See [Server Routing & Safety](docs/25-server-routing-safety.md) for details.
 
 **Requires:** [ffmpeg](https://ffmpeg.org/) must be installed and on your PATH.

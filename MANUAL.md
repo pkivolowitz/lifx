@@ -76,6 +76,7 @@ updates.
 |---------|-------------|
 | [Scheduler](docs/05-scheduler.md) | Daemon mode, config file, symbolic times, systemd |
 | [REST API Server](docs/11-rest-api.md) | server.py endpoints, auth, SSE, overrides, systemd |
+| [Server Routing & Safety](docs/25-server-routing-safety.md) | Auto-routing via server, emergency power-off, ARP keepalive |
 
 **Back:** [Core](#core) | **Next:** [Remote Access](#remote-access) | [Database](#database) | [Distributed](#distributed)
 
@@ -253,3 +254,4 @@ Every chapter in one flat list, for reference.
 | [Emitter Developer Guide](docs/22-emitter-dev-guide.md) | Core → Developer |
 | [MIDI Pipeline](docs/23-midi-pipeline.md) | Core → Server → Distributed → MIDI |
 | [Persistent Services](docs/24-persistent-services.md) | Core → any component |
+| [Server Routing & Safety](docs/25-server-routing-safety.md) | Core → Server |
