@@ -34,6 +34,7 @@ from typing import Optional
 # Ping parameters
 PING_COUNT: int = 1               # Number of ICMP echo requests per host
 PING_TIMEOUT_MS: int = 500        # Milliseconds to wait for a reply (macOS -W)
+PING_TIMEOUT_S: int = 1           # Seconds to wait for a reply (Linux -W)
 PING_TTL: int = 2                 # Max hops — keeps probes on the local segment
 PING_CONCURRENCY: int = 128       # Max simultaneous ping sub-processes
 PROC_TIMEOUT: int = 5             # Seconds before killing a hung ping process
@@ -209,19 +210,38 @@ OUI_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
-def get_local_network() -> Optional[ipaddress.IPv4Network]:
-    """Detect the local IP and subnet via ``ifconfig``.
+def _get_network_linux() -> Optional[ipaddress.IPv4Network]:
+    """Detect the local network on Linux via ``ip addr``.
 
-    Parses the output of ``ifconfig`` to find the first non-loopback
-    interface with a private IP address and its netmask.
+    Parses CIDR-notation addresses from ``ip -4 addr show`` output.
+    Returns the first non-loopback IPv4 network found, or ``None``.
+    """
+    try:
+        result = subprocess.run(
+            ["ip", "-4", "addr", "show"],
+            capture_output=True,
+            text=True,
+            timeout=IFCONFIG_TIMEOUT,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
 
-    Returns:
-        An ``ipaddress.IPv4Network`` representing the local subnet, or
-        ``None`` if no suitable interface was found.
+    # Match lines like: inet 10.0.0.48/24 brd 10.0.0.255 ...
+    pattern = re.compile(r"inet (\d+\.\d+\.\d+\.\d+/\d+)")
+    for match in pattern.finditer(result.stdout):
+        cidr: str = match.group(1)
+        if cidr.startswith("127."):
+            continue
+        return ipaddress.IPv4Network(cidr, strict=False)
 
-    Raises:
-        No exceptions are raised; errors are caught internally and
-        result in a ``None`` return value.
+    return None
+
+
+def _get_network_macos() -> Optional[ipaddress.IPv4Network]:
+    """Detect the local network on macOS via ``ifconfig``.
+
+    Parses hex-encoded netmasks from ``ifconfig`` output.
+    Returns the first non-loopback IPv4 network found, or ``None``.
     """
     try:
         result = subprocess.run(
@@ -241,18 +261,34 @@ def get_local_network() -> Optional[ipaddress.IPv4Network]:
         ip_str: str = match.group(1)
         mask_hex: str = match.group(2)
 
-        # Skip the loopback interface
         if ip_str.startswith("127."):
             continue
 
-        # Convert hex netmask (e.g. 0xfffffc00) to a CIDR prefix length
-        # by counting the number of set bits.
+        # Convert hex netmask to CIDR prefix length.
         mask_int: int = int(mask_hex, 16)
         prefix: int = bin(mask_int).count("1")
-        network = ipaddress.IPv4Network(f"{ip_str}/{prefix}", strict=False)
-        return network
+        return ipaddress.IPv4Network(f"{ip_str}/{prefix}", strict=False)
 
     return None
+
+
+def get_local_network() -> Optional[ipaddress.IPv4Network]:
+    """Detect the local IP and subnet.
+
+    Uses ``ip -4 addr`` on Linux and ``ifconfig`` on macOS to find the
+    first non-loopback interface with an IPv4 address and netmask.
+
+    Returns:
+        An ``ipaddress.IPv4Network`` representing the local subnet, or
+        ``None`` if no suitable interface was found.
+
+    Raises:
+        No exceptions are raised; errors are caught internally and
+        result in a ``None`` return value.
+    """
+    if sys.platform == "linux":
+        return _get_network_linux()
+    return _get_network_macos()
 
 
 async def ping_host(sem: asyncio.Semaphore, ip_str: str) -> Optional[str]:
@@ -274,12 +310,26 @@ async def ping_host(sem: asyncio.Semaphore, ip_str: str) -> Optional[str]:
 
     async with sem:
         try:
+            # Linux: -W takes seconds, TTL via -t
+            # macOS: -W takes milliseconds, TTL via -m
+            if sys.platform == "linux":
+                ping_args = [
+                    "ping",
+                    "-c", str(PING_COUNT),
+                    "-W", str(PING_TIMEOUT_S),
+                    "-t", str(PING_TTL),
+                    ip_str,
+                ]
+            else:
+                ping_args = [
+                    "ping",
+                    "-c", str(PING_COUNT),
+                    "-W", str(PING_TIMEOUT_MS),
+                    "-m", str(PING_TTL),
+                    ip_str,
+                ]
             proc = await asyncio.create_subprocess_exec(
-                "ping",
-                "-c", str(PING_COUNT),
-                "-W", str(PING_TIMEOUT_MS),
-                "-t", str(PING_TTL),
-                ip_str,
+                *ping_args,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
@@ -314,11 +364,44 @@ async def ping_sweep(network: ipaddress.IPv4Network) -> list[str]:
     return [ip for ip in results if ip is not None]
 
 
-def get_arp_table() -> dict[str, str]:
-    """Parse the system ARP table into an IP-to-MAC mapping.
+def _get_arp_linux() -> dict[str, str]:
+    """Read ``/proc/net/arp`` and return an IP-to-MAC mapping.
 
-    Runs ``arp -an`` (the ``-n`` flag avoids slow reverse-DNS lookups
-    that can hang on large subnets) and extracts IP-to-MAC mappings.
+    ``/proc/net/arp`` columns: IP, HW type, Flags, HW address, Mask, Device.
+    Entries with flags == 0x0 (incomplete) are skipped.
+
+    Returns:
+        A dictionary mapping IP address strings to normalized MAC
+        address strings (lowercase).
+    """
+    entries: dict[str, str] = {}
+    try:
+        with open("/proc/net/arp", "r", encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                ip: str = parts[0]
+                flags: str = parts[2]
+                mac: str = parts[3].lower()
+
+                # Skip header line and incomplete entries
+                if not mac[0].isdigit() and not mac[0].isalpha():
+                    continue
+                if flags == "0x0":
+                    continue
+                if mac == "00:00:00:00:00:00" or mac == BROADCAST_MAC:
+                    continue
+
+                entries[ip] = mac
+    except OSError:
+        pass
+    return entries
+
+
+def _get_arp_macos() -> dict[str, str]:
+    """Parse ``arp -an`` output and return an IP-to-MAC mapping.
+
     MAC addresses are normalized to two-digit colon-separated hex pairs.
     Broadcast and incomplete entries are excluded.
 
@@ -357,6 +440,21 @@ def get_arp_table() -> dict[str, str]:
         entries[ip] = mac
 
     return entries
+
+
+def get_arp_table() -> dict[str, str]:
+    """Parse the system ARP table into an IP-to-MAC mapping.
+
+    Uses ``/proc/net/arp`` on Linux (zero-cost, no subprocess) and
+    ``arp -an`` on macOS.
+
+    Returns:
+        A dictionary mapping IP address strings to normalized MAC
+        address strings (lowercase).
+    """
+    if sys.platform == "linux":
+        return _get_arp_linux()
+    return _get_arp_macos()
 
 
 def lookup_vendor(mac: str) -> Optional[str]:
