@@ -1,8 +1,8 @@
 {
     "node_id": "judy",
-    "mqtt_broker": "10.0.0.48",
+    "mqtt_broker": "192.0.2.1",
     "mqtt_port": 1883,
-    "ip": "10.0.0.63",
+    "ip": "192.0.2.2",
     "roles": ["compute"],
     "resources": {
         "gpus": [

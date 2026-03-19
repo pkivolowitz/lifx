@@ -15,7 +15,7 @@ import Foundation
 /// Usage::
 ///
 ///     let stream = SSEColorStream()
-///     stream.connect(apiClient: client, ip: "10.0.0.62")
+///     stream.connect(apiClient: client, ip: "192.0.2.10")
 ///     // stream.zones updates at 4 Hz
 ///     stream.disconnect()
 @MainActor

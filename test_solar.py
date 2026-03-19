@@ -3,7 +3,7 @@
 
 Verifies that sun_times() produces reasonable sunrise/sunset/dawn/dusk
 values for known locations and dates.  Tests:
-  - Mobile, AL (user's location) — mid-latitude, year-round sun events
+  - Test location (mid-latitude) — year-round sun events
   - New York City — well-known reference point
   - Tromso, Norway — polar night / midnight sun edge cases
   - Equator — minimal seasonal variation
@@ -23,9 +23,9 @@ from solar import sun_times, SunTimes
 # Constants
 # ---------------------------------------------------------------------------
 
-# Mobile, AL (user's server location).
-MOBILE_LAT: float = 30.6954
-MOBILE_LON: float = -88.0399
+# Madison, WI (test location).
+MADISON_LAT: float = 43.0731
+MADISON_LON: float = -89.4012
 CST_OFFSET: timedelta = timedelta(hours=-6)
 
 # New York City.
@@ -45,16 +45,16 @@ ECT_OFFSET: timedelta = timedelta(hours=-5)
 
 
 # ---------------------------------------------------------------------------
-# Mid-latitude tests (Mobile, AL)
+# Mid-latitude tests (Madison, WI)
 # ---------------------------------------------------------------------------
 
-class TestMobileAL(unittest.TestCase):
-    """Sun times for Mobile, AL — the user's deployment location."""
+class TestMidLatitude(unittest.TestCase):
+    """Sun times for a mid-latitude US location."""
 
     def test_winter_solstice(self) -> None:
         """Dec 21: shortest day of the year in Northern Hemisphere."""
         d = date(2026, 12, 21)
-        st = sun_times(MOBILE_LAT, MOBILE_LON, d, CST_OFFSET)
+        st = sun_times(MADISON_LAT, MADISON_LON, d, CST_OFFSET)
 
         # All events should be present at this latitude.
         self.assertIsNotNone(st.dawn)
@@ -63,34 +63,34 @@ class TestMobileAL(unittest.TestCase):
         self.assertIsNotNone(st.sunset)
         self.assertIsNotNone(st.dusk)
 
-        # Sunrise around 6:30–7:30 AM CST.
+        # Sunrise around 7:00–8:00 AM CST.
         self.assertGreaterEqual(st.sunrise.hour, 6)
         self.assertLessEqual(st.sunrise.hour, 8)
 
-        # Sunset around 4:45–5:30 PM CST.
+        # Sunset around 4:15–5:00 PM CST.
         self.assertGreaterEqual(st.sunset.hour, 16)
         self.assertLessEqual(st.sunset.hour, 18)
 
     def test_summer_solstice(self) -> None:
         """Jun 21: longest day of the year in Northern Hemisphere."""
         d = date(2026, 6, 21)
-        st = sun_times(MOBILE_LAT, MOBILE_LON, d, CST_OFFSET)
+        st = sun_times(MADISON_LAT, MADISON_LON, d, CST_OFFSET)
 
         self.assertIsNotNone(st.sunrise)
         self.assertIsNotNone(st.sunset)
 
-        # Sunrise around 5:45 AM CDT ≈ 4:45 AM CST (test uses CST offset).
+        # Sunrise around 4:15–5:15 AM CST.
         self.assertGreaterEqual(st.sunrise.hour, 4)
         self.assertLessEqual(st.sunrise.hour, 7)
 
-        # Sunset around 7:00–8:00 PM.
+        # Sunset around 7:30–9:00 PM CST.
         self.assertGreaterEqual(st.sunset.hour, 18)
         self.assertLessEqual(st.sunset.hour, 21)
 
     def test_event_ordering(self) -> None:
         """Dawn < sunrise < noon < sunset < dusk."""
         d = date(2026, 3, 20)  # Equinox.
-        st = sun_times(MOBILE_LAT, MOBILE_LON, d, CST_OFFSET)
+        st = sun_times(MADISON_LAT, MADISON_LON, d, CST_OFFSET)
 
         self.assertLess(st.dawn, st.sunrise)
         self.assertLess(st.sunrise, st.noon)
@@ -100,7 +100,7 @@ class TestMobileAL(unittest.TestCase):
     def test_noon_around_midday(self) -> None:
         """Solar noon should be roughly 12:00–13:30 local time."""
         d = date(2026, 6, 1)
-        st = sun_times(MOBILE_LAT, MOBILE_LON, d, CST_OFFSET)
+        st = sun_times(MADISON_LAT, MADISON_LON, d, CST_OFFSET)
 
         self.assertIsNotNone(st.noon)
         self.assertIn(st.noon.hour, (11, 12, 13))
@@ -196,7 +196,7 @@ class TestSunTimesProperties(unittest.TestCase):
     def test_timezone_aware(self) -> None:
         """All returned datetimes should be timezone-aware."""
         d = date(2026, 6, 1)
-        st = sun_times(MOBILE_LAT, MOBILE_LON, d, CST_OFFSET)
+        st = sun_times(MADISON_LAT, MADISON_LON, d, CST_OFFSET)
 
         for field_name in ("dawn", "sunrise", "noon", "sunset", "dusk"):
             value = getattr(st, field_name)

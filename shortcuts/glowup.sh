@@ -28,7 +28,7 @@ set -euo pipefail
 # Configuration
 # ---------------------------------------------------------------------------
 
-HOST="${GLOWUP_HOST:-10.0.0.48}"
+HOST="${GLOWUP_HOST:-192.0.2.1}"
 PORT="${GLOWUP_PORT:-8420}"
 BASE="http://${HOST}:${PORT}"
 

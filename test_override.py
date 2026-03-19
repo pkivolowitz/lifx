@@ -75,46 +75,46 @@ class TestBasicOverride(unittest.TestCase):
     """Tests for basic override set/clear/check."""
 
     def setUp(self) -> None:
-        self.dm = _make_dm(["10.0.0.1", "10.0.0.2"])
+        self.dm = _make_dm(["192.0.2.40", "192.0.2.41"])
 
     def test_not_overridden_by_default(self) -> None:
         """Devices are not overridden initially."""
-        self.assertFalse(self.dm.is_overridden("10.0.0.1"))
-        self.assertFalse(self.dm.is_overridden("10.0.0.2"))
+        self.assertFalse(self.dm.is_overridden("192.0.2.40"))
+        self.assertFalse(self.dm.is_overridden("192.0.2.41"))
 
     def test_mark_override(self) -> None:
         """mark_override makes is_overridden return True."""
-        self.dm.mark_override("10.0.0.1", None)
-        self.assertTrue(self.dm.is_overridden("10.0.0.1"))
-        self.assertFalse(self.dm.is_overridden("10.0.0.2"))
+        self.dm.mark_override("192.0.2.40", None)
+        self.assertTrue(self.dm.is_overridden("192.0.2.40"))
+        self.assertFalse(self.dm.is_overridden("192.0.2.41"))
 
     def test_clear_override(self) -> None:
         """clear_override reverses mark_override."""
-        self.dm.mark_override("10.0.0.1", None)
-        self.dm.clear_override("10.0.0.1")
-        self.assertFalse(self.dm.is_overridden("10.0.0.1"))
+        self.dm.mark_override("192.0.2.40", None)
+        self.dm.clear_override("192.0.2.40")
+        self.assertFalse(self.dm.is_overridden("192.0.2.40"))
 
     def test_clear_nonexistent_is_safe(self) -> None:
         """Clearing a device that was never overridden doesn't raise."""
-        self.dm.clear_override("10.0.0.1")
-        self.assertFalse(self.dm.is_overridden("10.0.0.1"))
+        self.dm.clear_override("192.0.2.40")
+        self.assertFalse(self.dm.is_overridden("192.0.2.40"))
 
     def test_override_entry_tracking(self) -> None:
         """get_override_entry returns the entry name set by mark_override."""
-        self.dm.mark_override("10.0.0.1", "evening aurora")
+        self.dm.mark_override("192.0.2.40", "evening aurora")
         self.assertEqual(
-            self.dm.get_override_entry("10.0.0.1"), "evening aurora",
+            self.dm.get_override_entry("192.0.2.40"), "evening aurora",
         )
 
     def test_override_entry_none(self) -> None:
         """get_override_entry returns None for non-overridden devices."""
-        self.assertIsNone(self.dm.get_override_entry("10.0.0.1"))
+        self.assertIsNone(self.dm.get_override_entry("192.0.2.40"))
 
     def test_override_entry_with_none_name(self) -> None:
         """MQTT/external clients pass None as entry name."""
-        self.dm.mark_override("10.0.0.1", None)
-        self.assertTrue(self.dm.is_overridden("10.0.0.1"))
-        self.assertIsNone(self.dm.get_override_entry("10.0.0.1"))
+        self.dm.mark_override("192.0.2.40", None)
+        self.assertTrue(self.dm.is_overridden("192.0.2.40"))
+        self.assertIsNone(self.dm.get_override_entry("192.0.2.40"))
 
 
 class TestGroupOverride(unittest.TestCase):
@@ -122,8 +122,8 @@ class TestGroupOverride(unittest.TestCase):
 
     def setUp(self) -> None:
         self.dm = _make_dm(
-            ["10.0.0.62", "10.0.0.23"],
-            groups={"porch": ["10.0.0.62", "10.0.0.23"]},
+            ["192.0.2.10", "192.0.2.20"],
+            groups={"porch": ["192.0.2.10", "192.0.2.20"]},
         )
 
     def test_group_override(self) -> None:
@@ -134,12 +134,12 @@ class TestGroupOverride(unittest.TestCase):
     def test_group_override_does_not_affect_members(self) -> None:
         """Overriding the group does not mark individual members."""
         self.dm.mark_override("group:porch", None)
-        self.assertFalse(self.dm.is_overridden("10.0.0.62"))
-        self.assertFalse(self.dm.is_overridden("10.0.0.23"))
+        self.assertFalse(self.dm.is_overridden("192.0.2.10"))
+        self.assertFalse(self.dm.is_overridden("192.0.2.20"))
 
     def test_member_override_does_not_affect_group(self) -> None:
         """Overriding a member does not mark the group (basic check)."""
-        self.dm.mark_override("10.0.0.62", None)
+        self.dm.mark_override("192.0.2.10", None)
         self.assertFalse(self.dm.is_overridden("group:porch"))
 
 
@@ -148,10 +148,10 @@ class TestGroupOrMemberOverride(unittest.TestCase):
 
     def setUp(self) -> None:
         self.dm = _make_dm(
-            ["10.0.0.62", "10.0.0.23", "10.0.0.10"],
+            ["192.0.2.10", "192.0.2.20", "192.0.2.30"],
             groups={
-                "porch": ["10.0.0.62", "10.0.0.23"],
-                "single": ["10.0.0.10"],
+                "porch": ["192.0.2.10", "192.0.2.20"],
+                "single": ["192.0.2.30"],
             },
         )
 
@@ -171,21 +171,21 @@ class TestGroupOrMemberOverride(unittest.TestCase):
     def test_member_override_detected_for_group(self) -> None:
         """Overriding one member makes is_overridden_or_member True
         for the whole group.  This is the core bug fix."""
-        self.dm.mark_override("10.0.0.62", None)
+        self.dm.mark_override("192.0.2.10", None)
         self.assertTrue(
             self.dm.is_overridden_or_member("group:porch"),
         )
 
     def test_other_member_override_detected(self) -> None:
         """Overriding the other member also triggers the group check."""
-        self.dm.mark_override("10.0.0.23", None)
+        self.dm.mark_override("192.0.2.20", None)
         self.assertTrue(
             self.dm.is_overridden_or_member("group:porch"),
         )
 
     def test_non_member_override_ignored(self) -> None:
         """Overriding a device NOT in the group does not trigger it."""
-        self.dm.mark_override("10.0.0.10", None)
+        self.dm.mark_override("192.0.2.30", None)
         self.assertFalse(
             self.dm.is_overridden_or_member("group:porch"),
         )
@@ -194,29 +194,29 @@ class TestGroupOrMemberOverride(unittest.TestCase):
         """For individual IPs, is_overridden_or_member matches
         is_overridden exactly."""
         self.assertFalse(
-            self.dm.is_overridden_or_member("10.0.0.62"),
+            self.dm.is_overridden_or_member("192.0.2.10"),
         )
-        self.dm.mark_override("10.0.0.62", None)
+        self.dm.mark_override("192.0.2.10", None)
         self.assertTrue(
-            self.dm.is_overridden_or_member("10.0.0.62"),
+            self.dm.is_overridden_or_member("192.0.2.10"),
         )
 
     def test_single_device_group(self) -> None:
         """Single-device groups work correctly (no member expansion)."""
-        self.dm.mark_override("10.0.0.10", None)
+        self.dm.mark_override("192.0.2.30", None)
         # "single" group has only one IP, so the scheduler would use
         # the IP directly, not group:single.  Test both paths.
         self.assertTrue(
-            self.dm.is_overridden_or_member("10.0.0.10"),
+            self.dm.is_overridden_or_member("192.0.2.30"),
         )
 
     def test_clear_member_clears_group_visibility(self) -> None:
         """Clearing the member override makes the group check return False."""
-        self.dm.mark_override("10.0.0.62", None)
+        self.dm.mark_override("192.0.2.10", None)
         self.assertTrue(
             self.dm.is_overridden_or_member("group:porch"),
         )
-        self.dm.clear_override("10.0.0.62")
+        self.dm.clear_override("192.0.2.10")
         self.assertFalse(
             self.dm.is_overridden_or_member("group:porch"),
         )
@@ -224,7 +224,7 @@ class TestGroupOrMemberOverride(unittest.TestCase):
     def test_both_group_and_member_overridden(self) -> None:
         """Both group and member overridden — still True, no double-count."""
         self.dm.mark_override("group:porch", "evening")
-        self.dm.mark_override("10.0.0.62", None)
+        self.dm.mark_override("192.0.2.10", None)
         self.assertTrue(
             self.dm.is_overridden_or_member("group:porch"),
         )

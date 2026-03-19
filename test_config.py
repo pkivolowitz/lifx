@@ -48,7 +48,7 @@ def _minimal_valid_config() -> dict[str, Any]:
         "auth_token": "test-token-for-unit-tests-only-000",
         "port": 8420,
         "groups": {
-            "porch": ["10.0.0.62"],
+            "porch": ["192.0.2.10"],
         },
     }
 
@@ -74,7 +74,7 @@ class TestValidConfig(unittest.TestCase):
     def test_config_with_schedule(self) -> None:
         """Config with schedule and location loads successfully."""
         config = _minimal_valid_config()
-        config["location"] = {"latitude": 30.69, "longitude": -88.04}
+        config["location"] = {"latitude": 43.07, "longitude": -89.40}
         config["schedule"] = [{
             "name": "test",
             "group": "porch",
@@ -270,7 +270,7 @@ class TestScheduleValidation(unittest.TestCase):
     def test_schedule_missing_required_field(self) -> None:
         """Schedule entry missing 'effect' raises ValueError."""
         config = _minimal_valid_config()
-        config["location"] = {"latitude": 30.69, "longitude": -88.04}
+        config["location"] = {"latitude": 43.07, "longitude": -89.40}
         config["schedule"] = [{
             "name": "test", "group": "porch",
             "start": "18:00", "stop": "23:00",
@@ -286,7 +286,7 @@ class TestScheduleValidation(unittest.TestCase):
     def test_schedule_unknown_group(self) -> None:
         """Schedule entry referencing unknown group raises ValueError."""
         config = _minimal_valid_config()
-        config["location"] = {"latitude": 30.69, "longitude": -88.04}
+        config["location"] = {"latitude": 43.07, "longitude": -89.40}
         config["schedule"] = [{
             "name": "test", "group": "nonexistent",
             "start": "18:00", "stop": "23:00", "effect": "aurora",
@@ -301,7 +301,7 @@ class TestScheduleValidation(unittest.TestCase):
     def test_schedule_invalid_days(self) -> None:
         """Schedule entry with invalid days string raises ValueError."""
         config = _minimal_valid_config()
-        config["location"] = {"latitude": 30.69, "longitude": -88.04}
+        config["location"] = {"latitude": 43.07, "longitude": -89.40}
         config["schedule"] = [{
             "name": "test", "group": "porch",
             "start": "18:00", "stop": "23:00", "effect": "aurora",
@@ -317,7 +317,7 @@ class TestScheduleValidation(unittest.TestCase):
     def test_schedule_duplicate_days(self) -> None:
         """Schedule entry with repeated days raises ValueError."""
         config = _minimal_valid_config()
-        config["location"] = {"latitude": 30.69, "longitude": -88.04}
+        config["location"] = {"latitude": 43.07, "longitude": -89.40}
         config["schedule"] = [{
             "name": "test", "group": "porch",
             "start": "18:00", "stop": "23:00", "effect": "aurora",

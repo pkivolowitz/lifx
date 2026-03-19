@@ -30,9 +30,9 @@ from solar import SunTimes, sun_times
 # Test fixtures
 # ---------------------------------------------------------------------------
 
-# Mobile, AL — matches the user's server.json.
-TEST_LAT: float = 30.6954
-TEST_LON: float = -88.0399
+# Madison, WI (test location).
+TEST_LAT: float = 43.0731
+TEST_LON: float = -89.4012
 
 # Central Standard Time (UTC-6).
 CST: timezone = timezone(timedelta(hours=-6))
@@ -88,7 +88,7 @@ class TestParseTimeSpec(unittest.TestCase):
         """'sunrise' resolves to a morning time."""
         result = _parse_time_spec("sunrise", TEST_SUN, TEST_DATE, CST_OFFSET)
         self.assertIsNotNone(result)
-        # Sunrise in Mobile, AL in January should be around 6:30-7:30 AM.
+        # Sunrise in Madison, WI in January should be around 7:15-7:30 AM.
         self.assertGreaterEqual(result.hour, 6)
         self.assertLessEqual(result.hour, 8)
 
@@ -96,7 +96,7 @@ class TestParseTimeSpec(unittest.TestCase):
         """'sunset' resolves to an evening time."""
         result = _parse_time_spec("sunset", TEST_SUN, TEST_DATE, CST_OFFSET)
         self.assertIsNotNone(result)
-        # Sunset in Mobile, AL in January should be around 5:00-6:00 PM.
+        # Sunset in Madison, WI in January should be around 4:30-5:00 PM.
         self.assertGreaterEqual(result.hour, 16)
         self.assertLessEqual(result.hour, 18)
 
@@ -406,7 +406,7 @@ class TestResolveEntries(unittest.TestCase):
         )
         self.assertEqual(len(resolved), 1)
         start, stop, _ = resolved[0]
-        # Start should be around 4:30-5:30 PM in January.
+        # Start should be around 4:00-5:00 PM in January.
         self.assertGreaterEqual(start.hour, 16)
         self.assertLessEqual(start.hour, 18)
 

@@ -10,8 +10,8 @@
 
     "nicknames": {
         "_comment": "Custom display names — set from the iPhone app or edit here",
-        "10.0.0.10": "Porch Lights",
-        "10.0.0.12": "Living Room Lamp"
+        "192.0.2.10": "Porch Lights",
+        "192.0.2.12": "Living Room Lamp"
     },
 
     "groups": {
@@ -20,8 +20,8 @@
             "string_lights"
         ],
         "living-room": [
-            "10.0.0.10",
-            "10.0.0.12"
+            "192.0.2.10",
+            "192.0.2.12"
         ]
     },
 

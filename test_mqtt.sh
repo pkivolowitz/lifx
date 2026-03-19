@@ -5,11 +5,11 @@
 # Requires:
 #   - GlowUp server running with an "mqtt" section in server.json
 #   - Mosquitto client tools (mosquitto_pub, mosquitto_sub)
-#   - A device IP to test against (default: 10.0.0.23)
+#   - A device IP to test against (default: 192.0.2.20)
 #
 # Usage:
 #   ./test_mqtt.sh                     # test against default device
-#   ./test_mqtt.sh 10.0.0.62           # test against a specific device
+#   ./test_mqtt.sh 192.0.2.10           # test against a specific device
 #   BROKER=192.168.1.50 ./test_mqtt.sh # test against a remote broker
 #
 # The script plays a short effect, checks state, stops it, resumes,
@@ -26,7 +26,7 @@ set -euo pipefail
 BROKER="${BROKER:-localhost}"
 PORT="${PORT:-1883}"
 PREFIX="${PREFIX:-glowup}"
-DEVICE="${1:-10.0.0.23}"
+DEVICE="${1:-192.0.2.20}"
 SUB_TIMEOUT=5          # seconds to wait for retained messages
 SETTLE_TIME=3          # seconds to let state publisher catch up
 

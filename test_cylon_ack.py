@@ -39,7 +39,7 @@ from transport import (
 # ---------------------------------------------------------------------------
 
 # Target device.
-DEFAULT_IP: str = "10.0.0.34"
+DEFAULT_IP: str = "192.0.2.10"
 
 # Cylon eye color — saturated red at full brightness.
 HUE_RED: int = 0
