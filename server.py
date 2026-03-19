@@ -2023,6 +2023,11 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_get_command_discover()
             return
 
+        # /api/command/identify/cancel-all
+        if path == "/api/command/identify/cancel-all":
+            self._handle_get_command_identify_cancel_all()
+            return
+
         self._send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
@@ -2157,6 +2162,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         if (len(parts) == 3 and parts[0] == "api" and parts[1] == "command"
                 and parts[2] == "identify"):
             self._handle_post_command_identify()
+            return
+
+        # /api/server/power-off-all
+        if (len(parts) == 3 and parts[0] == "api" and parts[1] == "server"
+                and parts[2] == "power-off-all"):
+            self._handle_post_server_power_off_all()
             return
 
         self._send_json(404, {"error": "Not found"})
@@ -2972,6 +2983,54 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         event.set()
         logging.info("API: command/identify — cancelled pulse on %s", ip)
         self._send_json(200, {"ip": ip, "cancelled": True})
+
+    def _handle_get_command_identify_cancel_all(self) -> None:
+        """GET /api/command/identify/cancel-all — cancel all active identify pulses.
+
+        Emergency/cleanup endpoint: sets the stop event for every running
+        identify pulse on every IP.  Returns the count of cancelled pulses.
+        """
+        with GlowUpRequestHandler._command_identifies_lock:
+            ips_to_cancel: list[str] = list(
+                GlowUpRequestHandler._command_identifies.keys()
+            )
+            for ip in ips_to_cancel:
+                event: Optional[threading.Event] = (
+                    GlowUpRequestHandler._command_identifies.get(ip)
+                )
+                if event is not None:
+                    event.set()
+                    logging.info(
+                        "API: command/identify/cancel-all — cancelled pulse on %s",
+                        ip,
+                    )
+        self._send_json(200, {"cancelled": len(ips_to_cancel)})
+
+    def _handle_post_server_power_off_all(self) -> None:
+        """POST /api/server/power-off-all — emergency bulk power-off.
+
+        Powers off every device configured in ``server.json`` immediately
+        with a 0ms transition.  Returns the count of devices sent the
+        power-off command.
+
+        This is a fire-and-forget emergency endpoint — failures on
+        individual devices do not stop the power-off of others.
+        """
+        configured_ips: list[str] = list(self.device_manager._devices.keys())
+        off_count: int = 0
+        for ip in configured_ips:
+            try:
+                dev: LifxDevice = LifxDevice(ip)
+                dev.set_power(False, duration_ms=0)
+                off_count += 1
+                logging.info("API: server/power-off-all — powered off %s", ip)
+                dev.close()
+            except Exception as exc:
+                logging.warning(
+                    "API: server/power-off-all — power-off failed for %s: %s",
+                    ip, exc,
+                )
+        self._send_json(200, {"devices_off": off_count})
 
     def _handle_get_command_discover(self) -> None:
         """GET /api/command/discover[?ip=X] — query device(s) for full info.

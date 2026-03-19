@@ -925,6 +925,103 @@ def cmd_identify(args: argparse.Namespace) -> None:
     _print("Done.")
 
 
+def cmd_off(args: argparse.Namespace) -> None:
+    """Emergency power-off: all LIFX devices off immediately.
+
+    Safety command that powers off every reachable LIFX device with
+    confirmation required.  Runs in parallel:
+
+    1. Direct UDP broadcast GetService + SetPower(False) to all devices
+       on the local subnet (independent of server).
+    2. Server-side bulk power-off of all configured devices.
+    3. Cancellation of any running identify/effect pulses on the server.
+
+    Confirmation required: user must type "off" to execute.  This prevents
+    accidental activation.
+    """
+    _print("\n⚠️  EMERGENCY POWER-OFF ⚠️")
+    _print("This will immediately power off ALL LIFX devices on the network.")
+    _print("Type 'off' to confirm, or press Ctrl+C to cancel.\n")
+
+    try:
+        confirmation: str = input("Confirm: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        _print("\nCancelled.")
+        return
+
+    if confirmation != "off":
+        _print("Confirmation mismatch. Cancelled.")
+        return
+
+    _print("\nPowering off all devices...\n")
+
+    # --- Broadcast power-off to local subnet (fast, server-independent) -----
+    try:
+        from transport import broadcast_wake, LifxDevice, SendMode
+        import socket
+        import struct
+
+        # Send broadcast SetPower(False) to wake any sleeping bulbs and turn them off.
+        sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        try:
+            # Build a SetPower(False) frame: MSG_LIGHT_SET_POWER = 117
+            # Payload: reserved(u8) + on(u16) + duration(u32) = 7 bytes
+            payload: bytes = struct.pack("<xHI", 0, 0)  # on=False, duration=0ms
+            frame: bytes = struct.pack(
+                "<HHI",
+                36,  # size: 36-byte header, no payload
+                (1 << 12) | (1 << 13),  # flags: addressable | tagged
+                0,  # source_id
+            )
+            target: bytes = b'\xff' * 8
+            reserved: bytes = b'\x00' * 6
+            ack_res: int = 0
+            seq: int = 0
+            frame_addr: bytes = target + reserved + struct.pack("<BB", ack_res, seq)
+            proto_header: bytes = struct.pack("<QHH", 0, 117, 0)  # MSG_LIGHT_SET_POWER
+            full_frame: bytes = frame + frame_addr + proto_header + payload
+
+            sock.sendto(full_frame, ("<broadcast>", 56700))
+            _print("✓ Broadcast power-off sent to local subnet")
+        finally:
+            sock.close()
+    except Exception as exc:
+        _print(f"⚠️  Broadcast failed: {exc}")
+
+    # --- Server-side power-off (configured devices + cancel identify) -------
+    if _server_url:
+        try:
+            # POST /api/server/power-off-all to turn off all configured devices
+            resp: dict = _server_post(
+                _server_url,
+                "/api/server/power-off-all",
+                {},
+                timeout=5.0,
+            )
+            count: int = resp.get("devices_off", 0)
+            _print(f"✓ Server powered off {count} configured device(s)")
+        except Exception as exc:
+            _print(f"⚠️  Server power-off failed: {exc}")
+
+        try:
+            # Cancel any running identify pulses (best-effort, fire-and-forget)
+            resp: dict = _server_get(
+                _server_url,
+                "/api/command/identify/cancel-all",
+                timeout=2.0,
+            )
+            cancelled: int = resp.get("cancelled", 0)
+            if cancelled > 0:
+                _print(f"✓ Cancelled {cancelled} identify pulse(s) on server")
+        except Exception as exc:
+            _print(f"⚠️  Pulse cancellation failed: {exc}")
+    else:
+        _print("⚠️  Server unreachable — configured devices may still be on")
+
+    _print("\n✓ Emergency power-off complete")
+
+
 def cmd_monitor(args: argparse.Namespace) -> None:
     """Monitor a LIFX device in real time by polling its zone colors.
 
@@ -1868,6 +1965,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # -- off ----------------------------------------------------------------
+    sub.add_parser(
+        "off",
+        help="⚠️  EMERGENCY: Power off all LIFX devices on the network",
+    )
+
     # -- monitor ---------------------------------------------------------------
     p_mon = sub.add_parser(
         "monitor",
@@ -2215,6 +2318,7 @@ def main() -> None:
         "effects": cmd_effects,
         "identify": cmd_identify,
         "monitor": cmd_monitor,
+        "off": cmd_off,
         "play": cmd_play,
         "record": cmd_record,
         "replay": cmd_replay,
