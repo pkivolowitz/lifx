@@ -3156,10 +3156,18 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         if result_ip:
             try:
                 from transport import LifxDevice, SOCKET_TIMEOUT
-                dev: LifxDevice = LifxDevice(result_ip)
-                dev.sock.settimeout(SOCKET_TIMEOUT)
-                firmware_written = dev.set_label(label)
-                dev.close()
+                tmp_dev: LifxDevice = LifxDevice(result_ip)
+                tmp_dev.sock.settimeout(SOCKET_TIMEOUT)
+                firmware_written = tmp_dev.set_label(label)
+                tmp_dev.close()
+                # Update the cached device's label so discover reflects
+                # the new name without requiring a server restart.
+                if firmware_written:
+                    cached_dev: Optional[LifxDevice] = (
+                        self.device_manager.get_device(result_ip)
+                    )
+                    if cached_dev is not None:
+                        cached_dev.label = label
             except Exception as exc:
                 logging.warning(
                     "Failed to write label to %s (%s): %s",
