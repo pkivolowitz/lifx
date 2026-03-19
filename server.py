@@ -3033,37 +3033,31 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self._send_json(200, {"devices_off": off_count})
 
     def _handle_get_command_discover(self) -> None:
-        """GET /api/command/discover[?ip=X] — query device(s) for full info.
+        """GET /api/command/discover[?ip=X] — return discovered LIFX devices.
 
-        Executes UDP device queries from the server, bypassing any mesh
-        router filtering that prevents direct UDP from the client machine.
-        Returns label, product name, zone count, IP, and MAC for each
-        responding device.
+        Returns IPs and MACs of all bulbs currently detected by the keepalive
+        daemon via ARP scan. The keepalive daemon confirms liveness by
+        unicast ping every 15 seconds, so all returned devices are known to
+        be on the network.
 
         Query parameters:
-            ip: Optional specific device IP to query.  If omitted, all
-                bulbs currently known to the keepalive daemon are queried
-                in parallel.
+            ip: Optional specific device IP to filter. If omitted, all
+                bulbs currently known to the keepalive daemon are returned.
 
         Response::
 
             {
                 "devices": [
                     {
-                        "ip":      "10.0.0.41",
-                        "mac":     "d0:73:d5:69:70:db",
-                        "label":   "Bedroom Neon",
-                        "product": "LIFX Neon",
-                        "zones":   100,
-                        "group":   "bedroom"
+                        "ip":  "10.0.0.41",
+                        "mac": "d0:73:d5:69:70:db"
                     },
                     ...
                 ]
             }
 
-        Devices that do not respond within
-        :data:`COMMAND_DISCOVER_TIMEOUT_SECONDS` are omitted from the
-        result rather than causing a timeout for the whole request.
+        Results are returned immediately (no UDP query overhead) since the
+        keepalive daemon maintains a live ARP-based device list.
         """
         qs: dict = parse_qs(urlparse(self.path).query)
         target_ip: Optional[str] = qs.get("ip", [None])[0]
@@ -3072,53 +3066,25 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             if not _validate_device_id(target_ip):
                 self._send_json(400, {"error": "Invalid device identifier"})
                 return
-            ips_to_query: list[str] = [target_ip]
+            # For specific IP, always return it (even if not in ARP cache yet).
+            devices: list[dict] = [{"ip": target_ip, "mac": ""}]
         else:
             daemon: Optional[BulbKeepAlive] = self.keepalive
             if daemon is None:
                 self._send_json(200, {"devices": []})
                 return
-            ips_to_query = list(daemon.known_bulbs.keys())
-
-        def _query_one(ip: str) -> Optional[dict]:
-            """Query a single device and return its info dict, or None."""
-            dev: LifxDevice = LifxDevice(ip)
-            dev.sock.settimeout(COMMAND_DISCOVER_TIMEOUT_SECONDS)
-            try:
-                dev.query_all()
-                if dev.product is None:
-                    # Device did not respond — omit from results.
-                    return None
-                return {
-                    "ip":      dev.ip,
-                    "mac":     dev.mac_str,
-                    "label":   dev.label or "",
-                    "product": dev.product_name or "",
-                    "zones":   dev.zone_count,
-                    "group":   dev.group or "",
-                }
-            except Exception as exc:
-                logging.debug(
-                    "command/discover: query failed for %s: %s", ip, exc,
+            # Return all currently-known devices from ARP cache (no fresh queries).
+            devices = [
+                {"ip": ip, "mac": mac}
+                for ip, mac in sorted(
+                    daemon.known_bulbs.items(),
+                    key=lambda x: tuple(int(p) for p in x[0].split(".")),
                 )
-                return None
-            finally:
-                dev.close()
+            ]
 
-        devices: list[dict] = []
-        with ThreadPoolExecutor(max_workers=len(ips_to_query) or 1) as pool:
-            futures = {pool.submit(_query_one, ip): ip for ip in ips_to_query}
-            for future in as_completed(
-                futures, timeout=COMMAND_DISCOVER_TIMEOUT_SECONDS + 1.0
-            ):
-                result: Optional[dict] = future.result()
-                if result is not None:
-                    devices.append(result)
-
-        devices.sort(key=lambda d: tuple(int(p) for p in d["ip"].split(".")))
         logging.info(
-            "API: command/discover — %d/%d device(s) responded",
-            len(devices), len(ips_to_query),
+            "API: command/discover — returning %d device(s) from ARP cache",
+            len(devices),
         )
         self._send_json(200, {"devices": devices})
 
