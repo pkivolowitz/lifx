@@ -19,16 +19,64 @@ device can help clear its internal state.
 This is a characteristic of the LIFX firmware's internal state
 management and may not be specific to GlowUp.
 
+## TP-Link Deco Mesh Routers — A Special Circle of Hell
+
+If you are using TP-Link Deco mesh routers, read this entire section
+before filing a bug report, because every problem you are about to
+have is the Deco's fault.
+
+**UDP broadcast is dead.**  The Deco silently eats UDP broadcast
+packets between mesh nodes.  LIFX discovery relies on UDP broadcast.
+This means `glowup.py discover` will find **zero devices** from any
+wireless client.  It only works from a machine on the same wired
+segment as the bulbs (e.g., a Pi connected via Ethernet).  This is
+not a GlowUp bug.  This is the Deco deciding it knows better than
+you what packets your devices should receive.
+
+**The IoT network is a trap.**  The Deco offers an "IoT network"
+feature that creates a separate SSID for smart devices.  Enabling
+this — even briefly — can force every WiFi device on your network to
+disconnect and re-associate.  LIFX bulbs, irrigation controllers,
+smart plugs, cameras, and anything else with stored WiFi credentials
+may drop off the network.  Disabling the IoT network does not
+automatically restore them.  Bulbs need a physical power-cycle
+(off at the switch, wait, on again).  Devices you cannot physically
+reach (in-wall controllers, outdoor sensors) may remain offline
+indefinitely until someone power-cycles them.
+
+**The client list is a lie.**  The Deco's app shows a "client list"
+of connected devices.  This list updates on its own schedule, which
+appears to be "whenever it feels like it."  A device can be fully
+connected, responding to pings, running LIFX protocol, and still not
+appear in the Deco client list for minutes or hours.  You cannot
+force a refresh.  Do not trust it as a source of truth — use
+`lanscan.py` or `ping` from the Pi instead.
+
+**DHCP roulette.**  After a network disruption (IoT network toggle,
+firmware update, power outage), the Deco may reassign IP addresses
+to devices that reconnect.  Your `server.json` will have stale IPs.
+Run `lanscan.py` from the Pi to find the new addresses and update
+your config.
+
+**What actually works:**  Put the Pi on Ethernet.  Use direct IP
+queries (`discover --ip <addr>`) or `lanscan.py` for device
+discovery.  Never enable the IoT network unless you enjoy spending
+your morning power-cycling every smart device in your house.  Use
+DHCP reservations in the Deco app to pin device IPs so they survive
+network disruptions.
+
 ## Discovery Failures
 
-Discovery uses UDP broadcast, which some mesh routers (e.g., TP-Link
-Deco) block between nodes.  If `discover` finds nothing:
+Discovery uses UDP broadcast, which mesh routers like the TP-Link
+Deco block between nodes (see [Deco section](#tp-link-deco-mesh-routers--a-special-circle-of-hell) above).
+If `discover` finds nothing:
 
 1. Try direct IP: `python3 glowup.py discover --ip 192.0.2.62`
-2. Check that your machine and the LIFX device are on the same
+2. Run `lanscan.py` from the Pi to find all devices on the network.
+3. Check that your machine and the LIFX device are on the same
    subnet (same VLAN, same SSID).
-3. Try from a wired connection if wireless discovery fails.
-4. The LIFX phone app always shows device IPs — use those with `--ip`.
+4. Try from a wired connection if wireless discovery fails.
+5. The LIFX phone app always shows device IPs — use those with `--ip`.
 
 Discovery is flaky by nature — a device that doesn't respond on the
 first try often responds on the second.  The server retries
