@@ -73,6 +73,10 @@ KEEPALIVE_BURST: int = 2
 #: Delay between burst packets (seconds).
 KEEPALIVE_BURST_DELAY: float = 0.05
 
+#: Number of consecutive ARP misses before a bulb is considered expired.
+#: At the default 5-second scan interval, 24 misses ≈ 2 minutes.
+EXPIRY_MISS_COUNT: int = 24
+
 #: LIFX protocol constants (duplicated from transport to keep this module
 #: importable standalone — e.g. on machines without the full codebase).
 _PROTOCOL: int = 1024
@@ -362,8 +366,13 @@ class BulbKeepAlive(threading.Thread):
         self._arp_interval: float = arp_interval
         self._keepalive_interval: float = keepalive_interval
         self._stop_event: threading.Event = threading.Event()
-        # {IP: MAC} — all LIFX bulbs ever seen this session.
+        # {IP: MAC} — currently-known LIFX bulbs.
         self._known: dict[str, str] = {}
+        # {IP: int} — consecutive ARP misses per bulb.  Reset to 0
+        # each time the bulb appears in the ARP table; incremented
+        # each scan where it is absent.  Bulb is expired when the
+        # count reaches EXPIRY_MISS_COUNT.
+        self._misses: dict[str, int] = {}
         self._lock: threading.Lock = threading.Lock()
         self._source_id: int = random.randint(_SOURCE_ID_MIN, _SOURCE_ID_MAX)
         self._packet: bytes = _build_getservice(self._source_id)
@@ -426,18 +435,18 @@ class BulbKeepAlive(threading.Thread):
     # -- Internals ---------------------------------------------------------
 
     def _scan_arp(self) -> None:
-        """Read the ARP table and register any new LIFX devices."""
+        """Read the ARP table, register new devices, and expire stale ones."""
         arp_entries: dict[str, str] = _read_arp()
         with self._lock:
+            # --- Process bulbs present in ARP ---
             for ip, mac in arp_entries.items():
                 if ip not in self._known:
                     self._known[ip] = mac
+                    self._misses[ip] = 0
                     logger.info(
                         "Discovered LIFX bulb %s (%s) via ARP", ip, mac,
                     )
-                    # Persist to database.
                     self._db.record(ip, mac)
-                    # Notify caller.
                     if self._on_new_bulb is not None:
                         try:
                             self._on_new_bulb(ip, mac)
@@ -446,8 +455,26 @@ class BulbKeepAlive(threading.Thread):
                                 "on_new_bulb callback failed for %s", ip,
                             )
                 else:
-                    # Bulb already known — bump last_seen in DB.
+                    # Bulb still present — reset miss counter, bump DB.
+                    self._misses[ip] = 0
                     self._db.record(ip, mac)
+
+            # --- Increment miss counters for absent bulbs ---
+            expired: list[str] = []
+            for ip in list(self._known):
+                if ip not in arp_entries:
+                    self._misses[ip] = self._misses.get(ip, 0) + 1
+                    if self._misses[ip] >= EXPIRY_MISS_COUNT:
+                        expired.append(ip)
+
+            # --- Remove expired bulbs ---
+            for ip in expired:
+                mac: str = self._known.pop(ip, "?")
+                self._misses.pop(ip, None)
+                logger.info(
+                    "Expired LIFX bulb %s (%s) — absent from ARP for %d scans",
+                    ip, mac, EXPIRY_MISS_COUNT,
+                )
 
     def _ping_all(self, sock: socket.socket) -> None:
         """Send a keepalive burst to every known bulb."""
