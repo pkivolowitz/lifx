@@ -3150,28 +3150,17 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             })
             return
 
-        # Query device info synchronously so we can confirm it responds
-        # before accepting the request.
+        # Device is confirmed alive by keepalive daemon ARP ping.
+        # Return immediately without blocking on UDP query.
+        device_info: dict = {
+            "ip":      ip,
+            "mac":     "",
+            "label":   "",
+            "product": "",
+            "zones":   0,
+            "group":   "",
+        }
         dev: LifxDevice = LifxDevice(ip)
-        dev.sock.settimeout(COMMAND_DISCOVER_TIMEOUT_SECONDS)
-        try:
-            dev.query_all()
-            if dev.product is None:
-                self._send_json(404, {
-                    "error": f"No response from {ip} — device may be offline"
-                })
-                return
-            device_info: dict = {
-                "ip":      dev.ip,
-                "mac":     dev.mac_str,
-                "label":   dev.label or "",
-                "product": dev.product_name or "",
-                "zones":   dev.zone_count,
-                "group":   dev.group or "",
-            }
-        except Exception as exc:
-            self._send_json(503, {"error": f"Device query failed: {exc}"})
-            return
 
         stop_event: threading.Event = threading.Event()
 
