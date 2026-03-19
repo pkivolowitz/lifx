@@ -69,7 +69,8 @@ import hmac
 import http.server
 import ipaddress
 import json
-from urllib.parse import unquote
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import unquote, parse_qs, urlparse
 import logging
 import math
 import os
@@ -193,6 +194,12 @@ IDENTIFY_FRAME_INTERVAL: float = 0.05
 
 # Minimum brightness fraction during identify pulse (5%).
 IDENTIFY_MIN_BRI: float = 0.05
+
+# Per-device UDP query timeout for /api/command/discover (seconds).
+COMMAND_DISCOVER_TIMEOUT_SECONDS: float = 4.0
+
+# Maximum identify duration accepted from /api/command/identify (seconds).
+COMMAND_IDENTIFY_MAX_DURATION: float = 60.0
 
 # Day-of-week letter to weekday index (Monday=0 .. Sunday=6).
 # Matches Python's date.weekday() convention.
@@ -2005,6 +2012,11 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_get_discovered_bulbs()
             return
 
+        # /api/command/discover[?ip=X]
+        if path == "/api/command/discover":
+            self._handle_get_command_discover()
+            return
+
         self._send_json(404, {"error": "Not found"})
 
     def do_POST(self) -> None:
@@ -2133,6 +2145,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         if (len(parts) == 5 and parts[0] == "api" and parts[1] == "assign"
                 and parts[3] == "cancel"):
             self._handle_post_cancel_assignment(parts[2], parts[4])
+            return
+
+        # /api/command/identify
+        if (len(parts) == 3 and parts[0] == "api" and parts[1] == "command"
+                and parts[2] == "identify"):
+            self._handle_post_command_identify()
             return
 
         self._send_json(404, {"error": "Not found"})
@@ -2906,6 +2924,222 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             for ip, mac in sorted(daemon.known_bulbs.items())
         ]
         self._send_json(200, {"discovered_bulbs": bulbs})
+
+    def _handle_get_command_discover(self) -> None:
+        """GET /api/command/discover[?ip=X] — query device(s) for full info.
+
+        Executes UDP device queries from the server, bypassing any mesh
+        router filtering that prevents direct UDP from the client machine.
+        Returns label, product name, zone count, IP, and MAC for each
+        responding device.
+
+        Query parameters:
+            ip: Optional specific device IP to query.  If omitted, all
+                bulbs currently known to the keepalive daemon are queried
+                in parallel.
+
+        Response::
+
+            {
+                "devices": [
+                    {
+                        "ip":      "10.0.0.41",
+                        "mac":     "d0:73:d5:69:70:db",
+                        "label":   "Bedroom Neon",
+                        "product": "LIFX Neon",
+                        "zones":   100,
+                        "group":   "bedroom"
+                    },
+                    ...
+                ]
+            }
+
+        Devices that do not respond within
+        :data:`COMMAND_DISCOVER_TIMEOUT_SECONDS` are omitted from the
+        result rather than causing a timeout for the whole request.
+        """
+        qs: dict = parse_qs(urlparse(self.path).query)
+        target_ip: Optional[str] = qs.get("ip", [None])[0]
+
+        if target_ip is not None:
+            if not _validate_device_id(target_ip):
+                self._send_json(400, {"error": "Invalid device identifier"})
+                return
+            ips_to_query: list[str] = [target_ip]
+        else:
+            daemon: Optional[BulbKeepAlive] = self.keepalive
+            if daemon is None:
+                self._send_json(200, {"devices": []})
+                return
+            ips_to_query = list(daemon.known_bulbs.keys())
+
+        def _query_one(ip: str) -> Optional[dict]:
+            """Query a single device and return its info dict, or None."""
+            dev: LifxDevice = LifxDevice(ip)
+            dev.sock.settimeout(COMMAND_DISCOVER_TIMEOUT_SECONDS)
+            try:
+                dev.query_all()
+                if dev.product is None:
+                    # Device did not respond — omit from results.
+                    return None
+                return {
+                    "ip":      dev.ip,
+                    "mac":     dev.mac_str,
+                    "label":   dev.label or "",
+                    "product": dev.product_name or "",
+                    "zones":   dev.zone_count,
+                    "group":   dev.group or "",
+                }
+            except Exception as exc:
+                logging.debug(
+                    "command/discover: query failed for %s: %s", ip, exc,
+                )
+                return None
+            finally:
+                dev.close()
+
+        devices: list[dict] = []
+        with ThreadPoolExecutor(max_workers=len(ips_to_query) or 1) as pool:
+            futures = {pool.submit(_query_one, ip): ip for ip in ips_to_query}
+            for future in as_completed(
+                futures, timeout=COMMAND_DISCOVER_TIMEOUT_SECONDS + 1.0
+            ):
+                result: Optional[dict] = future.result()
+                if result is not None:
+                    devices.append(result)
+
+        devices.sort(key=lambda d: tuple(int(p) for p in d["ip"].split(".")))
+        logging.info(
+            "API: command/discover — %d/%d device(s) responded",
+            len(devices), len(ips_to_query),
+        )
+        self._send_json(200, {"devices": devices})
+
+    def _handle_post_command_identify(self) -> None:
+        """POST /api/command/identify — pulse any device by IP to locate it.
+
+        Unlike ``POST /api/devices/{ip}/identify``, this endpoint works for
+        any device reachable from the server — it does not require the device
+        to be configured in ``server.json``.  Intended for use from client
+        machines that cannot reach bulbs directly due to mesh router filtering.
+
+        Request body::
+
+            {
+                "ip":       "10.0.0.41",
+                "duration": 10.0        (optional, default IDENTIFY_DURATION_SECONDS)
+            }
+
+        Response::
+
+            {
+                "ip":          "10.0.0.41",
+                "identifying": true,
+                "duration":    10.0,
+                "device": {
+                    "ip":      "10.0.0.41",
+                    "mac":     "d0:73:d5:69:70:db",
+                    "label":   "Bedroom Neon",
+                    "product": "LIFX Neon",
+                    "zones":   100,
+                    "group":   "bedroom"
+                }
+            }
+
+        The pulse runs asynchronously — the response returns immediately
+        while the bulb flashes.  The device is powered off when the
+        duration expires.
+        """
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        ip: Any = body.get("ip")
+        if not ip or not isinstance(ip, str):
+            self._send_json(400, {"error": "Missing or invalid 'ip' field"})
+            return
+        if not _validate_device_id(ip):
+            self._send_json(400, {"error": "Invalid device identifier"})
+            return
+
+        duration: float = float(body.get("duration", IDENTIFY_DURATION_SECONDS))
+        if not (0 < duration <= COMMAND_IDENTIFY_MAX_DURATION):
+            self._send_json(400, {
+                "error": (
+                    f"'duration' must be between 0 and "
+                    f"{COMMAND_IDENTIFY_MAX_DURATION} seconds"
+                )
+            })
+            return
+
+        # Query device info synchronously so we can confirm it responds
+        # before accepting the request.
+        dev: LifxDevice = LifxDevice(ip)
+        dev.sock.settimeout(COMMAND_DISCOVER_TIMEOUT_SECONDS)
+        try:
+            dev.query_all()
+            if dev.product is None:
+                self._send_json(404, {
+                    "error": f"No response from {ip} — device may be offline"
+                })
+                return
+            device_info: dict = {
+                "ip":      dev.ip,
+                "mac":     dev.mac_str,
+                "label":   dev.label or "",
+                "product": dev.product_name or "",
+                "zones":   dev.zone_count,
+                "group":   dev.group or "",
+            }
+        except Exception as exc:
+            self._send_json(503, {"error": f"Device query failed: {exc}"})
+            return
+
+        def _pulse() -> None:
+            """Sine-wave brightness pulse loop running in a daemon thread."""
+            try:
+                dev.set_power(True, duration_ms=0)
+                start: float = time_mod.monotonic()
+                while time_mod.monotonic() - start < duration:
+                    elapsed: float = time_mod.monotonic() - start
+                    phase: float = (
+                        math.sin(
+                            2.0 * math.pi * elapsed / IDENTIFY_CYCLE_SECONDS
+                        ) + 1.0
+                    ) / 2.0
+                    bri_frac: float = (
+                        IDENTIFY_MIN_BRI + phase * (1.0 - IDENTIFY_MIN_BRI)
+                    )
+                    bri: int = int(bri_frac * HSBK_MAX)
+                    if dev.is_multizone:
+                        dev.set_zones(
+                            [(0, 0, bri, KELVIN_DEFAULT)] * (dev.zone_count or 1),
+                            duration_ms=0,
+                        )
+                    else:
+                        dev.set_color(0, 0, bri, KELVIN_DEFAULT, duration_ms=0)
+                    time_mod.sleep(IDENTIFY_FRAME_INTERVAL)
+                dev.set_power(False, duration_ms=DEFAULT_FADE_MS)
+            except Exception as exc:
+                logging.warning(
+                    "command/identify pulse failed for %s: %s", ip, exc,
+                )
+            finally:
+                dev.close()
+
+        thread: threading.Thread = threading.Thread(
+            target=_pulse, daemon=True, name=f"cmd-identify-{ip}",
+        )
+        thread.start()
+        logging.info(
+            "API: command/identify — pulsing %s for %.1fs", ip, duration,
+        )
+        self._send_json(200, {
+            "ip":          ip,
+            "identifying": True,
+            "duration":    duration,
+            "device":      device_info,
+        })
 
     def _handle_get_dashboard(self) -> None:
         """GET /dashboard — serve the static HTML dashboard page."""

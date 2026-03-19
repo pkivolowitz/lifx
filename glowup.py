@@ -131,6 +131,16 @@ TOKEN_PATH: Path = Path.home() / ".glowup_token"
 SERVER_TIMEOUT_SECONDS: float = 5.0
 """HTTP timeout for server API requests."""
 
+COMMAND_DISCOVER_TIMEOUT_SECONDS: float = 15.0
+"""HTTP timeout for /api/command/discover (waits for all device UDP queries)."""
+
+IDENTIFY_DEFAULT_DURATION: float = 10.0
+"""Default identify pulse duration when routing via server (seconds)."""
+
+# Timeout for the server probe that runs at startup to decide routing mode.
+SERVER_PROBE_TIMEOUT: float = 1.5
+"""Seconds to wait for /api/status probe before falling back to direct UDP."""
+
 # Minimum column widths for the discovery table display.
 # These prevent columns from collapsing when device labels are short.
 _COL_MIN_LABEL: int = 12
@@ -152,6 +162,10 @@ _BANNER: str = (
 
 # Module-level quiet flag — set by main() before any subcommand runs.
 _quiet: bool = False
+
+# Active server URL (``host:port``) used for routing commands.  Set in
+# ``main()`` after probing for the server.  ``None`` means direct UDP.
+_server_url: Optional[str] = None
 
 
 def _print(*args: Any, **kwargs: Any) -> None:
@@ -324,6 +338,36 @@ def _load_group(config_path: str, group_name: str) -> list[str]:
     return ips
 
 
+def _probe_server(server: str) -> bool:
+    """Check whether the GlowUp server is reachable.
+
+    Sends a quick authenticated GET to ``/api/status``.  Uses a short
+    timeout (:data:`SERVER_PROBE_TIMEOUT`) so startup is not noticeably
+    delayed when the server is offline.
+
+    Args:
+        server: ``host:port`` of the server to probe.
+
+    Returns:
+        ``True`` if the server responded with HTTP 200, ``False``
+        otherwise (unreachable, bad token, any error).
+    """
+    if not TOKEN_PATH.is_file():
+        return False
+    token: str = TOKEN_PATH.read_text().strip()
+    if not token:
+        return False
+    url: str = f"http://{server}/api/status"
+    req: urllib.request.Request = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=SERVER_PROBE_TIMEOUT) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 def _fetch_group_from_server(
     group_name: str,
     server: str,
@@ -410,6 +454,101 @@ def _fetch_group_from_server(
     return ips
 
 
+def _read_token() -> str:
+    """Read the bearer token from :data:`TOKEN_PATH`.
+
+    Returns:
+        The token string, stripped of whitespace.
+
+    Raises:
+        SystemExit: If the file is missing or empty.
+    """
+    if not TOKEN_PATH.is_file():
+        _print(
+            f"ERROR: Token file not found: {TOKEN_PATH}\n"
+            "       Create it with the server's auth_token value "
+            "(chmod 600).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    token: str = TOKEN_PATH.read_text().strip()
+    if not token:
+        _print(f"ERROR: Token file is empty: {TOKEN_PATH}", file=sys.stderr)
+        sys.exit(1)
+    return token
+
+
+def _server_get(server: str, path: str, *, timeout: float = SERVER_TIMEOUT_SECONDS) -> dict:
+    """Perform an authenticated GET against the GlowUp server.
+
+    Args:
+        server:  ``host:port`` of the server.
+        path:    URL path including any query string (e.g. ``/api/command/discover?ip=X``).
+        timeout: HTTP request timeout in seconds.
+
+    Returns:
+        Parsed JSON response body as a dict.
+
+    Raises:
+        SystemExit: On HTTP error, network failure, or auth failure.
+    """
+    token: str = _read_token()
+    url: str = f"http://{server}{path}"
+    req: urllib.request.Request = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        _print(f"ERROR: Server returned {exc.code} for {url}: {exc.reason}",
+               file=sys.stderr)
+        sys.exit(1)
+    except (urllib.error.URLError, OSError) as exc:
+        _print(f"ERROR: Cannot reach server at {server}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _server_post(server: str, path: str, body: dict, *, timeout: float = SERVER_TIMEOUT_SECONDS) -> dict:
+    """Perform an authenticated POST with a JSON body against the GlowUp server.
+
+    Args:
+        server:  ``host:port`` of the server.
+        path:    URL path (e.g. ``/api/command/identify``).
+        body:    Dict to serialise as the JSON request body.
+        timeout: HTTP request timeout in seconds.
+
+    Returns:
+        Parsed JSON response body as a dict.
+
+    Raises:
+        SystemExit: On HTTP error, network failure, or auth failure.
+    """
+    token: str = _read_token()
+    url: str = f"http://{server}{path}"
+    data: bytes = json.dumps(body).encode()
+    req: urllib.request.Request = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        body_text: str = exc.read().decode(errors="replace")
+        _print(f"ERROR: Server returned {exc.code} for {url}: {body_text}",
+               file=sys.stderr)
+        sys.exit(1)
+    except (urllib.error.URLError, OSError) as exc:
+        _print(f"ERROR: Cannot reach server at {server}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _connect_group(ips: list[str]) -> list[LifxDevice]:
     """Connect to and query a list of devices.
 
@@ -455,56 +594,20 @@ def _connect_group(ips: list[str]) -> list[LifxDevice]:
 # Subcommand handlers
 # ---------------------------------------------------------------------------
 
-def cmd_discover(args: argparse.Namespace) -> None:
-    """Discover and display all LIFX devices on the local network.
+def _print_discover_table(
+    rows: List[Dict[str, str]], emit_json: bool = False
+) -> None:
+    """Print a formatted device table from a list of row dicts.
 
-    Sends a UDP broadcast and collects responses, then prints a
-    formatted table of discovered devices.  Optionally emits JSON
-    output when ``--json`` is passed.
+    Each dict must contain keys: ``label``, ``product``, ``group``,
+    ``ip``, ``mac``, ``zones``.  Used by both the direct-UDP and
+    server-routed discover paths so output is identical regardless of
+    transport.
 
-    Parameters
-    ----------
-    args : argparse.Namespace
-        Parsed CLI arguments.  Expected attributes:
-        ``timeout`` (float) and ``json`` (bool).
+    Args:
+        rows:      List of device info dicts.
+        emit_json: If ``True``, also print a JSON representation.
     """
-    if args.ip:
-        _print(f"Querying {args.ip}...", flush=True)
-    else:
-        _print("Scanning for LIFX devices...", flush=True)
-    devices: list = discover_devices(timeout=args.timeout, target_ip=args.ip)
-
-    if not devices:
-        _print("No LIFX devices found.\n")
-        _print("This does not necessarily mean your lights are absent — LIFX")
-        _print("UDP discovery can be unreliable depending on your network.")
-        _print("Common causes:\n")
-        _print("  • Mesh routers (e.g. TP-Link Deco) may filter broadcast")
-        _print("    packets between wireless nodes. Try --ip <device-ip> to")
-        _print("    query a specific device directly.")
-        _print("  • Devices may be powered off or unreachable on a different")
-        _print("    subnet or VLAN.")
-        _print("  • Increasing --timeout (default 5s) can help on congested")
-        _print("    networks.")
-        _print("  • The LIFX app on your phone can confirm whether devices")
-        _print("    are online.")
-        _print("  • Check your router's admin page for connected devices and")
-        _print("    their IP addresses, then add them to server.json groups.")
-        return
-
-    # Build a list of plain-dict rows for tabular display
-    rows: List[Dict[str, str]] = []
-    for dev in devices:
-        rows.append({
-            "label": dev.label or "?",
-            "product": dev.product_name or "?",
-            "group": dev.group or "",
-            "ip": dev.ip,
-            "mac": dev.mac_str,
-            "zones": str(dev.zone_count or "-"),
-        })
-
-    # Column definitions: (header text, row-dict key, minimum width)
     cols: List[Tuple[str, str, int]] = [
         ("Label",       "label",   _COL_MIN_LABEL),
         ("Product",     "product", _COL_MIN_PRODUCT),
@@ -514,14 +617,12 @@ def cmd_discover(args: argparse.Namespace) -> None:
         ("Zones",       "zones",   _COL_MIN_ZONES),
     ]
 
-    # Compute actual widths: max of (minimum, header length, longest value)
     widths: List[int] = []
     for header, key, min_w in cols:
         w: int = max(min_w, len(header),
                      max((len(r[key]) for r in rows), default=0))
         widths.append(w)
 
-    # Print header row, separator line, and data rows
     header_line: str = _COL_SEP.join(
         cols[i][0].ljust(widths[i]) for i in range(len(cols))
     )
@@ -534,7 +635,7 @@ def cmd_discover(args: argparse.Namespace) -> None:
         _print(line)
     _print(f"\n{len(rows)} device(s) found.")
 
-    if args.json:
+    if emit_json:
         _print("\n" + json.dumps(
             [
                 {
@@ -546,6 +647,90 @@ def cmd_discover(args: argparse.Namespace) -> None:
             ],
             indent=2,
         ))
+
+
+def cmd_discover(args: argparse.Namespace) -> None:
+    """Discover and display all LIFX devices on the local network.
+
+    When the GlowUp server is reachable the query is executed on the
+    server (which has unobstructed UDP access to every bulb on the LAN)
+    and results are returned over HTTP.  When running locally (``--local``
+    or server unreachable) a UDP broadcast or directed query is used.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments.  Expected attributes:
+        ``timeout`` (float), ``ip`` (str | None), ``json`` (bool).
+    """
+    if _server_url:
+        # --- Server path: query all known bulbs (or a specific IP) from Pi ---
+        path: str = (
+            f"/api/command/discover?ip={args.ip}"
+            if args.ip else "/api/command/discover"
+        )
+        if args.ip:
+            _print(f"Querying {args.ip} via server...", flush=True)
+        else:
+            _print("Querying all known devices via server...", flush=True)
+        body: dict = _server_get(
+            _server_url, path,
+            timeout=COMMAND_DISCOVER_TIMEOUT_SECONDS,
+        )
+        devices_raw: list = body.get("devices", [])
+        if not devices_raw:
+            _print("No devices responded.")
+            return
+        rows: List[Dict[str, str]] = [
+            {
+                "label":   d.get("label") or "?",
+                "product": d.get("product") or "?",
+                "group":   d.get("group") or "",
+                "ip":      d.get("ip", "?"),
+                "mac":     d.get("mac", "?"),
+                "zones":   str(d.get("zones") or "-"),
+            }
+            for d in devices_raw
+        ]
+        _print_discover_table(rows, emit_json=args.json)
+        return
+
+    # --- Direct UDP path (server unreachable or --local) ---------------------
+    if args.ip:
+        _print(f"Querying {args.ip}...", flush=True)
+    else:
+        _print("Scanning for LIFX devices...", flush=True)
+    devices: list = discover_devices(timeout=args.timeout, target_ip=args.ip)
+
+    if not devices:
+        _print("No LIFX devices found.\n")
+        _print("This does not necessarily mean your lights are absent — LIFX")
+        _print("UDP discovery can be unreliable depending on your network.")
+        _print("Common causes:\n")
+        _print("  • Mesh routers (e.g. TP-Link Deco) may filter broadcast")
+        _print("    packets between wireless nodes.")
+        _print("  • Devices may be powered off or unreachable on a different")
+        _print("    subnet or VLAN.")
+        _print("  • Increasing --timeout (default 5s) can help on congested")
+        _print("    networks.")
+        _print("  • The LIFX app on your phone can confirm whether devices")
+        _print("    are online.")
+        _print("  • Check your router's admin page for connected devices and")
+        _print("    their IP addresses, then add them to server.json groups.")
+        return
+
+    udp_rows: List[Dict[str, str]] = [
+        {
+            "label":   dev.label or "?",
+            "product": dev.product_name or "?",
+            "group":   dev.group or "",
+            "ip":      dev.ip,
+            "mac":     dev.mac_str,
+            "zones":   str(dev.zone_count or "-"),
+        }
+        for dev in devices
+    ]
+    _print_discover_table(udp_rows, emit_json=args.json)
 
 
 def cmd_effects(args: argparse.Namespace) -> None:
@@ -586,22 +771,51 @@ def cmd_effects(args: argparse.Namespace) -> None:
 
 
 def cmd_identify(args: argparse.Namespace) -> None:
-    """Slowly pulse a device's brightness so the user can locate it.
+    """Pulse a device's brightness so the user can locate it physically.
 
-    Connects to the device, powers it on, then smoothly ramps
-    brightness up and down in a sine-wave cycle until Ctrl+C.
-    On stop, the device is powered off.
+    When the GlowUp server is reachable, the pulse is executed on the
+    server (bypassing Deco mesh UDP filtering) for a fixed
+    ``--duration`` (default :data:`IDENTIFY_DEFAULT_DURATION` seconds).
+    The HTTP response returns immediately and the bulb flashes
+    asynchronously on the server side.
+
+    When running locally (``--local`` or server unreachable), the pulse
+    runs on the CLI host as an interactive loop until Ctrl+C.
 
     Parameters
     ----------
     args : argparse.Namespace
-        Parsed CLI arguments.  Expected attributes: ``ip`` (str).
+        Parsed CLI arguments.  Expected attributes: ``ip`` (str),
+        ``duration`` (float).
     """
     if not args.ip:
         _print("ERROR: --ip is required for identify command.", file=sys.stderr)
         sys.exit(1)
 
-    # --- Connect to device ---------------------------------------------------
+    if _server_url:
+        # --- Server path: execute pulse from Pi, return immediately ----------
+        duration: float = getattr(args, "duration", None) or IDENTIFY_DEFAULT_DURATION
+        _print(
+            f"Identifying {args.ip} via server "
+            f"(pulsing for {duration:.0f}s)...",
+            flush=True,
+        )
+        resp: dict = _server_post(
+            _server_url,
+            "/api/command/identify",
+            {"ip": args.ip, "duration": duration},
+            timeout=SERVER_TIMEOUT_SECONDS,
+        )
+        dev_info: dict = resp.get("device", {})
+        label: str = dev_info.get("label") or "?"
+        product: str = dev_info.get("product") or "?"
+        zones: Any = dev_info.get("zones")
+        mac: str = dev_info.get("mac") or "?"
+        _print(f"  {label} — {product}  |  MAC {mac}  |  zones: {zones}")
+        _print(f"Pulse running on server for {duration:.0f}s.")
+        return
+
+    # --- Direct UDP path (server unreachable or --local) ---------------------
     _print(f"Connecting to {args.ip}...", flush=True)
     try:
         dev: LifxDevice = LifxDevice(args.ip)
@@ -619,7 +833,6 @@ def cmd_identify(args: argparse.Namespace) -> None:
     _print(f"\nPulsing brightness on {args.ip}.")
     _print("Press Ctrl+C to stop.\n")
 
-    # --- Power on and pulse ---------------------------------------------------
     dev.set_power(on=True, duration_ms=0)
 
     stop_requested: threading.Event = threading.Event()
@@ -631,13 +844,12 @@ def cmd_identify(args: argparse.Namespace) -> None:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    # Warm white, zero saturation — works on both color and monochrome bulbs.
     start_time: float = time.monotonic()
     while not stop_requested.is_set():
         elapsed: float = time.monotonic() - start_time
-
-        # Sine wave from 0..1, mapped to IDENTIFY_MIN_BRI..1.0
-        phase: float = (math.sin(2.0 * math.pi * elapsed / IDENTIFY_CYCLE_SECONDS) + 1.0) / 2.0
+        phase: float = (
+            math.sin(2.0 * math.pi * elapsed / IDENTIFY_CYCLE_SECONDS) + 1.0
+        ) / 2.0
         bri_frac: float = IDENTIFY_MIN_BRI + phase * (1.0 - IDENTIFY_MIN_BRI)
         bri: int = int(bri_frac * HSBK_MAX)
 
@@ -650,7 +862,6 @@ def cmd_identify(args: argparse.Namespace) -> None:
 
         stop_requested.wait(timeout=IDENTIFY_FRAME_INTERVAL)
 
-    # --- Cleanup --------------------------------------------------------------
     _print("\nStopping...")
     dev.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
     dev.close()
@@ -892,7 +1103,7 @@ def cmd_play(args: argparse.Namespace) -> None:
         if has_config:
             ips: list[str] = _load_group(args.config, args.group)
         else:
-            server: str = getattr(args, "server", None) or (
+            server: str = _server_url or (
                 f"{DEFAULT_SERVER_HOST}:{DEFAULT_SERVER_PORT}"
             )
             _print(f"Fetching group '{args.group}' from server ({server})...",
@@ -1546,6 +1757,21 @@ def build_parser() -> argparse.ArgumentParser:
         "-q", "--quiet", action="store_true",
         help="Suppress the startup banner and informational output",
     )
+    parser.add_argument(
+        "--server", default=None, metavar="HOST:PORT",
+        help=(
+            f"GlowUp server address for routing UDP commands "
+            f"(default: {DEFAULT_SERVER_HOST}:{DEFAULT_SERVER_PORT}). "
+            f"Auto-detected if omitted — the server is used when reachable."
+        ),
+    )
+    parser.add_argument(
+        "--local", action="store_true", default=False,
+        help=(
+            "Force direct UDP even if the server is reachable. "
+            "Useful for testing or when running on the same machine as the server."
+        ),
+    )
     sub = parser.add_subparsers(dest="command", help="Command to run")
 
     # -- discover --------------------------------------------------------------
@@ -1575,6 +1801,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_ident.add_argument(
         "--ip", required=True,
         help="Target device IP address or hostname",
+    )
+    p_ident.add_argument(
+        "--duration", type=float, default=IDENTIFY_DEFAULT_DURATION,
+        help=(
+            f"Pulse duration in seconds when routing via server "
+            f"(default: {IDENTIFY_DEFAULT_DURATION:.0f}s). "
+            f"Ignored when running locally — use Ctrl+C to stop."
+        ),
     )
 
     # -- monitor ---------------------------------------------------------------
@@ -1630,13 +1864,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Device group name. Fetched from the server unless "
             "--config provides a local file"
-        ),
-    )
-    p_play.add_argument(
-        "--server", default=None,
-        help=(
-            f"Server host:port for remote group lookup "
-            f"(default: {DEFAULT_SERVER_HOST}:{DEFAULT_SERVER_PORT})"
         ),
     )
     p_play.add_argument(
@@ -1881,8 +2108,6 @@ def main() -> None:
     Prints a copyright/license banner on startup unless ``-q``/``--quiet``
     is given.
     """
-    global _quiet
-
     # --- Intercept "play/record <effect> --help" before argparse consumes -h --
     # sys.argv[1] is "play" or "record", sys.argv[2] is a non-flag token
     # (the effect name), and -h or --help appears anywhere after.
@@ -1899,6 +2124,7 @@ def main() -> None:
     parser: argparse.ArgumentParser = build_parser()
     args: argparse.Namespace = parser.parse_args()
 
+    global _quiet, _server_url
     _quiet = getattr(args, "quiet", False)
 
     if args.command is None:
@@ -1907,6 +2133,24 @@ def main() -> None:
 
     # Print the startup banner (suppressed by -q/--quiet).
     _print(_BANNER)
+
+    # --- Determine routing mode: via server or direct UDP --------------------
+    # Commands that only need local computation skip the server probe.
+    _LOCAL_ONLY_COMMANDS: set[str] = {"effects", "record", "replay"}
+    if args.command not in _LOCAL_ONLY_COMMANDS and not args.local:
+        server_addr: str = args.server or (
+            f"{DEFAULT_SERVER_HOST}:{DEFAULT_SERVER_PORT}"
+        )
+        if _probe_server(server_addr):
+            _server_url = server_addr
+            _print(f"Routing via server at {server_addr}")
+        else:
+            _print(
+                f"Server at {server_addr} unreachable — "
+                f"running locally (direct UDP)"
+            )
+    elif args.local:
+        _print("Running locally (--local flag set, direct UDP)")
 
     # Dispatch table -- maps subcommand names to handler functions
     commands: Dict[str, Callable[[argparse.Namespace], None]] = {
