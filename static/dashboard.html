@@ -106,6 +106,17 @@
     padding: 20px;
     text-align: center;
   }
+  .discovered-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .discovered-row:last-child { border-bottom: none; }
+  .discovered-ip { font-weight: 600; color: var(--green); }
+  .discovered-mac { color: var(--dim); font-family: monospace; font-size: 12px; }
   .refresh-note {
     color: var(--dim);
     font-size: 11px;
@@ -155,9 +166,10 @@
   <div class="subtitle">Auto-refreshes every 5 seconds</div>
 
   <div class="card" style="margin-bottom: 16px;">
-    <div class="stat-grid" id="stats">
+    <div class="stat-grid" id="stats" style="grid-template-columns: repeat(4, 1fr);">
       <div><div class="stat-value" id="stat-devices">-</div><div class="stat-label">Devices</div></div>
       <div><div class="stat-value" id="stat-playing">-</div><div class="stat-label">Playing</div></div>
+      <div><div class="stat-value" id="stat-discovered" style="color: var(--green);">-</div><div class="stat-label">Found (ARP)</div></div>
       <div><div class="stat-value" id="stat-today">-</div><div class="stat-label">Events Today</div></div>
     </div>
   </div>
@@ -176,6 +188,11 @@
   <div class="card">
     <h2>Devices</h2>
     <div id="devices"><div class="error">Loading...</div></div>
+  </div>
+
+  <div class="card" style="margin-top: 16px;">
+    <h2>Discovered Bulbs (ARP Keepalive)</h2>
+    <div id="discovered-bulbs"><div class="device-idle" style="padding:8px 0;">Waiting for ARP scan...</div></div>
   </div>
 
   <div class="refresh-note">Last update: <span id="last-update">-</span></div>
@@ -246,10 +263,11 @@ function duration(start, stop) {
 
 async function refresh() {
   try {
-    const [devices, nowPlaying, history] = await Promise.all([
+    const [devices, nowPlaying, history, discovered] = await Promise.all([
       api('/api/devices'),
       api('/api/diagnostics/now_playing'),
       api('/api/diagnostics/history'),
+      api('/api/discovered_bulbs'),
     ]);
 
     if (!devices) return;  // auth failed
@@ -260,6 +278,9 @@ async function refresh() {
 
     const playing = nowPlaying || [];
     document.getElementById('stat-playing').textContent = playing.length;
+
+    const bulbCount = (discovered && discovered.discovered_bulbs) ? discovered.discovered_bulbs.length : 0;
+    document.getElementById('stat-discovered').textContent = bulbCount;
 
     const hist = history || [];
     document.getElementById('stat-today').textContent = hist.length;
@@ -316,6 +337,20 @@ async function refresh() {
         </div>
       `;
     }).join('');
+
+    // Discovered Bulbs (ARP Keepalive)
+    const dbEl = document.getElementById('discovered-bulbs');
+    const bulbs = (discovered && discovered.discovered_bulbs) || [];
+    if (bulbs.length === 0) {
+      dbEl.innerHTML = '<div class="device-idle" style="padding:8px 0;">No bulbs discovered yet</div>';
+    } else {
+      dbEl.innerHTML = bulbs.map(b => `
+        <div class="discovered-row">
+          <span class="discovered-ip">${b.ip}</span>
+          <span class="discovered-mac">${b.mac}</span>
+        </div>
+      `).join('');
+    }
 
     document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
   } catch (e) {

@@ -109,6 +109,9 @@ except ImportError:
     DiagnosticsLogger = None  # type: ignore[assignment,misc]
     _HAS_DIAGNOSTICS = False
 
+# ARP-based bulb discovery and keepalive daemon.
+from bulb_keepalive import BulbKeepAlive
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -1738,6 +1741,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     config_path: Optional[str] = None
     media_manager: Optional[MediaManager] = None
     orchestrator: Optional[Any] = None
+    keepalive: Optional[BulbKeepAlive] = None
 
     # Silence per-request logging from BaseHTTPRequestHandler.
     def log_message(self, format: str, *args: Any) -> None:
@@ -1994,6 +1998,11 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         # /api/diagnostics/history
         if path == "/api/diagnostics/history":
             self._handle_get_diag_history()
+            return
+
+        # /api/discovered_bulbs
+        if path == "/api/discovered_bulbs":
+            self._handle_get_discovered_bulbs()
             return
 
         self._send_json(404, {"error": "Not found"})
@@ -2881,6 +2890,23 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             logging.warning("Diagnostics query failed: %s", exc)
             self._send_json(200, [])
 
+    def _handle_get_discovered_bulbs(self) -> None:
+        """GET /api/discovered_bulbs — bulbs found via ARP keepalive.
+
+        Returns the current in-memory set of discovered LIFX bulbs.
+        Each entry includes IP and MAC address.  If the keepalive
+        daemon is not running, returns an empty list.
+        """
+        daemon: Optional[BulbKeepAlive] = self.keepalive
+        if daemon is None:
+            self._send_json(200, {"discovered_bulbs": []})
+            return
+        bulbs: list[dict[str, str]] = [
+            {"ip": ip, "mac": mac}
+            for ip, mac in sorted(daemon.known_bulbs.items())
+        ]
+        self._send_json(200, {"discovered_bulbs": bulbs})
+
     def _handle_get_dashboard(self) -> None:
         """GET /dashboard — serve the static HTML dashboard page."""
         dashboard_path: str = os.path.join(
@@ -3388,10 +3414,11 @@ def main() -> None:
     media_mgr: Optional[MediaManager] = None
     # Orchestrator reference — set by _background_startup if configured.
     orch: Optional[Any] = None
+    keepalive: Optional[BulbKeepAlive] = None
 
     def _background_startup() -> None:
         """Load devices from config IPs, then start the scheduler."""
-        nonlocal mqtt_bridge, media_mgr, orch
+        nonlocal mqtt_bridge, media_mgr, orch, keepalive
 
         try:
             logging.info(
@@ -3399,6 +3426,14 @@ def main() -> None:
             )
             devices: list[dict[str, Any]] = dm.load_devices()
             logging.info("Loaded %d device(s)", len(devices))
+
+            # Start the ARP-based bulb keepalive daemon.
+            # Runs unconditionally — zero config required.  Passively
+            # watches the ARP table for LIFX MACs and pings each known
+            # bulb to keep its WiFi radio from deep-sleeping.
+            keepalive = BulbKeepAlive()
+            GlowUpRequestHandler.keepalive = keepalive
+            keepalive.start()
 
             # Start the scheduler now that devices are available.
             sched: Optional[SchedulerThread] = None
@@ -3483,6 +3518,9 @@ def main() -> None:
             orch.stop()
         if mqtt_bridge is not None:
             mqtt_bridge.stop()
+        if keepalive is not None:
+            keepalive.stop()
+            keepalive.join(timeout=3.0)
         scheduler: Optional[SchedulerThread] = GlowUpRequestHandler.scheduler
         if scheduler is not None:
             scheduler.stop()
