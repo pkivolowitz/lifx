@@ -1495,9 +1495,14 @@ def discover_devices(
     # Wake burst: rapid-fire a few GetService packets to prod sleeping bulbs
     # before the main discovery loop.  This helps on mesh routers (e.g.
     # TP-Link Deco) that delay or filter initial broadcast forwarding.
-    for _ in range(DISCOVERY_WAKE_BURSTS):
-        sock.sendto(msg, (broadcast_addr, LIFX_PORT))
-        time.sleep(DISCOVERY_WAKE_DELAY)
+    try:
+        for _ in range(DISCOVERY_WAKE_BURSTS):
+            sock.sendto(msg, (broadcast_addr, LIFX_PORT))
+            time.sleep(DISCOVERY_WAKE_DELAY)
+    except OSError as exc:
+        sock.close()
+        logger.warning("Broadcast send failed: %s", exc)
+        return []
 
     found: dict[str, tuple[str, bytes]] = {}  # mac_str -> (ip, mac_bytes)
     deadline = time.time() + timeout
@@ -1507,7 +1512,10 @@ def discover_devices(
         now = time.time()
         # Re-broadcast periodically to catch devices that missed earlier packets
         if now >= next_send:
-            sock.sendto(msg, (broadcast_addr, LIFX_PORT))
+            try:
+                sock.sendto(msg, (broadcast_addr, LIFX_PORT))
+            except OSError:
+                break
             next_send = now + DISCOVERY_INTERVAL
         try:
             data, (ip, _) = sock.recvfrom(MAX_UDP_PAYLOAD)
