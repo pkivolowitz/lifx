@@ -326,9 +326,6 @@ class DeviceRegistry:
                 "devices": dict(self._devices),
             }
 
-        # Ensure parent directory exists.
-        Path(target).parent.mkdir(parents=True, exist_ok=True)
-
         # Atomic write via temp file.
         tmp: str = target + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
