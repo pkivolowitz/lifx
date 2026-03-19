@@ -129,7 +129,10 @@ def load_registry(path: str) -> Dict[str, dict]:
 
 
 def save_registry(path: str, devices: Dict[str, dict]) -> None:
-    """Save the registry file atomically."""
+    """Save the registry file atomically.
+
+    Creates parent directories if they do not exist.
+    """
     data = {
         "_comment": (
             "MAC-based device identity.  Survives DHCP changes "
@@ -137,6 +140,8 @@ def save_registry(path: str, devices: Dict[str, dict]) -> None:
         ),
         "devices": devices,
     }
+    parent: Path = Path(path).parent
+    parent.mkdir(parents=True, exist_ok=True)
     tmp: str = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=4, sort_keys=True)
