@@ -202,14 +202,52 @@
 let TOKEN = '';
 const BASE = window.location.origin;
 
+// Polling state — managed by startPolling / stopPolling.
+let pollTimer = null;
+
+// Normal and backoff poll intervals (milliseconds).
+const POLL_INTERVAL_MS = 5000;
+const BACKOFF_INTERVAL_MS = 30000;
+
+// True while a refresh() cycle is in flight — prevents overlapping fetches.
+let refreshInFlight = false;
+
+function startPolling(intervalMs) {
+  stopPolling();
+  pollTimer = setInterval(refresh, intervalMs);
+}
+
+function stopPolling() {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function showAuth() {
+  stopPolling();
+  TOKEN = '';
+  localStorage.removeItem('glowup_token');
+  document.getElementById('auth-form').style.display = 'block';
+  document.getElementById('dashboard').style.display = 'none';
+}
+
+function showDashboard() {
+  document.getElementById('auth-form').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+}
+
+function showStatus(msg) {
+  document.getElementById('last-update').textContent = msg;
+}
+
 function authenticate() {
   TOKEN = document.getElementById('token-input').value.trim();
   if (!TOKEN) return;
   localStorage.setItem('glowup_token', TOKEN);
-  document.getElementById('auth-form').style.display = 'none';
-  document.getElementById('dashboard').style.display = 'block';
+  showDashboard();
   refresh();
-  setInterval(refresh, 5000);
+  startPolling(POLL_INTERVAL_MS);
 }
 
 // Auto-login if token is stored
@@ -217,10 +255,9 @@ window.addEventListener('load', () => {
   const saved = localStorage.getItem('glowup_token');
   if (saved) {
     TOKEN = saved;
-    document.getElementById('auth-form').style.display = 'none';
-    document.getElementById('dashboard').style.display = 'block';
+    showDashboard();
     refresh();
-    setInterval(refresh, 5000);
+    startPolling(POLL_INTERVAL_MS);
   }
 });
 
@@ -229,10 +266,13 @@ async function api(path) {
     headers: { 'Authorization': 'Bearer ' + TOKEN }
   });
   if (r.status === 401) {
-    localStorage.removeItem('glowup_token');
-    document.getElementById('auth-form').style.display = 'block';
-    document.getElementById('dashboard').style.display = 'none';
-    return null;
+    return { _authFailed: true };
+  }
+  if (r.status === 429) {
+    return { _rateLimited: true };
+  }
+  if (!r.ok) {
+    return { _error: true, status: r.status };
   }
   return r.json();
 }
@@ -262,6 +302,8 @@ function duration(start, stop) {
 }
 
 async function refresh() {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
   try {
     const [devices, nowPlaying, history, discovered] = await Promise.all([
       api('/api/devices'),
@@ -270,7 +312,29 @@ async function refresh() {
       api('/api/discovered_bulbs'),
     ]);
 
-    if (!devices) return;  // auth failed
+    const results = [devices, nowPlaying, history, discovered];
+
+    // Any 401 → back to login (check once, not per-call).
+    if (results.some(r => r && r._authFailed)) {
+      showAuth();
+      return;
+    }
+
+    // Any 429 → back off polling and show status.
+    if (results.some(r => r && r._rateLimited)) {
+      startPolling(BACKOFF_INTERVAL_MS);
+      showStatus('Rate limited — backing off to 30s polling');
+      return;
+    }
+
+    // Any other error → skip this cycle, keep normal polling.
+    if (results.some(r => r && r._error)) {
+      showStatus('Server error — retrying in 5s');
+      return;
+    }
+
+    // All responses OK — ensure normal poll rate.
+    startPolling(POLL_INTERVAL_MS);
 
     // Stats
     const devList = devices.devices || devices || [];
@@ -355,6 +419,8 @@ async function refresh() {
     document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
   } catch (e) {
     console.error('Refresh failed:', e);
+  } finally {
+    refreshInFlight = false;
   }
 }
 </script>
