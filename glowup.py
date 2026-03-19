@@ -149,6 +149,7 @@ _COL_MIN_GROUP: int = 8
 _COL_MIN_IP: int = 13
 _COL_MIN_MAC: int = 17
 _COL_MIN_ZONES: int = 5
+_COL_MIN_REGISTRY: int = 10
 
 # Column separator used in the discovery table
 _COL_SEP: str = "  "
@@ -634,27 +635,33 @@ def _print_discover_table(
     """Print a formatted device table from a list of row dicts.
 
     Each dict must contain keys: ``label``, ``product``, ``group``,
-    ``ip``, ``mac``, ``zones``.  Used by both the direct-UDP and
-    server-routed discover paths so output is identical regardless of
-    transport.
+    ``ip``, ``mac``, ``zones``.  The optional ``registry`` key shows
+    the user-assigned registry label (from the device registry) when
+    available.  Used by both the direct-UDP and server-routed discover
+    paths so output is identical regardless of transport.
 
     Args:
         rows:      List of device info dicts.
         emit_json: If ``True``, also print a JSON representation.
     """
+    # Only include the Registry column if any row has a non-empty value.
+    has_registry: bool = any(r.get("registry", "") for r in rows)
+
     cols: List[Tuple[str, str, int]] = [
-        ("Label",       "label",   _COL_MIN_LABEL),
-        ("Product",     "product", _COL_MIN_PRODUCT),
-        ("Group",       "group",   _COL_MIN_GROUP),
-        ("IP Address",  "ip",      _COL_MIN_IP),
-        ("MAC Address", "mac",     _COL_MIN_MAC),
-        ("Zones",       "zones",   _COL_MIN_ZONES),
+        ("Label",       "label",    _COL_MIN_LABEL),
+        ("Product",     "product",  _COL_MIN_PRODUCT),
+        ("Group",       "group",    _COL_MIN_GROUP),
+        ("IP Address",  "ip",       _COL_MIN_IP),
+        ("MAC Address", "mac",      _COL_MIN_MAC),
+        ("Zones",       "zones",    _COL_MIN_ZONES),
     ]
+    if has_registry:
+        cols.append(("Registry", "registry", _COL_MIN_REGISTRY))
 
     widths: List[int] = []
     for header, key, min_w in cols:
         w: int = max(min_w, len(header),
-                     max((len(r[key]) for r in rows), default=0))
+                     max((len(r.get(key, "")) for r in rows), default=0))
         widths.append(w)
 
     header_line: str = _COL_SEP.join(
@@ -664,7 +671,8 @@ def _print_discover_table(
     _print(_COL_SEP.join("-" * widths[i] for i in range(len(cols))))
     for r in rows:
         line: str = _COL_SEP.join(
-            str(r[cols[i][1]]).ljust(widths[i]) for i in range(len(cols))
+            str(r.get(cols[i][1], "")).ljust(widths[i])
+            for i in range(len(cols))
         )
         _print(line)
     _print(f"\n{len(rows)} device(s) found.")
@@ -676,6 +684,8 @@ def _print_discover_table(
                     "label": r["label"], "product": r["product"],
                     "group": r["group"], "ip": r["ip"],
                     "mac": r["mac"], "zones": r["zones"],
+                    **({"registry": r["registry"]}
+                       if r.get("registry") else {}),
                 }
                 for r in rows
             ],
@@ -717,12 +727,13 @@ def cmd_discover(args: argparse.Namespace) -> None:
             return
         rows: List[Dict[str, str]] = [
             {
-                "label":   d.get("label") or "?",
-                "product": d.get("product") or "?",
-                "group":   d.get("group") or "",
-                "ip":      d.get("ip", "?"),
-                "mac":     d.get("mac", "?"),
-                "zones":   str(d.get("zones") or "-"),
+                "label":    d.get("label") or "?",
+                "product":  d.get("product") or "?",
+                "group":    d.get("group") or "",
+                "ip":       d.get("ip", "?"),
+                "mac":      d.get("mac", "?"),
+                "zones":    str(d.get("zones") or "-"),
+                "registry": d.get("registry_label") or "",
             }
             for d in devices_raw
         ]

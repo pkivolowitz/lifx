@@ -3334,6 +3334,27 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 )
                 devices = []
 
+        # Enrich each device with metadata from the device manager and
+        # registry label from the device registry.
+        dm: DeviceManager = self.device_manager
+        reg: Optional[DeviceRegistry] = self.registry
+        for entry in devices:
+            ip: str = entry.get("ip", "")
+            mac: str = entry.get("mac", "")
+            # Pull cached device info (label, product, group, zones).
+            dev: Optional[LifxDevice] = dm.get_device(ip) if ip else None
+            if dev is not None:
+                entry["label"] = dev.label or ""
+                entry["product"] = dev.product_name or ""
+                entry["group"] = dev.group or ""
+                entry["zones"] = dev.zone_count or 0
+                if not mac:
+                    entry["mac"] = dev.mac_str
+                    mac = dev.mac_str
+            # Pull registry label (user-assigned name) if available.
+            if reg is not None and mac:
+                entry["registry_label"] = reg.mac_to_label(mac) or ""
+
         logging.info(
             "API: command/discover — returning %d device(s) from ARP cache",
             len(devices),
