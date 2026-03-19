@@ -134,7 +134,7 @@ SERVER_TIMEOUT_SECONDS: float = 5.0
 COMMAND_DISCOVER_TIMEOUT_SECONDS: float = 15.0
 """HTTP timeout for /api/command/discover (waits for all device UDP queries)."""
 
-IDENTIFY_DEFAULT_DURATION: float = 10.0
+IDENTIFY_DEFAULT_DURATION: float = 60.0
 """Default identify pulse duration when routing via server (seconds)."""
 
 # Timeout for the server probe that runs at startup to decide routing mode.
