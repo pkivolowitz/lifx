@@ -67,20 +67,53 @@ network disruptions.
 
 ## Discovery Failures
 
-Discovery uses UDP broadcast, which mesh routers like the TP-Link
-Deco block between nodes (see [Deco section](#tp-link-deco-mesh-routers--a-special-circle-of-hell) above).
-If `discover` finds nothing:
+### Server Routing: The Solution
 
-1. Try direct IP: `python3 glowup.py discover --ip 192.0.2.62`
-2. Run `lanscan.py` from the Pi to find all devices on the network.
-3. Check that your machine and the LIFX device are on the same
-   subnet (same VLAN, same SSID).
-4. Try from a wired connection if wireless discovery fails.
-5. The LIFX phone app always shows device IPs — use those with `--ip`.
+**If you have a hardwired Pi server on Ethernet, the problem is solved.**
+`glowup discover` automatically routes all queries through the server,
+bypassing Deco UDP blocking entirely.  You can run discovery from any
+wireless machine and it will work.
+
+```bash
+glowup discover              # Routes via server if reachable
+glowup discover --ip 10.0.0.28  # Also routes via server
+```
+
+The server has direct Ethernet access to all bulbs, so it can query
+them even when your wireless client can't.  See
+[Server Routing & Safety](../docs/25-server-routing-safety.md) for
+details on how this works.
+
+### Fallback Steps (No Server)
+
+If you don't have a server or it's unreachable, try these alternatives:
+
+1. **Direct IP:** `python3 glowup.py discover --ip 192.0.2.62`
+   Use the LIFX app to find device IPs, then query each one by IP.
+
+2. **Run lanscan from the Pi:** `python3 lanscan.py` from a machine
+   on Ethernet to scan the entire subnet at ARP level.
+
+3. **Check your subnet:** Verify that your machine and the LIFX device
+   are on the same subnet (same VLAN, same SSID).  Deco multi-node
+   setups often isolate wireless clients from bulbs on other nodes.
+
+4. **Wired connection:** Try discovery from a machine connected via
+   Ethernet.  Deco doesn't block UDP on wired segments.
+
+5. **Phone app:** The LIFX app always shows device IPs.  Use those
+   with `--ip` for direct queries.
 
 Discovery is flaky by nature — a device that doesn't respond on the
 first try often responds on the second.  The server retries
 automatically.
+
+### Bottom Line
+
+**Buy a Pi and put it on Ethernet.** Server routing makes discovery
+work seamlessly from anywhere on your network, even through multiple
+Deco nodes.  It's the single best investment for a robust GlowUp
+setup on a mesh network.
 
 ## When to Restart the Server
 
