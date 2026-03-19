@@ -3074,13 +3074,18 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(200, {"devices": []})
                 return
             # Return all currently-known devices from ARP cache (no fresh queries).
-            devices = [
-                {"ip": ip, "mac": mac}
-                for ip, mac in sorted(
-                    daemon.known_bulbs.items(),
-                    key=lambda x: tuple(int(p) for p in x[0].split(".")),
+            try:
+                bulbs_snapshot: dict[str, str] = daemon.known_bulbs
+                devices = [
+                    {"ip": ip, "mac": mac}
+                    for ip, mac in bulbs_snapshot.items()
+                ]
+            except Exception as exc:
+                logging.warning(
+                    "command/discover: failed to access keepalive daemon: %s",
+                    exc,
                 )
-            ]
+                devices = []
 
         logging.info(
             "API: command/discover — returning %d device(s) from ARP cache",
