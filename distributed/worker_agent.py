@@ -207,7 +207,7 @@ class WorkerAgent:
         self._start_time = time.monotonic()
 
         # Create MQTT client.
-        client_id: str = f"{CLIENT_ID_PREFIX}-{self._node_id}"
+        client_id: str = f"{CLIENT_ID_PREFIX}-{self._node_id}-{int(time.time())}"
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
             client_id=client_id,
