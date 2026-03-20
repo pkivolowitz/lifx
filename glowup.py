@@ -1140,6 +1140,43 @@ def _build_polychrome_map(em: Any) -> list[bool]:
     return [poly] * zones
 
 
+def _calibration_request(
+    server_url: str, path: str,
+    body: Optional[dict] = None,
+    timeout: float = 15.0,
+) -> Optional[dict]:
+    """Non-fatal HTTP request for calibration protocol.
+
+    Unlike :func:`_server_request`, this returns ``None`` on failure
+    instead of calling ``sys.exit``.  Used by the calibration system
+    where individual request failures are expected and handled.
+
+    Args:
+        server_url: Server host:port string.
+        path:       URL path.
+        body:       Optional JSON body (POST if provided, GET if not).
+        timeout:    Request timeout in seconds.
+
+    Returns:
+        Parsed JSON response, or ``None`` on any failure.
+    """
+    token: str = _read_token()
+    url: str = f"http://{server_url}{path}"
+    headers: Dict[str, str] = {"Authorization": f"Bearer {token}"}
+    data: Optional[bytes] = None
+    method: str = "GET"
+    if body is not None:
+        method = "POST"
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except Exception:
+        return None
+
+
 def _measure_clock_offset(server_url: str, samples: int = 10) -> float:
     """Estimate clock offset between this machine and the server.
 
@@ -1164,9 +1201,10 @@ def _measure_clock_offset(server_url: str, samples: int = 10) -> float:
 
     for _ in range(samples):
         t_send: float = time.monotonic()
-        try:
-            resp: dict = _server_get(server_url, "/api/calibrate/time_sync")
-        except Exception:
+        resp: Optional[dict] = _calibration_request(
+            server_url, "/api/calibrate/time_sync"
+        )
+        if resp is None:
             continue
         t_recv: float = time.monotonic()
 
@@ -1233,16 +1271,16 @@ def _run_calibration(
 
     # Step 3: Ask the server to inject calibration pulses.
     # This blocks on the server side while pulses are injected (~5s).
-    try:
-        cal_resp: dict = _server_post(
-            server_url,
-            f"/api/calibrate/start/{encoded_device}",
-            {},
-            timeout=15,
-        )
-    except Exception as exc:
+    cal_resp: Optional[dict] = _calibration_request(
+        server_url,
+        f"/api/calibrate/start/{encoded_device}",
+        body={},
+        timeout=15,
+    )
+    if cal_resp is None:
         sock.close()
-        _print(f"  Calibration: server error: {exc}", file=sys.stderr)
+        _print("  Calibration: server did not respond (timeout)",
+               file=sys.stderr)
         return None
 
     emit_times: list[float] = cal_resp.get("emit_times", [])
@@ -1487,15 +1525,13 @@ def _play_via_server(args: argparse.Namespace) -> None:
                     _print(f"  Sync: {cal_delay*1000:.0f}ms measured"
                            f"{f' + {audio_offset_ms}ms offset' if audio_offset_ms else ''}"
                            f" = {total_delay*1000:.0f}ms light delay")
-                    try:
-                        _server_post(
-                            _server_url,
-                            f"/api/calibrate/result/{encoded_device}",
-                            {"delay_seconds": max(0.0, total_delay)},
-                            timeout=SERVER_TIMEOUT_SECONDS,
-                        )
-                    except Exception as exc:
-                        _print(f"  WARNING: Could not apply sync delay: {exc}",
+                    result: Optional[dict] = _calibration_request(
+                        _server_url,
+                        f"/api/calibrate/result/{encoded_device}",
+                        body={"delay_seconds": max(0.0, total_delay)},
+                    )
+                    if result is None:
+                        _print("  WARNING: Could not apply sync delay",
                                file=sys.stderr)
                 else:
                     _print("  Sync: calibration failed, playing without delay")
