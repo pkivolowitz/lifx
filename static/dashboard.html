@@ -347,12 +347,14 @@ async function refresh() {
     const physical = devList.filter(d => !d.is_group);
     const groups = devList.filter(d => d.is_group);
 
-    // Determine which devices are playing (from current_effect field).
+    // Determine which devices/groups are playing (from current_effect field).
     const playing = physical.filter(d => d.current_effect);
+    const playingGroups = groups.filter(g => g.current_effect);
 
-    // Stats.
+    // Stats — count both physical and group playing.
     document.getElementById('stat-devices').textContent = physical.length;
-    document.getElementById('stat-playing').textContent = playing.length;
+    document.getElementById('stat-playing').textContent =
+      playing.length + playingGroups.length;
 
     const bulbs = (discovered && discovered.discovered_bulbs) || [];
     document.getElementById('stat-discovered').textContent = bulbs.length;
@@ -364,48 +366,48 @@ async function refresh() {
 
     // Now Playing — derived from device list current_effect.
     const npEl = document.getElementById('now-playing');
-    if (playing.length === 0) {
-      npEl.innerHTML =
-        '<div class="device-idle" style="padding:8px 0;">Nothing playing</div>';
-    } else {
-      npEl.innerHTML = playing.map(d => {
-        const name = d.nickname || d.label || d.ip;
-        const overridden = d.overridden
-          ? ' <span class="badge badge-overridden">PHONE</span>'
-          : '';
-        return `
-          <div class="device-row">
-            <div>
-              <div class="device-name">${esc(name)}</div>
-              <div class="device-effect">${esc(d.current_effect)}</div>
-              <div class="device-meta">${esc(d.product || '')} &middot; ${d.zones || 1} zones</div>
-            </div>
-            <div style="text-align:right;">
-              <span class="badge badge-playing">LIVE</span>${overridden}
-            </div>
-          </div>
-        `;
-      }).join('');
-    }
+    let npHtml = '';
 
-    // Also check groups that are playing.
-    const playingGroups = groups.filter(g => g.current_effect);
-    if (playingGroups.length > 0) {
-      npEl.innerHTML += playingGroups.map(g => {
-        return `
-          <div class="device-row">
-            <div>
-              <div class="device-name">Group: ${esc(g.label || g.ip)}</div>
-              <div class="device-effect">${esc(g.current_effect)}</div>
-              <div class="device-meta">${g.zones || 0} zones</div>
-            </div>
-            <div style="text-align:right;">
-              <span class="badge badge-playing">LIVE</span>
-            </div>
+    // Physical devices playing.
+    npHtml += playing.map(d => {
+      const name = d.nickname || d.label || d.ip;
+      const srcBadge = d.source
+        ? ` <span class="badge badge-overridden">${esc(d.source)}</span>`
+        : '';
+      return `
+        <div class="device-row">
+          <div>
+            <div class="device-name">${esc(name)}</div>
+            <div class="device-effect">${esc(d.current_effect)}</div>
+            <div class="device-meta">${esc(d.product || '')} &middot; ${d.zones || 1} zones</div>
           </div>
-        `;
-      }).join('');
-    }
+          <div style="text-align:right;">
+            <span class="badge badge-playing">LIVE</span>${srcBadge}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Groups playing.
+    npHtml += playingGroups.map(g => {
+      const srcBadge = g.source
+        ? ` <span class="badge badge-overridden">${esc(g.source)}</span>`
+        : '';
+      return `
+        <div class="device-row">
+          <div>
+            <div class="device-name">Group: ${esc(g.label || g.ip)}</div>
+            <div class="device-effect">${esc(g.current_effect)}</div>
+            <div class="device-meta">${g.zones || 0} zones</div>
+          </div>
+          <div style="text-align:right;">
+            <span class="badge badge-playing">LIVE</span>${srcBadge}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    npEl.innerHTML = npHtml || '<div class="device-idle" style="padding:8px 0;">Nothing playing</div>';
 
     // Schedule.
     const sEl = document.getElementById('schedule');

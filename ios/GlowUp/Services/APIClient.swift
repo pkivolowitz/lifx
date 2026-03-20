@@ -5,6 +5,7 @@
 // Licensed under the MIT License. See LICENSE file in the project root.
 
 import Foundation
+import UIKit
 
 /// Percent-encode a device identifier for use in a URL path segment.
 ///
@@ -140,6 +141,7 @@ class APIClient: ObservableObject {
         let body: [String: Any] = [
             "effect": effectName,
             "params": params,
+            "source": UIDevice.current.name,
         ]
         return try await postRaw("/api/devices/\(encoded)/play", body: body)
     }

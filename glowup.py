@@ -25,6 +25,7 @@ __version__ = "2.0"
 import argparse
 import json
 import math
+import platform
 import signal
 import sys
 import threading
@@ -1262,7 +1263,11 @@ def _play_via_server(args: argparse.Namespace) -> None:
     try:
         resp = _server_post(
             _server_url, play_path,
-            {"effect": effect_name, "params": params},
+            {
+                "effect": effect_name,
+                "params": params,
+                "source": platform.node().removesuffix(".local"),
+            },
             timeout=SERVER_TIMEOUT_SECONDS,
         )
     except SystemExit:

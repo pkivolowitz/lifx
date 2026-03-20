@@ -525,6 +525,9 @@ class DeviceManager:
                 config_dir, EFFECT_DEFAULTS_FILENAME,
             )
             self._load_effect_defaults()
+        # Play source tracking: device ID → client name that started
+        # the current effect (e.g. "Conway", "Perry's iPhone", "scheduler").
+        self._play_sources: dict[str, str] = {}
         # Readiness flag: False until initial load completes.
         self._ready: bool = False
         # Optional diagnostics logger (None if psycopg2 or DB unavailable).
@@ -716,6 +719,7 @@ class DeviceManager:
         params: dict[str, Any],
         bindings: Optional[dict[str, Any]] = None,
         signal_bus: Optional[SignalBus] = None,
+        source: Optional[str] = None,
     ) -> dict[str, Any]:
         """Start an effect on a device.
 
@@ -729,6 +733,8 @@ class DeviceManager:
                          ``reduce``, and optional ``scale`` fields.
             signal_bus:  Optional :class:`SignalBus` instance for
                          reading media signals during rendering.
+            source:      Optional client name that started the effect
+                         (e.g. "Conway", "Perry's iPhone").
 
         Returns:
             A status dict for the device.
@@ -763,6 +769,11 @@ class DeviceManager:
             self._diag.log_stop(ip, stop_reason="replaced")
         ctrl.play(effect_name, bindings=bindings,
                   signal_bus=signal_bus, **params)
+        # Track which client started this effect.
+        if source:
+            self._play_sources[ip] = source
+        else:
+            self._play_sources.pop(ip, None)
         if self._diag is not None:
             em_info: dict[str, Any] = em.get_info() if em else {}
             self._diag.log_play(
@@ -770,10 +781,11 @@ class DeviceManager:
                 device_label=em_info.get("label"),
                 effect_name=effect_name,
                 params=params,
-                started_by="api",
+                started_by=source or "api",
             )
         result: dict[str, Any] = ctrl.get_status()
         result["overridden"] = self.is_overridden(ip)
+        result["source"] = source
         return result
 
     def stop(self, ip: str) -> dict[str, Any]:
@@ -797,6 +809,7 @@ class DeviceManager:
             raise KeyError(f"Unknown device: {ip}")
         ctrl.stop(fade_ms=DEFAULT_FADE_MS)
         ctrl.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
+        self._play_sources.pop(ip, None)
         if self._diag is not None:
             self._diag.log_stop(ip, stop_reason="user")
         result: dict[str, Any] = ctrl.get_status()
@@ -1354,9 +1367,18 @@ class DeviceManager:
             current_effect: Optional[str] = None
             if ctrl is not None:
                 status: dict[str, Any] = ctrl.get_status()
-                current_effect = status.get("effect")
+                # Only report an effect if the engine is actively running.
+                # After stop(), get_status() still returns the last effect
+                # name for client convenience — but the dashboard and
+                # playing counter should not treat stopped effects as live.
+                if status.get("running"):
+                    current_effect = status.get("effect")
             is_group: bool = isinstance(em, VirtualMultizoneEmitter)
             nickname: Optional[str] = self._nicknames.get(dev_id)
+            # Include source only when actively playing.
+            source: Optional[str] = (
+                self._play_sources.get(dev_id) if current_effect else None
+            )
             entry: dict[str, Any] = {
                 "ip": dev_id,
                 "label": em.label,
@@ -1365,6 +1387,7 @@ class DeviceManager:
                 "zones": em.zone_count,
                 "is_multizone": em.is_multizone,
                 "current_effect": current_effect,
+                "source": source,
                 "overridden": self.is_overridden(dev_id),
                 "is_group": is_group,
             }
@@ -1820,6 +1843,7 @@ class SchedulerThread(threading.Thread):
                                     device_id, effect, params,
                                     bindings=sched_bindings,
                                     signal_bus=sched_bus,
+                                    source="scheduler",
                                 )
                             except (KeyError, ValueError, Exception) as exc:
                                 logging.warning(
@@ -1868,6 +1892,7 @@ class SchedulerThread(threading.Thread):
                                     params_restart,
                                     bindings=restart_bindings,
                                     signal_bus=restart_bus,
+                                    source="scheduler",
                                 )
                             except Exception as exc:
                                 logging.warning(
@@ -2465,6 +2490,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(400, {"error": "'bindings' must be an object"})
             return
 
+        # Optional source identifier — the client name that started
+        # the effect (e.g. "Conway", "Perry's iPhone").
+        source: Optional[str] = body.get("source")
+        if source is not None and not isinstance(source, str):
+            source = None
+
         # Resolve signal bus — pass if we have bindings OR a media manager
         # (MediaEffects need the bus even without explicit bindings).
         signal_bus: Optional[SignalBus] = None
@@ -2479,10 +2510,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             status: dict[str, Any] = self.device_manager.play(
                 ip, effect_name, params,
                 bindings=bindings, signal_bus=signal_bus,
+                source=source,
             )
             logging.info(
-                "API: playing '%s' on %s (params: %s, bindings: %s)",
-                effect_name, ip, params,
+                "API: playing '%s' on %s from %s (params: %s, bindings: %s)",
+                effect_name, ip, source or "unknown",
+                params,
                 list(bindings.keys()) if bindings else None,
             )
             self._send_json(200, status)
