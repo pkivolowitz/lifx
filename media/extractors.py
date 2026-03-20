@@ -342,7 +342,6 @@ class AudioExtractor(SignalExtractor):
         for s in samples:
             sum_sq += s * s
         rms_raw: float = math.sqrt(sum_sq / len(samples))
-        rms_norm: float = self._rms_peak.update(rms_raw)
 
         # --- FFT magnitude spectrum ---
         mags: list[float] = fft_magnitudes(samples, self._window)
