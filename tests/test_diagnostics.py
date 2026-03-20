@@ -263,48 +263,6 @@ class TestDiagnosticsLogger(unittest.TestCase):
                 os.environ.pop("GLOWUP_DIAG_DSN", None)
 
 
-@unittest.skipUnless(_CAN_TEST, _SKIP_REASON)
-class TestNeonAutoTuning(unittest.TestCase):
-    """Tests for Neon-class device auto-tuning in the Engine."""
-
-    def test_neon_emitter_detected(self) -> None:
-        """Engine should lower FPS when a Neon emitter is present."""
-        from engine import Engine, DEFAULT_FPS, NEON_FPS
-        from unittest.mock import MagicMock
-
-        # Create a mock emitter that reports is_neon=True.
-        mock_em = MagicMock()
-        mock_em.is_neon = True
-        mock_em.zone_count = 24
-
-        engine = Engine([mock_em])
-        self.assertEqual(engine.fps, NEON_FPS)
-
-    def test_non_neon_keeps_default_fps(self) -> None:
-        """Engine should keep default FPS for non-Neon devices."""
-        from engine import Engine, DEFAULT_FPS
-
-        from unittest.mock import MagicMock
-        mock_em = MagicMock()
-        mock_em.is_neon = False
-        mock_em.zone_count = 50
-
-        engine = Engine([mock_em])
-        self.assertEqual(engine.fps, DEFAULT_FPS)
-
-    def test_explicit_fps_respected(self) -> None:
-        """Engine should not auto-tune when fps_explicit=True."""
-        from engine import Engine
-
-        from unittest.mock import MagicMock
-        mock_em = MagicMock()
-        mock_em.is_neon = True
-        mock_em.zone_count = 24
-
-        engine = Engine([mock_em], fps=5, fps_explicit=True)
-        self.assertEqual(engine.fps, 5)
-
-
 class TestDiagnosticsUnavailable(unittest.TestCase):
     """Tests for graceful degradation without psycopg2."""
 

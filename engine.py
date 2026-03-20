@@ -160,9 +160,6 @@ class Engine:
         self._transition_ms_override: Optional[int] = transition_ms
         self._fps_explicit: bool = fps_explicit
 
-        # NOTE: Prior versions auto-tuned FPS for Neon devices here.
-        # Ack-paced sends in transport.py now provide natural back-pressure,
-        # so Neon-specific FPS hacks are no longer needed.
         self.effect: Optional[Effect] = None
         self.running: bool = False
         self._send_thread: Optional[threading.Thread] = None
