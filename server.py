@@ -65,6 +65,7 @@ from __future__ import annotations
 
 __version__ = "2.0"
 
+import argparse
 import hmac
 import http.server
 import ipaddress
@@ -93,7 +94,7 @@ from engine import Controller
 from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
 from media import MediaManager, SignalBus
 from solar import SunTimes, sun_times
-from transport import LifxDevice, SendMode
+from transport import LifxDevice, SendMode, SOCKET_TIMEOUT
 
 # Optional distributed compute subsystem.
 try:
@@ -2214,12 +2215,21 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         })
 
     def _handle_get_devices(self) -> None:
-        """GET /api/devices — list all configured devices."""
+        """GET /api/devices — list all configured devices.
+
+        Returns each device's IP, label, product name, zone count,
+        group membership, power state, and current effect status.
+        """
         devices: list[dict[str, Any]] = self.device_manager.devices_as_list()
         self._send_json(200, {"devices": devices})
 
     def _handle_get_effects(self) -> None:
-        """GET /api/effects — list effects with param metadata."""
+        """GET /api/effects — list effects with param metadata.
+
+        Returns the effect registry: each effect's name, description,
+        tunable parameters with min/max/default, and any saved
+        user defaults from ``effect_defaults`` in the config.
+        """
         effects: dict[str, Any] = self.device_manager.list_effects()
         self._send_json(200, {"effects": effects})
 
@@ -2316,7 +2326,14 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self._send_json(200, {"entries": entries})
 
     def _handle_get_device_status(self, ip: str) -> None:
-        """GET /api/devices/{ip}/status — device effect status."""
+        """GET /api/devices/{ip}/status — device effect status.
+
+        Returns the currently playing effect name, parameters, elapsed
+        time, and override state for a single device.
+
+        Args:
+            ip: Device IP address (URL-decoded by dispatch).
+        """
         try:
             status: dict[str, Any] = self.device_manager.get_status(ip)
             self._send_json(200, status)
@@ -2324,7 +2341,15 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(404, {"error": "Device not found"})
 
     def _handle_get_device_colors(self, ip: str) -> None:
-        """GET /api/devices/{ip}/colors — zone color snapshot."""
+        """GET /api/devices/{ip}/colors — zone color snapshot.
+
+        Queries the device for its current zone colors and returns them
+        as a list of HSBK tuples.  Returns 503 if the device cannot
+        be reached for a live query.
+
+        Args:
+            ip: Device IP address (URL-decoded by dispatch).
+        """
         try:
             colors = self.device_manager.get_colors(ip)
         except KeyError:
@@ -2463,7 +2488,15 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(400, {"error": "Invalid effect or parameters"})
 
     def _handle_post_stop(self, ip: str) -> None:
-        """POST /api/devices/{ip}/stop — stop the current effect."""
+        """POST /api/devices/{ip}/stop — stop the current effect.
+
+        Stops the effect engine, powers off the device, and sets a
+        scheduler override so the schedule does not immediately restart
+        the effect on its next poll cycle.
+
+        Args:
+            ip: Device IP address (URL-decoded by dispatch).
+        """
         try:
             # Set override if not already set so the scheduler doesn't
             # immediately restart the effect on its next poll cycle.
@@ -2765,9 +2798,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         ]
 
         # Generate assignment ID.
-        import time as _time
         assignment_id: str = (
-            f"{node_id}-{operator_name.lower()}-{int(_time.time())}"
+            f"{node_id}-{operator_name.lower()}-{int(time_mod.time())}"
         )
 
         assignment: WorkAssignment = WorkAssignment(
@@ -2818,7 +2850,15 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             })
 
     def _handle_post_media_source_start(self, name: str) -> None:
-        """POST /api/media/sources/{name}/start — manually start a source."""
+        """POST /api/media/sources/{name}/start — manually start a source.
+
+        Starts the named media source (e.g. an ffmpeg audio capture
+        pipeline).  Returns 503 if the media pipeline is not configured,
+        404 if the source name is unknown.
+
+        Args:
+            name: Media source name (URL-decoded by dispatch).
+        """
         mm: Optional[MediaManager] = self.media_manager
         if mm is None:
             self._send_json(503, {
@@ -2834,7 +2874,14 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             })
 
     def _handle_post_media_source_stop(self, name: str) -> None:
-        """POST /api/media/sources/{name}/stop — manually stop a source."""
+        """POST /api/media/sources/{name}/stop — manually stop a source.
+
+        Stops the named media source.  Returns 503 if the media
+        pipeline is not configured, 404 if the source name is unknown.
+
+        Args:
+            name: Media source name (URL-decoded by dispatch).
+        """
         mm: Optional[MediaManager] = self.media_manager
         if mm is None:
             self._send_json(503, {
@@ -3124,7 +3171,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         firmware_written: bool = False
         if result_ip:
             try:
-                from transport import LifxDevice, SOCKET_TIMEOUT
+
                 tmp_dev: LifxDevice = LifxDevice(result_ip)
                 tmp_dev.sock.settimeout(SOCKET_TIMEOUT)
                 firmware_written = tmp_dev.set_label(label)
@@ -3196,7 +3243,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 continue
 
             try:
-                from transport import LifxDevice, SOCKET_TIMEOUT
+
                 dev: LifxDevice = LifxDevice(ip)
                 dev.sock.settimeout(SOCKET_TIMEOUT)
                 ok: bool = dev.set_label(label)
@@ -3480,7 +3527,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         })
 
     def _handle_get_dashboard(self) -> None:
-        """GET /dashboard — serve the static HTML dashboard page."""
+        """GET /dashboard — serve the static HTML dashboard page.
+
+        Reads ``static/dashboard.html`` from the server's directory
+        and returns it as ``text/html``.  Returns 404 if the file
+        is missing.
+        """
         dashboard_path: str = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             "static", "dashboard.html",
@@ -3927,8 +3979,6 @@ def _build_parser() -> "argparse.ArgumentParser":
     Returns:
         A configured argument parser.
     """
-    import argparse
-
     parser = argparse.ArgumentParser(
         prog="glowup-server",
         description="GlowUp REST API server — remote control daemon "
@@ -3958,8 +4008,6 @@ def _build_parser() -> "argparse.ArgumentParser":
 
 def main() -> None:
     """Entry point for the GlowUp REST API server."""
-    import argparse
-
     parser: argparse.ArgumentParser = _build_parser()
     args: argparse.Namespace = parser.parse_args()
 
