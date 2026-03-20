@@ -233,6 +233,11 @@ class WorkerAgent:
             self._on_assignment,
         )
 
+        # Slow down auto-reconnect to prevent reconnect storms.
+        self._client.reconnect_delay_set(
+            min_delay=5, max_delay=30,
+        )
+
         # Connect.
         try:
             self._client.connect(self._broker, self._port)
