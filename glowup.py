@@ -1140,6 +1140,177 @@ def _build_polychrome_map(em: Any) -> list[bool]:
     return [poly] * zones
 
 
+def _measure_clock_offset(server_url: str, samples: int = 10) -> float:
+    """Estimate clock offset between this machine and the server.
+
+    Uses Cristian's algorithm: send rapid time-sync requests, pick
+    the sample with the smallest round-trip (least asymmetry), and
+    compute the offset as:
+        offset = server_time - (t_send + t_recv) / 2
+
+    After applying this offset, a server-side ``time.monotonic()``
+    value can be translated to local time:
+        t_local = t_server - offset
+
+    Args:
+        server_url: Server host:port string.
+        samples:    Number of ping samples (default 10).
+
+    Returns:
+        Estimated clock offset in seconds (server - local).
+    """
+    best_rtt: float = float("inf")
+    best_offset: float = 0.0
+
+    for _ in range(samples):
+        t_send: float = time.monotonic()
+        try:
+            resp: dict = _server_get(server_url, "/api/calibrate/time_sync")
+        except Exception:
+            continue
+        t_recv: float = time.monotonic()
+
+        rtt: float = t_recv - t_send
+        server_time: float = resp.get("server_time", 0.0)
+
+        if rtt < best_rtt:
+            best_rtt = rtt
+            best_offset = server_time - (t_send + t_recv) / 2.0
+
+    return best_offset
+
+
+def _run_calibration(
+    server_url: str,
+    audio_port: int,
+    device_label: str,
+    encoded_device: str,
+    server_host: str,
+) -> Optional[float]:
+    """Run the automatic audio-light sync calibration.
+
+    Measures the one-way audio latency from the server's extractor
+    callback to the CLI's TCP socket.  Returns the measured delay
+    in seconds, or ``None`` if calibration fails.
+
+    Protocol:
+    1. Measure clock offset via Cristian's algorithm.
+    2. Connect to the TCP audio stream.
+    3. Ask the server to inject calibration pulses.
+    4. Detect pulses arriving on the TCP stream.
+    5. Compute one-way latency for each pulse using the clock offset.
+    6. Return the median.
+
+    Args:
+        server_url:     Server host:port string.
+        audio_port:     TCP audio stream port.
+        device_label:   Human-readable device name for messages.
+        encoded_device: URL-encoded device identifier.
+        server_host:    Server hostname/IP.
+
+    Returns:
+        Measured audio delay in seconds, or ``None`` on failure.
+    """
+    import socket as _socket
+    import struct as _struct
+
+    _print("  Calibrating audio sync...", flush=True)
+
+    # Step 1: Clock offset estimation.
+    clock_offset: float = _measure_clock_offset(server_url)
+
+    # Step 2: Connect to the TCP audio stream.
+    try:
+        sock: _socket.socket = _socket.socket(
+            _socket.AF_INET, _socket.SOCK_STREAM
+        )
+        sock.settimeout(10.0)
+        sock.connect((server_host, audio_port))
+    except Exception as exc:
+        _print(f"  Calibration: cannot connect to audio stream: {exc}",
+               file=sys.stderr)
+        return None
+
+    # Step 3: Ask the server to inject calibration pulses.
+    # This blocks on the server side while pulses are injected (~5s).
+    try:
+        cal_resp: dict = _server_post(
+            server_url,
+            f"/api/calibrate/start/{encoded_device}",
+            {},
+            timeout=15,
+        )
+    except Exception as exc:
+        sock.close()
+        _print(f"  Calibration: server error: {exc}", file=sys.stderr)
+        return None
+
+    emit_times: list[float] = cal_resp.get("emit_times", [])
+    if not emit_times:
+        sock.close()
+        _print("  Calibration: no pulses emitted by server",
+               file=sys.stderr)
+        return None
+
+    # Step 4: Read TCP stream and detect pulses.
+    # The pulses were injected during the POST request (which blocked).
+    # They should be in the TCP buffer waiting to be read.
+    from media.calibration import PulseDetector
+    detector: PulseDetector = PulseDetector(sample_rate=44100)
+
+    # Read for up to 8 seconds to catch all buffered pulses.
+    deadline: float = time.monotonic() + 8.0
+    while (time.monotonic() < deadline
+           and detector.detection_count < len(emit_times)):
+        try:
+            data: bytes = sock.recv(8820)  # ~100ms at 44100 Hz
+        except _socket.timeout:
+            break
+        if not data:
+            break
+        detector.feed(data)
+
+    sock.close()
+
+    detect_times: list[float] = detector.detections
+
+    if not detect_times:
+        _print("  Calibration: no pulses detected on TCP stream",
+               file=sys.stderr)
+        return None
+
+    # Step 5: Compute one-way latency for each matched pulse.
+    latencies: list[float] = []
+    for i in range(min(len(emit_times), len(detect_times))):
+        # Convert server emit time to local clock using offset.
+        emit_local: float = emit_times[i] - clock_offset
+        latency: float = detect_times[i] - emit_local
+        if latency > 0:
+            latencies.append(latency)
+
+    if not latencies:
+        _print("  Calibration: all latency measurements negative "
+               "(clock sync failed?)", file=sys.stderr)
+        return None
+
+    # Step 6: Take the median.
+    latencies.sort()
+    median_latency: float = latencies[len(latencies) // 2]
+
+    # Add an estimate for ffplay's internal pipeline delay.
+    # With -fflags nobuffer and -analyzeduration 0, ffplay's
+    # remaining internal buffer is approximately 100-200ms.
+    FFPLAY_PIPELINE_ESTIMATE: float = 0.15
+
+    total: float = median_latency + FFPLAY_PIPELINE_ESTIMATE
+
+    _print(f"  Calibration: TCP={median_latency*1000:.0f}ms "
+           f"+ ffplay~{FFPLAY_PIPELINE_ESTIMATE*1000:.0f}ms "
+           f"= {total*1000:.0f}ms ({len(latencies)} pulses)")
+
+    return total
+
+
 def _play_via_server(args: argparse.Namespace) -> None:
     """Run an effect on a device identified by label or MAC.
 
@@ -1293,14 +1464,43 @@ def _play_via_server(args: argparse.Namespace) -> None:
     if "params" in resp:
         _print(f"  Params: {json.dumps(resp['params'], indent=2)}")
 
-    # If music_dir is active, stream audio from the server via TCP.
+    # If music_dir is active, calibrate audio sync and start streaming.
     ffplay_proc: Optional[subprocess.Popen] = None
     if music_dir:
         audio_port: Optional[int] = resp.get("audio_stream_port")
         if audio_port:
-            # Extract host from _server_url (host:port format).
             server_host: str = _server_url.rsplit(":", 1)[0]
             stream_url: str = f"tcp://{server_host}:{audio_port}"
+
+            # --- Automatic audio-light sync calibration ---
+            audio_offset_ms: int = getattr(args, "audio_offset_ms", 0)
+            skip_cal: bool = getattr(args, "skip_calibration", False)
+
+            if not skip_cal:
+                cal_delay: Optional[float] = _run_calibration(
+                    _server_url, audio_port, device,
+                    encoded_device, server_host,
+                )
+                if cal_delay is not None:
+                    # Apply the measured delay plus any manual offset.
+                    total_delay: float = cal_delay + (audio_offset_ms / 1000.0)
+                    _print(f"  Sync: {cal_delay*1000:.0f}ms measured"
+                           f"{f' + {audio_offset_ms}ms offset' if audio_offset_ms else ''}"
+                           f" = {total_delay*1000:.0f}ms light delay")
+                    try:
+                        _server_post(
+                            _server_url,
+                            f"/api/calibrate/result/{encoded_device}",
+                            {"delay_seconds": max(0.0, total_delay)},
+                            timeout=SERVER_TIMEOUT_SECONDS,
+                        )
+                    except Exception as exc:
+                        _print(f"  WARNING: Could not apply sync delay: {exc}",
+                               file=sys.stderr)
+                else:
+                    _print("  Sync: calibration failed, playing without delay")
+
+            # Start ffplay for audio output.
             try:
                 ffplay_proc = subprocess.Popen(
                     [
@@ -1319,7 +1519,7 @@ def _play_via_server(args: argparse.Namespace) -> None:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
-                _print(f"  Audio: tcp://{server_host}:{audio_port}")
+                _print(f"  Audio: {stream_url}")
             except FileNotFoundError:
                 _print("  WARNING: ffplay not found — no local audio playback",
                        file=sys.stderr)
@@ -2241,6 +2441,18 @@ def build_parser() -> argparse.ArgumentParser:
             "(default 32).  More bands = finer spectral resolution on "
             "multizone devices."
         ),
+    )
+    p_play.add_argument(
+        "--audio-offset-ms", type=int, default=0, metavar="MS",
+        help=(
+            "Manual audio sync offset in milliseconds (added to "
+            "the automatic calibration result).  Positive values "
+            "delay lights further; negative brings them forward."
+        ),
+    )
+    p_play.add_argument(
+        "--skip-calibration", action="store_true",
+        help="Skip automatic audio sync calibration (debug only)",
     )
     p_play.add_argument(
         "--config", default=None,

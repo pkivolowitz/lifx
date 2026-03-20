@@ -288,6 +288,15 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_media_stream",
            requires_auth=False,
            unquote_params=("source_name",)),
+    _Route("GET", ("api", "calibrate", "time_sync"),
+           "_handle_get_calibrate_time_sync",
+           requires_auth=False),
+    _Route("POST", ("api", "calibrate", "start", "{device_id}"),
+           "_handle_post_calibrate_start",
+           device_param="device_id"),
+    _Route("POST", ("api", "calibrate", "result", "{device_id}"),
+           "_handle_post_calibrate_result",
+           device_param="device_id"),
     _Route("GET", ("api", "fleet"),
            "_handle_get_fleet"),
     _Route("GET", ("api", "diagnostics", "now_playing"),
@@ -2930,6 +2939,110 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             pass  # Client disconnected.
         finally:
             source.remove_extractor(_on_chunk)
+
+    # -- Calibration handlers -------------------------------------------------
+
+    def _handle_get_calibrate_time_sync(self) -> None:
+        """GET /api/calibrate/time_sync — return server monotonic time.
+
+        Used by the CLI to estimate clock offset between client and
+        server via Cristian's algorithm.  No auth required.
+        """
+        self._send_json(200, {"server_time": time_mod.monotonic()})
+
+    def _handle_post_calibrate_start(self, device_id: str) -> None:
+        """POST /api/calibrate/start/{device_id} — inject calibration pulses.
+
+        Injects 3 calibration pulses into the active music source for
+        the given device.  Records emission timestamps and returns them
+        so the CLI can compute one-way audio latency.
+
+        The pulses travel through the same extractor callback chain as
+        real audio, hitting both the FFT/lights path and the TCP
+        stream simultaneously.
+        """
+        mm: Optional[MediaManager] = self.media_manager
+        music_name: Optional[str] = (
+            self.device_manager._music_sources.get(device_id)
+        )
+        if mm is None or music_name is None:
+            self._send_json(400, {
+                "error": "No active music source for this device"
+            })
+            return
+
+        with mm._lock:
+            source = mm._sources.get(music_name)
+        if source is None:
+            self._send_json(404, {"error": "Music source not found"})
+            return
+
+        from media.calibration import PulseGenerator
+        gen: PulseGenerator = PulseGenerator(
+            sample_rate=source.sample_rate
+        )
+        sequence = gen.generate_sequence()
+
+        # Inject the calibration sequence and record pulse timestamps.
+        emit_times: list[float] = []
+        for tag, chunk in sequence:
+            if not source.is_alive():
+                break
+            if tag.startswith("pulse:"):
+                t_emit: float = time_mod.monotonic()
+                source.inject_chunk(chunk)
+                emit_times.append(t_emit)
+            else:
+                # Silence — inject in small chunks to pace correctly.
+                # Each chunk is ~100ms at 44100 Hz.
+                chunk_size: int = 44100 * 2 // 10  # ~100ms
+                offset: int = 0
+                while offset < len(chunk):
+                    end: int = min(offset + chunk_size, len(chunk))
+                    source.inject_chunk(chunk[offset:end])
+                    offset = end
+                    time_mod.sleep(0.09)  # Pace to real time.
+
+        self._send_json(200, {"emit_times": emit_times})
+
+    def _handle_post_calibrate_result(self, device_id: str) -> None:
+        """POST /api/calibrate/result/{device_id} — apply measured delay.
+
+        Request body::
+
+            {"delay_seconds": 0.423}
+
+        Sets the audio synchronization delay on the device's engine
+        so light frames are delayed to match the audio stream.
+        """
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        delay: Any = body.get("delay_seconds")
+        if not isinstance(delay, (int, float)) or delay < 0:
+            self._send_json(400, {
+                "error": "'delay_seconds' must be a non-negative number"
+            })
+            return
+
+        dm: DeviceManager = self.device_manager
+        ctrl: Optional[Controller] = dm.get_controller(device_id)
+        if ctrl is None:
+            self._send_json(404, {"error": "No controller for device"})
+            return
+
+        ctrl.set_audio_delay(float(delay))
+        logging.info(
+            "Calibration: audio delay for %s set to %.3fs",
+            device_id, delay,
+        )
+        self._send_json(200, {
+            "delay_seconds": delay,
+            "delay_frames": round(delay * ctrl.engine.fps),
+        })
+
+    # -- Fleet handler ---------------------------------------------------------
 
     def _handle_get_fleet(self) -> None:
         """GET /api/fleet — distributed fleet status.

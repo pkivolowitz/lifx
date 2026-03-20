@@ -31,6 +31,8 @@ Typical usage::
 
 from __future__ import annotations
 
+import collections
+
 __version__ = "2.1"
 
 import logging
@@ -193,6 +195,13 @@ class Engine:
         # thread can discard stale pre-rendered frames from the old effect.
         self._effect_generation: int = 0
 
+        # --- Audio sync delay buffer ---
+        # When calibration determines that audio arrives N frames later
+        # than the lights, we buffer N frames and send the oldest,
+        # effectively delaying the lights to match the audio.
+        self._audio_delay_frames: int = 0
+        self._delay_buffer: collections.deque = collections.deque()
+
     def start(self, effect: Effect,
               bindings: Optional[dict[str, dict]] = None,
               signal_bus: Optional[Any] = None) -> None:
@@ -264,6 +273,24 @@ class Engine:
                 name="glowup-send",
             )
             self._send_thread.start()
+
+    def set_audio_delay(self, delay_seconds: float) -> None:
+        """Set the audio synchronization delay.
+
+        Delays light frames by the specified duration so they arrive
+        at the same perceptual moment as the audio stream.  The delay
+        is implemented as a FIFO buffer in the send thread.
+
+        Args:
+            delay_seconds: Delay in seconds.  0 disables the delay.
+        """
+        n_frames: int = max(0, round(delay_seconds * self.fps))
+        _log.info(
+            "Audio sync delay set: %.3fs = %d frames @ %d fps",
+            delay_seconds, n_frames, self.fps,
+        )
+        self._audio_delay_frames = n_frames
+        self._delay_buffer.clear()
 
     def stop(self, fade_ms: int = DEFAULT_FADE_MS) -> None:
         """Stop the animation loop and optionally fade to black.
@@ -464,6 +491,17 @@ class Engine:
                     self._flush_pipeline()
                     frame = None
 
+            # --- Audio sync delay buffer ---
+            # When calibrated, buffer N frames and send the oldest,
+            # effectively delaying the lights to match audio latency.
+            if self._audio_delay_frames > 0:
+                self._delay_buffer.append(last_colors)
+                if len(self._delay_buffer) > self._audio_delay_frames:
+                    last_colors = self._delay_buffer.popleft()
+                else:
+                    # Buffer is filling — send black (silence).
+                    last_colors = {}
+
             # Send the frame to all emitters.
             colors: list = []
             for em in self.emitters:
@@ -654,6 +692,16 @@ class Controller:
         self._last_params = dict(params)
         self._bindings = bindings
         self.engine.start(effect, bindings=bindings, signal_bus=signal_bus)
+
+    def set_audio_delay(self, delay_seconds: float) -> None:
+        """Set the audio synchronization delay on the engine.
+
+        See :meth:`Engine.set_audio_delay` for details.
+
+        Args:
+            delay_seconds: Delay in seconds.  0 disables.
+        """
+        self.engine.set_audio_delay(delay_seconds)
 
     def stop(self, fade_ms: int = DEFAULT_FADE_MS) -> None:
         """Stop the current effect and optionally fade to black.

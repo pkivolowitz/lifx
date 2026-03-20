@@ -217,6 +217,30 @@ class MediaSource(ABC):
         with self._lock:
             self._extractors.append(callback)
 
+    def inject_chunk(self, chunk: bytes) -> None:
+        """Inject a synthetic PCM chunk through the extractor chain.
+
+        Used for calibration pulse injection.  The chunk is dispatched
+        to all registered extractors exactly as if it came from the
+        ffmpeg pipe, so it travels through both the FFT/SignalBus path
+        and the TCP audio stream path simultaneously.
+
+        Thread-safe: acquires the extractor lock.
+
+        Args:
+            chunk: Raw PCM bytes to inject.
+        """
+        with self._lock:
+            callbacks: list[ExtractorCallback] = list(self._extractors)
+        for cb in callbacks:
+            try:
+                cb(chunk)
+            except Exception as exc:
+                logger.error(
+                    "Extractor error during inject on '%s': %s",
+                    self.name, exc,
+                )
+
     def remove_extractor(self, callback: ExtractorCallback) -> None:
         """Unregister an extractor callback.
 
