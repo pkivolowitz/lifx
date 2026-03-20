@@ -10,9 +10,10 @@ in a tight loop.  Raw data never touches the SignalBus (too high bandwidth);
 instead, chunks are pushed directly to extractors via callback.
 
 Concrete sources:
-    RtspSource  — RTSP stream via ffmpeg (cameras, NVR)
-    FileSource  — local audio/video file via ffmpeg
-    MicSource   — system microphone via ffmpeg (avfoundation / pulse)
+    RtspSource      — RTSP stream via ffmpeg (cameras, NVR)
+    FileSource      — local audio/video file via ffmpeg
+    DirectorySource — shuffled directory playback via ffmpeg
+    MicSource       — system microphone via ffmpeg (avfoundation / pulse)
 
 Factory function:
     create_source — construct the right source type from config dict
@@ -27,11 +28,13 @@ import json
 import logging
 import os
 import platform
+import random
 import shutil
 import subprocess
 import threading
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 logger: logging.Logger = logging.getLogger("glowup.media.source")
@@ -523,6 +526,215 @@ class FileSource(MediaSource):
 
 
 # ---------------------------------------------------------------------------
+# DirectorySource
+# ---------------------------------------------------------------------------
+
+# Audio file extensions recognized by the directory scanner.
+AUDIO_EXTENSIONS: frozenset[str] = frozenset({
+    ".mp3", ".flac", ".wav", ".ogg", ".aac", ".m4a", ".wma", ".opus",
+    ".aiff", ".alac",
+})
+
+
+class DirectorySource(MediaSource):
+    """Shuffled directory playback via ffmpeg.
+
+    Scans a directory (optionally recursive) for audio files, shuffles
+    them, and plays them back-to-back.  When all tracks finish, the
+    playlist is reshuffled and playback loops from the top.
+
+    Each track runs as a separate ffmpeg subprocess.  On EOF (track
+    finished), the next track starts immediately with no gap.
+
+    Config keys:
+        path:        Directory path containing audio files.
+        recursive:   Scan subdirectories (default ``True``).
+        sample_rate: Audio sample rate in Hz (default 44100).
+        extensions:  List of file extensions to include (default:
+                     all common audio formats).
+    """
+
+    # Higher sample rate default for music playback.
+    DIR_DEFAULT_SAMPLE_RATE: int = 44100
+
+    def __init__(self, name: str, config: dict[str, Any]) -> None:
+        """Initialize a directory source.
+
+        Args:
+            name:   Unique source name.
+            config: Source configuration dict.
+
+        Raises:
+            ValueError: If ``path`` is missing or not a directory.
+        """
+        path: str = config.get("path", "")
+        if not path:
+            raise ValueError(
+                f"Directory source '{name}' requires a 'path' field"
+            )
+        expanded: str = os.path.expanduser(path)
+        if not os.path.isdir(expanded):
+            raise ValueError(
+                f"Directory source '{name}': path is not a directory: "
+                f"{expanded}"
+            )
+        # Default sample rate to 44100 for music.
+        if "sample_rate" not in config:
+            config = dict(config, sample_rate=self.DIR_DEFAULT_SAMPLE_RATE)
+        super().__init__(name, "directory", "audio", config)
+        self._dir: str = expanded
+        self._recursive: bool = config.get("recursive", True)
+        # Optional user-specified extensions override.
+        ext_list: Optional[list[str]] = config.get("extensions")
+        if ext_list is not None:
+            self._extensions: frozenset[str] = frozenset(
+                e if e.startswith(".") else f".{e}" for e in ext_list
+            )
+        else:
+            self._extensions = AUDIO_EXTENSIONS
+        # The current playlist and position — managed by _reader_loop.
+        self._playlist: list[str] = []
+        self._track_index: int = 0
+        # Currently playing track name for status display.
+        self._current_track: str = ""
+
+    @property
+    def current_track(self) -> str:
+        """The filename of the currently playing track.
+
+        Returns:
+            Basename of the current file, or empty string if idle.
+        """
+        return self._current_track
+
+    def _scan_files(self) -> list[str]:
+        """Scan the directory for audio files.
+
+        Returns:
+            List of absolute paths to audio files.
+        """
+        results: list[str] = []
+        if self._recursive:
+            for root, _dirs, files in os.walk(self._dir):
+                for fname in files:
+                    if Path(fname).suffix.lower() in self._extensions:
+                        results.append(os.path.join(root, fname))
+        else:
+            for fname in os.listdir(self._dir):
+                fpath: str = os.path.join(self._dir, fname)
+                if (os.path.isfile(fpath)
+                        and Path(fname).suffix.lower() in self._extensions):
+                    results.append(fpath)
+        return results
+
+    def _build_ffmpeg_cmd(self) -> list[str]:
+        """Build ffmpeg command for the current track.
+
+        Returns:
+            Command-line arguments list.
+        """
+        path: str = self._playlist[self._track_index]
+        cmd: list[str] = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", path,
+            "-vn",
+            "-acodec", "pcm_s16le",
+            "-ar", str(self.sample_rate),
+            "-ac", str(self.channels),
+            "-f", "s16le",
+            "pipe:1",
+        ]
+        return cmd
+
+    def _reader_loop(self) -> None:
+        """Override the base reader loop for multi-track playback.
+
+        Scans the directory, shuffles, and plays tracks sequentially.
+        On EOF for each track, advances to the next.  When all tracks
+        are exhausted, reshuffles and starts over.
+        """
+        chunk_size: int = self._chunk_size()
+
+        while self._running:
+            # Scan and shuffle.
+            files: list[str] = self._scan_files()
+            if not files:
+                logger.error(
+                    "Directory source '%s': no audio files found in %s",
+                    self.name, self._dir,
+                )
+                # Wait before retrying (files might appear later).
+                deadline: float = time.time() + 30.0
+                while self._running and time.time() < deadline:
+                    time.sleep(0.5)
+                continue
+
+            random.shuffle(files)
+            self._playlist = files
+            logger.info(
+                "Directory source '%s': %d tracks queued (shuffled)",
+                self.name, len(files),
+            )
+
+            for idx in range(len(files)):
+                if not self._running:
+                    break
+                self._track_index = idx
+                track_path: str = files[idx]
+                self._current_track = os.path.basename(track_path)
+                logger.info(
+                    "Directory source '%s': [%d/%d] %s",
+                    self.name, idx + 1, len(files),
+                    self._current_track,
+                )
+
+                if not self._start_process():
+                    self._running = False
+                    return
+
+                # Read until EOF (track finished).
+                while self._running and self._process:
+                    try:
+                        chunk: bytes = self._process.stdout.read(
+                            chunk_size
+                        )
+                        if not chunk:
+                            # Track finished — advance to next.
+                            break
+
+                        with self._lock:
+                            callbacks: list[ExtractorCallback] = list(
+                                self._extractors
+                            )
+                        for cb in callbacks:
+                            try:
+                                cb(chunk)
+                            except Exception as exc:
+                                logger.error(
+                                    "Extractor error on '%s' track '%s': %s",
+                                    self.name, self._current_track, exc,
+                                )
+                    except Exception as exc:
+                        logger.error(
+                            "Directory source '%s' read error: %s",
+                            self.name, exc,
+                        )
+                        break
+
+                self._kill_process()
+
+            # All tracks done — loop: reshuffle and play again.
+            if self._running:
+                logger.info(
+                    "Directory source '%s': playlist complete, reshuffling",
+                    self.name,
+                )
+
+        self._current_track = ""
+        logger.info("Directory source '%s': reader loop exited", self.name)
+
+
+# ---------------------------------------------------------------------------
 # MicSource
 # ---------------------------------------------------------------------------
 
@@ -633,12 +845,14 @@ def create_source(name: str, config: dict[str, Any],
         source: MediaSource = RtspSource(name, config)
     elif source_type == "file":
         source = FileSource(name, config)
+    elif source_type == "directory":
+        source = DirectorySource(name, config)
     elif source_type == "mic":
         source = MicSource(name, config)
     else:
         raise ValueError(
             f"Unknown media source type '{source_type}' for '{name}'. "
-            f"Supported types: rtsp, file, mic"
+            f"Supported types: rtsp, file, directory, mic"
         )
 
     # Attach extractors.
