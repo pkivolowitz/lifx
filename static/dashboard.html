@@ -230,7 +230,7 @@
   </div>
 
   <div class="card" style="margin-top: 16px;">
-    <h2>Discovered Bulbs (ARP Keepalive)</h2>
+    <h2>Discovered Devices (ARP Keepalive)</h2>
     <div id="discovered-bulbs"><div class="device-idle" style="padding:8px 0;">Waiting for ARP scan...</div></div>
   </div>
 
@@ -497,21 +497,32 @@ async function refresh() {
       }).join('');
     }
 
-    // Discovered Bulbs.
+    // Discovered Devices — cross-reference with device list for
+    // labels, product type, and zone count.
+    const devByIp = {};
+    physical.forEach(d => { devByIp[d.ip] = d; });
     const dbEl = document.getElementById('discovered-bulbs');
     if (bulbs.length === 0) {
       dbEl.innerHTML =
-        '<div class="device-idle" style="padding:8px 0;">No bulbs discovered yet</div>';
+        '<div class="device-idle" style="padding:8px 0;">No devices discovered yet</div>';
     } else {
-      dbEl.innerHTML = bulbs.map(b => `
-        <div class="discovered-row">
-          <div>
-            <span class="discovered-ip">${esc(b.ip)}</span>
-            <span class="discovered-label">${b.label ? ' \u2014 ' + esc(b.label) : ''}</span>
+      dbEl.innerHTML = bulbs.map(b => {
+        const dev = devByIp[b.ip];
+        const label = (dev && dev.label) || '';
+        const product = (dev && dev.product) || '';
+        const zones = (dev && dev.zones) || 1;
+        const nameCol = label || b.mac;
+        const meta = product ? product + ' \u00b7 ' + zones + ' zone' + (zones !== 1 ? 's' : '') : '';
+        return `
+          <div class="discovered-row">
+            <div>
+              <span class="discovered-ip">${esc(b.ip)}</span>
+              <span class="discovered-label">${' \u2014 ' + esc(nameCol)}</span>
+            </div>
+            <span class="discovered-mac">${esc(meta)}</span>
           </div>
-          <span class="discovered-mac">${esc(b.mac)}</span>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     }
 
     document.getElementById('last-update').textContent =
