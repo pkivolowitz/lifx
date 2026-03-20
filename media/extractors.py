@@ -66,6 +66,12 @@ BEAT_THRESHOLD: float = 1.5
 # Beat detection: number of recent energy samples for the running average.
 BEAT_HISTORY_SIZE: int = 43  # ~2.7 seconds at 64ms windows
 
+# Fixed gain applied to raw FFT band magnitudes.  Raw values are
+# typically 0.001-0.01 for normal audio.  This brings them into the
+# 0-1 range without any adaptive behavior.  The effect's sensitivity
+# param provides additional user-controlled gain.
+FFT_BASE_GAIN: float = 100.0
+
 # Bytes per sample for 16-bit signed PCM.
 BYTES_PER_SAMPLE: int = 2
 
@@ -354,10 +360,12 @@ class AudioExtractor(SignalExtractor):
                 + (1.0 - alpha) * bands_raw[i]
             )
 
-        # Clamp bands to [0, 1].  No adaptive normalization — the
-        # effect's sensitivity param is the user's gain control.
+        # Apply fixed gain to bring raw FFT magnitudes into [0, 1].
+        # Raw values are typically 0.001-0.01 for normal audio — this
+        # baseline scaling makes them visible.  The effect's sensitivity
+        # param provides additional user-controlled gain on top.
         bands_out: list[float] = [
-            min(1.0, b) for b in self._smooth_bands
+            min(1.0, b * FFT_BASE_GAIN) for b in self._smooth_bands
         ]
 
         # --- Derived scalar signals ---
@@ -382,11 +390,11 @@ class AudioExtractor(SignalExtractor):
             if mid_count > 0 else 0.0
         )
 
-        # Energy: total spectral energy (clamped, no adaptive peak).
-        energy: float = min(1.0, sum(self._smooth_bands) / self._band_count)
+        # Energy: total spectral energy with base gain.
+        energy: float = min(1.0, sum(self._smooth_bands) * FFT_BASE_GAIN / self._band_count)
 
-        # RMS: clamped, no adaptive peak.
-        rms_out: float = min(1.0, rms_raw)
+        # RMS with base gain.
+        rms_out: float = min(1.0, rms_raw * FFT_BASE_GAIN)
 
         # --- Beat detection ---
         energy_raw: float = sum(self._smooth_bands)
