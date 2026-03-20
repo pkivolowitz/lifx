@@ -28,7 +28,20 @@
 		A10019 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10019 /* LoginView.swift */; };
 		A10020 /* AudioStreamService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10020 /* AudioStreamService.swift */; };
 		A10021 /* AudioStreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10021 /* AudioStreamView.swift */; };
+		T10001 /* DeviceIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T10002 /* DeviceIdentityTests.swift */; };
+		T10003 /* URLEncodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T10004 /* URLEncodingTests.swift */; };
+		T10005 /* ModelDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T10006 /* ModelDecodingTests.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		T10020 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = H10001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F10001;
+			remoteInfo = GlowUp;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		B10001 /* GlowUpApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlowUpApp.swift; sourceTree = "<group>"; };
@@ -53,10 +66,21 @@
 		B10020 /* AudioStreamService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioStreamService.swift; sourceTree = "<group>"; };
 		B10021 /* AudioStreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioStreamView.swift; sourceTree = "<group>"; };
 		C10001 /* GlowUp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GlowUp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		T10002 /* DeviceIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentityTests.swift; sourceTree = "<group>"; };
+		T10004 /* URLEncodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLEncodingTests.swift; sourceTree = "<group>"; };
+		T10006 /* ModelDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDecodingTests.swift; sourceTree = "<group>"; };
+		T10010 /* GlowUpTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GlowUpTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		D10001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		T10011 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -70,6 +94,7 @@
 			isa = PBXGroup;
 			children = (
 				E10002 /* GlowUp */,
+				T10008 /* GlowUpTests */,
 				E10007 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -138,8 +163,19 @@
 			isa = PBXGroup;
 			children = (
 				C10001 /* GlowUp.app */,
+				T10010 /* GlowUpTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		T10008 /* GlowUpTests */ = {
+			isa = PBXGroup;
+			children = (
+				T10002 /* DeviceIdentityTests.swift */,
+				T10004 /* URLEncodingTests.swift */,
+				T10006 /* ModelDecodingTests.swift */,
+			);
+			path = GlowUpTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -162,6 +198,24 @@
 			productReference = C10001 /* GlowUp.app */;
 			productType = "com.apple.product-type.application";
 		};
+		T10007 /* GlowUpTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = T10017 /* Build configuration list for PBXNativeTarget "GlowUpTests" */;
+			buildPhases = (
+				T10012 /* Sources */,
+				T10011 /* Frameworks */,
+				T10013 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				T10021 /* PBXTargetDependency */,
+			);
+			name = GlowUpTests;
+			productName = GlowUpTests;
+			productReference = T10010 /* GlowUpTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -174,6 +228,10 @@
 				TargetAttributes = {
 					F10001 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					T10007 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = F10001;
 					};
 				};
 			};
@@ -191,6 +249,7 @@
 			projectRoot = "";
 			targets = (
 				F10001 /* GlowUp */,
+				T10007 /* GlowUpTests */,
 			);
 		};
 /* End PBXProject section */
@@ -201,6 +260,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10016 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		T10013 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -234,7 +300,25 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		T10012 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				T10001 /* DeviceIdentityTests.swift in Sources */,
+				T10003 /* URLEncodingTests.swift in Sources */,
+				T10005 /* ModelDecodingTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		T10021 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F10001 /* GlowUp */;
+			targetProxy = T10020 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		G10002 /* Debug */ = {
@@ -354,6 +438,44 @@
 			};
 			name = Release;
 		};
+		T10014 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = RQ4G8SN343;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kivolowitz.glowup.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/GlowUp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/GlowUp";
+			};
+			name = Debug;
+		};
+		T10015 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = RQ4G8SN343;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kivolowitz.glowup.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/GlowUp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/GlowUp";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -371,6 +493,15 @@
 			buildConfigurations = (
 				G10005 /* Debug */,
 				G10006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		T10017 /* Build configuration list for PBXNativeTarget "GlowUpTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				T10014 /* Debug */,
+				T10015 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
