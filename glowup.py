@@ -1225,23 +1225,17 @@ def _run_calibration(
     encoded_device: str,
     server_host: str,
 ) -> Optional[float]:
-    """Run the automatic audio-light sync calibration.
+    """Run standalone sonar calibration before music starts.
 
-    Measures the one-way audio latency from the server's extractor
-    callback to the CLI's TCP socket.  Returns the measured delay
-    in seconds, or ``None`` if calibration fails.
-
-    Protocol:
-    1. Measure clock offset via Cristian's algorithm.
-    2. Connect to the TCP audio stream.
-    3. Ask the server to inject calibration pulses.
-    4. Detect pulses arriving on the TCP stream.
-    5. Compute one-way latency for each pulse using the clock offset.
-    6. Return the median.
+    Nothing else is running — no music, no effects.  The server opens
+    a dedicated TCP socket, sends silence + calibration pulses, and
+    appends emission timestamps at the end of the stream.  The CLI
+    detects the pulses, reads the timestamps, and computes the
+    one-way audio latency using Cristian's algorithm for clock sync.
 
     Args:
         server_url:     Server host:port string.
-        audio_port:     TCP audio stream port.
+        audio_port:     Not used (server picks its own port).
         device_label:   Human-readable device name for messages.
         encoded_device: URL-encoded device identifier.
         server_host:    Server hostname/IP.
@@ -1250,96 +1244,101 @@ def _run_calibration(
         Measured audio delay in seconds, or ``None`` on failure.
     """
     import socket as _socket
-    import struct as _struct
 
     _print("  Calibrating audio sync...", flush=True)
 
-    # Step 1: Clock offset estimation.
+    # Step 1: Clock offset estimation (Cristian's algorithm).
     clock_offset: float = _measure_clock_offset(server_url)
 
-    # Step 2: Connect to the TCP audio stream.
+    # Step 2: Ask the server to start calibration.  It opens a TCP
+    # socket and returns the port.  Then it waits for us to connect.
+    cal_resp: Optional[dict] = _calibration_request(
+        server_url,
+        f"/api/calibrate/start/{encoded_device}",
+        body={},
+        timeout=5,
+    )
+    if cal_resp is None:
+        _print("  Calibration: server did not respond",
+               file=sys.stderr)
+        return None
+
+    cal_port: int = cal_resp.get("port", 8421)
+
+    # Step 3: Connect to the calibration TCP socket.
     try:
         sock: _socket.socket = _socket.socket(
             _socket.AF_INET, _socket.SOCK_STREAM
         )
         sock.settimeout(10.0)
-        sock.connect((server_host, audio_port))
+        sock.connect((server_host, cal_port))
     except Exception as exc:
-        _print(f"  Calibration: cannot connect to audio stream: {exc}",
+        _print(f"  Calibration: cannot connect to tcp port {cal_port}: {exc}",
                file=sys.stderr)
         return None
 
-    # Step 3: Ask the server to inject calibration pulses.
-    # This blocks on the server side while pulses are injected (~5s).
-    cal_resp: Optional[dict] = _calibration_request(
-        server_url,
-        f"/api/calibrate/start/{encoded_device}",
-        body={},
-        timeout=15,
-    )
-    if cal_resp is None:
-        sock.close()
-        _print("  Calibration: server did not respond (timeout)",
-               file=sys.stderr)
-        return None
-
-    emit_times: list[float] = cal_resp.get("emit_times", [])
-    if not emit_times:
-        sock.close()
-        _print("  Calibration: no pulses emitted by server",
-               file=sys.stderr)
-        return None
-
-    # Step 4: Read TCP stream and detect pulses.
-    # The pulses were injected during the POST request (which blocked).
-    # They should be in the TCP buffer waiting to be read.
+    # Step 4: Read the entire calibration stream — silence, pulses,
+    # then a JSON line with emission timestamps at the end.
     from media.calibration import PulseDetector
     detector: PulseDetector = PulseDetector(sample_rate=44100)
 
-    # Read for up to 8 seconds to catch all buffered pulses.
-    deadline: float = time.monotonic() + 8.0
-    while (time.monotonic() < deadline
-           and detector.detection_count < len(emit_times)):
+    all_data: bytearray = bytearray()
+    deadline: float = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
         try:
-            data: bytes = sock.recv(8820)  # ~100ms at 44100 Hz
+            chunk: bytes = sock.recv(8820)
         except _socket.timeout:
             break
-        if not data:
-            break
-        detector.feed(data)
+        if not chunk:
+            break  # Server closed connection — stream complete.
+        all_data.extend(chunk)
+        detector.feed(chunk)
 
     sock.close()
 
-    detect_times: list[float] = detector.detections
+    # Step 5: Extract emit timestamps from the end of the stream.
+    MARKER: bytes = b"\n__EMIT_TIMES__:"
+    emit_times: List[float] = []
+    marker_pos: int = all_data.find(MARKER)
+    if marker_pos >= 0:
+        json_start: int = marker_pos + len(MARKER)
+        json_end: int = all_data.find(b"\n", json_start)
+        if json_end < 0:
+            json_end = len(all_data)
+        try:
+            emit_times = json.loads(
+                all_data[json_start:json_end].decode()
+            )
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
 
-    if not detect_times:
-        _print("  Calibration: no pulses detected on TCP stream",
+    detect_times: List[float] = detector.detections
+
+    if not detect_times or not emit_times:
+        _print(f"  Calibration: detected {len(detect_times)} pulses, "
+               f"server emitted {len(emit_times)}",
                file=sys.stderr)
         return None
 
-    # Step 5: Compute one-way latency for each matched pulse.
-    latencies: list[float] = []
+    # Step 6: Compute one-way latency for each matched pulse.
+    latencies: List[float] = []
     for i in range(min(len(emit_times), len(detect_times))):
-        # Convert server emit time to local clock using offset.
         emit_local: float = emit_times[i] - clock_offset
         latency: float = detect_times[i] - emit_local
         if latency > 0:
             latencies.append(latency)
 
     if not latencies:
-        _print("  Calibration: all latency measurements negative "
-               "(clock sync failed?)", file=sys.stderr)
+        _print("  Calibration: all latency measurements invalid",
+               file=sys.stderr)
         return None
 
-    # Step 6: Take the median.
+    # Step 7: Median + ffplay pipeline estimate.
     latencies.sort()
     median_latency: float = latencies[len(latencies) // 2]
 
-    # Add an estimate for ffplay's internal pipeline delay.
-    # With -fflags nobuffer and -analyzeduration 0, ffplay's
-    # remaining internal buffer is approximately 100-200ms.
+    # ffplay's internal pipeline with low-latency flags is ~150ms.
     FFPLAY_PIPELINE_ESTIMATE: float = 0.15
-
     total: float = median_latency + FFPLAY_PIPELINE_ESTIMATE
 
     _print(f"  Calibration: TCP={median_latency*1000:.0f}ms "

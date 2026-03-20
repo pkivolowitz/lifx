@@ -2967,59 +2967,89 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self._send_json(200, {"server_time": time_mod.monotonic()})
 
     def _handle_post_calibrate_start(self, device_id: str) -> None:
-        """POST /api/calibrate/start/{device_id} — inject calibration pulses.
+        """POST /api/calibrate/start/{device_id} — standalone sonar calibration.
 
-        Injects 3 calibration pulses into the active music source for
-        the given device.  Records emission timestamps and returns them
-        so the CLI can compute one-way audio latency.
+        Opens a temporary TCP socket, sends silence + calibration pulses,
+        records emission timestamps, and returns them.  Nothing else is
+        running — no music source, no effect, no competition.  The CLI
+        connects to the TCP socket, detects pulses, computes the delay.
 
-        The pulses travel through the same extractor callback chain as
-        real audio, hitting both the FFT/lights path and the TCP
-        stream simultaneously.
+        This is the "Calibrating for optimal performance" step that
+        runs before music starts.
         """
-        mm: Optional[MediaManager] = self.media_manager
-        music_name: Optional[str] = (
-            self.device_manager._music_sources.get(device_id)
-        )
-        if mm is None or music_name is None:
-            self._send_json(400, {
-                "error": "No active music source for this device"
-            })
-            return
-
-        with mm._lock:
-            source = mm._sources.get(music_name)
-        if source is None:
-            self._send_json(404, {"error": "Music source not found"})
-            return
-
+        import socket as _socket
         from media.calibration import PulseGenerator
-        gen: PulseGenerator = PulseGenerator(
-            sample_rate=source.sample_rate
-        )
+
+        CALIBRATION_PORT: int = 8421
+        SAMPLE_RATE: int = 44100
+
+        gen: PulseGenerator = PulseGenerator(sample_rate=SAMPLE_RATE)
         sequence = gen.generate_sequence()
 
-        # Inject the calibration sequence and record pulse timestamps.
-        emit_times: list[float] = []
-        for tag, chunk in sequence:
-            if not source.is_alive():
-                break
-            if tag.startswith("pulse:"):
-                t_emit: float = time_mod.monotonic()
-                source.inject_chunk(chunk)
-                emit_times.append(t_emit)
-            else:
-                # Silence — inject in small chunks to pace correctly.
-                # Each chunk is ~100ms at 44100 Hz.
-                chunk_size: int = 44100 * 2 // 10  # ~100ms
-                offset: int = 0
-                while offset < len(chunk):
-                    end: int = min(offset + chunk_size, len(chunk))
-                    source.inject_chunk(chunk[offset:end])
-                    offset = end
-                    time_mod.sleep(0.09)  # Pace to real time.
+        # Open a temporary TCP socket for the calibration stream.
+        srv_sock: _socket.socket = _socket.socket(
+            _socket.AF_INET, _socket.SOCK_STREAM
+        )
+        srv_sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        try:
+            srv_sock.bind(("0.0.0.0", CALIBRATION_PORT))
+        except OSError:
+            # Port in use — try next.
+            CALIBRATION_PORT += 1
+            srv_sock.bind(("0.0.0.0", CALIBRATION_PORT))
+        srv_sock.listen(1)
+        srv_sock.settimeout(10.0)
 
-        self._send_json(200, {"emit_times": emit_times})
+        logging.info(
+            "Calibration: listening on tcp port %d", CALIBRATION_PORT,
+        )
+
+        # Return the port so the CLI knows where to connect.
+        # The CLI will connect, then we send the pulses.
+        self._send_json(200, {"port": CALIBRATION_PORT, "status": "ready"})
+        self.wfile.flush()
+
+        # Wait for the CLI to connect.
+        try:
+            client, addr = srv_sock.accept()
+        except _socket.timeout:
+            srv_sock.close()
+            logging.warning("Calibration: no client connected (timeout)")
+            return
+
+        client.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
+        logging.info("Calibration: client connected from %s", addr)
+
+        # Send the calibration sequence.
+        emit_times: list[float] = []
+        try:
+            for tag, chunk in sequence:
+                if tag.startswith("pulse:"):
+                    t_emit: float = time_mod.monotonic()
+                    client.sendall(chunk)
+                    emit_times.append(t_emit)
+                else:
+                    # Silence — send as bulk.
+                    client.sendall(chunk)
+                # Brief real-time pause so pulses are spaced in time.
+                time_mod.sleep(0.1)
+        except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+            logging.warning("Calibration: client disconnected: %s", exc)
+
+        # Send the emit timestamps as a JSON line at the end of the
+        # TCP stream so the CLI can read them after pulse detection.
+        try:
+            marker: bytes = b"\n__EMIT_TIMES__:"
+            payload: bytes = json.dumps(emit_times).encode()
+            client.sendall(marker + payload + b"\n")
+        except Exception:
+            pass
+
+        client.close()
+        srv_sock.close()
+        logging.info(
+            "Calibration: done, %d pulses emitted", len(emit_times),
+        )
 
     def _handle_post_calibrate_result(self, device_id: str) -> None:
         """POST /api/calibrate/result/{device_id} — apply measured delay.
@@ -3029,7 +3059,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             {"delay_seconds": 0.423}
 
         Sets the audio synchronization delay on the device's engine
-        so light frames are delayed to match the audio stream.
+        so light frames are delayed to match the audio stream.  Also
+        stores the value for reuse on subsequent plays.
         """
         body: Optional[dict[str, Any]] = self._read_json_body()
         if body is None:
@@ -3042,20 +3073,19 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             })
             return
 
+        # Store for reuse.
+        self._calibrated_delay = float(delay)
+
         dm: DeviceManager = self.device_manager
         ctrl: Optional[Controller] = dm.get_controller(device_id)
-        if ctrl is None:
-            self._send_json(404, {"error": "No controller for device"})
-            return
+        if ctrl is not None:
+            ctrl.set_audio_delay(float(delay))
 
-        ctrl.set_audio_delay(float(delay))
         logging.info(
-            "Calibration: audio delay for %s set to %.3fs",
-            device_id, delay,
+            "Calibration: audio delay set to %.3fs", delay,
         )
         self._send_json(200, {
             "delay_seconds": delay,
-            "delay_frames": round(delay * ctrl.engine.fps),
         })
 
     # -- Fleet handler ---------------------------------------------------------
