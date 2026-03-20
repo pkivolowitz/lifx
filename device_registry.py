@@ -33,7 +33,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from bulb_keepalive import BulbKeepAlive
@@ -96,8 +96,8 @@ class DeviceRegistry:
 
     def __init__(self) -> None:
         self.path: Optional[str] = None
-        self._devices: Dict[str, Dict[str, Any]] = {}   # MAC → entry
-        self._label_to_mac: Dict[str, str] = {}          # label → MAC
+        self._devices: dict[str, dict[str, Any]] = {}   # MAC → entry
+        self._label_to_mac: dict[str, str] = {}          # label → MAC
         self._lock: threading.Lock = threading.Lock()
 
     # -- Loading -----------------------------------------------------------
@@ -130,11 +130,11 @@ class DeviceRegistry:
             return False
 
         with open(resolved, "r", encoding="utf-8") as fh:
-            raw: Dict[str, Any] = json.load(fh)
+            raw: dict[str, Any] = json.load(fh)
 
-        devices_raw: Dict[str, Any] = raw.get("devices", {})
-        devices: Dict[str, Dict[str, Any]] = {}
-        label_to_mac: Dict[str, str] = {}
+        devices_raw: dict[str, Any] = raw.get("devices", {})
+        devices: dict[str, dict[str, Any]] = {}
+        label_to_mac: dict[str, str] = {}
 
         for mac_raw, entry in devices_raw.items():
             mac: str = mac_raw.strip().lower()
@@ -210,7 +210,7 @@ class DeviceRegistry:
         with self._lock:
             return self._label_to_mac.get(label.lower())
 
-    def all_devices(self) -> Dict[str, Dict[str, Any]]:
+    def all_devices(self) -> dict[str, dict[str, Any]]:
         """Return a snapshot of the full registry (MAC → entry dict)."""
         with self._lock:
             return dict(self._devices)
@@ -318,7 +318,7 @@ class DeviceRegistry:
             )
 
         with self._lock:
-            data: Dict[str, Any] = {
+            data: dict[str, Any] = {
                 "_comment": (
                     "MAC-based device identity.  Survives DHCP changes "
                     "and git pulls.  Do not edit while server is running."
@@ -386,7 +386,7 @@ class DeviceRegistry:
                 if old_label and old_label.lower() != label.lower():
                     self._label_to_mac.pop(old_label.lower(), None)
 
-            entry: Dict[str, Any] = {"label": label}
+            entry: dict[str, Any] = {"label": label}
             if notes:
                 entry["notes"] = notes
             self._devices[mac] = entry
@@ -445,11 +445,11 @@ class DeviceRegistry:
             return "(empty registry)"
 
         # Build reverse ARP lookup if available.
-        mac_to_ip: Dict[str, str] = {}
+        mac_to_ip: dict[str, str] = {}
         if keepalive is not None:
             mac_to_ip = keepalive.known_bulbs_by_mac
 
-        lines: List[str] = []
+        lines: list[str] = []
         header: str = (
             f"{'MAC Address':19}  {'Label':24}  {'IP Address':15}  "
             f"{'Status':8}  {'Notes'}"

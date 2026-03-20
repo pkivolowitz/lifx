@@ -20,6 +20,7 @@ addressable canvas.
 __version__ = "2.3"
 
 import logging
+import sys
 import time
 from typing import Any, Optional
 
@@ -319,7 +320,7 @@ class VirtualMultizoneEmitter(Emitter):
                 f"{self._fanout_warns}"
             )
             # Print to stderr so it appears in both CLI and systemd journal.
-            print(msg, file=__import__("sys").stderr, flush=True)
+            print(msg, file=sys.stderr, flush=True)
             logger.info(msg)
 
     def send_color(
