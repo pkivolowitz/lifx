@@ -3622,10 +3622,11 @@ def _load_config(config_path: str) -> dict[str, Any]:
     """Load and validate the server configuration file.
 
     The config must contain ``port``, ``auth_token``, and ``groups``
-    sections.  The ``groups`` section provides all device IPs — the
-    server does not perform broadcast discovery.  The ``schedule``
-    and ``location`` sections are optional (server works without a
-    schedule in API-only mode).
+    sections.  Group entries may be registry labels, MAC addresses, or
+    raw IP addresses — they are resolved to live IPs at startup via
+    :func:`_resolve_config_groups`.  The ``schedule`` and ``location``
+    sections are optional (server works without a schedule in
+    API-only mode).
 
     Args:
         config_path: Path to the JSON configuration file.
@@ -3667,23 +3668,34 @@ def _load_config(config_path: str) -> dict[str, Any]:
             )
 
     # Validate groups — required, since the server has no other source
-    # of device IPs (broadcast discovery has been removed).
+    # of devices (broadcast discovery has been removed).  Entries may
+    # be registry labels, MAC addresses, or raw IP addresses — they
+    # are resolved to live IPs in _background_startup().
     if "groups" not in config or not config["groups"]:
         raise ValueError(
             "Config must contain a non-empty 'groups' section with "
-            "device IPs.  The server does not perform broadcast "
-            "discovery — all devices must be listed explicitly."
+            "device identifiers (labels, MACs, or IPs).  The server "
+            "does not perform broadcast discovery — all devices must "
+            "be listed explicitly."
         )
     groups: dict[str, list[str]] = config["groups"]
     empty_groups: list[str] = []
-    for group_name, ips in list(groups.items()):
+    for group_name, entries in list(groups.items()):
         if group_name.startswith("_"):
             continue
-        if not isinstance(ips, list):
+        if not isinstance(entries, list):
             raise ValueError(
-                f"Group '{group_name}' must be a list of IP addresses"
+                f"Group '{group_name}' must be a list of device "
+                f"identifiers (labels, MACs, or IPs)"
             )
-        if not ips:
+        # Validate that every entry is a non-empty string.
+        for i, entry in enumerate(entries):
+            if not isinstance(entry, str) or not entry.strip():
+                raise ValueError(
+                    f"Group '{group_name}' entry {i} must be a "
+                    f"non-empty string, got {entry!r}"
+                )
+        if not entries:
             logger.warning("Group '%s' is empty — skipping", group_name)
             empty_groups.append(group_name)
     # Remove empty groups so downstream code never encounters them.
@@ -3745,14 +3757,66 @@ def _get_groups(config: dict[str, Any]) -> dict[str, list[str]]:
         config: Parsed configuration dictionary.
 
     Returns:
-        A dict mapping group names to lists of IP addresses.
+        A dict mapping group names to lists of identifiers (labels,
+        MACs, or IPs).
     """
     groups: dict = config.get("groups", {})
     return {
-        name: ips
-        for name, ips in groups.items()
+        name: entries
+        for name, entries in groups.items()
         if not name.startswith("_")
     }
+
+
+def _resolve_config_groups(
+    raw_groups: dict[str, list[str]],
+    registry: "DeviceRegistry",
+    keepalive: "BulbKeepAlive",
+) -> tuple[dict[str, list[str]], list[str], list[tuple[str, str]]]:
+    """Resolve config group entries to live IP addresses.
+
+    Each entry in a group list may be a registry label, a MAC address,
+    or a raw IP address.  Labels are resolved via the device registry
+    to a MAC, then via the keepalive daemon's ARP table to a live IP.
+    MACs go straight to ARP lookup.  IPs pass through unchanged.
+
+    Args:
+        raw_groups:  Group name to list-of-identifiers mapping from
+                     the config file.
+        registry:    Loaded :class:`DeviceRegistry` instance.
+        keepalive:   Running :class:`BulbKeepAlive` instance whose
+                     initial ARP scan has completed.
+
+    Returns:
+        A three-tuple of ``(resolved_groups, device_ips, unresolved)``
+        where:
+
+        - *resolved_groups* maps group name to a list of resolved IPs
+          (entries that could not be resolved are omitted).
+        - *device_ips* is a flat, sorted, de-duplicated list of every
+          resolved IP across all groups.
+        - *unresolved* is a list of ``(group_name, identifier)`` pairs
+          for entries that could not be resolved (offline, not in
+          registry, etc.).
+    """
+    from device_registry import IP_PATTERN
+
+    resolved_groups: dict[str, list[str]] = {}
+    all_ips: set[str] = set()
+    unresolved: list[tuple[str, str]] = []
+
+    for group_name, entries in raw_groups.items():
+        resolved: list[str] = []
+        for ident in entries:
+            ip: Optional[str] = registry.resolve_to_ip(ident, keepalive)
+            if ip is not None:
+                resolved.append(ip)
+                all_ips.add(ip)
+            else:
+                unresolved.append((group_name, ident))
+        resolved_groups[group_name] = resolved
+
+    return resolved_groups, sorted(all_ips), unresolved
 
 
 # ---------------------------------------------------------------------------
@@ -3942,18 +4006,16 @@ def main() -> None:
         sys.exit(0)
 
     # -- Device manager -------------------------------------------------------
-    # Extract all unique IPs from config groups.  The server does not
-    # perform broadcast discovery — these IPs are the only devices it
-    # will manage.
-    groups: dict[str, list[str]] = config["groups"]
-    device_ips: list[str] = sorted(
-        {ip for ips in groups.values() for ip in ips}
-    )
+    # Create the DeviceManager with empty IPs.  Config groups contain
+    # labels, MACs, or IPs — these are resolved to live IP addresses
+    # in _background_startup() after the keepalive daemon has populated
+    # its ARP table.  The DeviceManager is safe to use (returns empty
+    # device list) until load_devices() is called.
     nicknames: dict[str, str] = config.get("nicknames", {})
     dm: DeviceManager = DeviceManager(
-        device_ips=device_ips, nicknames=nicknames,
+        device_ips=[], nicknames=nicknames,
         config_dir=os.path.dirname(os.path.abspath(config_path)),
-        groups=_get_groups(config),
+        groups={},
     )
 
     # -- HTTP server (bind immediately) -------------------------------------
@@ -4015,25 +4077,28 @@ def main() -> None:
     keepalive: Optional[BulbKeepAlive] = None
 
     def _background_startup() -> None:
-        """Load devices from config IPs, then start the scheduler."""
+        """Resolve config identifiers, load devices, start services.
+
+        Startup order:
+
+        1. Start the keepalive daemon (ARP discovery).
+        2. Load the device registry (MAC→label mapping).
+        3. Wait for the keepalive's initial ARP scan.
+        4. Resolve config group entries (labels/MACs) → live IPs.
+        5. Populate DeviceManager and load devices.
+        6. Start scheduler, MQTT, orchestrator, media pipeline.
+        """
         nonlocal mqtt_bridge, media_mgr, orch, keepalive
 
         try:
-            logging.info(
-                "Loading %d device(s) from config...", len(device_ips),
-            )
-            devices: list[dict[str, Any]] = dm.load_devices()
-            logging.info("Loaded %d device(s)", len(devices))
-
-            # Start the ARP-based bulb keepalive daemon.
-            # Runs unconditionally — zero config required.  Passively
-            # watches the ARP table for LIFX MACs and pings each known
-            # bulb to keep its WiFi radio from deep-sleeping.
+            # -- Step 1: Start the ARP-based bulb keepalive daemon --------
+            # Must run BEFORE device loading so the ARP table is
+            # populated for label/MAC → IP resolution.
             keepalive = BulbKeepAlive()
             GlowUpRequestHandler.keepalive = keepalive
             keepalive.start()
 
-            # Load the device registry (MAC→label mapping).
+            # -- Step 2: Load the device registry -------------------------
             device_reg: DeviceRegistry = DeviceRegistry()
             if device_reg.load():
                 logging.info(
@@ -4046,6 +4111,47 @@ def main() -> None:
                     "until devices are registered"
                 )
             GlowUpRequestHandler.registry = device_reg
+
+            # -- Step 3: Wait for initial ARP scan ------------------------
+            logging.info("Waiting for initial ARP scan...")
+            if not keepalive.wait_initial_scan(timeout=30.0):
+                logging.warning(
+                    "Initial ARP scan timed out — some devices may "
+                    "be unresolvable until the next scan"
+                )
+
+            # -- Step 4: Resolve config groups ----------------------------
+            raw_groups: dict[str, list[str]] = _get_groups(config)
+            resolved_groups: dict[str, list[str]]
+            device_ips: list[str]
+            unresolved: list[tuple[str, str]]
+            resolved_groups, device_ips, unresolved = (
+                _resolve_config_groups(raw_groups, device_reg, keepalive)
+            )
+
+            for group_name, ident in unresolved:
+                logging.warning(
+                    "Group '%s': cannot resolve '%s' to IP — "
+                    "device offline or not in registry",
+                    group_name, ident,
+                )
+
+            if device_ips:
+                logging.info(
+                    "Resolved %d device(s) from config groups",
+                    len(device_ips),
+                )
+            else:
+                logging.warning(
+                    "No devices resolved from config groups — "
+                    "check registry and device connectivity"
+                )
+
+            # -- Step 5: Populate DeviceManager and load ------------------
+            dm._device_ips = device_ips
+            dm._group_config = resolved_groups
+            devices: list[dict[str, Any]] = dm.load_devices()
+            logging.info("Loaded %d device(s)", len(devices))
 
             # Start the scheduler now that devices are available.
             sched: Optional[SchedulerThread] = None

@@ -396,8 +396,26 @@ class BulbKeepAlive(threading.Thread):
         self._source_id: int = random.randint(_SOURCE_ID_MIN, _SOURCE_ID_MAX)
         self._packet: bytes = _build_getservice(self._source_id)
         self._db: _BulbDB = _BulbDB()
+        # Set after the first ARP scan completes, so callers can wait
+        # for the daemon to have a populated device table.
+        self._initial_scan_done: threading.Event = threading.Event()
 
     # -- Public API --------------------------------------------------------
+
+    def wait_initial_scan(self, timeout: float = 30.0) -> bool:
+        """Block until the first ARP scan has completed.
+
+        The keepalive performs a subnet sweep followed by an ARP read
+        on its first loop iteration.  This method lets startup code
+        wait for that data before resolving config identifiers.
+
+        Args:
+            timeout: Maximum seconds to wait.
+
+        Returns:
+            ``True`` if the scan completed, ``False`` on timeout.
+        """
+        return self._initial_scan_done.wait(timeout=timeout)
 
     @property
     def known_bulbs(self) -> dict[str, str]:
@@ -467,6 +485,14 @@ class BulbKeepAlive(threading.Thread):
                 if now >= next_arp:
                     self._scan_arp()
                     next_arp = now + self._arp_interval
+                    # Signal that the first scan is done so startup
+                    # code waiting on wait_initial_scan() can proceed.
+                    if not self._initial_scan_done.is_set():
+                        self._initial_scan_done.set()
+                        logger.info(
+                            "Initial ARP scan complete — %d bulb(s) found",
+                            len(self._known),
+                        )
 
                 # --- Keepalive ping ---
                 if now >= next_ping:
