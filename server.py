@@ -2542,10 +2542,26 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             # Set the effect's source param to the dynamic source name.
             params["source"] = music_source_name
 
+            # Clean up any stale audio stream server for this device.
+            old_stream: Optional[AudioStreamServer] = (
+                self.device_manager._audio_streams.pop(ip, None)
+            )
+            if old_stream is not None:
+                old_stream.stop()
+
             # Start a TCP audio stream server so the CLI can play audio
             # locally via ffplay tcp://host:port.
             stream_srv: AudioStreamServer = AudioStreamServer()
-            stream_srv.start()
+            try:
+                stream_srv.start()
+            except OSError as exc:
+                logging.warning(
+                    "Audio stream port %d in use, retrying: %s",
+                    stream_srv.port, exc,
+                )
+                # Port may be in TIME_WAIT — try the next one.
+                stream_srv = AudioStreamServer(port=stream_srv.port + 1)
+                stream_srv.start()
             # Register the streamer as an extractor on the source.
             with mm._lock:
                 src = mm._sources.get(music_source_name)
