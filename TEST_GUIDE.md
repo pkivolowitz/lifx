@@ -30,6 +30,75 @@ python3 -m unittest discover -p "test_*.py" -v
 
 ---
 
+## Unit Tests (Quick Reference)
+
+The unit tier covers source-level correctness — symbol names, route tables,
+config validation, and emitter interfaces. They run in under a second and
+should be the first thing you check after any code change.
+
+```bash
+# Run all unit tests:
+python3 -m unittest test_audit_regressions test_routing test_config \
+    test_virtual_multizone -v
+
+# Run a single file:
+python3 -m unittest test_routing -v
+
+# Run a single test class:
+python3 -m unittest test_audit_regressions.TestEngineNoBareExcepts -v
+
+# Run a single test method:
+python3 -m unittest test_audit_regressions.TestEngineNoBareExcepts.test_no_except_pass_in_render_loop
+```
+
+There are also unit tests under `tests/` (a subdirectory with its own
+`__init__.py`):
+
+```bash
+# MIDI parser and pipeline tests:
+python3 -m unittest tests.test_midi_parser tests.test_midi_pipeline -v
+
+# Environment sanity checks (NTP, Python version):
+python3 -m unittest tests.test_environment -v
+
+# Diagnostics DB (skipped if psycopg2/DB unavailable):
+python3 -m unittest tests.test_diagnostics -v
+```
+
+Additional standalone test files in the project root:
+
+| File | What it covers |
+|------|----------------|
+| `test_audit_regressions.py` | Logger symbol fixes, PRODUCT_MAP integrity, Emitter ABC, signal handler consolidation, HSB→RGB conversion, BulbDB DSN, MQTT client factory, bare-except replacements, error handling consistency, broadcast_power_off extraction |
+| `test_routing.py` | Server route table integrity, handler existence, pattern matching, route flags, method/segment indexing |
+| `test_config.py` | `_load_config` validation — auth tokens, ports, groups, empty groups, schedule entries |
+| `test_virtual_multizone.py` | VirtualMultizoneEmitter zone routing, fan-out, skip_wake |
+| `test_effects.py` | Every effect's `render()` at multiple zone counts (1, 3, 36, 108) |
+| `test_protocol.py` | LIFX transport protocol constants and message parsing |
+| `test_transport_adapter.py` | Transport adapter signal routing |
+| `test_udp_channel.py` | UDP sender/receiver pack/unpack |
+| `test_multizone_products.py` | Product ID → multizone classification |
+| `test_schedule.py` | Schedule time resolution, day filtering, solar calculations |
+| `test_solar.py` | Sunrise/sunset computation accuracy |
+| `test_fft.py` | FFT windowing and bin mapping |
+| `test_media.py` | MediaManager lifecycle, source start/stop |
+| `test_override.py` | Phone override state machine |
+| `test_cylon_ack.py` | Ack-paced send timing for the cylon effect |
+| `test_e2e_audio.py` | Audio capture → extraction → signal bus (needs ffmpeg) |
+| `test_audio_out.py` | AudioOutEmitter construction, params, lifecycle, registration |
+
+To discover and run *everything* (including the slower use-case tests):
+
+```bash
+python3 -m unittest discover -s . -p "test_*.py" -v
+```
+
+This recurses into `tests/` automatically. Expect ~535 tests and ~20 seconds
+on a modern Mac. The 9 pre-existing `plasma2d`/`spectrum2d` failures in
+`test_effects.py` are known issues unrelated to the audit work.
+
+---
+
 ## Test Infrastructure
 
 ### RecordingEmitter (test_use_cases.py)
