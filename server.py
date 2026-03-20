@@ -2850,7 +2850,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         # Thread-safe queue bridges the source callback to this thread.
         import queue as _queue
-        audio_q: _queue.Queue[Optional[bytes]] = _queue.Queue(maxsize=64)
+        audio_q: _queue.Queue[Optional[bytes]] = _queue.Queue(maxsize=512)
 
         def _on_chunk(chunk: bytes) -> None:
             try:
@@ -2858,18 +2858,39 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             except _queue.Full:
                 pass  # Drop frames rather than blocking the source.
 
+        # Aggregate small PCM chunks into larger HTTP writes to reduce
+        # per-chunk overhead.  At 44100 Hz mono 16-bit, 3200 bytes is
+        # only ~36ms.  We batch up to ~200ms before flushing.
+        BATCH_BYTES: int = 17640  # ~200ms at 44100 Hz mono 16-bit
+
         source.add_extractor(_on_chunk)
         try:
+            buf: bytearray = bytearray()
             while source.is_alive():
                 try:
-                    chunk: Optional[bytes] = audio_q.get(timeout=1.0)
+                    chunk: Optional[bytes] = audio_q.get(timeout=0.05)
                 except _queue.Empty:
+                    # Flush whatever we have on timeout.
+                    if buf:
+                        self.wfile.write(f"{len(buf):x}\r\n".encode())
+                        self.wfile.write(buf)
+                        self.wfile.write(b"\r\n")
+                        self.wfile.flush()
+                        buf = bytearray()
                     continue
                 if chunk is None:
                     break
-                # HTTP chunked encoding: hex length + CRLF + data + CRLF.
-                self.wfile.write(f"{len(chunk):x}\r\n".encode())
-                self.wfile.write(chunk)
+                buf.extend(chunk)
+                if len(buf) >= BATCH_BYTES:
+                    self.wfile.write(f"{len(buf):x}\r\n".encode())
+                    self.wfile.write(buf)
+                    self.wfile.write(b"\r\n")
+                    self.wfile.flush()
+                    buf = bytearray()
+            # Flush remainder.
+            if buf:
+                self.wfile.write(f"{len(buf):x}\r\n".encode())
+                self.wfile.write(buf)
                 self.wfile.write(b"\r\n")
                 self.wfile.flush()
             # Chunked terminator.
