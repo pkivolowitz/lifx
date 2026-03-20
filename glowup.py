@@ -1273,6 +1273,7 @@ def _play_via_server(args: argparse.Namespace) -> None:
     }
     if music_dir:
         play_body["music_dir"] = music_dir
+        play_body["bands"] = getattr(args, "bands", 32)
 
     try:
         resp = _server_post(
@@ -2227,6 +2228,14 @@ def build_parser() -> argparse.ArgumentParser:
             "The server decodes the files via ffmpeg and feeds the "
             "audio signal to the effect.  Requires --device and a "
             "media-reactive effect (waveform, soundlevel)."
+        ),
+    )
+    p_play.add_argument(
+        "--bands", type=int, default=32, metavar="N",
+        help=(
+            "Number of FFT frequency bands for audio-reactive effects "
+            "(default 32).  More bands = finer spectral resolution on "
+            "multizone devices."
         ),
     )
     p_play.add_argument(

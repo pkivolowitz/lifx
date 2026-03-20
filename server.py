@@ -2517,11 +2517,13 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 mm.configure(self.config)
                 GlowUpRequestHandler.media_manager = mm
             music_source_name = f"_music_{ip.replace(':', '_')}"
+            bands: int = body.get("bands", 32)
             ok: bool = mm.add_source(music_source_name, {
                 "type": "directory",
                 "path": music_dir,
                 "recursive": True,
                 "sample_rate": 44100,
+                "extractors": {"audio": {"bands": bands}},
             })
             if not ok:
                 self._send_json(400, {
