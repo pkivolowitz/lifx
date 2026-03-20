@@ -49,10 +49,12 @@ struct Device: Codable, Identifiable, Hashable {
 
     /// The best available stable identifier for API calls.
     ///
-    /// Preference order: label, MAC, IP.  Labels are human-readable
-    /// and survive DHCP changes.  MACs are stable but opaque.  IPs
-    /// are a last resort.  Empty strings are skipped.
+    /// Virtual groups always use ``ip`` (which holds ``group:<name>``).
+    /// Physical devices prefer label → MAC → IP.  Labels are
+    /// human-readable and survive DHCP changes.  MACs are stable but
+    /// opaque.  IPs are a last resort.  Empty strings are skipped.
     var deviceId: String {
+        if isVirtualGroup { return ip }
         if let label = label, !label.isEmpty { return label }
         if !mac.isEmpty && mac != "virtual" { return mac }
         return ip

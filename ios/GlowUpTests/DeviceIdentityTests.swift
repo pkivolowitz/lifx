@@ -47,10 +47,11 @@ final class DeviceIdentityTests: XCTestCase {
         XCTAssertEqual(device.deviceId, "group:all")
     }
 
-    /// Group device with a label — label wins over group:name IP.
-    func testDeviceId_groupWithLabel() throws {
+    /// Group device with a label — group:name always wins for groups
+    /// because the server needs the ``group:`` prefix for routing.
+    func testDeviceId_groupAlwaysUsesGroupPrefix() throws {
         let device = makeDevice(label: "all", mac: "", ip: "group:all", isGroup: true)
-        XCTAssertEqual(device.deviceId, "all")
+        XCTAssertEqual(device.deviceId, "group:all")
     }
 
     /// All three present — label still wins.
