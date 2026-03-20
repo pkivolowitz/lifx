@@ -3269,6 +3269,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         Accepts ``{"mac": "...", "label": "..."}`` or
         ``{"ip": "...", "label": "..."}``.
+
+        An empty label clears the firmware label on the device.
         """
         body: Optional[dict] = self._read_json_body()
         if body is None:
@@ -3278,8 +3280,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         mac: str = body.get("mac", "").strip().lower()
         ip_arg: str = body.get("ip", "").strip()
 
-        if not label:
-            self._send_json(400, {"error": "Label is required"})
+        if not label and not ip_arg and not mac:
+            self._send_json(400, {"error": "IP or MAC is required"})
             return
 
         # Resolve to IP.

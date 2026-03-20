@@ -7,10 +7,13 @@ thin HTTP client that talks to the server's ``/api/registry`` endpoints.
 
 Usage::
 
-    python3 register_device.py 10.0.0.44 "porch-left"
-    python3 register_device.py 10.0.0.44          # prompts for label
-    python3 register_device.py --list              # show registry
-    python3 register_device.py --push-labels       # write all labels to bulbs
+    python3 register_device.py <ip> "Label Name"   # register with label
+    python3 register_device.py <ip>                 # prompts for label
+    python3 register_device.py --list               # show registry
+    python3 register_device.py --push-labels        # write all labels to bulbs
+    python3 register_device.py --clear-label <ip>   # blank the firmware label
+    python3 register_device.py --remove <mac-or-label>  # unregister a device
+    python3 register_device.py --help               # this message
 
 Designed for rapid use during a bulk identification session.
 """
@@ -234,6 +237,27 @@ def cmd_remove(identifier: str) -> None:
     print(f"Removed: {result.get('removed', identifier)}")
 
 
+def cmd_clear_label(ip: str) -> None:
+    """Clear (blank) the firmware label on a bulb via the server API.
+
+    Sends an empty label to ``POST /api/registry/push-label`` which
+    writes a null label to the device firmware.  The server handles
+    device communication and registry consistency.
+
+    Args:
+        ip: Device IP address.
+    """
+    result: dict[str, Any] = _api_post("/api/registry/push-label", {
+        "ip": ip,
+        "label": "",
+    })
+    fw: bool = result.get("firmware_written", False)
+    if fw:
+        print(f"Label cleared on {ip}")
+    else:
+        print(f"WARNING: No ack from {ip} — bulb may be offline")
+
+
 def cmd_push_labels() -> None:
     """Write all registry labels to bulb firmware."""
     data: dict[str, Any] = _api_post("/api/registry/push-labels", {})
@@ -278,7 +302,10 @@ def main() -> None:
 
     arg1: str = sys.argv[1]
 
-    if arg1 == "--list":
+    if arg1 in ("--help", "-h"):
+        print(__doc__)
+        sys.exit(0)
+    elif arg1 == "--list":
         cmd_list()
     elif arg1 == "--push-labels":
         cmd_push_labels()
@@ -288,6 +315,12 @@ def main() -> None:
                   file=sys.stderr)
             sys.exit(1)
         cmd_remove(sys.argv[2])
+    elif arg1 == "--clear-label":
+        if len(sys.argv) < 3:
+            print("Usage: register_device.py --clear-label <ip>",
+                  file=sys.stderr)
+            sys.exit(1)
+        cmd_clear_label(sys.argv[2])
     else:
         # register_device.py <ip> [label]
         ip: str = arg1
