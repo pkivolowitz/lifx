@@ -107,7 +107,7 @@ struct SettingsView: View {
                             .font(.title2)
                             .fontWeight(.bold)
 
-                        Text("v1.0")
+                        Text("v4.2")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
