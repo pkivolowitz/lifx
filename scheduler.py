@@ -35,6 +35,16 @@ from typing import Any, Optional
 from effects import get_registry
 from solar import SunTimes, sun_times
 
+# Optional imports for label/MAC resolution.  When available, group
+# entries can be registry labels or MAC addresses (not just raw IPs).
+# Falls back gracefully if the registry/keepalive modules aren't present.
+try:
+    from device_registry import DeviceRegistry
+    from bulb_keepalive import _read_arp, LIFX_OUI
+    _HAS_RESOLUTION: bool = True
+except ImportError:
+    _HAS_RESOLUTION = False
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -561,19 +571,22 @@ def _load_config(config_path: str) -> dict[str, Any]:
         raise ValueError("Config missing or empty 'groups' section")
 
     # Validate groups: each must be a non-empty list of strings.
+    # Entries can be IP addresses, MAC addresses, or registry labels —
+    # resolved to IPs at runtime via _resolve_groups().
     groups: dict[str, list[str]] = config["groups"]
-    for group_name, ips in groups.items():
+    for group_name, entries in groups.items():
         if group_name.startswith("_"):
             # Allow "_comment" keys.
             continue
-        if not isinstance(ips, list) or not ips:
+        if not isinstance(entries, list) or not entries:
             raise ValueError(
-                f"Group '{group_name}' must be a non-empty list of IP addresses"
+                f"Group '{group_name}' must be a non-empty list of "
+                f"device identifiers (IPs, MACs, or registry labels)"
             )
-        for ip in ips:
-            if not isinstance(ip, str) or not ip:
+        for entry in entries:
+            if not isinstance(entry, str) or not entry:
                 raise ValueError(
-                    f"Group '{group_name}' contains invalid IP entry: {ip!r}"
+                    f"Group '{group_name}' contains invalid entry: {entry!r}"
                 )
 
     if "schedule" not in config or not config["schedule"]:
@@ -614,6 +627,128 @@ def _get_groups(config: dict[str, Any]) -> dict[str, list[str]]:
         for name, ips in config["groups"].items()
         if not name.startswith("_")
     }
+
+
+# ---------------------------------------------------------------------------
+# Device identifier resolution (label/MAC → IP)
+# ---------------------------------------------------------------------------
+
+# Regex matching an IPv4 address.
+_IP_PATTERN: re.Pattern[str] = re.compile(
+    r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"
+)
+
+# Regex matching a MAC address (colon-separated hex).
+_MAC_PATTERN: re.Pattern[str] = re.compile(
+    r"^[\da-fA-F]{2}(:[\da-fA-F]{2}){5}$"
+)
+
+# Default registry path — same as the server's default.
+DEFAULT_REGISTRY_PATH: str = "/etc/glowup/device_registry.json"
+
+
+def _resolve_groups(
+    groups: dict[str, list[str]],
+    registry_path: Optional[str] = None,
+) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
+    """Resolve label/MAC identifiers to live IPs in group definitions.
+
+    Uses the device registry (label → MAC) and the system ARP table
+    (MAC → IP) to resolve non-IP identifiers.  Raw IPs pass through
+    unchanged.
+
+    This is the standalone equivalent of the server's
+    ``_resolve_config_groups()`` — it does not require the server or
+    BulbKeepAlive daemon to be running; it reads the ARP table directly.
+
+    Args:
+        groups:        Dict mapping group names to identifier lists.
+        registry_path: Path to device_registry.json (default:
+                       ``/etc/glowup/device_registry.json``).
+
+    Returns:
+        A tuple of (resolved_groups, unresolved) where resolved_groups
+        has the same structure but with IPs, and unresolved is a list
+        of (group_name, identifier) pairs that could not be resolved.
+    """
+    if not _HAS_RESOLUTION:
+        # No resolution modules available — assume all entries are IPs.
+        return dict(groups), []
+
+    # Load the registry if available.
+    registry: Optional[DeviceRegistry] = None
+    reg_path: str = registry_path or DEFAULT_REGISTRY_PATH
+    if os.path.exists(reg_path):
+        registry = DeviceRegistry()
+        registry.load(reg_path)
+        logging.info("Loaded device registry from %s", reg_path)
+
+    # Read the current ARP table for MAC → IP resolution.
+    arp_table: dict[str, str] = _read_arp()  # {IP: MAC}
+    # Build reverse map: {MAC: IP}.
+    mac_to_ip: dict[str, str] = {
+        mac.lower(): ip for ip, mac in arp_table.items()
+    }
+
+    resolved: dict[str, list[str]] = {}
+    unresolved: list[tuple[str, str]] = []
+
+    for gname, identifiers in groups.items():
+        resolved_ips: list[str] = []
+        for ident in identifiers:
+            ip: Optional[str] = _resolve_identifier(
+                ident, registry, mac_to_ip,
+            )
+            if ip is not None:
+                resolved_ips.append(ip)
+            else:
+                unresolved.append((gname, ident))
+                logging.warning(
+                    "Could not resolve '%s' in group '%s' to an IP",
+                    ident, gname,
+                )
+        resolved[gname] = resolved_ips
+
+    return resolved, unresolved
+
+
+def _resolve_identifier(
+    ident: str,
+    registry: Optional["DeviceRegistry"],
+    mac_to_ip: dict[str, str],
+) -> Optional[str]:
+    """Resolve a single device identifier to an IP address.
+
+    Resolution chain:
+    1. If it looks like an IP → return as-is.
+    2. If it looks like a MAC → look up in ARP table.
+    3. Otherwise → treat as label, look up in registry → MAC → ARP.
+
+    Args:
+        ident:     Device identifier (IP, MAC, or label).
+        registry:  DeviceRegistry instance (or None).
+        mac_to_ip: Reverse ARP table {MAC: IP}.
+
+    Returns:
+        Resolved IP address, or None if resolution failed.
+    """
+    ident_stripped: str = ident.strip()
+
+    # 1. Already an IP?
+    if _IP_PATTERN.match(ident_stripped):
+        return ident_stripped
+
+    # 2. MAC address?
+    if _MAC_PATTERN.match(ident_stripped):
+        return mac_to_ip.get(ident_stripped.lower())
+
+    # 3. Registry label → MAC → IP.
+    if registry is not None:
+        mac: Optional[str] = registry.label_to_mac(ident_stripped)
+        if mac:
+            return mac_to_ip.get(mac.lower())
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -706,8 +841,11 @@ def _dry_run(config: dict[str, Any]) -> None:
     """
     lat: float = config["location"]["latitude"]
     lon: float = config["location"]["longitude"]
-    groups: dict[str, list[str]] = _get_groups(config)
+    raw_groups: dict[str, list[str]] = _get_groups(config)
     specs: list[dict[str, Any]] = config["schedule"]
+
+    # Resolve labels/MACs to IPs for display.
+    groups, unresolved = _resolve_groups(raw_groups)
 
     now: datetime = datetime.now(timezone.utc).astimezone()
     utc_offset: timedelta = now.utcoffset()
@@ -786,8 +924,18 @@ def _main_loop(config: dict[str, Any]) -> None:
     """
     lat: float = config["location"]["latitude"]
     lon: float = config["location"]["longitude"]
-    groups: dict[str, list[str]] = _get_groups(config)
+    raw_groups: dict[str, list[str]] = _get_groups(config)
     specs: list[dict[str, Any]] = config["schedule"]
+
+    # Resolve labels/MACs to IPs.  If resolution modules aren't
+    # available, identifiers are assumed to be raw IPs (backward compat).
+    groups, unresolved = _resolve_groups(raw_groups)
+    if unresolved:
+        logging.warning(
+            "%d device identifier(s) could not be resolved: %s",
+            len(unresolved),
+            ", ".join(f"{g}:{ident}" for g, ident in unresolved),
+        )
 
     # Locate glowup.py relative to this script.
     script_dir: str = os.path.dirname(os.path.abspath(__file__))

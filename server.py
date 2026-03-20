@@ -3654,6 +3654,13 @@ def _load_config(config_path: str) -> dict[str, Any]:
     sections are optional (server works without a schedule in
     API-only mode).
 
+    **Schedule file support:** If ``schedule_file`` is present in the
+    config, the schedule, location, and groups are loaded from that
+    external file and merged into the server config.  This allows a
+    single ``schedule.json`` to be shared between the server and the
+    standalone ``scheduler.py``.  Schedule-file groups are added to
+    (not replacing) any groups already in ``server.json``.
+
     Args:
         config_path: Path to the JSON configuration file.
 
@@ -3667,6 +3674,52 @@ def _load_config(config_path: str) -> dict[str, Any]:
     """
     with open(config_path, "r") as f:
         config: dict[str, Any] = json.load(f)
+
+    # --- Merge external schedule file if referenced ---
+    # This is the unification point: schedule.json is the single source
+    # of truth for schedule entries, location, and schedule-specific
+    # groups.  Both scheduler.py and the server read the same file.
+    schedule_file: Optional[str] = config.get("schedule_file")
+    if schedule_file:
+        schedule_path: str = schedule_file
+        # Resolve relative paths against the config file's directory.
+        if not os.path.isabs(schedule_path):
+            config_dir: str = os.path.dirname(os.path.abspath(config_path))
+            schedule_path = os.path.join(config_dir, schedule_path)
+        if not os.path.exists(schedule_path):
+            raise FileNotFoundError(
+                f"schedule_file '{schedule_path}' not found "
+                f"(referenced from {config_path})"
+            )
+        with open(schedule_path, "r") as sf:
+            sched_config: dict[str, Any] = json.load(sf)
+        logging.info(
+            "Loaded schedule from external file: %s", schedule_path,
+        )
+        # Merge location (schedule file wins if server.json doesn't have one).
+        if "location" not in config and "location" in sched_config:
+            config["location"] = sched_config["location"]
+        # Merge schedule entries (schedule file is the source of truth).
+        if "schedule" in sched_config:
+            config["schedule"] = sched_config["schedule"]
+        # Merge groups — schedule file groups are added to server groups.
+        # Schedule groups may use IPs, labels, or MACs; the server's
+        # resolution chain handles all three.
+        if "groups" in sched_config:
+            if "groups" not in config:
+                config["groups"] = {}
+            for gname, entries in sched_config["groups"].items():
+                if gname.startswith("_"):
+                    continue
+                if gname not in config["groups"]:
+                    config["groups"][gname] = entries
+                else:
+                    # Merge: add any devices from schedule file not already
+                    # in the server group (no duplicates).
+                    existing: set[str] = set(config["groups"][gname])
+                    for entry in entries:
+                        if entry not in existing:
+                            config["groups"][gname].append(entry)
 
     # Validate auth token.
     token: Any = config.get("auth_token")
