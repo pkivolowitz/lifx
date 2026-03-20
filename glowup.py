@@ -1308,13 +1308,13 @@ def _play_via_server(args: argparse.Namespace) -> None:
                         "ffplay",
                         "-f", "s16le",
                         "-ar", str(sr),
-                        "-ac", "1",
+                        "-ch_layout", "mono",
                         "-nodisp",
                         "-loglevel", "error",
                         stream_url,
                     ],
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                 )
                 _print(f"  Audio streaming to local speakers (pid {ffplay_proc.pid})")
             except FileNotFoundError:
