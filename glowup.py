@@ -1292,22 +1292,20 @@ def _play_via_server(args: argparse.Namespace) -> None:
     if "params" in resp:
         _print(f"  Params: {json.dumps(resp['params'], indent=2)}")
 
-    # If music_dir is active, stream audio from the server to local speakers.
+    # If music_dir is active, stream audio from the server via TCP.
     ffplay_proc: Optional[subprocess.Popen] = None
     if music_dir:
-        music_source_name: str = resp.get("params", {}).get("source", "")
-        if music_source_name:
-            stream_url: str = (
-                f"http://{_server_url}/api/media/stream/"
-                f"{quote(music_source_name, safe='')}"
-            )
-            sr: int = 44100
+        audio_port: Optional[int] = resp.get("audio_stream_port")
+        if audio_port:
+            # Extract host from _server_url (host:port format).
+            server_host: str = _server_url.rsplit(":", 1)[0]
+            stream_url: str = f"tcp://{server_host}:{audio_port}"
             try:
                 ffplay_proc = subprocess.Popen(
                     [
                         "ffplay",
                         "-f", "s16le",
-                        "-ar", str(sr),
+                        "-ar", "44100",
                         "-ch_layout", "mono",
                         "-nodisp",
                         "-loglevel", "error",
@@ -1316,7 +1314,7 @@ def _play_via_server(args: argparse.Namespace) -> None:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
-                _print(f"  Audio streaming to local speakers (pid {ffplay_proc.pid})")
+                _print(f"  Audio: tcp://{server_host}:{audio_port}")
             except FileNotFoundError:
                 _print("  WARNING: ffplay not found — no local audio playback",
                        file=sys.stderr)

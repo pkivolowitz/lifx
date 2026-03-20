@@ -93,6 +93,7 @@ from emitters.virtual import VirtualMultizoneEmitter
 from engine import Controller
 from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
 from media import MediaManager, SignalBus
+from media.source import AudioStreamServer
 from solar import SunTimes, sun_times
 from transport import LifxDevice, SendMode, SOCKET_TIMEOUT
 
@@ -535,6 +536,8 @@ class DeviceManager:
         # Dynamic music source tracking: device ID → source name.
         # Used to clean up on-demand DirectorySource instances on stop.
         self._music_sources: dict[str, str] = {}
+        # TCP audio stream servers: device ID → AudioStreamServer.
+        self._audio_streams: dict[str, AudioStreamServer] = {}
         # Readiness flag: False until initial load completes.
         self._ready: bool = False
         # Optional diagnostics logger (None if psycopg2 or DB unavailable).
@@ -2527,9 +2530,22 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
             # Set the effect's source param to the dynamic source name.
             params["source"] = music_source_name
+
+            # Start a TCP audio stream server so the CLI can play audio
+            # locally via ffplay tcp://host:port.
+            stream_srv: AudioStreamServer = AudioStreamServer()
+            stream_srv.start()
+            # Register the streamer as an extractor on the source.
+            with mm._lock:
+                src = mm._sources.get(music_source_name)
+            if src is not None:
+                src.add_extractor(stream_srv.on_chunk)
+            self.device_manager._audio_streams[ip] = stream_srv
+
             logging.info(
-                "API: created music source '%s' from %s",
-                music_source_name, music_dir,
+                "API: created music source '%s' from %s "
+                "(audio stream on tcp port %d)",
+                music_source_name, music_dir, stream_srv.port,
             )
 
         # Resolve signal bus — pass if we have bindings OR a media manager
@@ -2551,6 +2567,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             # Track the dynamic music source so stop can clean it up.
             if music_source_name:
                 self.device_manager._music_sources[ip] = music_source_name
+                # Include the audio stream port in the response.
+                stream: Optional[AudioStreamServer] = (
+                    self.device_manager._audio_streams.get(ip)
+                )
+                if stream is not None:
+                    status["audio_stream_port"] = stream.port
             else:
                 self.device_manager._music_sources.pop(ip, None)
             logging.info(
@@ -2587,6 +2609,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 active_entry: Optional[str] = self._get_active_entry_for_ip(ip)
                 self.device_manager.mark_override(ip, active_entry)
             status: dict[str, Any] = self.device_manager.stop(ip)
+            # Clean up TCP audio stream server for this device.
+            audio_srv: Optional[AudioStreamServer] = (
+                self.device_manager._audio_streams.pop(ip, None)
+            )
+            if audio_srv is not None:
+                audio_srv.stop()
             # Clean up any dynamic music source for this device.
             music_name: Optional[str] = (
                 self.device_manager._music_sources.pop(ip, None)

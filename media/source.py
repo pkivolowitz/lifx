@@ -22,14 +22,16 @@ Factory function:
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.1"
+__version__ = "1.2"
 
 import json
 import logging
 import os
 import platform
 import random
+import select
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -813,6 +815,126 @@ class MicSource(MediaSource):
         ])
 
         return cmd
+
+
+# ---------------------------------------------------------------------------
+# TCP Audio Streamer
+# ---------------------------------------------------------------------------
+
+# Default TCP port for audio streaming.
+DEFAULT_AUDIO_STREAM_PORT: int = 8421
+
+
+class AudioStreamServer:
+    """TCP server that streams raw PCM audio to connected clients.
+
+    Registers as an extractor callback on a :class:`MediaSource`.  Each
+    connected TCP client receives the same raw PCM byte stream.  Clients
+    that can't keep up are disconnected rather than blocking the source.
+
+    Designed for consumption by ffplay::
+
+        ffplay -f s16le -ar 44100 -ch_layout mono -nodisp tcp://host:8421
+
+    Attributes:
+        port: The TCP port the server listens on.
+    """
+
+    def __init__(self, port: int = DEFAULT_AUDIO_STREAM_PORT) -> None:
+        """Initialize the stream server.
+
+        Args:
+            port: TCP port to listen on.
+        """
+        self.port: int = port
+        self._server_sock: Optional[socket.socket] = None
+        self._clients: list[socket.socket] = []
+        self._lock: threading.Lock = threading.Lock()
+        self._accept_thread: Optional[threading.Thread] = None
+        self._running: bool = False
+
+    def start(self) -> None:
+        """Start listening for TCP connections."""
+        if self._running:
+            return
+        self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server_sock.setsockopt(
+            socket.SOL_SOCKET, socket.SO_REUSEADDR, 1,
+        )
+        self._server_sock.settimeout(1.0)
+        self._server_sock.bind(("0.0.0.0", self.port))
+        self._server_sock.listen(4)
+        self._running = True
+        self._accept_thread = threading.Thread(
+            target=self._accept_loop,
+            daemon=True,
+            name="audio-stream-accept",
+        )
+        self._accept_thread.start()
+        logger.info(
+            "Audio stream server listening on tcp://0.0.0.0:%d", self.port,
+        )
+
+    def stop(self) -> None:
+        """Stop the server and disconnect all clients."""
+        self._running = False
+        if self._server_sock is not None:
+            try:
+                self._server_sock.close()
+            except Exception:
+                pass
+            self._server_sock = None
+        with self._lock:
+            for client in self._clients:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+            self._clients.clear()
+        if self._accept_thread is not None:
+            self._accept_thread.join(timeout=3.0)
+            self._accept_thread = None
+        logger.info("Audio stream server stopped")
+
+    def on_chunk(self, chunk: bytes) -> None:
+        """Extractor callback — broadcast a PCM chunk to all clients.
+
+        Clients that fail to receive are disconnected immediately.
+
+        Args:
+            chunk: Raw PCM audio bytes.
+        """
+        with self._lock:
+            dead: list[socket.socket] = []
+            for client in self._clients:
+                try:
+                    client.sendall(chunk)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    dead.append(client)
+            for client in dead:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                self._clients.remove(client)
+                logger.info("Audio stream client disconnected")
+
+    def _accept_loop(self) -> None:
+        """Accept incoming TCP connections."""
+        while self._running:
+            try:
+                client, addr = self._server_sock.accept()
+                # Disable Nagle's algorithm for lower latency.
+                client.setsockopt(
+                    socket.IPPROTO_TCP, socket.TCP_NODELAY, 1,
+                )
+                with self._lock:
+                    self._clients.append(client)
+                logger.info("Audio stream client connected from %s", addr)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
 
 
 # ---------------------------------------------------------------------------
