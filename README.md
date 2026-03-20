@@ -69,6 +69,32 @@ when you need it:
   <img src="multizone.PNG" alt="Virtual multizone group in iOS app" width="300">
 </p>
 
+## What's New (March 2026)
+
+Major infrastructure and reliability release. Not much user-visible
+change, but a large body of work underneath:
+
+- **Unified scheduling** — single `schedule.json` shared between
+  server and standalone scheduler. Device groups now accept labels
+  and MAC addresses, not just IPs.
+- **Label/MAC-based device identity** — `server.json` and
+  `schedule.json` use human-readable labels or MAC addresses
+  instead of IP addresses. Devices survive DHCP reassignment
+  and router swaps.
+- **Server route table** — 315 lines of if-elif URL routing replaced
+  with a declarative 39-route table. Adding an API endpoint is one
+  line.
+- **194 regression tests** gated by a pre-commit hook. Includes
+  use-case-level pipeline tests, distributed agent tests, MIDI/audio
+  fixture validation, and FFT frequency detection.
+- **Tech debt audit** — bare-except handlers replaced with logged
+  warnings, duplicate logic consolidated, undefined variables fixed,
+  raw protocol code extracted to proper layers.
+- **MAC-based ARP dedup** — devices that change IPs no longer appear
+  as duplicates in discovery.
+- **iOS app** update is in progress — the server API is unchanged so
+  the current app continues to work.
+
 ## Caveat
 
 I have tested with string, Neon, and monochrome lights. Please report
