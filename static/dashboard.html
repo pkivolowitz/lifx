@@ -28,11 +28,27 @@
     margin-bottom: 6px;
     color: var(--accent);
   }
-  .subtitle {
+  .header-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .header-left h1 { margin-bottom: 2px; }
+  .header-left .subtitle {
     color: var(--dim);
     font-size: 12px;
-    margin-bottom: 20px;
   }
+  .header-right {
+    text-align: right;
+    font-size: 10px;
+    color: var(--dim);
+    max-width: 50%;
+    line-height: 1.4;
+  }
+  .header-right .copyright { color: var(--text); font-size: 11px; }
   .grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -171,8 +187,16 @@
 </div>
 
 <div id="dashboard" style="display:none;">
-  <h1>GlowUp Dashboard</h1>
-  <div class="subtitle">Auto-refreshes every 5 seconds</div>
+  <div class="header-bar">
+    <div class="header-left">
+      <h1>GlowUp Dashboard</h1>
+      <div class="subtitle">Auto-refreshes every 5 seconds</div>
+    </div>
+    <div class="header-right">
+      <div class="copyright">&copy; 2026 Perry Kivolowitz &middot; MIT License</div>
+      <div>PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, INCLUDING MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.</div>
+    </div>
+  </div>
 
   <div class="card" style="margin-bottom: 16px;">
     <div class="stat-grid">
