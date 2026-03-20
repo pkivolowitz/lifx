@@ -1487,6 +1487,33 @@ def broadcast_wake() -> None:
         sock.close()
 
 
+def broadcast_power_off() -> None:
+    """Broadcast a SetPower(off) to all LIFX devices on the LAN.
+
+    Emergency function that sends a tagged (broadcast) SetPower packet
+    with level=0 and duration=0ms to every reachable LIFX device.
+    No acknowledgement is requested — this is fire-and-forget.
+
+    Uses the transport layer's :func:`_build_header` so protocol
+    constants are not duplicated outside the module.
+    """
+    broadcast_addr: str = _get_broadcast_address()
+    source_id: int = random.randint(SOURCE_ID_MIN, SOURCE_ID_MAX)
+    # SetPower payload: level(u16) + duration(u32) = 6 bytes.
+    payload: bytes = struct.pack("<HI", POWER_OFF, 0)
+    header: bytes = _build_header(
+        MSG_LIGHT_SET_POWER, len(payload), source_id, tagged=True,
+    )
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    try:
+        sock.sendto(header + payload, (broadcast_addr, LIFX_PORT))
+    except OSError as exc:
+        _log.debug("Broadcast power-off failed: %s", exc)
+    finally:
+        sock.close()
+
+
 # ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------

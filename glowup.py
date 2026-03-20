@@ -959,35 +959,9 @@ def cmd_off(args: argparse.Namespace) -> None:
 
     # --- Broadcast power-off to local subnet (fast, server-independent) -----
     try:
-        from transport import broadcast_wake, LifxDevice, SendMode
-        import socket
-        import struct
-
-        # Send broadcast SetPower(False) to wake any sleeping bulbs and turn them off.
-        sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        try:
-            # Build a SetPower(False) frame: MSG_LIGHT_SET_POWER = 117
-            # Payload: reserved(u8) + on(u16) + duration(u32) = 7 bytes
-            payload: bytes = struct.pack("<xHI", 0, 0)  # on=False, duration=0ms
-            frame: bytes = struct.pack(
-                "<HHI",
-                36,  # size: 36-byte header, no payload
-                (1 << 12) | (1 << 13),  # flags: addressable | tagged
-                0,  # source_id
-            )
-            target: bytes = b'\xff' * 8
-            reserved: bytes = b'\x00' * 6
-            ack_res: int = 0
-            seq: int = 0
-            frame_addr: bytes = target + reserved + struct.pack("<BB", ack_res, seq)
-            proto_header: bytes = struct.pack("<QHH", 0, 117, 0)  # MSG_LIGHT_SET_POWER
-            full_frame: bytes = frame + frame_addr + proto_header + payload
-
-            sock.sendto(full_frame, ("<broadcast>", 56700))
-            _print("✓ Broadcast power-off sent to local subnet")
-        finally:
-            sock.close()
+        from transport import broadcast_power_off
+        broadcast_power_off()
+        _print("✓ Broadcast power-off sent to local subnet")
     except Exception as exc:
         _print(f"⚠️  Broadcast failed: {exc}")
 
