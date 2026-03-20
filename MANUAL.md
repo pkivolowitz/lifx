@@ -216,6 +216,7 @@ gallery publishing.
 | [Effect Developer Guide](docs/07-effect-dev-guide.md) | Architecture, base class, Param system, HSBK, examples |
 | [Engine and Controller API](docs/09-engine-api.md) | Programmatic API, VirtualMultizoneDevice |
 | [Testing](docs/10-testing.md) | Test modules, 250+ tests, how to run |
+| [Test Interpretation Guide](TEST_GUIDE.md) | What the high-level tests prove, failure modes, triage reference (developer-level) |
 | [Effect Gallery](docs/13-gallery.md) | GitHub Pages gallery with animated GIF previews |
 | [SOE Pipeline](docs/21-soe-pipeline.md) | Architecture and extension points |
 | [Emitter Developer Guide](docs/22-emitter-dev-guide.md) | Emitter ABC, SynthBackend pattern, creating new emitters |
