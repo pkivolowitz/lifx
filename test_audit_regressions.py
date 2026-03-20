@@ -1002,6 +1002,105 @@ class TestBulbDBCloseLogging(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Test: bulb_keepalive.py — MAC-based dedup in _scan_arp
+# ---------------------------------------------------------------------------
+
+class TestKeepAliveMacDedup(unittest.TestCase):
+    """Verify _scan_arp deduplicates on MAC when a device moves IPs.
+
+    LIFX bulbs have factory-burned MACs with no randomization.  When a
+    bulb gets a new IP (DHCP reassignment, router swap), the ARP table
+    may contain both the old and new IP for the same MAC.  The keepalive
+    daemon must evict the stale IP entry so discover doesn't report
+    duplicate devices.
+    """
+
+    def _make_daemon(self) -> "BulbKeepAlive":
+        """Create a BulbKeepAlive with no network or DB dependencies."""
+        from bulb_keepalive import BulbKeepAlive
+        daemon: BulbKeepAlive = BulbKeepAlive.__new__(BulbKeepAlive)
+        daemon._known = {}
+        daemon._misses = {}
+        daemon._lock = threading.Lock()
+        daemon._db = MagicMock()
+        daemon._on_new_bulb = None
+        return daemon
+
+    @patch("bulb_keepalive._read_arp")
+    def test_mac_moves_to_new_ip(self, mock_arp: MagicMock) -> None:
+        """When a MAC appears at a new IP, the old IP is evicted."""
+        daemon = self._make_daemon()
+
+        # First scan: device at 10.0.0.10.
+        mock_arp.return_value = {"10.0.0.10": "d0:73:d5:aa:bb:cc"}
+        daemon._scan_arp()
+        self.assertIn("10.0.0.10", daemon._known)
+
+        # Second scan: same MAC now at 10.0.0.20 (DHCP reassignment).
+        # ARP may still have both, or just the new one.
+        mock_arp.return_value = {"10.0.0.20": "d0:73:d5:aa:bb:cc"}
+        daemon._scan_arp()
+
+        # Old IP must be gone, new IP present.
+        self.assertNotIn("10.0.0.10", daemon._known)
+        self.assertIn("10.0.0.20", daemon._known)
+        self.assertEqual(daemon._known["10.0.0.20"], "d0:73:d5:aa:bb:cc")
+
+    @patch("bulb_keepalive._read_arp")
+    def test_two_ips_same_mac_deduped(self, mock_arp: MagicMock) -> None:
+        """If ARP returns two IPs for one MAC, only the latest survives."""
+        daemon = self._make_daemon()
+
+        # First scan: device at old IP.
+        mock_arp.return_value = {"10.0.0.10": "d0:73:d5:aa:bb:cc"}
+        daemon._scan_arp()
+
+        # Second scan: ARP has BOTH old and new IP for same MAC.
+        mock_arp.return_value = {
+            "10.0.0.10": "d0:73:d5:aa:bb:cc",
+            "10.0.0.20": "d0:73:d5:aa:bb:cc",
+        }
+        daemon._scan_arp()
+
+        # Should have exactly one entry for this MAC.
+        mac_entries: list[str] = [
+            ip for ip, mac in daemon._known.items()
+            if mac == "d0:73:d5:aa:bb:cc"
+        ]
+        self.assertEqual(
+            len(mac_entries), 1,
+            f"Expected 1 entry for MAC, got {len(mac_entries)}: {mac_entries}",
+        )
+
+    @patch("bulb_keepalive._read_arp")
+    def test_different_macs_not_deduped(self, mock_arp: MagicMock) -> None:
+        """Different MACs at different IPs are not deduped."""
+        daemon = self._make_daemon()
+        mock_arp.return_value = {
+            "10.0.0.10": "d0:73:d5:aa:bb:cc",
+            "10.0.0.20": "d0:73:d5:dd:ee:ff",
+        }
+        daemon._scan_arp()
+
+        self.assertEqual(len(daemon._known), 2)
+
+    @patch("bulb_keepalive._read_arp")
+    def test_dedup_cleans_miss_counter(self, mock_arp: MagicMock) -> None:
+        """Evicting a stale IP also cleans its miss counter."""
+        daemon = self._make_daemon()
+
+        mock_arp.return_value = {"10.0.0.10": "d0:73:d5:aa:bb:cc"}
+        daemon._scan_arp()
+        # Simulate some misses on the old IP.
+        daemon._misses["10.0.0.10"] = 5
+
+        mock_arp.return_value = {"10.0.0.20": "d0:73:d5:aa:bb:cc"}
+        daemon._scan_arp()
+
+        self.assertNotIn("10.0.0.10", daemon._misses)
+
+
+# ---------------------------------------------------------------------------
 # Test: server.py — consistent error handling in handlers
 # ---------------------------------------------------------------------------
 

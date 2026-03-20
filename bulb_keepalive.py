@@ -553,12 +553,35 @@ class BulbKeepAlive(threading.Thread):
             logger.debug("Subnet sweep failed: %s", exc)
 
     def _scan_arp(self) -> None:
-        """Read the ARP table, register new devices, and expire stale ones."""
+        """Read the ARP table, register new devices, and expire stale ones.
+
+        Deduplicates on MAC address: if the same MAC appears at a new IP
+        (DHCP reassignment, router swap), the old IP entry is evicted
+        immediately rather than waiting for expiry.  LIFX bulbs have
+        factory-burned MACs with no randomization, so a duplicate MAC
+        always means the same physical device moved IPs.
+        """
         arp_entries: dict[str, str] = _read_arp()
         with self._lock:
             # --- Process bulbs present in ARP ---
             for ip, mac in arp_entries.items():
                 if ip not in self._known:
+                    # Dedup: if this MAC already exists at a different IP,
+                    # the device moved.  Evict the stale entry so we don't
+                    # carry two IPs for one physical device.
+                    stale_ip: Optional[str] = None
+                    for old_ip, old_mac in self._known.items():
+                        if old_mac == mac and old_ip != ip:
+                            stale_ip = old_ip
+                            break
+                    if stale_ip is not None:
+                        self._known.pop(stale_ip)
+                        self._misses.pop(stale_ip, None)
+                        logger.info(
+                            "Bulb %s moved %s → %s (MAC dedup)",
+                            mac, stale_ip, ip,
+                        )
+
                     self._known[ip] = mac
                     self._misses[ip] = 0
                     logger.info(
