@@ -1,12 +1,23 @@
 # Server Routing and Safety Features
 
-Automatic server routing bypasses mesh router UDP filtering.  Emergency
+GlowUp is **server-preferred**: when a server is reachable, all commands
+route through it — discovery, identification, and effect playback.  The
+server resolves device labels and MACs to live IPs, manages keepalive,
+and runs effects directly.  If the server is unreachable, the CLI falls
+back to direct UDP for commands that support it.
+
+Server routing also bypasses mesh router UDP filtering.  Emergency
 power-off provides physical safety when hardware misbehavior causes
 distress.
 
 ## Quick Start
 
-**Server routing (automatic):**
+**Play by device label (server resolves label → IP, runs effect):**
+```bash
+glowup play cylon --device "PORCH STRING LIGHTS"
+```
+
+**Server routing (automatic for discover/identify):**
 ```bash
 glowup discover              # Routes via server if reachable; falls back to UDP
 glowup identify --ip 10.0.0.28  # Same: server if available, else direct UDP
@@ -75,7 +86,9 @@ connection or directly adjacent on the mesh.
 | `identify --ip X` | Server or UDP | Pulse runs async on server; cancel via Ctrl+C |
 | `identify --duration N` | Server only | Pulse duration (default 10s); ignored locally |
 | `effects` | Local | No devices involved |
-| `play` | Local (direct UDP) | Server can't run effects; use local Pi/Jetson for distributed effects |
+| `play --device` | Server | Server resolves label/MAC → IP, runs effect, sends packets |
+| `play --group` | Server or local | Group fetched from server (or `--config` for local file) |
+| `play --ip` | Server or UDP | Direct connection to device; works standalone |
 | `record` | Local | No devices involved |
 | `replay` | Local (MQTT) | Publishes to MQTT broker; handled by SOE pipeline |
 
@@ -141,9 +154,21 @@ thread; the HTTP response returns immediately.
 }
 ```
 
+or using a registry label / MAC address:
+```json
+{
+  "device":   "Bedroom Neon",
+  "duration": 10.0
+}
+```
+
 **Parameters:**
-- `ip` (required, string): Device IP address
+- `ip` (string): Device IP address
+- `device` (string): Device registry label or MAC address (resolved by server)
 - `duration` (optional, float): Pulse duration in seconds (default 10s; max 60s)
+
+One of `ip` or `device` is required.  If `device` is given, the server
+resolves it to a live IP via the device registry and ARP table.
 
 **Response:**
 ```json
@@ -419,7 +444,8 @@ Or use `glowup off`.
 
 | Feature | What | Why | How |
 |---------|------|-----|-----|
-| **Server routing** | Auto-use Pi for device queries | Bypass Deco UDP filtering | `glowup discover` (automatic) |
+| **Server routing** | Auto-use Pi for all commands | Bypass mesh UDP filtering; label addressing | `glowup play --device "FOO"` (automatic) |
+| **Label addressing** | Use device names instead of IPs | Survive DHCP, router swaps, power cycles | `--device "PORCH STRING LIGHTS"` |
 | **Force local** | Skip server; use direct UDP | Testing; same-machine server | `glowup --local discover` |
 | **Custom server** | Specify non-default server IP | Multiple Pi networks | `glowup --server 192.168.1.100:8420` |
 | **Emergency off** | Power off all devices | Safety; runaway effects | `glowup off` (requires confirmation) |

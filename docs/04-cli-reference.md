@@ -73,11 +73,31 @@ See [Server Routing & Safety](docs/25-server-routing-safety.md) for details.
 
 Run an effect on a device or device group. Blocks until Ctrl+C or SIGTERM.
 
-**Single device:**
+GlowUp is **server-preferred**: when the GlowUp server is reachable, it
+handles device resolution, effect execution, and packet delivery.  This
+gives you label-based device addressing, ARP-based discovery, keepalive,
+and scheduling — features unavailable in standalone mode.  If the server
+is unreachable, the CLI falls back to direct UDP (requires `--ip`).
+
+**By device label or MAC (server-preferred):**
+
+```bash
+python3 glowup.py play <effect> --device "PORCH STRING LIGHTS" [--fps N] [--param value ...]
+python3 glowup.py play <effect> --device "d0:73:d5:d4:79:9c" [--param value ...]
+```
+
+The server resolves the label (or MAC) to a live IP via its device
+registry and ARP table, then runs the effect.  The CLI blocks until
+Ctrl+C, which tells the server to stop.
+
+**By IP (standalone or server):**
 
 ```bash
 python3 glowup.py play <effect> --ip <device_ip> [--fps N] [--param value ...]
 ```
+
+Connects directly to the device via UDP.  Works with or without
+a server, but requires you to know the device's current IP address.
 
 **Virtual multizone (device group from server):**
 
@@ -109,17 +129,18 @@ luma-converted brightness.  You can mix any device types freely.
 
 | Option      | Default | Description                               |
 |-------------|---------|-------------------------------------------|
-| `--ip`      | *(none)* | Target device IP address (single device mode) |
+| `--device`  | *(none)* | Target device by registry label or MAC address.  **Requires server.** The server resolves the identifier and runs the effect. |
+| `--ip`      | *(none)* | Target device IP address (direct UDP, works standalone) |
 | `--group`   | *(none)* | Device group name (fetched from server, or from local file with `--config`) |
 | `--config`  | *(none)* | Path to local config file containing device groups |
 | `--server`  | `192.0.2.48:8420` | Server host:port for remote group lookup |
 | `--fps`     | 20      | Frames per second for the render loop     |
-| `--sim`     | off     | Open a live simulator window alongside the real lights               |
-| `--sim-only` | off    | Query device geometry then run the effect in the simulator only — no commands sent to the lights (see [Sim-Only Mode](#sim-only-mode)) |
+| `--sim`     | off     | With `--device`: fetches device geometry from server and opens a local simulator (no packets sent).  With `--ip`: opens a simulator alongside the real lights. |
+| `--sim-only` | off    | Same as `--sim` but never sends commands to the lights.  With `--device`, fetches zone count from the server so you see the real geometry. |
 | `--zpb`     | 3       | Zones per bulb.  Effects render one color per bulb; the engine replicates it across all zones in the bulb.  Default 3 matches LIFX string lights (36 zones = 12 bulbs).  Use 1 for per-zone rendering. |
 | `--lerp`    | oklab   | Color interpolation: `oklab` (best), `lab` (classic CIELAB), `hsb` (cheap) |
 
-You must specify `--ip`, `--group`, or `--zones` (not combinations).
+You must specify `--device`, `--ip`, `--group`, or `--zones` (not combinations).
 
 Effect-specific parameters are auto-generated as `--flag` options using
 hyphenated names (e.g. `--launch-rate`, `--burst-spread`).  Any parameter
@@ -146,29 +167,27 @@ effect, its default value, and its valid range.
 **Examples:**
 
 ```bash
-# Red cylon scanner, fast and wide
-python3 glowup.py play cylon --ip <device-ip> --speed 1.0 --width 12 --hue 0
+# Play cylon on porch string lights (server resolves label → IP)
+python3 glowup.py play cylon --device "PORCH STRING LIGHTS"
 
-# Slow blue-to-green breathe
-python3 glowup.py play breathe --ip <device-ip> --speed 8.0 --hue1 240 --hue2 120
+# Same device, red scanner, fast and wide
+python3 glowup.py play cylon --device "PORCH STRING LIGHTS" --speed 1.0 --width 12 --hue 0
 
-# Morse code message
-python3 glowup.py play morse --ip <device-ip> --message "SOS" --unit 0.1
+# Preview what cylon looks like on the string lights (102 zones)
+# without actually sending commands — geometry fetched from server
+python3 glowup.py play cylon --device "PORCH STRING LIGHTS" --sim-only
+
+# Slow blue-to-green breathe (by IP, standalone or server)
+python3 glowup.py play breathe --ip 10.0.0.34 --speed 8.0 --hue1 240 --hue2 120
 
 # Aurora borealis at low brightness
-python3 glowup.py play aurora --ip <device-ip> --brightness 40 --speed 15
-
-# Waving French flag
-python3 glowup.py play flag --ip <device-ip> --country france
+python3 glowup.py play aurora --device "Living Room Floor Lamp" --brightness 40 --speed 15
 
 # Cylon scanner across 5 room lamps (group fetched from server)
 python3 glowup.py play cylon --group office --speed 3
 
 # Aurora drifting around a room (group from local config file)
 python3 glowup.py play aurora --group living-room --config schedule.json
-
-# Preview an effect in the simulator window alongside the real lights
-python3 glowup.py play cylon --ip <device-ip> --sim
 ```
 
 On stop (Ctrl+C or closing the simulator window), the device fades to

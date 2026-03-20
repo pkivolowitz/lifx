@@ -3,18 +3,48 @@
 > Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 > Licensed under the [MIT License](../LICENSE).
 
+GlowUp is **server-preferred**: when a GlowUp server is reachable, it
+handles device resolution, effect execution, and packet delivery.  This
+gives you label-based device addressing, ARP-based discovery, keepalive,
+and scheduling — features unavailable in standalone mode.  If the server
+is unreachable, the CLI falls back to direct UDP.
+
+If you want label addressing, groups, scheduling, and remote control —
+install the server (see [REST API Server](11-rest-api.md)).  Without the
+server, `--ip` still works for direct device control.
+
+### With a Server (recommended)
+
 ```bash
-# 1. Find your LIFX devices
+# 1. Find your LIFX devices (routes via server automatically)
 python3 glowup.py discover
 
 # 2. See what effects are available
 python3 glowup.py effects
 
-# 3. Run an effect (replace IP with your device's IP)
-python3 glowup.py play cylon --ip <device-ip>
+# 3. Run an effect by device label (server resolves label → IP)
+python3 glowup.py play cylon --device "PORCH STRING LIGHTS"
 
 # 4. Or animate a group of bulbs as a virtual multizone
+python3 glowup.py play aurora --group porch
+
+# 5. Preview an effect in the simulator (fetches real geometry from server)
+python3 glowup.py play cylon --device "PORCH STRING LIGHTS" --sim-only
+
+# 6. Press Ctrl+C to stop (fades to black gracefully)
+```
+
+### Standalone (no server)
+
+```bash
+# 1. Find your LIFX devices (direct UDP broadcast)
+python3 glowup.py discover
+
+# 2. Run an effect by IP address
+python3 glowup.py play cylon --ip <device-ip>
+
+# 3. Or animate a group from a local config file
 python3 glowup.py play cylon --config schedule.json --group office
 
-# 5. Press Ctrl+C to stop (fades to black gracefully)
+# 4. Press Ctrl+C to stop (fades to black gracefully)
 ```

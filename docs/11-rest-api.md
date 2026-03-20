@@ -16,7 +16,14 @@ python3 server.py --dry-run server.json    # preview resolved schedule
 ### Server Configuration
 
 The server reads a JSON configuration file that combines server settings
-with the same schedule format used by `scheduler.py`:
+with the same schedule format used by `scheduler.py`.
+
+**Device identifiers** in the `groups` section can be registry labels,
+MAC addresses, or raw IP addresses.  At startup the server resolves
+each entry to a live IP via the device registry (label → MAC) and the
+keepalive daemon's ARP table (MAC → IP).  This means device IPs are a
+runtime detail, not a configuration input — devices survive DHCP
+reassignment, router swaps, and power cycles without config changes.
 
 ```json
 {
@@ -27,10 +34,9 @@ with the same schedule format used by `scheduler.py`:
         "longitude": -89.40
     },
     "groups": {
-        "porch": ["192.0.2.62"]
-    },
-    "nicknames": {
-        "192.0.2.62": "Porch Lights"
+        "porch": ["Porch Front", "PORCH STRING LIGHTS"],
+        "office": ["Dragon Fly 1A", "Dragon Fly 1B", "Dragon Fly 2A", "Dragon Fly 2B"],
+        "unregistered": ["d0:73:d5:69:59:41", "d0:73:d5:6a:cd:ba"]
     },
     "schedule": [
         {
@@ -54,9 +60,15 @@ with the same schedule format used by `scheduler.py`:
 }
 ```
 
-The `nicknames` section maps device IPs to custom display names shown
-in the iPhone app.  Nicknames can also be set from the app itself
-(swipe left on a device row) and are persisted back to this file.
+Group entries accept three formats:
+
+- **Registry labels** (e.g. `"PORCH STRING LIGHTS"`) — resolved via
+  the device registry (`/etc/glowup/device_registry.json`) to a MAC,
+  then via ARP to a live IP.  Most readable; recommended.
+- **MAC addresses** (e.g. `"d0:73:d5:69:59:41"`) — resolved directly
+  via ARP.  Use for devices not yet registered in the registry.
+- **Raw IPs** (e.g. `"10.0.0.35"`) — passed through unchanged.
+  Backward compatible but fragile; breaks when DHCP reassigns.
 
 Generate a secure token:
 
@@ -65,11 +77,12 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
 The `groups` section is **required** — it is the server's only source of
-device IPs.  The server does not perform broadcast discovery; instead it
-queries each configured IP directly at startup.  This is both faster and
-more reliable than broadcast discovery, which requires multiple retries
-with long timeouts and is defeated by mesh routers that filter broadcast
-packets between nodes.
+devices.  The server does not perform broadcast discovery; instead it
+resolves each configured identifier at startup, performs a subnet sweep
+to populate the ARP table, then queries each device directly.  This is
+both faster and more reliable than broadcast discovery, which requires
+multiple retries with long timeouts and is defeated by mesh routers that
+filter broadcast packets between nodes.
 
 Groups with two or more devices automatically appear as a virtual
 multizone device in the API and the iOS app, identified by
@@ -81,11 +94,15 @@ unified canvas.
 The `schedule` section is optional — the server works in API-only mode
 without it.
 
-> **Tip:** Because the server relies on IP addresses to reach each
-> device, LIFX bulbs should be given **static IP addresses** or
-> **DHCP address reservations** in your router.  If a device's IP
-> changes (e.g. after a power outage or DHCP lease renewal), the
-> server will no longer be able to reach it at the configured address.
+The optional `nicknames` section maps device IPs to custom display names
+shown in the iPhone app.  With label-based config, registry labels
+typically serve this purpose.
+
+**API device addressing:** All `/api/devices/{id}/...` endpoints accept
+registry labels, MAC addresses, or IPs as the device identifier.  Labels
+with spaces are URL-encoded (e.g., `PORCH%20STRING%20LIGHTS`).  The
+server resolves the identifier to an internal IP before dispatching to
+the handler.
 
 ### API Endpoints
 
