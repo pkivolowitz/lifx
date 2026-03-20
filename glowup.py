@@ -1182,11 +1182,16 @@ def _build_polychrome_map(em: Any) -> list[bool]:
 
 
 def _play_via_server(args: argparse.Namespace) -> None:
-    """Run an effect entirely on the server, identified by label or MAC.
+    """Run an effect on a device identified by label or MAC.
 
-    The server resolves the ``--device`` identifier (registry label or
-    MAC address) to a live IP, then runs the effect.  The CLI blocks
-    until Ctrl+C, then tells the server to stop.
+    Two modes:
+
+    - **Normal** — the server resolves the identifier, runs the effect,
+      and sends packets.  The CLI blocks until Ctrl+C, then tells the
+      server to stop.
+    - **Sim / sim-only** — the server is queried for the device's zone
+      count, then the effect runs locally in the simulator.  No packets
+      are sent to the device.
 
     Args:
         args: Parsed CLI arguments with ``device``, ``effect``, and
@@ -1194,6 +1199,8 @@ def _play_via_server(args: argparse.Namespace) -> None:
     """
     device: str = args.device
     effect_name: str = args.effect
+    sim_mode: bool = getattr(args, "sim", False)
+    sim_only: bool = getattr(args, "sim_only", False)
 
     # Validate effect name locally (fast feedback, no server round-trip).
     registry: Dict[str, Any] = get_registry()
@@ -1213,18 +1220,97 @@ def _play_via_server(args: argparse.Namespace) -> None:
         val: Any = getattr(args, pname, None)
         if val is not None:
             params[pname] = val
+    zpb_val: int = getattr(args, "zpb", 1)
     if "zones_per_bulb" in param_defs:
-        params["zones_per_bulb"] = getattr(args, "zpb", 1)
+        params["zones_per_bulb"] = zpb_val
 
     # URL-encode the device identifier (labels may contain spaces).
     encoded_device: str = quote(device, safe="")
+
+    # -- Sim mode: fetch geometry from server, run effect locally ----------
+    if sim_mode or sim_only:
+        status_path: str = f"/api/devices/{encoded_device}/status"
+        _print(f"Fetching geometry for '{device}' from server...",
+               flush=True)
+        resp: dict = _server_get(_server_url, status_path)
+        # Extract zone count from device info.
+        dev_list: list = resp.get("devices", [])
+        if not dev_list:
+            _print("ERROR: Device not found on server.", file=sys.stderr)
+            sys.exit(1)
+        dev_info: dict = dev_list[0]
+        zone_count: int = dev_info.get("zones", 1)
+        dev_label: str = dev_info.get("label", device)
+        dev_product: str = dev_info.get("product", "?")
+
+        _print(f"  {dev_label} — {dev_product}, {zone_count} zones",
+               flush=True)
+
+        # Build a null emitter with the device's geometry.
+        poly_map: list[bool] = [True] * zone_count
+        em: Any = _NullEmitter(
+            zone_count=zone_count,
+            label=dev_label,
+            product_name=dev_product,
+            ip="sim-only",
+            pre_poly_map=poly_map,
+        )
+
+        # Set color interpolation.
+        from colorspace import set_lerp_method
+        lerp_method: str = getattr(args, "lerp", "lab")
+        set_lerp_method(lerp_method)
+
+        # Create and start the simulator.
+        from simulator import create_simulator
+        zoom_val: int = getattr(args, "zoom", 1)
+        sim = create_simulator(
+            zone_count, effect_name,
+            polychrome_map=poly_map,
+            zones_per_bulb=zpb_val,
+            zoom=zoom_val,
+        )
+        if sim is None:
+            _print("ERROR: Simulator unavailable (pygame not installed?).",
+                   file=sys.stderr)
+            sys.exit(1)
+
+        # Create engine controller and run.
+        from engine import Controller, create_effect
+        fps: int = getattr(args, "fps", None) or DEFAULT_FPS
+        ctrl: Controller = Controller(
+            [em], fps=fps,
+            frame_callback=sim.update,
+            zones_per_bulb=zpb_val,
+        )
+        ctrl.play(effect_name, **params)
+
+        _print(f"\nSimulating '{effect_name}' — {zone_count} zones "
+               f"(from '{dev_label}')")
+        _print("Press Ctrl+C to stop.\n")
+
+        stop_event: threading.Event = threading.Event()
+
+        def _handle_signal(sig: int, frame: Any) -> None:
+            if not stop_event.is_set():
+                stop_event.set()
+
+        signal.signal(signal.SIGINT, _handle_signal)
+        signal.signal(signal.SIGTERM, _handle_signal)
+        stop_event.wait()
+        _print("\nStopping...")
+        ctrl.stop(fade_ms=0)
+        sim.stop()
+        return
+
+    # -- Normal mode: server runs everything --------------------------------
     play_path: str = f"/api/devices/{encoded_device}/play"
 
     _print(f"Playing '{effect_name}' on '{device}' via server...",
            flush=True)
 
     try:
-        resp: dict = _server_post(
+        resp = _server_post(
             _server_url, play_path,
             {"effect": effect_name, "params": params},
             timeout=SERVER_TIMEOUT_SECONDS,
@@ -1243,7 +1329,7 @@ def _play_via_server(args: argparse.Namespace) -> None:
     _print("Press Ctrl+C to stop.\n")
 
     # Block until Ctrl+C, then tell the server to stop the effect.
-    stop_event: threading.Event = threading.Event()
+    stop_event = threading.Event()
 
     def _handle_signal(sig: int, frame: Any) -> None:
         if not stop_event.is_set():
