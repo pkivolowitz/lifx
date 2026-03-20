@@ -754,8 +754,8 @@ class DeviceManager:
         if em is not None:
             try:
                 em.power_on(duration_ms=0)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning("power_on failed for %s before play: %s", ip, exc)
         # Close the previous effect's diagnostics record before starting
         # a new one, so replaced effects get a proper stop_reason.
         if self._diag is not None:
@@ -1392,8 +1392,8 @@ class DeviceManager:
         if ctrl is not None:
             try:
                 ctrl.stop(fade_ms=0)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning("ctrl.stop failed during removal of %s: %s", ip, exc)
         dev: Optional[LifxDevice] = self._devices.pop(ip, None)
         if dev is not None:
             dev.close()
@@ -2625,7 +2625,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         try:
             self.device_manager.save_effect_defaults(effect_name, params)
         except ValueError as exc:
-            self._send_json(404, {"error": str(exc)})
+            self._send_json(400, {"error": str(exc)})
             return
 
         self._send_json(200, {"ok": True})

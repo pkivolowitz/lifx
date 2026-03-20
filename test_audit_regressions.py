@@ -1002,6 +1002,114 @@ class TestBulbDBCloseLogging(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Test: server.py — consistent error handling in handlers
+# ---------------------------------------------------------------------------
+
+class TestServerHandlerErrorConsistency(unittest.TestCase):
+    """Verify server handler error handling is consistent."""
+
+    def test_power_on_before_play_logs_on_failure(self) -> None:
+        """power_on() before play must log, not silently pass."""
+        import inspect
+        # DeviceManager.play is where power_on happens before effect start.
+        from server import DeviceManager
+        source: str = inspect.getsource(DeviceManager.play)
+        # Should NOT have bare 'except Exception: pass'.
+        import re
+        bare: list[str] = re.findall(
+            r"except Exception:\s*\n\s*pass", source,
+        )
+        self.assertEqual(
+            len(bare), 0,
+            "DeviceManager.play still has silent 'except Exception: pass' "
+            "on power_on — should log warning",
+        )
+
+    def test_stop_and_remove_logs_on_failure(self) -> None:
+        """_stop_and_remove must log, not silently pass."""
+        import inspect
+        from server import DeviceManager
+        source: str = inspect.getsource(DeviceManager._stop_and_remove)
+        import re
+        bare: list[str] = re.findall(
+            r"except Exception:\s*\n\s*pass", source,
+        )
+        self.assertEqual(
+            len(bare), 0,
+            "_stop_and_remove still has silent 'except Exception: pass' "
+            "on ctrl.stop — should log warning",
+        )
+
+    def test_effect_defaults_returns_400_not_404(self) -> None:
+        """save_effect_defaults ValueError should return 400, not 404."""
+        import inspect
+        from server import GlowUpRequestHandler
+        source: str = inspect.getsource(
+            GlowUpRequestHandler._handle_post_effect_defaults,
+        )
+        # Should NOT return 404 for a ValueError.
+        self.assertNotIn(
+            "404",
+            source,
+            "_handle_post_effect_defaults returns 404 for ValueError — "
+            "should return 400 (bad request, not not-found)",
+        )
+        # Should return 400.
+        self.assertIn(
+            "400",
+            source,
+            "_handle_post_effect_defaults should return 400 for ValueError",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: glowup.py cmd_off — no raw protocol in client code
+# ---------------------------------------------------------------------------
+
+class TestCmdOffNoRawProtocol(unittest.TestCase):
+    """Verify cmd_off delegates to transport instead of building raw frames."""
+
+    def test_no_struct_pack_in_cmd_off(self) -> None:
+        """cmd_off must not contain struct.pack — uses broadcast_power_off."""
+        import inspect
+        from glowup import cmd_off
+        source: str = inspect.getsource(cmd_off)
+        self.assertNotIn(
+            "struct.pack",
+            source,
+            "cmd_off still builds raw LIFX frames with struct.pack — "
+            "should call transport.broadcast_power_off()",
+        )
+
+    def test_no_magic_numbers_in_cmd_off(self) -> None:
+        """cmd_off must not contain hardcoded protocol constants."""
+        import inspect
+        from glowup import cmd_off
+        source: str = inspect.getsource(cmd_off)
+        for magic in ("56700", "MSG_LIGHT_SET_POWER", "117"):
+            self.assertNotIn(
+                magic,
+                source,
+                f"cmd_off still contains magic number {magic} — "
+                f"should delegate to transport layer",
+            )
+
+    def test_broadcast_power_off_exists(self) -> None:
+        """transport.broadcast_power_off must be importable."""
+        from transport import broadcast_power_off
+        self.assertTrue(callable(broadcast_power_off))
+
+    def test_broadcast_power_off_builds_correct_payload(self) -> None:
+        """broadcast_power_off must send a SetPower(off) payload."""
+        import inspect
+        from transport import broadcast_power_off
+        source: str = inspect.getsource(broadcast_power_off)
+        self.assertIn("POWER_OFF", source)
+        self.assertIn("MSG_LIGHT_SET_POWER", source)
+        self.assertIn("_build_header", source)
+
+
+# ---------------------------------------------------------------------------
 # Test: _exc_oneliner helper
 # ---------------------------------------------------------------------------
 
