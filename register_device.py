@@ -247,9 +247,11 @@ def cmd_clear_label(ip: str) -> None:
     Args:
         ip: Device IP address.
     """
+    # LIFX firmware ignores all-null labels.  A single space is the
+    # smallest value the firmware will accept as a real write.
     result: dict[str, Any] = _api_post("/api/registry/push-label", {
         "ip": ip,
-        "label": "",
+        "label": " ",
     })
     fw: bool = result.get("firmware_written", False)
     if fw:
