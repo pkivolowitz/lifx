@@ -31,6 +31,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -1180,6 +1181,91 @@ def _build_polychrome_map(em: Any) -> list[bool]:
     return [poly] * zones
 
 
+def _play_via_server(args: argparse.Namespace) -> None:
+    """Run an effect entirely on the server, identified by label or MAC.
+
+    The server resolves the ``--device`` identifier (registry label or
+    MAC address) to a live IP, then runs the effect.  The CLI blocks
+    until Ctrl+C, then tells the server to stop.
+
+    Args:
+        args: Parsed CLI arguments with ``device``, ``effect``, and
+              any effect-specific parameters.
+    """
+    device: str = args.device
+    effect_name: str = args.effect
+
+    # Validate effect name locally (fast feedback, no server round-trip).
+    registry: Dict[str, Any] = get_registry()
+    if effect_name not in registry:
+        _print(
+            f"ERROR: Unknown effect '{effect_name}'. "
+            f"Available: {', '.join(get_effect_names())}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Collect effect params from CLI arguments.
+    effect_cls = registry[effect_name]
+    param_defs = effect_cls.get_param_defs()
+    params: Dict[str, Any] = {}
+    for pname in param_defs:
+        val: Any = getattr(args, pname, None)
+        if val is not None:
+            params[pname] = val
+    if "zones_per_bulb" in param_defs:
+        params["zones_per_bulb"] = getattr(args, "zpb", 1)
+
+    # URL-encode the device identifier (labels may contain spaces).
+    encoded_device: str = quote(device, safe="")
+    play_path: str = f"/api/devices/{encoded_device}/play"
+
+    _print(f"Playing '{effect_name}' on '{device}' via server...",
+           flush=True)
+
+    try:
+        resp: dict = _server_post(
+            _server_url, play_path,
+            {"effect": effect_name, "params": params},
+            timeout=SERVER_TIMEOUT_SECONDS,
+        )
+    except SystemExit:
+        raise
+    except Exception as exc:
+        _print(f"ERROR: Server play failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # Show what the server reported.
+    if "effect" in resp:
+        _print(f"  Effect: {resp['effect']}")
+    if "params" in resp:
+        _print(f"  Params: {json.dumps(resp['params'], indent=2)}")
+    _print("Press Ctrl+C to stop.\n")
+
+    # Block until Ctrl+C, then tell the server to stop the effect.
+    stop_event: threading.Event = threading.Event()
+
+    def _handle_signal(sig: int, frame: Any) -> None:
+        if not stop_event.is_set():
+            stop_event.set()
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    stop_event.wait()
+    _print("\nStopping...")
+
+    stop_path: str = f"/api/devices/{encoded_device}/stop"
+    try:
+        _server_post(
+            _server_url, stop_path, {},
+            timeout=SERVER_TIMEOUT_SECONDS,
+        )
+        _print("Stopped.")
+    except Exception as exc:
+        _print(f"WARNING: Stop request failed: {exc}", file=sys.stderr)
+
+
 def cmd_play(args: argparse.Namespace) -> None:
     """Connect to a LIFX device (or group) and run the named effect.
 
@@ -1205,10 +1291,33 @@ def cmd_play(args: argparse.Namespace) -> None:
         plus any effect-specific parameters.
     """
     has_ip: bool = bool(getattr(args, "ip", None))
+    has_device: bool = bool(getattr(args, "device", None))
     has_group: bool = bool(getattr(args, "group", None))
     has_config: bool = bool(getattr(args, "config", None))
     sim_only: bool = bool(getattr(args, "sim_only", False))
     virtual_zones: int = getattr(args, "zones", None) or 0
+
+    # -- Server-side play via --device ----------------------------------------
+    # When --device is given, the server does all the work: resolve the
+    # label/MAC to an IP, run the effect, send packets.  The CLI just
+    # blocks until Ctrl+C, then tells the server to stop.
+    if has_device:
+        if not _server_url:
+            _print(
+                "ERROR: --device requires a reachable GlowUp server "
+                "(the server resolves labels and runs effects).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if has_ip or has_group:
+            _print(
+                "ERROR: --device is mutually exclusive with "
+                "--ip and --group.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        _play_via_server(args)
+        return
 
     # --config without --group is meaningless.
     if has_config and not has_group:
@@ -1225,7 +1334,8 @@ def cmd_play(args: argparse.Namespace) -> None:
 
     if not has_ip and not has_group and virtual_zones <= 0:
         _print(
-            "ERROR: Specify --ip, --group, or --zones.\n"
+            "ERROR: Specify --ip, --device, --group, or --zones.\n"
+            "       --device routes through the server by label/MAC\n"
             "       --group fetches device IPs from the server\n"
             "       (or from a local file with --config).",
             file=sys.stderr,
@@ -2025,6 +2135,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_play.add_argument(
         "--ip", default=None,
         help="Target device IP address or hostname",
+    )
+    p_play.add_argument(
+        "--device", default=None,
+        help=(
+            "Target device by registry label or MAC address. "
+            "Requires the GlowUp server — the server resolves "
+            "the identifier and runs the effect."
+        ),
     )
     p_play.add_argument(
         "--config", default=None,

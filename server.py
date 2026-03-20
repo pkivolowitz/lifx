@@ -1770,6 +1770,44 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         """
         logging.debug("HTTP %s", format % args)
 
+    # -- Device identifier resolution ----------------------------------------
+
+    def _resolve_device_id(self, identifier: str) -> Optional[str]:
+        """Resolve a device identifier to an internal IP or group key.
+
+        Accepts any of:
+        - Raw IP address — returned as-is.
+        - ``group:name`` — returned as-is.
+        - Registry label (e.g. ``PORCH STRING LIGHTS``) — resolved
+          via registry label→MAC, then keepalive MAC→IP.
+        - MAC address (e.g. ``d0:73:d5:69:70:db``) — resolved via
+          keepalive MAC→IP.
+
+        Args:
+            identifier: Raw device identifier from the URL path.
+
+        Returns:
+            The resolved IP address or ``group:name`` string, or
+            ``None`` if the identifier cannot be resolved.
+        """
+        # Group identifiers pass through unchanged.
+        if _is_group_id(identifier):
+            return identifier if len(identifier) > len(GROUP_PREFIX) else None
+
+        # Raw IP addresses pass through unchanged.
+        if _validate_ip(identifier):
+            return identifier
+
+        # Try registry + keepalive resolution (label or MAC → IP).
+        reg: Optional[DeviceRegistry] = self.registry
+        ka: Optional[BulbKeepAlive] = self.keepalive
+        if reg is not None and ka is not None:
+            ip: Optional[str] = reg.resolve_to_ip(identifier, ka)
+            if ip is not None:
+                return ip
+
+        return None
+
     # -- Authentication -----------------------------------------------------
 
     def _authenticate(self) -> bool:
@@ -1933,9 +1971,14 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             return  # strip query string
         parts: list[str] = path.strip("/").split("/")
         # URL-decode the device identifier (handles %3A for colon in
-        # group:name identifiers).
+        # group:name identifiers, %20 for spaces in labels).
+        # Then resolve labels/MACs to internal IPs so all downstream
+        # handlers receive a valid device key.
         if len(parts) >= 3 and parts[1] == "devices":
             parts[2] = unquote(parts[2])
+            resolved: Optional[str] = self._resolve_device_id(parts[2])
+            if resolved is not None:
+                parts[2] = resolved
 
         # /api/status
         if path == "/api/status":
@@ -1957,7 +2000,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 and parts[3] == "status"):
             ip: str = parts[2]
             if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Invalid device identifier"})
+                self._send_json(400, {"error": "Cannot resolve device identifier"})
                 return
             self._handle_get_device_status(ip)
             return
@@ -1967,7 +2010,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 and parts[3] == "colors"):
             ip = parts[2]
             if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Invalid device identifier"})
+                self._send_json(400, {"error": "Cannot resolve device identifier"})
                 return
             self._handle_get_device_colors(ip)
             return
@@ -1977,7 +2020,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 and parts[3] == "colors" and parts[4] == "stream"):
             ip = parts[2]
             if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Invalid device identifier"})
+                self._send_json(400, {"error": "Cannot resolve device identifier"})
                 return
             self._handle_get_device_colors_stream(ip)
             return
@@ -2046,15 +2089,19 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         path: str = self.path.split("?")[0]
         parts: list[str] = path.strip("/").split("/")
+        # URL-decode and resolve labels/MACs to internal IPs.
         if len(parts) >= 3 and parts[1] == "devices":
             parts[2] = unquote(parts[2])
+            resolved: Optional[str] = self._resolve_device_id(parts[2])
+            if resolved is not None:
+                parts[2] = resolved
 
         # /api/devices/{id}/play
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
                 and parts[3] == "play"):
             ip: str = parts[2]
             if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Invalid device identifier"})
+                self._send_json(400, {"error": "Cannot resolve device identifier"})
                 return
             self._handle_post_play(ip)
             return
@@ -2064,7 +2111,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 and parts[3] == "stop"):
             ip = parts[2]
             if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Invalid device identifier"})
+                self._send_json(400, {"error": "Cannot resolve device identifier"})
                 return
             self._handle_post_stop(ip)
             return
@@ -2074,7 +2121,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 and parts[3] == "power"):
             ip = parts[2]
             if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Invalid device identifier"})
+                self._send_json(400, {"error": "Cannot resolve device identifier"})
                 return
             self._handle_post_power(ip)
             return
@@ -2084,7 +2131,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 and parts[3] == "identify"):
             ip = parts[2]
             if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Invalid device identifier"})
+                self._send_json(400, {"error": "Cannot resolve device identifier"})
                 return
             self._handle_post_identify(ip)
             return
@@ -2094,7 +2141,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 and parts[3] == "resume"):
             ip = parts[2]
             if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Invalid device identifier"})
+                self._send_json(400, {"error": "Cannot resolve device identifier"})
                 return
             self._handle_post_resume(ip)
             return
@@ -2104,7 +2151,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 and parts[3] == "reset"):
             ip = parts[2]
             if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Invalid device identifier"})
+                self._send_json(400, {"error": "Cannot resolve device identifier"})
                 return
             self._handle_post_reset(ip)
             return
@@ -2114,7 +2161,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 and parts[3] == "nickname"):
             ip = parts[2]
             if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Invalid device identifier"})
+                self._send_json(400, {"error": "Cannot resolve device identifier"})
                 return
             self._handle_post_nickname(ip)
             return
@@ -2214,12 +2261,13 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_delete_registry_device(mac)
             return
 
-        # DELETE /api/command/identify/{ip} — cancel a running identify pulse.
+        # DELETE /api/command/identify/{id} — cancel a running identify pulse.
         if (len(parts) == 4 and parts[0] == "api" and parts[1] == "command"
                 and parts[2] == "identify"):
-            ip: str = unquote(parts[3])
+            raw_id: str = unquote(parts[3])
+            ip: str = self._resolve_device_id(raw_id) or raw_id
             if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Invalid device identifier"})
+                self._send_json(400, {"error": "Cannot resolve device identifier"})
                 return
             self._handle_delete_command_identify(ip)
             return
@@ -3319,7 +3367,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         if target_ip is not None:
             if not _validate_device_id(target_ip):
-                self._send_json(400, {"error": "Invalid device identifier"})
+                self._send_json(400, {"error": "Cannot resolve device identifier"})
                 return
             # For specific IP, always return it (even if not in ARP cache yet).
             devices: list[dict] = [{"ip": target_ip, "mac": ""}]
@@ -3408,12 +3456,17 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         if body is None:
             return
 
-        ip: Any = body.get("ip")
-        if not ip or not isinstance(ip, str):
-            self._send_json(400, {"error": "Missing or invalid 'ip' field"})
+        raw_ident: Any = body.get("ip") or body.get("device")
+        if not raw_ident or not isinstance(raw_ident, str):
+            self._send_json(400, {
+                "error": "Missing or invalid 'ip' or 'device' field"
+            })
             return
-        if not _validate_device_id(ip):
-            self._send_json(400, {"error": "Invalid device identifier"})
+        ip: Optional[str] = self._resolve_device_id(raw_ident)
+        if ip is None or not _validate_device_id(ip):
+            self._send_json(400, {
+                "error": f"Cannot resolve device '{raw_ident}'"
+            })
             return
 
         duration: float = float(body.get("duration", IDENTIFY_DURATION_SECONDS))
