@@ -1693,7 +1693,11 @@ class SchedulerThread(threading.Thread):
         """Scheduler main loop — poll for schedule transitions."""
         lat: float = self._config["location"]["latitude"]
         lon: float = self._config["location"]["longitude"]
-        groups: dict[str, list[str]] = _get_groups(self._config)
+        # Use the DeviceManager's resolved groups (IPs), not the raw
+        # config groups (which may contain labels or MACs that the
+        # DeviceManager can't look up directly).  The resolution
+        # happened in _background_startup → _resolve_config_groups.
+        groups: dict[str, list[str]] = dict(self._dm._group_config)
         specs: list[dict[str, Any]] = self._config.get("schedule", [])
 
         if not specs:
