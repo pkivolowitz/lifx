@@ -283,6 +283,10 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_media_sources"),
     _Route("GET", ("api", "media", "signals"),
            "_handle_get_media_signals"),
+    _Route("GET", ("api", "media", "stream", "{source_name}"),
+           "_handle_get_media_stream",
+           requires_auth=False,
+           unquote_params=("source_name",)),
     _Route("GET", ("api", "fleet"),
            "_handle_get_fleet"),
     _Route("GET", ("api", "diagnostics", "now_playing"),
@@ -2810,6 +2814,71 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, {"signals": []})
             return
         self._send_json(200, {"signals": mm.bus.list_signals()})
+
+    def _handle_get_media_stream(self, source_name: str) -> None:
+        """GET /api/media/stream/{source_name} — raw PCM audio stream.
+
+        Streams raw 16-bit signed little-endian mono PCM at the source's
+        sample rate.  Designed for piping to ffplay::
+
+            ffplay -f s16le -ar 44100 -ac 1 -nodisp http://server:8420/api/media/stream/name
+
+        The connection stays open as long as the source is alive.  No
+        authentication required — audio streams are not sensitive.
+        """
+        mm: Optional[MediaManager] = self.media_manager
+        if mm is None:
+            self._send_json(404, {"error": "No media manager"})
+            return
+
+        with mm._lock:
+            source = mm._sources.get(source_name)
+        if source is None or not source.is_alive():
+            self._send_json(404, {
+                "error": f"Source '{source_name}' not found or not running"
+            })
+            return
+
+        # Send chunked raw PCM.
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("X-Sample-Rate", str(source.sample_rate))
+        self.send_header("X-Channels", str(source.channels))
+        self.send_header("X-Format", "s16le")
+        self.end_headers()
+
+        # Thread-safe queue bridges the source callback to this thread.
+        import queue as _queue
+        audio_q: _queue.Queue[Optional[bytes]] = _queue.Queue(maxsize=64)
+
+        def _on_chunk(chunk: bytes) -> None:
+            try:
+                audio_q.put_nowait(chunk)
+            except _queue.Full:
+                pass  # Drop frames rather than blocking the source.
+
+        source.add_extractor(_on_chunk)
+        try:
+            while source.is_alive():
+                try:
+                    chunk: Optional[bytes] = audio_q.get(timeout=1.0)
+                except _queue.Empty:
+                    continue
+                if chunk is None:
+                    break
+                # HTTP chunked encoding: hex length + CRLF + data + CRLF.
+                self.wfile.write(f"{len(chunk):x}\r\n".encode())
+                self.wfile.write(chunk)
+                self.wfile.write(b"\r\n")
+                self.wfile.flush()
+            # Chunked terminator.
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # Client disconnected.
+        finally:
+            source.remove_extractor(_on_chunk)
 
     def _handle_get_fleet(self) -> None:
         """GET /api/fleet — distributed fleet status.

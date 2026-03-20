@@ -27,6 +27,7 @@ import json
 import math
 import platform
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -1290,6 +1291,39 @@ def _play_via_server(args: argparse.Namespace) -> None:
         _print(f"  Effect: {resp['effect']}")
     if "params" in resp:
         _print(f"  Params: {json.dumps(resp['params'], indent=2)}")
+
+    # If music_dir is active, stream audio from the server to local speakers.
+    ffplay_proc: Optional[subprocess.Popen] = None
+    if music_dir:
+        music_source_name: str = resp.get("params", {}).get("source", "")
+        if music_source_name:
+            stream_url: str = (
+                f"http://{_server_url}/api/media/stream/"
+                f"{quote(music_source_name, safe='')}"
+            )
+            sr: int = 44100
+            try:
+                ffplay_proc = subprocess.Popen(
+                    [
+                        "ffplay",
+                        "-f", "s16le",
+                        "-ar", str(sr),
+                        "-ac", "1",
+                        "-nodisp",
+                        "-loglevel", "error",
+                        stream_url,
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                _print(f"  Audio streaming to local speakers (pid {ffplay_proc.pid})")
+            except FileNotFoundError:
+                _print("  WARNING: ffplay not found — no local audio playback",
+                       file=sys.stderr)
+            except Exception as exc:
+                _print(f"  WARNING: Could not start audio: {exc}",
+                       file=sys.stderr)
+
     _print("Press Ctrl+C to stop.\n")
 
     # Block until Ctrl+C, then tell the server to stop the effect.
@@ -1297,6 +1331,14 @@ def _play_via_server(args: argparse.Namespace) -> None:
     _install_stop_signal(stop_event)
     stop_event.wait()
     _print("\nStopping...")
+
+    # Kill local audio playback.
+    if ffplay_proc is not None:
+        try:
+            ffplay_proc.kill()
+            ffplay_proc.wait(timeout=3.0)
+        except Exception:
+            pass
 
     stop_path: str = f"/api/devices/{encoded_device}/stop"
     try:
