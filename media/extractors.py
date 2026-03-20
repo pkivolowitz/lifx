@@ -236,13 +236,6 @@ class AudioExtractor(SignalExtractor):
         # Smoothed band values (initialized to zero).
         self._smooth_bands: list[float] = [0.0] * band_count
 
-        # Peak trackers for normalization.
-        self._band_peaks: list[_PeakTracker] = [
-            _PeakTracker() for _ in range(band_count)
-        ]
-        self._rms_peak: _PeakTracker = _PeakTracker()
-        self._energy_peak: _PeakTracker = _PeakTracker()
-
         # Beat detection state.
         self._energy_history: list[float] = []
         self._beat_value: float = 0.0
@@ -361,22 +354,22 @@ class AudioExtractor(SignalExtractor):
                 + (1.0 - alpha) * bands_raw[i]
             )
 
-        # Normalize bands.
-        bands_norm: list[float] = [
-            self._band_peaks[i].update(self._smooth_bands[i])
-            for i in range(self._band_count)
+        # Clamp bands to [0, 1].  No adaptive normalization — the
+        # effect's sensitivity param is the user's gain control.
+        bands_out: list[float] = [
+            min(1.0, b) for b in self._smooth_bands
         ]
 
         # --- Derived scalar signals ---
         # Bass: average of lowest 2 bands (or 1 if only 1 band).
         bass_end: int = min(2, self._band_count)
-        bass: float = sum(bands_norm[:bass_end]) / bass_end if bass_end > 0 else 0.0
+        bass: float = sum(bands_out[:bass_end]) / bass_end if bass_end > 0 else 0.0
 
         # Treble: average of highest 2 bands.
         treble_start: int = max(0, self._band_count - 2)
         treble_count: int = self._band_count - treble_start
         treble: float = (
-            sum(bands_norm[treble_start:]) / treble_count
+            sum(bands_out[treble_start:]) / treble_count
             if treble_count > 0 else 0.0
         )
 
@@ -385,15 +378,18 @@ class AudioExtractor(SignalExtractor):
         mid_end: int = treble_start
         mid_count: int = mid_end - mid_start
         mid: float = (
-            sum(bands_norm[mid_start:mid_end]) / mid_count
+            sum(bands_out[mid_start:mid_end]) / mid_count
             if mid_count > 0 else 0.0
         )
 
-        # Energy: total spectral energy (sum of raw band magnitudes).
-        energy_raw: float = sum(self._smooth_bands)
-        energy_norm: float = self._energy_peak.update(energy_raw)
+        # Energy: total spectral energy (clamped, no adaptive peak).
+        energy: float = min(1.0, sum(self._smooth_bands) / self._band_count)
+
+        # RMS: clamped, no adaptive peak.
+        rms_out: float = min(1.0, rms_raw)
 
         # --- Beat detection ---
+        energy_raw: float = sum(self._smooth_bands)
         self._energy_history.append(energy_raw)
         if len(self._energy_history) > BEAT_HISTORY_SIZE:
             self._energy_history = self._energy_history[-BEAT_HISTORY_SIZE:]
@@ -418,27 +414,13 @@ class AudioExtractor(SignalExtractor):
         # --- Spectral centroid ---
         centroid: float = spectral_centroid(mags, self._sample_rate)
 
-        # --- Global peak normalization ---
-        # Normalize all bands against the single loudest band value.
-        # This preserves relative differences between bands (unlike
-        # per-band peak tracking which makes ambient noise look uniform).
-        # Gate: if RMS is below the noise floor, all bands are silence.
-        if rms_raw < NOISE_FLOOR:
-            bands_global: list[float] = [0.0] * self._band_count
-        else:
-            global_peak: float = max(self._smooth_bands) if self._smooth_bands else NOISE_FLOOR
-            global_peak = max(global_peak, NOISE_FLOOR)
-            bands_global = [
-                min(1.0, b / global_peak) for b in self._smooth_bands
-            ]
-
         # --- Write to bus ---
-        self._bus.write(f"{prefix}:bands", bands_global)
+        self._bus.write(f"{prefix}:bands", bands_out)
         self._bus.write(f"{prefix}:bass", bass)
         self._bus.write(f"{prefix}:mid", mid)
         self._bus.write(f"{prefix}:treble", treble)
-        self._bus.write(f"{prefix}:rms", rms_norm)
-        self._bus.write(f"{prefix}:energy", energy_norm)
+        self._bus.write(f"{prefix}:rms", rms_out)
+        self._bus.write(f"{prefix}:energy", energy)
         self._bus.write(f"{prefix}:beat", self._beat_value)
         self._bus.write(f"{prefix}:centroid", centroid)
 
