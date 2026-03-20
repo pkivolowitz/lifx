@@ -1305,6 +1305,10 @@ def _play_via_server(args: argparse.Namespace) -> None:
                 ffplay_proc = subprocess.Popen(
                     [
                         "ffplay",
+                        "-fflags", "nobuffer",
+                        "-flags", "low_delay",
+                        "-probesize", "32",
+                        "-analyzeduration", "0",
                         "-f", "s16le",
                         "-ar", "44100",
                         "-ch_layout", "mono",
