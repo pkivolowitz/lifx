@@ -6,6 +6,17 @@
 
 import Foundation
 
+/// Percent-encode a device identifier for use in a URL path segment.
+///
+/// Labels may contain spaces and other characters that are not
+/// valid in URL paths.  This encodes everything except unreserved
+/// characters (RFC 3986 §2.3).
+func urlEncodeDeviceId(_ identifier: String) -> String {
+    // .urlPathAllowed keeps slashes — we need pure segment encoding.
+    let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
+    return identifier.addingPercentEncoding(withAllowedCharacters: allowed) ?? identifier
+}
+
 /// HTTP client for the GlowUp REST API.
 ///
 /// Manages the server URL and bearer token, persisting both in the
@@ -61,21 +72,23 @@ class APIClient: ObservableObject {
 
     /// Fetch the current status of a device's effect engine.
     ///
-    /// - Parameter ip: Device IP address.
+    /// - Parameter deviceId: Device identifier (label, MAC, or IP).
     /// - Returns: The ``DeviceStatus`` for the device.
     /// - Throws: ``APIError`` on failure.
-    func fetchStatus(ip: String) async throws -> DeviceStatus {
-        return try await get("/api/devices/\(ip)/status")
+    func fetchStatus(deviceId: String) async throws -> DeviceStatus {
+        let encoded = urlEncodeDeviceId(deviceId)
+        return try await get("/api/devices/\(encoded)/status")
     }
 
     /// Fetch a snapshot of the current zone colors.
     ///
-    /// - Parameter ip: Device IP address.
+    /// - Parameter deviceId: Device identifier (label, MAC, or IP).
     /// - Returns: An array of ``ZoneColor``.
     /// - Throws: ``APIError`` on failure.
-    func fetchColors(ip: String) async throws -> [ZoneColor] {
+    func fetchColors(deviceId: String) async throws -> [ZoneColor] {
+        let encoded = urlEncodeDeviceId(deviceId)
         let response: ZoneColorResponse = try await get(
-            "/api/devices/\(ip)/colors"
+            "/api/devices/\(encoded)/colors"
         )
         return response.zones
     }
@@ -113,53 +126,57 @@ class APIClient: ObservableObject {
     /// Start an effect on a device.
     ///
     /// - Parameters:
-    ///   - ip: Device IP address.
+    ///   - deviceId: Device identifier (label, MAC, or IP).
     ///   - effectName: Registered effect name.
     ///   - params: Parameter overrides (name → value).
     /// - Returns: The updated ``DeviceStatus``.
     /// - Throws: ``APIError`` on failure.
     func play(
-        ip: String,
+        deviceId: String,
         effectName: String,
         params: [String: Any]
     ) async throws -> DeviceStatus {
+        let encoded = urlEncodeDeviceId(deviceId)
         let body: [String: Any] = [
             "effect": effectName,
             "params": params,
         ]
-        return try await postRaw("/api/devices/\(ip)/play", body: body)
+        return try await postRaw("/api/devices/\(encoded)/play", body: body)
     }
 
     /// Stop the current effect on a device.
     ///
-    /// - Parameter ip: Device IP address.
+    /// - Parameter deviceId: Device identifier (label, MAC, or IP).
     /// - Returns: The updated ``DeviceStatus``.
     /// - Throws: ``APIError`` on failure.
-    func stop(ip: String) async throws -> DeviceStatus {
-        return try await post("/api/devices/\(ip)/stop", body: EmptyBody())
+    func stop(deviceId: String) async throws -> DeviceStatus {
+        let encoded = urlEncodeDeviceId(deviceId)
+        return try await post("/api/devices/\(encoded)/stop", body: EmptyBody())
     }
 
     /// Resume the schedule on a device by clearing its phone override.
     ///
     /// The scheduler will resume control on its next poll cycle.
     ///
-    /// - Parameter ip: Device IP address.
+    /// - Parameter deviceId: Device identifier (label, MAC, or IP).
     /// - Returns: The updated ``DeviceStatus``.
     /// - Throws: ``APIError`` on failure.
-    func resume(ip: String) async throws -> DeviceStatus {
-        return try await post("/api/devices/\(ip)/resume", body: EmptyBody())
+    func resume(deviceId: String) async throws -> DeviceStatus {
+        let encoded = urlEncodeDeviceId(deviceId)
+        return try await post("/api/devices/\(encoded)/resume", body: EmptyBody())
     }
 
     /// Turn a device on or off.
     ///
     /// - Parameters:
-    ///   - ip: Device IP address.
+    ///   - deviceId: Device identifier (label, MAC, or IP).
     ///   - on: ``true`` to power on, ``false`` to power off.
     /// - Throws: ``APIError`` on failure.
-    func setPower(ip: String, on: Bool) async throws {
+    func setPower(deviceId: String, on: Bool) async throws {
         struct PowerBody: Codable { let on: Bool }
+        let encoded = urlEncodeDeviceId(deviceId)
         let _: [String: AnyCodableValue] = try await post(
-            "/api/devices/\(ip)/power",
+            "/api/devices/\(encoded)/power",
             body: PowerBody(on: on)
         )
     }
@@ -169,11 +186,12 @@ class APIClient: ObservableObject {
     /// The server pulses the device for ~10 seconds in the background.
     /// This method returns immediately after the server acknowledges.
     ///
-    /// - Parameter ip: Device IP address.
+    /// - Parameter deviceId: Device identifier (label, MAC, or IP).
     /// - Throws: ``APIError`` on failure.
-    func identify(ip: String) async throws {
+    func identify(deviceId: String) async throws {
+        let encoded = urlEncodeDeviceId(deviceId)
         let _: [String: AnyCodableValue] = try await post(
-            "/api/devices/\(ip)/identify",
+            "/api/devices/\(encoded)/identify",
             body: EmptyBody()
         )
     }
@@ -181,11 +199,12 @@ class APIClient: ObservableObject {
     /// Deep-reset device hardware: stop effects, clear firmware state,
     /// blank all zones, and power off.
     ///
-    /// - Parameter ip: Device IP address.
+    /// - Parameter deviceId: Device identifier (label, MAC, or IP).
     /// - Throws: ``APIError`` on failure.
-    func reset(ip: String) async throws {
+    func reset(deviceId: String) async throws {
+        let encoded = urlEncodeDeviceId(deviceId)
         let _: [String: AnyCodableValue] = try await post(
-            "/api/devices/\(ip)/reset",
+            "/api/devices/\(encoded)/reset",
             body: EmptyBody()
         )
     }
@@ -193,13 +212,14 @@ class APIClient: ObservableObject {
     /// Set or clear a custom display name for a device.
     ///
     /// - Parameters:
-    ///   - ip: Device IP address.
+    ///   - deviceId: Device identifier (label, MAC, or IP).
     ///   - nickname: The custom name, or empty string to clear.
     /// - Throws: ``APIError`` on failure.
-    func setNickname(ip: String, nickname: String) async throws {
+    func setNickname(deviceId: String, nickname: String) async throws {
         struct NicknameBody: Codable { let nickname: String }
+        let encoded = urlEncodeDeviceId(deviceId)
         let _: [String: AnyCodableValue] = try await post(
-            "/api/devices/\(ip)/nickname",
+            "/api/devices/\(encoded)/nickname",
             body: NicknameBody(nickname: nickname)
         )
     }
@@ -236,10 +256,11 @@ class APIClient: ObservableObject {
     /// The caller is responsible for creating a ``URLSession`` data
     /// task with a streaming delegate to consume the response.
     ///
-    /// - Parameter ip: Device IP address.
+    /// - Parameter deviceId: Device identifier (label, MAC, or IP).
     /// - Returns: A configured ``URLRequest`` for SSE streaming.
-    func sseRequest(ip: String) -> URLRequest? {
-        guard let url = buildURL("/api/devices/\(ip)/colors/stream") else {
+    func sseRequest(deviceId: String) -> URLRequest? {
+        let encoded = urlEncodeDeviceId(deviceId)
+        guard let url = buildURL("/api/devices/\(encoded)/colors/stream") else {
             return nil
         }
         var request = URLRequest(url: url)

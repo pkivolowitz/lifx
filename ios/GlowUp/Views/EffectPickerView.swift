@@ -104,7 +104,7 @@ struct EffectPickerView: View {
         do {
             effects = try await apiClient.fetchEffects()
             // Fetch device status to highlight the running effect.
-            let status = try await apiClient.fetchStatus(ip: device.ip)
+            let status = try await apiClient.fetchStatus(deviceId: device.deviceId)
             if status.running {
                 currentEffect = status.effect
             }

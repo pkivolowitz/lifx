@@ -207,7 +207,7 @@ struct DeviceDetailView: View {
             // Fetch status first, then start SSE only if an effect is running.
             await refreshStatus()
             if status?.running == true {
-                colorStream.connect(apiClient: apiClient, ip: device.ip)
+                colorStream.connect(apiClient: apiClient, deviceId: device.deviceId)
             }
         }
         .onDisappear {
@@ -233,7 +233,7 @@ struct DeviceDetailView: View {
     /// Fetch current device status from the server.
     private func refreshStatus() async {
         do {
-            status = try await apiClient.fetchStatus(ip: device.ip)
+            status = try await apiClient.fetchStatus(deviceId: device.deviceId)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -243,7 +243,7 @@ struct DeviceDetailView: View {
     private func stopEffect() async {
         isLoading = true
         do {
-            status = try await apiClient.stop(ip: device.ip)
+            status = try await apiClient.stop(deviceId: device.deviceId)
             colorStream.disconnect()
         } catch {
             errorMessage = error.localizedDescription
@@ -267,12 +267,12 @@ struct DeviceDetailView: View {
                 }
             }
             status = try await apiClient.play(
-                ip: device.ip,
+                deviceId: device.deviceId,
                 effectName: effectName,
                 params: params
             )
             if status?.running == true {
-                colorStream.connect(apiClient: apiClient, ip: device.ip)
+                colorStream.connect(apiClient: apiClient, deviceId: device.deviceId)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -283,7 +283,7 @@ struct DeviceDetailView: View {
     /// Pulse the device's brightness to visually locate it.
     private func identifyDevice() async {
         do {
-            try await apiClient.identify(ip: device.ip)
+            try await apiClient.identify(deviceId: device.deviceId)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -293,7 +293,7 @@ struct DeviceDetailView: View {
     private func resumeSchedule() async {
         isLoading = true
         do {
-            status = try await apiClient.resume(ip: device.ip)
+            status = try await apiClient.resume(deviceId: device.deviceId)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -303,7 +303,7 @@ struct DeviceDetailView: View {
     /// Toggle device power off.
     private func togglePower() async {
         do {
-            try await apiClient.setPower(ip: device.ip, on: false)
+            try await apiClient.setPower(deviceId: device.deviceId, on: false)
             // Refresh status after power change.
             await refreshStatus()
         } catch {
@@ -315,7 +315,7 @@ struct DeviceDetailView: View {
     private func resetDevice() async {
         isLoading = true
         do {
-            try await apiClient.reset(ip: device.ip)
+            try await apiClient.reset(deviceId: device.deviceId)
             colorStream.disconnect()
             await refreshStatus()
         } catch {

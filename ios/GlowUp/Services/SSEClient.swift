@@ -41,11 +41,11 @@ class SSEColorStream: ObservableObject {
     ///
     /// - Parameters:
     ///   - apiClient: The configured ``APIClient`` for building requests.
-    ///   - ip: Device IP address.
-    func connect(apiClient: APIClient, ip: String) {
+    ///   - deviceId: Device identifier (label, MAC, or IP).
+    func connect(apiClient: APIClient, deviceId: String) {
         disconnect()
 
-        guard let request = apiClient.sseRequest(ip: ip) else { return }
+        guard let request = apiClient.sseRequest(deviceId: deviceId) else { return }
 
         // Create a delegate that calls back to update zones.
         let sseDelegate = SSEDelegate { [weak self] newZones in

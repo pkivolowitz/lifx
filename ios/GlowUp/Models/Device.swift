@@ -47,8 +47,19 @@ struct Device: Codable, Identifiable, Hashable {
     /// IP addresses of member devices (groups only).
     let memberIps: [String]?
 
-    /// Conform to ``Identifiable`` using the device identifier.
-    var id: String { ip }
+    /// The best available stable identifier for API calls.
+    ///
+    /// Preference order: label, MAC, IP.  Labels are human-readable
+    /// and survive DHCP changes.  MACs are stable but opaque.  IPs
+    /// are a last resort.  Empty strings are skipped.
+    var deviceId: String {
+        if let label = label, !label.isEmpty { return label }
+        if !mac.isEmpty && mac != "virtual" { return mac }
+        return ip
+    }
+
+    /// Conform to ``Identifiable`` using the most stable identifier.
+    var id: String { deviceId }
 
     /// True if this is a virtual multizone group.
     var isVirtualGroup: Bool { isGroup ?? false }

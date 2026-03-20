@@ -488,7 +488,7 @@ struct HubView: View {
         // Play the effect on the device.
         do {
             _ = try await apiClient.play(
-                ip: device.ip,
+                deviceId: device.deviceId,
                 effectName: effect.name,
                 params: params
             )
@@ -505,7 +505,7 @@ struct HubView: View {
 
         if let device = selectedDevice {
             Task {
-                _ = try? await apiClient.stop(ip: device.ip)
+                _ = try? await apiClient.stop(deviceId: device.deviceId)
             }
         }
 

@@ -8,6 +8,13 @@ devices.  It communicates with `server.py` over HTTP(S) and provides
 live color monitoring, auto-generated parameter UI, and
 Keychain-secured authentication.
 
+> **This app has not been reviewed by Apple.**  You build and install
+> it yourself via Xcode — it is not distributed through the App Store.
+> The source code is open for inspection under the MIT License, but
+> the software is provided **as-is**, without warranty of any kind,
+> including merchantability or fitness for a particular purpose.
+> See the [LICENSE](../LICENSE) file for full terms.
+
 ### Connectivity Options
 
 The app connects to a running `server.py` instance.  There are

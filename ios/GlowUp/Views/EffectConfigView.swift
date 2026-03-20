@@ -315,7 +315,7 @@ struct EffectConfigView: View {
 
         do {
             _ = try await apiClient.play(
-                ip: device.ip,
+                deviceId: device.deviceId,
                 effectName: effect.name,
                 params: apiParams
             )

@@ -115,13 +115,28 @@ struct LoginView: View {
 
                 Spacer()
 
-                // Footer.
-                VStack(spacing: 4) {
-                    Text("Credentials are stored in the iOS Keychain.")
-                    Text("\u{00A9} 2026 Perry Kivolowitz. MIT License.")
+                // Disclaimer and footer.
+                VStack(spacing: 8) {
+                    Text("This app has not been reviewed by Apple.")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.orange)
+
+                    Text("THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+
+                    Text("Source code is available under the MIT License. Credentials are stored in the iOS Keychain.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+
+                    Text("\u{00A9} 2026 Perry Kivolowitz")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 32)
                 .padding(.bottom, 16)
             }
             .onAppear {

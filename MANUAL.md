@@ -93,6 +93,13 @@ house, or from home automation platforms.
 Home Assistant integration, macOS Dock/Finder shortcuts, Node-RED
 visual flows.
 
+> **Caveat emptor:** The GlowUp iOS app has not undergone Apple App
+> Store review.  You build and install it yourself via Xcode.  The
+> source code is open and available for inspection under the MIT
+> License, but the software is provided **as-is**, without warranty
+> of any kind — including merchantability or fitness for a particular
+> purpose.  Use at your own discretion.
+
 | Section | Description |
 |---------|-------------|
 | [GlowUp iOS App](docs/12-ios-app.md) | Building, running, connectivity, app screens |

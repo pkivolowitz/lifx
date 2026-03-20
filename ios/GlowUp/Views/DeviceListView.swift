@@ -132,7 +132,7 @@ struct DeviceListView: View {
     /// Pulse a device's brightness to visually locate it.
     private func identifyDevice(_ device: Device) async {
         do {
-            try await apiClient.identify(ip: device.ip)
+            try await apiClient.identify(deviceId: device.deviceId)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -143,7 +143,7 @@ struct DeviceListView: View {
         let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
         renamingDevice = nil
         do {
-            try await apiClient.setNickname(ip: device.ip, nickname: name)
+            try await apiClient.setNickname(deviceId: device.deviceId, nickname: name)
             // Refresh to show the updated name.
             await refreshDevices()
         } catch {
