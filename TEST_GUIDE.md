@@ -28,6 +28,30 @@ python3 -m unittest test_use_cases -v
 python3 -m unittest discover -p "test_*.py" -v
 ```
 
+### Pre-commit hook
+
+A git pre-commit hook at `.git/hooks/pre-commit` runs the fast suite
+(173 tests, ~1 second) automatically before every commit. If any test
+fails, the commit is rejected.
+
+**Location:** `.git/hooks/pre-commit` (not tracked by git — lives only
+in the local clone).
+
+**What it runs:**
+1. `py_compile` on every staged `.py` file (syntax errors)
+2. The 5 fast test modules (logic errors)
+
+**If it blocks a commit:** Fix the failing test, re-stage, commit again.
+
+**If you need to bypass it (rare, mid-refactor):** `git commit --no-verify`
+
+**If it's missing after a fresh clone:** The canonical content is documented
+in the hook file's own header comments. Recreate it, `chmod +x`, done.
+The hook is also referenced in `standing_rules.md` on the NAS.
+
+**Note:** The hook does NOT run the use-case tests (`test_use_cases.py`,
+~19s) to keep commits fast. Run those manually before major pushes.
+
 ---
 
 ## Unit Tests (Quick Reference)
