@@ -528,6 +528,9 @@ class DeviceManager:
         # Play source tracking: device ID → client name that started
         # the current effect (e.g. "Conway", "Perry's iPhone", "scheduler").
         self._play_sources: dict[str, str] = {}
+        # Dynamic music source tracking: device ID → source name.
+        # Used to clean up on-demand DirectorySource instances on stop.
+        self._music_sources: dict[str, str] = {}
         # Readiness flag: False until initial load completes.
         self._ready: bool = False
         # Optional diagnostics logger (None if psycopg2 or DB unavailable).
@@ -2496,6 +2499,35 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         if source is not None and not isinstance(source, str):
             source = None
 
+        # On-demand music directory — create a DirectorySource at runtime.
+        music_dir: Optional[str] = body.get("music_dir")
+        music_source_name: Optional[str] = None
+        if music_dir and isinstance(music_dir, str):
+            mm: Optional[MediaManager] = self.media_manager
+            if mm is None:
+                # No MediaManager — create one with a SignalBus.
+                mm = MediaManager()
+                mm.configure(self.config)
+                GlowUpRequestHandler.media_manager = mm
+            music_source_name = f"_music_{ip.replace(':', '_')}"
+            ok: bool = mm.add_source(music_source_name, {
+                "type": "directory",
+                "path": music_dir,
+                "recursive": True,
+                "sample_rate": 44100,
+            })
+            if not ok:
+                self._send_json(400, {
+                    "error": f"Cannot start music from: {music_dir}"
+                })
+                return
+            # Set the effect's source param to the dynamic source name.
+            params["source"] = music_source_name
+            logging.info(
+                "API: created music source '%s' from %s",
+                music_source_name, music_dir,
+            )
+
         # Resolve signal bus — pass if we have bindings OR a media manager
         # (MediaEffects need the bus even without explicit bindings).
         signal_bus: Optional[SignalBus] = None
@@ -2512,6 +2544,11 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 bindings=bindings, signal_bus=signal_bus,
                 source=source,
             )
+            # Track the dynamic music source so stop can clean it up.
+            if music_source_name:
+                self.device_manager._music_sources[ip] = music_source_name
+            else:
+                self.device_manager._music_sources.pop(ip, None)
             logging.info(
                 "API: playing '%s' on %s from %s (params: %s, bindings: %s)",
                 effect_name, ip, source or "unknown",
@@ -2520,8 +2557,13 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             )
             self._send_json(200, status)
         except KeyError:
+            # Clean up music source if play failed.
+            if music_source_name and self.media_manager:
+                self.media_manager.remove_source(music_source_name)
             self._send_json(404, {"error": "Device not found"})
         except ValueError:
+            if music_source_name and self.media_manager:
+                self.media_manager.remove_source(music_source_name)
             self._send_json(400, {"error": "Invalid effect or parameters"})
 
     def _handle_post_stop(self, ip: str) -> None:
@@ -2541,6 +2583,13 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 active_entry: Optional[str] = self._get_active_entry_for_ip(ip)
                 self.device_manager.mark_override(ip, active_entry)
             status: dict[str, Any] = self.device_manager.stop(ip)
+            # Clean up any dynamic music source for this device.
+            music_name: Optional[str] = (
+                self.device_manager._music_sources.pop(ip, None)
+            )
+            if music_name and self.media_manager:
+                self.media_manager.remove_source(music_name)
+                logging.info("API: cleaned up music source '%s'", music_name)
             logging.info("API: stopped effect on %s", ip)
             self._send_json(200, status)
         except KeyError:

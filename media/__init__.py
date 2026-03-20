@@ -684,6 +684,55 @@ class MediaManager:
             source.stop()
         return True
 
+    def add_source(self, name: str, config: dict[str, Any]) -> bool:
+        """Create and register a media source at runtime.
+
+        Used for on-demand sources like ``--music-dir`` that are not
+        in the server config file.  The source is created, registered,
+        and started immediately.
+
+        Args:
+            name:   Unique source name (e.g. ``"_music_dir"``).
+            config: Source config dict (must include ``"type"``).
+
+        Returns:
+            ``True`` if the source was created and started successfully.
+        """
+        from .source import create_source  # Deferred import.
+
+        try:
+            source = create_source(name, config, self._bus)
+        except Exception as exc:
+            logger.error("Failed to create dynamic source '%s': %s",
+                         name, exc)
+            return False
+
+        with self._lock:
+            # Stop any existing source with this name.
+            old = self._sources.get(name)
+            if old is not None and old.is_alive():
+                old.stop()
+            self._sources[name] = source
+            self._ref_counts[name] = 0
+
+        return self.acquire(name)
+
+    def remove_source(self, name: str) -> None:
+        """Stop and remove a dynamically created source.
+
+        Safe to call for sources that don't exist.
+
+        Args:
+            name: Source name to remove.
+        """
+        with self._lock:
+            source = self._sources.pop(name, None)
+            self._ref_counts.pop(name, None)
+            self._idle_timers.pop(name, None)
+        if source is not None and source.is_alive():
+            source.stop()
+            logger.info("Removed dynamic media source: %s", name)
+
     def shutdown(self) -> None:
         """Stop all sources and disable MQTT bridge.
 

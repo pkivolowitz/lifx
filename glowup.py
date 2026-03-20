@@ -1257,17 +1257,26 @@ def _play_via_server(args: argparse.Namespace) -> None:
     # -- Normal mode: server runs everything --------------------------------
     play_path: str = f"/api/devices/{encoded_device}/play"
 
-    _print(f"Playing '{effect_name}' on '{device}' via server...",
-           flush=True)
+    music_dir: Optional[str] = getattr(args, "music_dir", None)
+    if music_dir:
+        _print(f"Playing '{effect_name}' on '{device}' with music "
+               f"from '{music_dir}'...", flush=True)
+    else:
+        _print(f"Playing '{effect_name}' on '{device}' via server...",
+               flush=True)
+
+    play_body: Dict[str, Any] = {
+        "effect": effect_name,
+        "params": params,
+        "source": platform.node().removesuffix(".local"),
+    }
+    if music_dir:
+        play_body["music_dir"] = music_dir
 
     try:
         resp = _server_post(
             _server_url, play_path,
-            {
-                "effect": effect_name,
-                "params": params,
-                "source": platform.node().removesuffix(".local"),
-            },
+            play_body,
             timeout=SERVER_TIMEOUT_SECONDS,
         )
     except SystemExit:
@@ -2169,6 +2178,15 @@ def build_parser() -> argparse.ArgumentParser:
             "Target device by registry label or MAC address. "
             "Requires the GlowUp server — the server resolves "
             "the identifier and runs the effect."
+        ),
+    )
+    p_play.add_argument(
+        "--music-dir", default=None, metavar="PATH",
+        help=(
+            "Directory of audio files to play in shuffled order. "
+            "The server decodes the files via ffmpeg and feeds the "
+            "audio signal to the effect.  Requires --device and a "
+            "media-reactive effect (waveform, soundlevel)."
         ),
     )
     p_play.add_argument(
