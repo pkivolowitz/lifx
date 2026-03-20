@@ -303,8 +303,8 @@ class _BulbDB:
             if self._conn is not None:
                 try:
                     self._conn.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("BulbDB close failed: %s", exc)
                 self._conn = None
                 self._available = False
 

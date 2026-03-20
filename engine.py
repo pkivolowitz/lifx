@@ -33,6 +33,7 @@ from __future__ import annotations
 
 __version__ = "2.1"
 
+import logging
 import queue
 import threading
 import time
@@ -48,6 +49,18 @@ from transport import SendMode
 # Existing code that imports VirtualMultizoneDevice from engine will continue
 # to work.  The class is now VirtualMultizoneEmitter in its canonical home.
 from emitters.virtual import VirtualMultizoneEmitter as VirtualMultizoneDevice  # noqa: F401
+
+_log: logging.Logger = logging.getLogger("glowup.engine")
+
+
+def _exc_oneliner() -> str:
+    """Return a compact 'ExceptionType: message' string for the current exception."""
+    import sys
+    exc = sys.exc_info()[1]
+    if exc is None:
+        return "unknown error"
+    return f"{type(exc).__name__}: {exc}"
+
 
 # ---------------------------------------------------------------------------
 # Named constants — no magic numbers
@@ -382,7 +395,11 @@ class Engine:
                             colors.append(colors[-1] if colors else (0, 0, 0, 3500))
                     frame[id(em)] = colors
                 except Exception:
-                    pass
+                    _log.warning(
+                        "Render failed for emitter %s: %s",
+                        getattr(em, 'label', id(em)),
+                        _exc_oneliner(),
+                    )
 
             if not frame:
                 self._stop_event.wait(interval)
@@ -467,7 +484,11 @@ class Engine:
                         h, s, b, k = em_colors[0]
                         em.send_color(h, s, b, k, duration_ms=0)
                 except Exception:
-                    pass
+                    _log.warning(
+                        "Send failed for emitter %s: %s",
+                        getattr(em, 'label', id(em)),
+                        _exc_oneliner(),
+                    )
 
             # Store the last sent frame for SSE streaming.
             if colors:
@@ -479,7 +500,9 @@ class Engine:
                     try:
                         self._frame_callback(colors)
                     except Exception:
-                        pass
+                        _log.warning(
+                            "Frame callback failed: %s", _exc_oneliner(),
+                        )
 
             # Frame pacing: sleep only the remaining time in this frame slot.
             elapsed: float = time.time() - frame_start
@@ -537,7 +560,10 @@ class Engine:
             try:
                 setattr(effect, param_name, scaled)
             except Exception:
-                pass
+                _log.warning(
+                    "Failed to set param %s on effect: %s",
+                    param_name, _exc_oneliner(),
+                )
 
     def _flush_pipeline(self) -> None:
         """Drain all frames from the pipeline buffer.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Regression tests for tech debt audit fixes — 2026-03-19.
+"""Regression tests for tech debt audit fixes — 2026-03-19/20.
 
-Covers every change made during the audit session on Bed:
+Covers every change made during the audit sessions on Bed:
 
 - server.py:3752   — logger.warning → logging.warning (undefined name fix)
 - transport.py:1484 — logger.debug  → _log.debug     (undefined name fix)
@@ -10,6 +10,9 @@ Covers every change made during the audit session on Bed:
 - emitters/__init__.py — prepare_for_rendering() added to Emitter ABC
 - emitters/lifx.py     — skip_wake parameter on prepare_for_rendering()
 - emitters/virtual.py  — uses public API with skip_wake=True
+- engine.py — bare except→logged warnings in render/send/callback/binding
+- transport.py set_label — bare except→logged warning + finally timeout restore
+- bulb_keepalive.py close — bare except→logged debug
 
 No network or hardware dependencies.
 """
@@ -775,7 +778,7 @@ class TestCreateMqttClient(unittest.TestCase):
                 f"directly — should use create_mqtt_client",
             )
 
-    def test_no_paho_v2_in_source(self) -> None:
+    def test_no_paho_v2_in_source(self) -> None:  # noqa: E301
         """Theremin submodule source files must not contain _PAHO_V2."""
         for filename in ("display.py", "synth.py", "simulator.py"):
             filepath: str = os.path.join(
@@ -790,6 +793,247 @@ class TestCreateMqttClient(unittest.TestCase):
                 source,
                 f"theremin/{filename} still defines _PAHO_V2 variable",
             )
+
+
+# ---------------------------------------------------------------------------
+# Test: engine.py — bare exceptions replaced with logged warnings
+# ---------------------------------------------------------------------------
+
+class TestEngineLoggerExists(unittest.TestCase):
+    """Verify engine.py has a proper logger for error reporting."""
+
+    def test_engine_has_logger(self) -> None:
+        """engine module must define _log as a Logger."""
+        import engine
+        self.assertTrue(
+            hasattr(engine, "_log"),
+            "engine module missing '_log' attribute",
+        )
+        self.assertIsInstance(engine._log, logging.Logger)
+
+    def test_engine_has_exc_oneliner(self) -> None:
+        """engine module must define _exc_oneliner helper."""
+        import engine
+        self.assertTrue(
+            hasattr(engine, "_exc_oneliner"),
+            "engine module missing '_exc_oneliner' helper",
+        )
+        self.assertTrue(callable(engine._exc_oneliner))
+
+
+class TestEngineNoBareExcepts(unittest.TestCase):
+    """Verify engine.py render loop no longer silently swallows exceptions."""
+
+    def test_no_except_pass_in_render_loop(self) -> None:
+        """_run_loop must not contain 'except Exception' followed by 'pass'."""
+        import inspect
+        from engine import Engine
+        source: str = inspect.getsource(Engine._run_loop)
+        # Find 'except Exception:' lines not followed by logging.
+        import re
+        bare_excepts: list[str] = re.findall(
+            r"except Exception:\s*\n\s*pass",
+            source,
+        )
+        self.assertEqual(
+            len(bare_excepts), 0,
+            f"Found {len(bare_excepts)} bare 'except Exception: pass' "
+            f"blocks in _run_loop — should log warnings",
+        )
+
+    def test_no_except_pass_in_resolve_bindings(self) -> None:
+        """_resolve_bindings must not contain 'except Exception' + 'pass'."""
+        import inspect
+        from engine import Engine
+        source: str = inspect.getsource(Engine._resolve_bindings)
+        import re
+        bare_excepts: list[str] = re.findall(
+            r"except Exception:\s*\n\s*pass",
+            source,
+        )
+        self.assertEqual(
+            len(bare_excepts), 0,
+            f"Found {len(bare_excepts)} bare 'except Exception: pass' "
+            f"blocks in _resolve_bindings — should log warnings",
+        )
+
+    def test_render_thread_logs_on_render_error(self) -> None:
+        """_render_thread source must log on render exception."""
+        import inspect
+        from engine import Engine
+        source: str = inspect.getsource(Engine._render_thread)
+        self.assertIn(
+            "Render failed",
+            source,
+            "_render_thread should log 'Render failed' on exception",
+        )
+
+    def test_run_loop_logs_on_send_error(self) -> None:
+        """_run_loop source must log on send exception."""
+        import inspect
+        from engine import Engine
+        source: str = inspect.getsource(Engine._run_loop)
+        self.assertIn(
+            "Send failed",
+            source,
+            "_run_loop should log 'Send failed' on exception",
+        )
+
+    def test_run_loop_logs_on_callback_error(self) -> None:
+        """_run_loop source must log on frame callback exception."""
+        import inspect
+        from engine import Engine
+        source: str = inspect.getsource(Engine._run_loop)
+        self.assertIn(
+            "Frame callback failed",
+            source,
+            "_run_loop should log 'Frame callback failed' on exception",
+        )
+
+    def test_resolve_bindings_logs_on_setattr_error(self) -> None:
+        """_resolve_bindings must log when setattr fails."""
+        from engine import Engine
+
+        # Effect where setattr raises for a specific param.
+        class _BrokenEffect:
+            _param_defs = {}
+
+            def __setattr__(self, name: str, value: Any) -> None:
+                if name == "speed":
+                    raise AttributeError("read-only")
+                super().__setattr__(name, value)
+
+        effect = _BrokenEffect()
+        bindings: dict = {
+            "speed": {"signal": "audio.rms", "mode": "latest"},
+        }
+
+        # Mock signal bus with a .read() method.
+        mock_bus = MagicMock()
+        mock_bus.read.return_value = 0.5
+
+        with self.assertLogs("glowup.engine", level=logging.WARNING) as cm:
+            Engine._resolve_bindings(effect, bindings, mock_bus)
+
+        found: bool = any("Failed to set param" in msg for msg in cm.output)
+        self.assertTrue(
+            found,
+            f"Expected 'Failed to set param' warning, got: {cm.output}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: transport.py set_label — bare except replaced, timeout restored
+# ---------------------------------------------------------------------------
+
+class TestSetLabelExceptionHandling(unittest.TestCase):
+    """Verify set_label logs errors and restores socket timeout."""
+
+    def test_no_bare_except_in_set_label(self) -> None:
+        """set_label must not contain 'except Exception' + 'pass'."""
+        import inspect
+        from transport import LifxDevice
+        source: str = inspect.getsource(LifxDevice.set_label)
+        import re
+        bare_excepts: list[str] = re.findall(
+            r"except Exception:\s*\n\s*pass",
+            source,
+        )
+        self.assertEqual(
+            len(bare_excepts), 0,
+            "set_label still has bare 'except Exception: pass'",
+        )
+
+    def test_set_label_has_finally_block(self) -> None:
+        """set_label must use finally to restore socket timeout."""
+        import inspect
+        from transport import LifxDevice
+        source: str = inspect.getsource(LifxDevice.set_label)
+        self.assertIn(
+            "finally",
+            source,
+            "set_label missing 'finally' block for timeout restoration",
+        )
+
+    def test_set_label_logs_on_exception(self) -> None:
+        """set_label must reference _log.warning for error reporting."""
+        import inspect
+        from transport import LifxDevice
+        source: str = inspect.getsource(LifxDevice.set_label)
+        self.assertIn(
+            "_log.warning",
+            source,
+            "set_label should log warnings on exception",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: bulb_keepalive.py close — bare except replaced with debug log
+# ---------------------------------------------------------------------------
+
+class TestBulbDBCloseLogging(unittest.TestCase):
+    """Verify BulbDB.close() logs instead of silently swallowing."""
+
+    def test_close_no_bare_except(self) -> None:
+        """close() must not contain 'except Exception' + 'pass'."""
+        import inspect
+        from bulb_keepalive import _BulbDB
+        source: str = inspect.getsource(_BulbDB.close)
+        import re
+        bare_excepts: list[str] = re.findall(
+            r"except Exception:\s*\n\s*pass",
+            source,
+        )
+        self.assertEqual(
+            len(bare_excepts), 0,
+            "close() still has bare 'except Exception: pass'",
+        )
+
+    def test_close_logs_debug_on_failure(self) -> None:
+        """close() should log at debug level if conn.close() fails."""
+        import inspect
+        from bulb_keepalive import _BulbDB
+        source: str = inspect.getsource(_BulbDB.close)
+        self.assertIn(
+            "logger.debug",
+            source,
+            "close() should log at debug level on exception",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: _exc_oneliner helper
+# ---------------------------------------------------------------------------
+
+class TestExcOneliner(unittest.TestCase):
+    """Verify _exc_oneliner produces correct exception summaries."""
+
+    def test_returns_string_in_except_block(self) -> None:
+        """Inside an except block, should return 'Type: message'."""
+        from engine import _exc_oneliner
+        try:
+            raise ValueError("test message")
+        except ValueError:
+            result: str = _exc_oneliner()
+        self.assertEqual(result, "ValueError: test message")
+
+    def test_returns_unknown_outside_except(self) -> None:
+        """Outside an except block, should return 'unknown error'."""
+        from engine import _exc_oneliner
+        result: str = _exc_oneliner()
+        self.assertEqual(result, "unknown error")
+
+    def test_handles_nested_exceptions(self) -> None:
+        """Should report the innermost exception."""
+        from engine import _exc_oneliner
+        try:
+            try:
+                raise OSError("disk full")
+            except OSError:
+                raise RuntimeError("wrapped") from None
+        except RuntimeError:
+            result: str = _exc_oneliner()
+        self.assertEqual(result, "RuntimeError: wrapped")
 
 
 # ---------------------------------------------------------------------------

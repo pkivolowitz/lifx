@@ -1079,8 +1079,8 @@ class LifxDevice:
         self._send(MSG_SET_LABEL, payload, ack=True)
 
         # Wait for acknowledgement.
+        old_timeout: float = self.sock.gettimeout() or SOCKET_TIMEOUT
         try:
-            old_timeout: float = self.sock.gettimeout() or SOCKET_TIMEOUT
             self.sock.settimeout(SOCKET_TIMEOUT)
             deadline: float = time.time() + SOCKET_TIMEOUT
             while time.time() < deadline:
@@ -1094,9 +1094,11 @@ class LifxDevice:
                     break
                 except OSError:
                     break
+        except Exception as exc:
+            _log.warning("set_label(%r) failed: %s: %s",
+                         label, type(exc).__name__, exc)
+        finally:
             self.sock.settimeout(old_timeout)
-        except Exception:
-            pass
 
         return False
 
