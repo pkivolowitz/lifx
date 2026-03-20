@@ -43,6 +43,7 @@ from engine import Controller
 from effects import get_registry, get_effect_names, create_effect, HSBK, HSBK_MAX, KELVIN_DEFAULT
 from colorspace import set_lerp_method
 from network_config import net
+from simulator import create_simulator
 
 # ---------------------------------------------------------------------------
 # Named constants -- no magic numbers
@@ -141,6 +142,35 @@ IDENTIFY_DEFAULT_DURATION: float = 60.0
 # Timeout for the server probe that runs at startup to decide routing mode.
 SERVER_PROBE_TIMEOUT: float = 1.5
 """Seconds to wait for /api/status probe before falling back to direct UDP."""
+
+
+# ---------------------------------------------------------------------------
+# Signal handling
+# ---------------------------------------------------------------------------
+
+def _install_stop_signal(
+    stop_event: threading.Event,
+) -> threading.Event:
+    """Install SIGINT/SIGTERM handlers that set *stop_event*.
+
+    This is the standard pattern for interruptible CLI commands:
+    create a :class:`threading.Event`, wire signal handlers to set it,
+    then wait or poll via ``stop_event.wait()`` / ``stop_event.is_set()``.
+
+    Args:
+        stop_event: The event to set when a signal is received.
+
+    Returns:
+        The same *stop_event* for convenience (allows one-liner init).
+    """
+
+    def _handler(signum: int, frame: Any) -> None:
+        """Signal handler — sets the stop event."""
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, _handler)
+    signal.signal(signal.SIGTERM, _handler)
+    return stop_event
 
 # Minimum column widths for the discovery table display.
 # These prevent columns from collapsing when device labels are short.
@@ -480,12 +510,25 @@ def _read_token() -> str:
     return token
 
 
-def _server_get(server: str, path: str, *, timeout: float = SERVER_TIMEOUT_SECONDS) -> dict:
-    """Perform an authenticated GET against the GlowUp server.
+def _server_request(
+    server: str,
+    path: str,
+    *,
+    method: str = "GET",
+    body: Optional[dict] = None,
+    timeout: float = SERVER_TIMEOUT_SECONDS,
+) -> dict:
+    """Perform an authenticated HTTP request against the GlowUp server.
+
+    Handles token loading, JSON serialization, error formatting, and
+    ``sys.exit`` on failure — so callers stay concise.
 
     Args:
         server:  ``host:port`` of the server.
-        path:    URL path including any query string (e.g. ``/api/command/discover?ip=X``).
+        path:    URL path (e.g. ``/api/status``).
+        method:  HTTP method (``"GET"``, ``"POST"``, ``"DELETE"``).
+        body:    Optional dict to serialize as a JSON request body.
+                 Only meaningful for POST; ignored for other methods.
         timeout: HTTP request timeout in seconds.
 
     Returns:
@@ -496,93 +539,56 @@ def _server_get(server: str, path: str, *, timeout: float = SERVER_TIMEOUT_SECON
     """
     token: str = _read_token()
     url: str = f"http://{server}{path}"
+
+    headers: dict[str, str] = {"Authorization": f"Bearer {token}"}
+    data: Optional[bytes] = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(body).encode()
+
     req: urllib.request.Request = urllib.request.Request(
-        url, headers={"Authorization": f"Bearer {token}"},
+        url, data=data, headers=headers, method=method,
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
-        _print(f"ERROR: Server returned {exc.code} for {url}: {exc.reason}",
-               file=sys.stderr)
+        err_detail: str = exc.read().decode(errors="replace")
+        _print(
+            f"ERROR: Server returned {exc.code} for {url}: {err_detail}",
+            file=sys.stderr,
+        )
         sys.exit(1)
     except (urllib.error.URLError, OSError) as exc:
-        _print(f"ERROR: Cannot reach server at {server}: {exc}", file=sys.stderr)
+        _print(
+            f"ERROR: Cannot reach server at {server}: {exc}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
-def _server_post(server: str, path: str, body: dict, *, timeout: float = SERVER_TIMEOUT_SECONDS) -> dict:
-    """Perform an authenticated POST with a JSON body against the GlowUp server.
+def _server_get(
+    server: str, path: str, *, timeout: float = SERVER_TIMEOUT_SECONDS,
+) -> dict:
+    """Authenticated GET.  See :func:`_server_request`."""
+    return _server_request(server, path, method="GET", timeout=timeout)
 
-    Args:
-        server:  ``host:port`` of the server.
-        path:    URL path (e.g. ``/api/command/identify``).
-        body:    Dict to serialise as the JSON request body.
-        timeout: HTTP request timeout in seconds.
 
-    Returns:
-        Parsed JSON response body as a dict.
-
-    Raises:
-        SystemExit: On HTTP error, network failure, or auth failure.
-    """
-    token: str = _read_token()
-    url: str = f"http://{server}{path}"
-    data: bytes = json.dumps(body).encode()
-    req: urllib.request.Request = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+def _server_post(
+    server: str, path: str, body: dict,
+    *, timeout: float = SERVER_TIMEOUT_SECONDS,
+) -> dict:
+    """Authenticated POST with JSON body.  See :func:`_server_request`."""
+    return _server_request(
+        server, path, method="POST", body=body, timeout=timeout,
     )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as exc:
-        body_text: str = exc.read().decode(errors="replace")
-        _print(f"ERROR: Server returned {exc.code} for {url}: {body_text}",
-               file=sys.stderr)
-        sys.exit(1)
-    except (urllib.error.URLError, OSError) as exc:
-        _print(f"ERROR: Cannot reach server at {server}: {exc}", file=sys.stderr)
-        sys.exit(1)
 
 
-def _server_delete(server: str, path: str, *, timeout: float = SERVER_TIMEOUT_SECONDS) -> dict:
-    """Perform an authenticated DELETE against the GlowUp server.
-
-    Args:
-        server:  ``host:port`` of the server.
-        path:    URL path (e.g. ``/api/command/identify/10.0.0.28``).
-        timeout: HTTP request timeout in seconds.
-
-    Returns:
-        Parsed JSON response body as a dict.
-
-    Raises:
-        SystemExit: On HTTP error, network failure, or auth failure.
-    """
-    token: str = _read_token()
-    url: str = f"http://{server}{path}"
-    req: urllib.request.Request = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bearer {token}"},
-        method="DELETE",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as exc:
-        body_text: str = exc.read().decode(errors="replace")
-        _print(f"ERROR: Server returned {exc.code} for {url}: {body_text}",
-               file=sys.stderr)
-        sys.exit(1)
-    except (urllib.error.URLError, OSError) as exc:
-        _print(f"ERROR: Cannot reach server at {server}: {exc}", file=sys.stderr)
-        sys.exit(1)
+def _server_delete(
+    server: str, path: str, *, timeout: float = SERVER_TIMEOUT_SECONDS,
+) -> dict:
+    """Authenticated DELETE.  See :func:`_server_request`."""
+    return _server_request(server, path, method="DELETE", timeout=timeout)
 
 
 def _connect_group(ips: list[str]) -> list[LifxDevice]:
@@ -860,22 +866,12 @@ def cmd_identify(args: argparse.Namespace) -> None:
         _print(f"  {label} — {product}  |  MAC {mac}  |  zones: {zones}")
 
         # Wait for the pulse to finish; cancel via DELETE on Ctrl+C.
-        cancelled: bool = False
+        cancel_event: threading.Event = threading.Event()
+        _install_stop_signal(cancel_event)
 
-        def _cancel_identify(sig: int, frame: Any) -> None:
-            """Send DELETE to cancel the server-side pulse on Ctrl+C."""
-            nonlocal cancelled
-            cancelled = True
+        cancel_event.wait(timeout=duration)
 
-        signal.signal(signal.SIGINT, _cancel_identify)
-        signal.signal(signal.SIGTERM, _cancel_identify)
-
-        elapsed_wait: float = 0.0
-        while elapsed_wait < duration and not cancelled:
-            time.sleep(min(0.1, duration - elapsed_wait))
-            elapsed_wait += 0.1
-
-        if cancelled:
+        if cancel_event.is_set():
             _print("\nCancelling pulse on server...", flush=True)
             _server_delete(_server_url,
                            f"/api/command/identify/{args.ip}",
@@ -905,13 +901,7 @@ def cmd_identify(args: argparse.Namespace) -> None:
     dev.set_power(on=True, duration_ms=0)
 
     stop_requested: threading.Event = threading.Event()
-
-    def _handle_signal(sig: int, frame: Any) -> None:
-        """Signal handler that unblocks the main thread."""
-        stop_requested.set()
-
-    signal.signal(signal.SIGINT, _handle_signal)
-    signal.signal(signal.SIGTERM, _handle_signal)
+    _install_stop_signal(stop_requested)
 
     start_time: float = time.monotonic()
     while not stop_requested.is_set():
@@ -1076,8 +1066,6 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     _print(f"  {dev.zone_count} zones", flush=True)
 
     # --- Create simulator window ---------------------------------------------
-    from simulator import create_simulator
-
     poly_map: list[bool] = _build_polychrome_map(dev)
     zpb: int = getattr(args, "zpb", 1)
     zoom_val: int = getattr(args, "zoom", 1)
@@ -1112,12 +1100,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     poll_thread.start()
 
     # --- Signal handling ------------------------------------------------------
-    def _handle_signal(sig: int, frame: Any) -> None:
-        """Signal handler that unblocks the main thread."""
-        stop_requested.set()
-
-    signal.signal(signal.SIGINT, _handle_signal)
-    signal.signal(signal.SIGTERM, _handle_signal)
+    _install_stop_signal(stop_requested)
 
     # tkinter must run on the main thread (macOS requirement).
     sim._root.protocol("WM_DELETE_WINDOW", lambda: stop_requested.set())
@@ -1262,7 +1245,6 @@ def _play_via_server(args: argparse.Namespace) -> None:
         set_lerp_method(lerp_method)
 
         # Create and start the simulator.
-        from simulator import create_simulator
         zoom_val: int = getattr(args, "zoom", 1)
         sim = create_simulator(
             zone_count, effect_name,
@@ -1290,13 +1272,7 @@ def _play_via_server(args: argparse.Namespace) -> None:
         _print("Press Ctrl+C to stop.\n")
 
         stop_event: threading.Event = threading.Event()
-
-        def _handle_signal(sig: int, frame: Any) -> None:
-            if not stop_event.is_set():
-                stop_event.set()
-
-        signal.signal(signal.SIGINT, _handle_signal)
-        signal.signal(signal.SIGTERM, _handle_signal)
+        _install_stop_signal(stop_event)
         stop_event.wait()
         _print("\nStopping...")
         ctrl.stop(fade_ms=0)
@@ -1329,15 +1305,8 @@ def _play_via_server(args: argparse.Namespace) -> None:
     _print("Press Ctrl+C to stop.\n")
 
     # Block until Ctrl+C, then tell the server to stop the effect.
-    stop_event = threading.Event()
-
-    def _handle_signal(sig: int, frame: Any) -> None:
-        if not stop_event.is_set():
-            stop_event.set()
-
-    signal.signal(signal.SIGINT, _handle_signal)
-    signal.signal(signal.SIGTERM, _handle_signal)
-
+    stop_event: threading.Event = threading.Event()
+    _install_stop_signal(stop_event)
     stop_event.wait()
     _print("\nStopping...")
 
@@ -1570,7 +1539,6 @@ def cmd_play(args: argparse.Namespace) -> None:
     # --- Optional simulator window (--sim or --sim-only) ----------------------
     sim = None
     if getattr(args, "sim", False) or sim_only:
-        from simulator import create_simulator
         poly_map: list[bool] = _build_polychrome_map(em)
         zpb: int = getattr(args, "zpb", 1)
         zoom_val: int = getattr(args, "zoom", 1)
@@ -1607,13 +1575,7 @@ def cmd_play(args: argparse.Namespace) -> None:
 
     # --- Wait for interrupt (SIGINT / SIGTERM) --------------------------------
     stop_requested: threading.Event = threading.Event()
-
-    def _handle_signal(sig: int, frame: Any) -> None:
-        """Signal handler that unblocks the main thread."""
-        stop_requested.set()
-
-    signal.signal(signal.SIGINT, _handle_signal)
-    signal.signal(signal.SIGTERM, _handle_signal)
+    _install_stop_signal(stop_requested)
 
     if sim is not None:
         # tkinter must run on the main thread (macOS requirement).

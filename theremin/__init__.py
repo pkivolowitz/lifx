@@ -173,6 +173,33 @@ def distance_to_freq(pitch_cm: float) -> float:
     return max(FREQ_MIN, min(FREQ_MAX, freq))
 
 
+def create_mqtt_client(client_id: str) -> "mqtt.Client":
+    """Create a paho MQTT client compatible with both v1 and v2 APIs.
+
+    Paho v2 introduced ``CallbackAPIVersion`` and requires it as the
+    first constructor argument.  This factory detects which version is
+    installed and builds the client accordingly, eliminating the
+    per-module ``_PAHO_V2`` boilerplate.
+
+    Args:
+        client_id: Unique MQTT client identifier.
+
+    Returns:
+        A configured (but not yet connected) ``mqtt.Client`` instance.
+    """
+    import paho.mqtt.client as mqtt
+
+    if hasattr(mqtt, "CallbackAPIVersion"):
+        return mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2,
+            client_id=client_id,
+        )
+    return mqtt.Client(
+        client_id=client_id,
+        protocol=mqtt.MQTTv311,
+    )
+
+
 def distance_to_amplitude(volume_cm: float) -> float:
     """Map volume-hand distance to amplitude.
 

@@ -50,6 +50,7 @@ class MockEmitter(Emitter):
         self.power_off_calls: list[tuple] = []
         self.close_called: bool = False
         self.prepare_called: bool = False
+        self.prepare_skip_wake: bool = False
 
     @property
     def zone_count(self) -> Optional[int]:
@@ -79,8 +80,10 @@ class MockEmitter(Emitter):
                    duration_ms: int = 0) -> None:
         self.send_color_calls.append((hue, sat, bri, kelvin, duration_ms))
 
-    def prepare_for_rendering(self) -> None:
+    def prepare_for_rendering(self, *, skip_wake: bool = False) -> None:
+        """Record that prepare was called and whether wake was skipped."""
         self.prepare_called = True
+        self.prepare_skip_wake = skip_wake
 
     def power_on(self, duration_ms: int = 0) -> None:
         self.power_on_calls.append((duration_ms,))
@@ -252,7 +255,7 @@ def test_backward_compat_import():
 
 
 def test_prepare_for_rendering():
-    """prepare_for_rendering() fans out to all members."""
+    """prepare_for_rendering() fans out to all members with skip_wake=True."""
     from emitters.virtual import VirtualMultizoneEmitter
 
     emitters = [
@@ -264,7 +267,11 @@ def test_prepare_for_rendering():
 
     for em in emitters:
         assert em.prepare_called, f"{em.emitter_id}: prepare not called"
-    print(f"  prepare_for_rendering() reached all 3 emitters ... OK")
+        assert em.prepare_skip_wake is True, (
+            f"{em.emitter_id}: expected skip_wake=True (virtual does one "
+            f"broadcast wake for the group), got {em.prepare_skip_wake}"
+        )
+    print(f"  prepare_for_rendering() reached all 3 emitters with skip_wake=True ... OK")
 
 
 def main() -> int:

@@ -354,9 +354,7 @@ class VirtualMultizoneEmitter(Emitter):
         """
         broadcast_wake()
         for em in self._emitters:
-            # Members skip their own broadcast_wake — already done above.
-            if em._device is not None and em.is_multizone and em.zone_count:
-                em._device.set_color(0, 0, 0, KELVIN_DEFAULT, duration_ms=0)
+            em.prepare_for_rendering(skip_wake=True)
 
     def power_on(self, duration_ms: int = 0) -> None:
         """Power on all member emitters.

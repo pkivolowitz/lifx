@@ -306,6 +306,16 @@ class Emitter(metaclass=EmitterMeta):
         writes (databases, file buffers, network queues).
         """
 
+    def prepare_for_rendering(self) -> None:
+        """Prepare the emitter for a new rendering pass.
+
+        Called by the Engine before each :meth:`play` cycle.  Override
+        to perform hardware-specific preparation (e.g., waking sleeping
+        devices, clearing committed state, flushing stale frames).
+
+        The default implementation is a no-op.
+        """
+
     def on_close(self) -> None:
         """Release all resources.
 

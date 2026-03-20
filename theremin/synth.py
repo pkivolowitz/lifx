@@ -54,8 +54,7 @@ MASTER_VOLUME: float = 0.3
 # Minimum amplitude to produce sound (noise gate).
 AMPLITUDE_GATE: float = 0.01
 
-# paho v2 detection.
-_PAHO_V2: bool = hasattr(mqtt, "CallbackAPIVersion")
+from theremin import create_mqtt_client
 
 
 # ---------------------------------------------------------------------------
@@ -97,16 +96,7 @@ class ThereminSynth:
 
     def _connect_mqtt(self) -> None:
         """Connect to MQTT broker and subscribe to note signals."""
-        if _PAHO_V2:
-            self._client = mqtt.Client(
-                mqtt.CallbackAPIVersion.VERSION2,
-                client_id="theremin-synth",
-            )
-        else:
-            self._client = mqtt.Client(
-                client_id="theremin-synth",
-                protocol=mqtt.MQTTv311,
-            )
+        self._client = create_mqtt_client("theremin-synth")
 
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message

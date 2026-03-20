@@ -66,8 +66,7 @@ VOLUME_COLOR: str = "#4ecdc4"
 LABEL_FONT: tuple[str, int] = ("Helvetica", 14)
 VALUE_FONT: tuple[str, int, str] = ("Menlo", 18, "bold")
 
-# paho v2 detection.
-_PAHO_V2: bool = hasattr(mqtt, "CallbackAPIVersion")
+from theremin import create_mqtt_client
 
 
 # ---------------------------------------------------------------------------
@@ -109,16 +108,7 @@ class ThereminSimulator:
     def _connect_mqtt(self) -> None:
         """Connect to the MQTT broker on the Pi."""
         try:
-            if _PAHO_V2:
-                self._client = mqtt.Client(
-                    mqtt.CallbackAPIVersion.VERSION2,
-                    client_id="theremin-simulator",
-                )
-            else:
-                self._client = mqtt.Client(
-                    client_id="theremin-simulator",
-                    protocol=mqtt.MQTTv311,
-                )
+            self._client = create_mqtt_client("theremin-simulator")
             self._client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
             self._client.loop_start()
             print(f"  MQTT connected to {MQTT_BROKER}:{MQTT_PORT}")

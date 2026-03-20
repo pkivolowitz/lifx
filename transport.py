@@ -227,7 +227,6 @@ PRODUCT_MAP: dict[int, str] = {
     203: "String Light US", 204: "String Light Intl",
     205: "Indoor Neon US", 206: "Indoor Neon Intl",
     213: "Permanent Outdoor US", 214: "Permanent Outdoor Intl",
-    143: "String Light", 144: "String Light",
 }
 
 # Regex for basic IPv4 format validation
@@ -1481,7 +1480,7 @@ def broadcast_wake() -> None:
             sock.sendto(msg, (broadcast_addr, LIFX_PORT))
             time.sleep(WAKE_BURST_DELAY)
     except OSError as exc:
-        logger.debug("Broadcast wake failed: %s", exc)
+        _log.debug("Broadcast wake failed: %s", exc)
     finally:
         sock.close()
 
@@ -1546,7 +1545,7 @@ def discover_devices(
             time.sleep(DISCOVERY_WAKE_DELAY)
     except OSError as exc:
         sock.close()
-        logger.warning("Broadcast send failed: %s", exc)
+        _log.warning("Broadcast send failed: %s", exc)
         return []
 
     found: dict[str, tuple[str, bytes]] = {}  # mac_str -> (ip, mac_bytes)

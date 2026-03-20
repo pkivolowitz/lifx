@@ -66,8 +66,7 @@ LABEL_FONT: tuple[str, int] = ("Helvetica", 11)
 BAR_HEIGHT: int = 20
 BAR_MAX_WIDTH: int = 300
 
-# paho v2 detection.
-_PAHO_V2: bool = hasattr(mqtt, "CallbackAPIVersion")
+from theremin import create_mqtt_client
 
 
 # ---------------------------------------------------------------------------
@@ -106,16 +105,7 @@ class ThereminDisplay:
     def _connect_mqtt(self) -> None:
         """Connect to MQTT and subscribe to all Theremin signals."""
         try:
-            if _PAHO_V2:
-                self._client = mqtt.Client(
-                    mqtt.CallbackAPIVersion.VERSION2,
-                    client_id="theremin-display",
-                )
-            else:
-                self._client = mqtt.Client(
-                    client_id="theremin-display",
-                    protocol=mqtt.MQTTv311,
-                )
+            self._client = create_mqtt_client("theremin-display")
             self._client.on_connect = self._on_connect
             self._client.on_message = self._on_message
             self._client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)

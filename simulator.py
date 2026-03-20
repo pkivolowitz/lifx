@@ -123,31 +123,27 @@ _LUMA_B: float = 0.0722
 # HSBK → RGB conversion (display only)
 # ---------------------------------------------------------------------------
 
-def hsbk_to_rgb(hue: int, sat: int, bri: int, kelvin: int) -> str:
-    """Convert a LIFX HSBK color to a tkinter-compatible hex string.
+def _hsbk_to_rgb_floats(
+    hue: int, sat: int, bri: int,
+) -> tuple[float, float, float]:
+    """Convert LIFX HSB values to normalized RGB floats in [0, 1].
 
-    Uses the standard HSB-to-RGB algorithm (same as
-    ``effects.hsbk_to_luminance`` lines 333-354) but returns an
-    ``"#RRGGBB"`` hex string instead of computing BT.709 luma.
-
-    The *kelvin* parameter is accepted for API compatibility but
-    ignored — color temperature tinting is not applied.
+    This is the shared core of :func:`hsbk_to_rgb` and
+    :func:`hsbk_to_gray` — the standard sextant-based HSB→RGB
+    conversion, written once.
 
     Args:
-        hue:    LIFX hue (0-65535, mapped to 0-360°).
-        sat:    LIFX saturation (0-65535).
-        bri:    LIFX brightness (0-65535).
-        kelvin: Color temperature (ignored for display).
+        hue: LIFX hue (0-65535, mapped to 0-360°).
+        sat: LIFX saturation (0-65535).
+        bri: LIFX brightness (0-65535).
 
     Returns:
-        A hex color string ``"#RRGGBB"`` suitable for tkinter.
+        ``(r, g, b)`` each in the range [0.0, 1.0].
     """
-    # Normalize to [0, 1].
     h: float = (hue / HSBK_MAX) * HUE_SEXTANTS  # 0-6 for sextant math
     s: float = sat / HSBK_MAX
     b: float = bri / HSBK_MAX
 
-    # HSB to RGB (standard algorithm).
     c: float = b * s           # chroma
     x: float = c * (1.0 - abs(h % 2.0 - 1.0))  # secondary component
     m: float = b - c           # brightness offset
@@ -166,7 +162,26 @@ def hsbk_to_rgb(hue: int, sat: int, bri: int, kelvin: int) -> str:
     else:
         r, g, bl = c + m, m, x + m
 
-    # Clamp and convert to 8-bit integers.
+    return r, g, bl
+
+
+def hsbk_to_rgb(hue: int, sat: int, bri: int, kelvin: int) -> str:
+    """Convert a LIFX HSBK color to a tkinter-compatible hex string.
+
+    The *kelvin* parameter is accepted for API compatibility but
+    ignored — color temperature tinting is not applied.
+
+    Args:
+        hue:    LIFX hue (0-65535, mapped to 0-360°).
+        sat:    LIFX saturation (0-65535).
+        bri:    LIFX brightness (0-65535).
+        kelvin: Color temperature (ignored for display).
+
+    Returns:
+        A hex color string ``"#RRGGBB"`` suitable for tkinter.
+    """
+    r, g, bl = _hsbk_to_rgb_floats(hue, sat, bri)
+
     ri: int = min(int(r * 255), 255)
     gi: int = min(int(g * 255), 255)
     bi: int = min(int(bl * 255), 255)
@@ -190,31 +205,8 @@ def hsbk_to_gray(hue: int, sat: int, bri: int, kelvin: int) -> str:
     Returns:
         A hex color string ``"#RRGGBB"`` where R == G == B (grayscale).
     """
-    # Normalize to [0, 1].
-    h: float = (hue / HSBK_MAX) * HUE_SEXTANTS
-    s: float = sat / HSBK_MAX
-    b: float = bri / HSBK_MAX
+    r, g, bl = _hsbk_to_rgb_floats(hue, sat, bri)
 
-    # HSB to RGB (standard algorithm).
-    c: float = b * s
-    x: float = c * (1.0 - abs(h % 2.0 - 1.0))
-    m: float = b - c
-
-    sextant: int = int(h) % HUE_SEXTANTS
-    if sextant == 0:
-        r, g, bl = c + m, x + m, m
-    elif sextant == 1:
-        r, g, bl = x + m, c + m, m
-    elif sextant == 2:
-        r, g, bl = m, c + m, x + m
-    elif sextant == 3:
-        r, g, bl = m, x + m, c + m
-    elif sextant == 4:
-        r, g, bl = x + m, m, c + m
-    else:
-        r, g, bl = c + m, m, x + m
-
-    # BT.709 perceptual luminance.
     y: float = _LUMA_R * r + _LUMA_G * g + _LUMA_B * bl
     gray: int = min(int(y * 255), 255)
 

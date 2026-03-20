@@ -333,7 +333,7 @@ class LifxEmitter(Emitter):
     # --- Engine-facing lifecycle -------------------------------------------
     # Called by the Engine and Controller at various pipeline stages.
 
-    def prepare_for_rendering(self) -> None:
+    def prepare_for_rendering(self, *, skip_wake: bool = False) -> None:
         """Broadcast-wake sleeping bulbs, then clear committed state to black.
 
         LIFX bulbs in power-save mode respond to broadcast frames but
@@ -344,10 +344,17 @@ class LifxEmitter(Emitter):
         After the wake burst, the extended multizone committed layer is
         set to black so that dropped UDP frames reveal black instead of
         stale colors.
+
+        Args:
+            skip_wake: If ``True``, skip the broadcast wake burst.  Used
+                       by :class:`VirtualMultizoneEmitter` which issues a
+                       single wake for the whole group before preparing
+                       individual members.
         """
         if self._device is not None:
-            # Broadcast wake burst — wakes all bulbs on the network.
-            broadcast_wake()
+            if not skip_wake:
+                # Broadcast wake burst — wakes all bulbs on the network.
+                broadcast_wake()
             # Clear the committed layer to black on multizone devices.
             if self.is_multizone and self.zone_count:
                 self._device.set_color(0, 0, 0, _CLEAR_KELVIN, duration_ms=0)

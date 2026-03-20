@@ -216,10 +216,34 @@ class _BulbDB:
     or the database is unreachable, all methods silently no-op.
     """
 
+    #: Maximum number of retry attempts for a failed DB write.
+    _RECONNECT_ATTEMPTS: int = 2
+
     def __init__(self) -> None:
         self._conn: Any = None
         self._lock: threading.Lock = threading.Lock()
         self._available: bool = False
+
+    @staticmethod
+    def _get_dsn() -> str:
+        """Resolve the PostgreSQL DSN for bulb persistence.
+
+        Checks the ``GLOWUP_DIAG_DSN`` environment variable first.
+        Falls back to a default DSN constructed from the network
+        config (or ``localhost`` if ``network_config`` is unavailable).
+
+        Returns:
+            A PostgreSQL connection string.
+        """
+        try:
+            from network_config import net
+            default_dsn: str = (
+                f"postgresql://glowup:changeme@{net.db_host}:5432/glowup"
+            )
+        except ImportError:
+            default_dsn = "postgresql://glowup:changeme@localhost:5432/glowup"
+
+        return os.environ.get("GLOWUP_DIAG_DSN", default_dsn)
 
     def connect(self) -> bool:
         """Attempt to connect using the diagnostics DSN.
@@ -231,16 +255,7 @@ class _BulbDB:
             logger.debug("BulbDB unavailable: psycopg2 not installed")
             return False
 
-        # Reuse the same DSN resolution as the diagnostics subsystem.
-        try:
-            from network_config import net
-            default_dsn: str = (
-                f"postgresql://glowup:changeme@{net.db_host}:5432/glowup"
-            )
-        except ImportError:
-            default_dsn = "postgresql://glowup:changeme@localhost:5432/glowup"
-
-        dsn: str = os.environ.get("GLOWUP_DIAG_DSN", default_dsn)
+        dsn: str = self._get_dsn()
 
         try:
             self._conn = psycopg2.connect(dsn)
@@ -267,7 +282,7 @@ class _BulbDB:
         if not self._available:
             return
         with self._lock:
-            for attempt in range(2):
+            for attempt in range(self._RECONNECT_ATTEMPTS):
                 try:
                     if self._conn is None or self._conn.closed:
                         if not self._reconnect():
@@ -295,20 +310,14 @@ class _BulbDB:
 
     def _reconnect(self) -> bool:
         """Re-establish the database connection after a failure."""
-        try:
-            from network_config import net
-            default_dsn: str = (
-                f"postgresql://glowup:changeme@{net.db_host}:5432/glowup"
-            )
-        except ImportError:
-            default_dsn = "postgresql://glowup:changeme@localhost:5432/glowup"
-
-        dsn: str = os.environ.get("GLOWUP_DIAG_DSN", default_dsn)
+        dsn: str = self._get_dsn()
         try:
             self._conn = psycopg2.connect(dsn)
             self._conn.autocommit = True
+            logger.info("BulbDB reconnected")
             return True
-        except Exception:
+        except Exception as exc:
+            logger.debug("BulbDB reconnect failed: %s", exc)
             self._conn = None
             return False
 

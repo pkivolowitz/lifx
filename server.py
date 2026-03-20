@@ -70,6 +70,7 @@ import http.server
 import ipaddress
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from urllib.parse import unquote, parse_qs, urlparse
 import logging
 import math
@@ -212,6 +213,158 @@ DAY_LETTER_TO_WEEKDAY: dict[str, int] = {
 
 # All valid day letters (for validation).
 VALID_DAY_LETTERS: str = "MTWRFSU"
+
+# Error message for device identifier resolution failures.
+DEVICE_RESOLVE_ERROR: str = "Cannot resolve device identifier"
+
+
+# ---------------------------------------------------------------------------
+# Route table
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class _Route:
+    """Declarative HTTP route definition.
+
+    Each route describes a URL pattern, the HTTP method it responds to,
+    and the handler method (by name) to dispatch to.  Flags control
+    authentication, device identifier resolution, URL decoding, and
+    parameter type coercion.
+
+    Attributes:
+        method:         HTTP method (``"GET"``, ``"POST"``, ``"DELETE"``).
+        pattern:        URL path segments.  Literal strings must match
+                        exactly; ``{name}`` placeholders capture the
+                        segment value into a positional arg for the handler.
+        handler:        Name of the handler method on the request handler
+                        class (looked up via ``getattr``).
+        requires_auth:  If ``False``, skip authentication (e.g. dashboard).
+        device_param:   Placeholder name to resolve and validate as a
+                        device identifier (URL-decode → resolve → validate).
+        unquote_params: Placeholder names to URL-decode before dispatch.
+        param_types:    Placeholder names mapped to a callable for type
+                        coercion (e.g. ``{"index": int}``).  Coercion
+                        failure returns HTTP 400.
+    """
+
+    method: str
+    pattern: tuple[str, ...]
+    handler: str
+    requires_auth: bool = True
+    device_param: Optional[str] = None
+    unquote_params: tuple[str, ...] = ()
+    param_types: dict[str, type] = field(default_factory=dict)
+
+
+# Placeholder prefix/suffix for pattern matching.
+_PARAM_OPEN: str = "{"
+_PARAM_CLOSE: str = "}"
+
+# All API routes.  Order within a (method, segment-count) bucket matters
+# only when patterns could overlap — currently none do.
+_ROUTES: tuple[_Route, ...] = (
+    # -- Pre-auth routes -----------------------------------------------------
+    _Route("GET", ("dashboard",),
+           "_handle_get_dashboard", requires_auth=False),
+
+    # -- GET: static ---------------------------------------------------------
+    _Route("GET", ("api", "status"),
+           "_handle_get_status"),
+    _Route("GET", ("api", "devices"),
+           "_handle_get_devices"),
+    _Route("GET", ("api", "effects"),
+           "_handle_get_effects"),
+    _Route("GET", ("api", "groups"),
+           "_handle_get_groups"),
+    _Route("GET", ("api", "schedule"),
+           "_handle_get_schedule"),
+    _Route("GET", ("api", "media", "sources"),
+           "_handle_get_media_sources"),
+    _Route("GET", ("api", "media", "signals"),
+           "_handle_get_media_signals"),
+    _Route("GET", ("api", "fleet"),
+           "_handle_get_fleet"),
+    _Route("GET", ("api", "diagnostics", "now_playing"),
+           "_handle_get_diag_now_playing"),
+    _Route("GET", ("api", "diagnostics", "history"),
+           "_handle_get_diag_history"),
+    _Route("GET", ("api", "discovered_bulbs"),
+           "_handle_get_discovered_bulbs"),
+    _Route("GET", ("api", "registry"),
+           "_handle_get_registry"),
+    _Route("GET", ("api", "command", "discover"),
+           "_handle_get_command_discover"),
+    _Route("GET", ("api", "command", "identify", "cancel-all"),
+           "_handle_get_command_identify_cancel_all"),
+
+    # -- GET: device ---------------------------------------------------------
+    _Route("GET", ("api", "devices", "{id}", "status"),
+           "_handle_get_device_status", device_param="id"),
+    _Route("GET", ("api", "devices", "{id}", "colors"),
+           "_handle_get_device_colors", device_param="id"),
+    _Route("GET", ("api", "devices", "{id}", "colors", "stream"),
+           "_handle_get_device_colors_stream", device_param="id"),
+
+    # -- POST: device --------------------------------------------------------
+    _Route("POST", ("api", "devices", "{id}", "play"),
+           "_handle_post_play", device_param="id"),
+    _Route("POST", ("api", "devices", "{id}", "stop"),
+           "_handle_post_stop", device_param="id"),
+    _Route("POST", ("api", "devices", "{id}", "power"),
+           "_handle_post_power", device_param="id"),
+    _Route("POST", ("api", "devices", "{id}", "identify"),
+           "_handle_post_identify", device_param="id"),
+    _Route("POST", ("api", "devices", "{id}", "resume"),
+           "_handle_post_resume", device_param="id"),
+    _Route("POST", ("api", "devices", "{id}", "reset"),
+           "_handle_post_reset", device_param="id"),
+    _Route("POST", ("api", "devices", "{id}", "nickname"),
+           "_handle_post_nickname", device_param="id"),
+
+    # -- POST: parameterized -------------------------------------------------
+    _Route("POST", ("api", "effects", "{name}", "defaults"),
+           "_handle_post_effect_defaults"),
+    _Route("POST", ("api", "schedule", "{index}", "enabled"),
+           "_handle_post_schedule_enabled",
+           param_types={"index": int}),
+    _Route("POST", ("api", "media", "sources", "{name}", "start"),
+           "_handle_post_media_source_start"),
+    _Route("POST", ("api", "media", "sources", "{name}", "stop"),
+           "_handle_post_media_source_stop"),
+    _Route("POST", ("api", "assign", "{node_id}", "cancel", "{assignment_id}"),
+           "_handle_post_cancel_assignment"),
+
+    # -- POST: static --------------------------------------------------------
+    _Route("POST", ("api", "media", "signals", "ingest"),
+           "_handle_post_signal_ingest"),
+    _Route("POST", ("api", "assign"),
+           "_handle_post_assign"),
+    _Route("POST", ("api", "registry", "device"),
+           "_handle_post_registry_device"),
+    _Route("POST", ("api", "registry", "push-labels"),
+           "_handle_post_registry_push_labels"),
+    _Route("POST", ("api", "registry", "push-label"),
+           "_handle_post_registry_push_label"),
+    _Route("POST", ("api", "command", "identify"),
+           "_handle_post_command_identify"),
+    _Route("POST", ("api", "server", "power-off-all"),
+           "_handle_post_server_power_off_all"),
+
+    # -- DELETE --------------------------------------------------------------
+    _Route("DELETE", ("api", "registry", "device", "{mac}"),
+           "_handle_delete_registry_device",
+           unquote_params=("mac",)),
+    _Route("DELETE", ("api", "command", "identify", "{id}"),
+           "_handle_delete_command_identify",
+           device_param="id", unquote_params=("id",)),
+)
+
+# Pre-built index: (method, segment_count) → list of candidate routes.
+# Narrows per-request matching to a handful of candidates.
+_ROUTE_INDEX: dict[tuple[str, int], list[_Route]] = {}
+for _r in _ROUTES:
+    _key = (_r.method, len(_r.pattern))
+    _ROUTE_INDEX.setdefault(_key, []).append(_r)
 
 
 # ---------------------------------------------------------------------------
@@ -1925,21 +2078,6 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
     # -- Routing ------------------------------------------------------------
 
-    def _extract_ip(self, parts: list[str]) -> Optional[str]:
-        """Extract the device IP from URL path parts.
-
-        Expects the IP at index 3 (``/api/devices/{ip}/...``).
-
-        Args:
-            parts: URL path split by ``/``.
-
-        Returns:
-            The IP string, or ``None`` if not present.
-        """
-        if len(parts) > 3:
-            return parts[3]
-        return None
-
     def do_OPTIONS(self) -> None:
         """Handle CORS preflight requests.
 
@@ -1960,318 +2098,101 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         """Route GET requests to the appropriate handler."""
-        path: str = self.path.split("?")[0]
-
-        # Dashboard serves its own login page — no server-side auth.
-        if path == "/dashboard":
-            self._handle_get_dashboard()
-            return
-
-        if not self._authenticate():
-            return  # strip query string
-        parts: list[str] = path.strip("/").split("/")
-        # URL-decode the device identifier (handles %3A for colon in
-        # group:name identifiers, %20 for spaces in labels).
-        # Then resolve labels/MACs to internal IPs so all downstream
-        # handlers receive a valid device key.
-        if len(parts) >= 3 and parts[1] == "devices":
-            parts[2] = unquote(parts[2])
-            resolved: Optional[str] = self._resolve_device_id(parts[2])
-            if resolved is not None:
-                parts[2] = resolved
-
-        # /api/status
-        if path == "/api/status":
-            self._handle_get_status()
-            return
-
-        # /api/devices
-        if path == "/api/devices":
-            self._handle_get_devices()
-            return
-
-        # /api/effects
-        if path == "/api/effects":
-            self._handle_get_effects()
-            return
-
-        # /api/devices/{id}/status
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
-                and parts[3] == "status"):
-            ip: str = parts[2]
-            if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Cannot resolve device identifier"})
-                return
-            self._handle_get_device_status(ip)
-            return
-
-        # /api/devices/{id}/colors
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
-                and parts[3] == "colors"):
-            ip = parts[2]
-            if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Cannot resolve device identifier"})
-                return
-            self._handle_get_device_colors(ip)
-            return
-
-        # /api/devices/{id}/colors/stream
-        if (len(parts) == 5 and parts[0] == "api" and parts[1] == "devices"
-                and parts[3] == "colors" and parts[4] == "stream"):
-            ip = parts[2]
-            if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Cannot resolve device identifier"})
-                return
-            self._handle_get_device_colors_stream(ip)
-            return
-
-        # /api/groups
-        if path == "/api/groups":
-            self._handle_get_groups()
-            return
-
-        # /api/schedule
-        if path == "/api/schedule":
-            self._handle_get_schedule()
-            return
-
-        # /api/media/sources
-        if path == "/api/media/sources":
-            self._handle_get_media_sources()
-            return
-
-        # /api/media/signals
-        if path == "/api/media/signals":
-            self._handle_get_media_signals()
-            return
-
-        # /api/fleet
-        if path == "/api/fleet":
-            self._handle_get_fleet()
-            return
-
-        # /api/diagnostics/now_playing
-        if path == "/api/diagnostics/now_playing":
-            self._handle_get_diag_now_playing()
-            return
-
-        # /api/diagnostics/history
-        if path == "/api/diagnostics/history":
-            self._handle_get_diag_history()
-            return
-
-        # /api/discovered_bulbs
-        if path == "/api/discovered_bulbs":
-            self._handle_get_discovered_bulbs()
-            return
-
-        # /api/registry
-        if path == "/api/registry":
-            self._handle_get_registry()
-            return
-
-        # /api/command/discover[?ip=X]
-        if path == "/api/command/discover":
-            self._handle_get_command_discover()
-            return
-
-        # /api/command/identify/cancel-all
-        if path == "/api/command/identify/cancel-all":
-            self._handle_get_command_identify_cancel_all()
-            return
-
-        self._send_json(404, {"error": "Not found"})
+        self._dispatch("GET")
 
     def do_POST(self) -> None:
         """Route POST requests to the appropriate handler."""
-        if not self._authenticate():
-            return
-
-        path: str = self.path.split("?")[0]
-        parts: list[str] = path.strip("/").split("/")
-        # URL-decode and resolve labels/MACs to internal IPs.
-        if len(parts) >= 3 and parts[1] == "devices":
-            parts[2] = unquote(parts[2])
-            resolved: Optional[str] = self._resolve_device_id(parts[2])
-            if resolved is not None:
-                parts[2] = resolved
-
-        # /api/devices/{id}/play
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
-                and parts[3] == "play"):
-            ip: str = parts[2]
-            if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Cannot resolve device identifier"})
-                return
-            self._handle_post_play(ip)
-            return
-
-        # /api/devices/{id}/stop
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
-                and parts[3] == "stop"):
-            ip = parts[2]
-            if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Cannot resolve device identifier"})
-                return
-            self._handle_post_stop(ip)
-            return
-
-        # /api/devices/{id}/power
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
-                and parts[3] == "power"):
-            ip = parts[2]
-            if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Cannot resolve device identifier"})
-                return
-            self._handle_post_power(ip)
-            return
-
-        # /api/devices/{id}/identify
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
-                and parts[3] == "identify"):
-            ip = parts[2]
-            if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Cannot resolve device identifier"})
-                return
-            self._handle_post_identify(ip)
-            return
-
-        # /api/devices/{id}/resume
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
-                and parts[3] == "resume"):
-            ip = parts[2]
-            if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Cannot resolve device identifier"})
-                return
-            self._handle_post_resume(ip)
-            return
-
-        # /api/devices/{id}/reset
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
-                and parts[3] == "reset"):
-            ip = parts[2]
-            if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Cannot resolve device identifier"})
-                return
-            self._handle_post_reset(ip)
-            return
-
-        # /api/devices/{id}/nickname
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "devices"
-                and parts[3] == "nickname"):
-            ip = parts[2]
-            if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Cannot resolve device identifier"})
-                return
-            self._handle_post_nickname(ip)
-            return
-
-        # /api/effects/{name}/defaults
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "effects"
-                and parts[3] == "defaults"):
-            effect_name: str = parts[2]
-            self._handle_post_effect_defaults(effect_name)
-            return
-
-        # /api/schedule/{index}/enabled
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "schedule"
-                and parts[3] == "enabled"):
-            try:
-                index: int = int(parts[2])
-            except ValueError:
-                self._send_json(400, {"error": "Invalid schedule index"})
-                return
-            self._handle_post_schedule_enabled(index)
-            return
-
-        # /api/media/sources/{name}/start
-        if (len(parts) == 5 and parts[0] == "api" and parts[1] == "media"
-                and parts[2] == "sources" and parts[4] == "start"):
-            self._handle_post_media_source_start(parts[3])
-            return
-
-        # /api/media/sources/{name}/stop
-        if (len(parts) == 5 and parts[0] == "api" and parts[1] == "media"
-                and parts[2] == "sources" and parts[4] == "stop"):
-            self._handle_post_media_source_stop(parts[3])
-            return
-
-        # /api/media/signals/ingest
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "media"
-                and parts[2] == "signals" and parts[3] == "ingest"):
-            self._handle_post_signal_ingest()
-            return
-
-        # /api/assign — issue a work assignment to a compute node
-        if (len(parts) == 2 and parts[0] == "api"
-                and parts[1] == "assign"):
-            self._handle_post_assign()
-            return
-
-        # /api/assign/{node_id}/cancel/{assignment_id}
-        if (len(parts) == 5 and parts[0] == "api" and parts[1] == "assign"
-                and parts[3] == "cancel"):
-            self._handle_post_cancel_assignment(parts[2], parts[4])
-            return
-
-        # /api/registry/device
-        if (len(parts) == 3 and parts[0] == "api" and parts[1] == "registry"
-                and parts[2] == "device"):
-            self._handle_post_registry_device()
-            return
-
-        # /api/registry/push-labels
-        if (len(parts) == 3 and parts[0] == "api" and parts[1] == "registry"
-                and parts[2] == "push-labels"):
-            self._handle_post_registry_push_labels()
-            return
-
-        # /api/registry/push-label
-        if (len(parts) == 3 and parts[0] == "api" and parts[1] == "registry"
-                and parts[2] == "push-label"):
-            self._handle_post_registry_push_label()
-            return
-
-        # /api/command/identify
-        if (len(parts) == 3 and parts[0] == "api" and parts[1] == "command"
-                and parts[2] == "identify"):
-            self._handle_post_command_identify()
-            return
-
-        # /api/server/power-off-all
-        if (len(parts) == 3 and parts[0] == "api" and parts[1] == "server"
-                and parts[2] == "power-off-all"):
-            self._handle_post_server_power_off_all()
-            return
-
-        self._send_json(404, {"error": "Not found"})
+        self._dispatch("POST")
 
     def do_DELETE(self) -> None:
         """Route DELETE requests to the appropriate handler."""
-        if not self._authenticate():
-            return
+        self._dispatch("DELETE")
 
+    def _dispatch(self, method: str) -> None:
+        """Match the request path against the route table and dispatch.
+
+        Handles authentication, device identifier resolution, URL
+        decoding, and parameter type coercion based on the matched
+        route's flags.  Sends 404 if no route matches.
+
+        Args:
+            method: HTTP method (``"GET"``, ``"POST"``, ``"DELETE"``).
+        """
         path: str = self.path.split("?")[0]
         parts: list[str] = path.strip("/").split("/")
+        n_parts: int = len(parts)
 
-        # DELETE /api/registry/device/{mac}
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "registry"
-                and parts[2] == "device"):
-            mac: str = unquote(parts[3])
-            self._handle_delete_registry_device(mac)
-            return
+        # Look up candidate routes by (method, segment count).
+        candidates: list[_Route] = _ROUTE_INDEX.get((method, n_parts), [])
 
-        # DELETE /api/command/identify/{id} — cancel a running identify pulse.
-        if (len(parts) == 4 and parts[0] == "api" and parts[1] == "command"
-                and parts[2] == "identify"):
-            raw_id: str = unquote(parts[3])
-            ip: str = self._resolve_device_id(raw_id) or raw_id
-            if not _validate_device_id(ip):
-                self._send_json(400, {"error": "Cannot resolve device identifier"})
+        for route in candidates:
+            # Match literal segments; collect placeholder values.
+            params: dict[str, str] = {}
+            matched: bool = True
+            for seg, pat in zip(parts, route.pattern):
+                if pat.startswith(_PARAM_OPEN) and pat.endswith(_PARAM_CLOSE):
+                    # Placeholder — capture the value.
+                    param_name: str = pat[1:-1]
+                    params[param_name] = seg
+                elif seg != pat:
+                    matched = False
+                    break
+
+            if not matched:
+                continue
+
+            # --- Route matched ---
+
+            # Authentication gate.
+            if route.requires_auth and not self._authenticate():
                 return
-            self._handle_delete_command_identify(ip)
+
+            # URL-decode specified params.
+            for pname in route.unquote_params:
+                if pname in params:
+                    params[pname] = unquote(params[pname])
+
+            # Device identifier resolution and validation.
+            if route.device_param is not None:
+                dp: str = route.device_param
+                raw: str = params.get(dp, "")
+                # URL-decode if not already handled by unquote_params.
+                if dp not in route.unquote_params:
+                    raw = unquote(raw)
+                # Resolve labels/MACs to internal IPs.
+                resolved: Optional[str] = self._resolve_device_id(raw)
+                if resolved is not None:
+                    raw = resolved
+                # Validate.
+                if not _validate_device_id(raw):
+                    self._send_json(400, {"error": DEVICE_RESOLVE_ERROR})
+                    return
+                params[dp] = raw
+
+            # Type coercion for non-string params.
+            for pname, ptype in route.param_types.items():
+                try:
+                    params[pname] = ptype(params[pname])
+                except (ValueError, TypeError):
+                    self._send_json(
+                        400,
+                        {"error": f"Invalid {pname}: {params[pname]!r}"},
+                    )
+                    return
+
+            # Collect handler args in pattern order.
+            handler_args: list[Any] = [
+                params[pat[1:-1]]
+                for pat in route.pattern
+                if pat.startswith(_PARAM_OPEN) and pat.endswith(_PARAM_CLOSE)
+            ]
+
+            # Dispatch.
+            handler_fn: Callable = getattr(self, route.handler)
+            handler_fn(*handler_args)
             return
 
+        # No route matched.
         self._send_json(404, {"error": "Not found"})
 
     # -- GET handlers -------------------------------------------------------
@@ -3749,11 +3670,23 @@ def _load_config(config_path: str) -> dict[str, Any]:
                     f"non-empty string, got {entry!r}"
                 )
         if not entries:
-            logger.warning("Group '%s' is empty — skipping", group_name)
+            logging.warning("Group '%s' is empty — skipping", group_name)
             empty_groups.append(group_name)
     # Remove empty groups so downstream code never encounters them.
     for name in empty_groups:
         del groups[name]
+
+    # After pruning, check that at least one non-comment group remains.
+    real_groups: list[str] = [
+        k for k in groups if not k.startswith("_")
+    ]
+    if not real_groups:
+        raise ValueError(
+            "Config must contain a non-empty 'groups' section with "
+            "device identifiers (labels, MACs, or IPs).  The server "
+            "does not perform broadcast discovery — all devices must "
+            "be listed explicitly."
+        )
 
     if "schedule" in config:
         known_groups: set[str] = set()
