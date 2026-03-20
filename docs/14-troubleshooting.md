@@ -208,19 +208,25 @@ without logging.  No effect playback is affected.  Check
 
 The server includes a web dashboard at `/dashboard` that shows:
 
-- **Device inventory** — all configured devices and their status.
-- **Now playing** — which effects are currently running on which
-  devices.
-- **Recent history** — the last 50 effect events (start/stop times,
-  parameters, stop reason).
-
-**Requires:** PostgreSQL (diagnostics subsystem) — without it, the
-dashboard shows empty tables.
+- **Stats bar** — device count, playing count (physical + groups),
+  ARP-discovered count, active schedule entries.
+- **Now Playing** — live effects with the source that started them
+  (e.g. "Conway", "iPhone", "scheduler").
+- **Schedule** — all schedule entries with active/waiting/off badges
+  and resolved start/stop times.
+- **Devices** — all configured physical devices with playing/idle
+  status and current effect.
+- **Groups** — virtual multizone groups with member count and
+  playing status.
+- **Discovered Devices** — ARP keepalive scan results with labels,
+  product type, and zone count.  Collapsed by default (click to
+  expand).
 
 **Access:** `http://<server-ip>:8420/dashboard`
 
 The dashboard uses its own login page (bearer token entered in the
-browser, stored in localStorage).  It auto-refreshes every 5 seconds.
+browser, stored in localStorage).  It auto-refreshes every 5 seconds
+with rate-limit backoff to 30 seconds if the server returns 429.
 
 ## NTP / Clock Drift
 
