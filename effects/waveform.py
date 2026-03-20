@@ -68,7 +68,7 @@ class Waveform(MediaEffect):
         description="Maximum zone brightness (percent)",
     )
     sensitivity = Param(
-        1.5, min=0.1, max=5.0,
+        1.5, min=0.1,
         description="Audio sensitivity multiplier",
     )
     saturation = Param(
