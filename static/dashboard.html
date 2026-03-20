@@ -37,7 +37,7 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 16px;
-    margin-bottom: 20px;
+    margin-bottom: 16px;
   }
   @media (max-width: 768px) {
     .grid { grid-template-columns: 1fr; }
@@ -64,18 +64,9 @@
   }
   .device-row:last-child { border-bottom: none; }
   .device-name { font-weight: 600; }
-  .device-effect { color: var(--green); }
+  .device-meta { color: var(--dim); font-size: 12px; }
+  .device-effect { color: var(--green); font-size: 13px; }
   .device-idle { color: var(--dim); }
-  .history-row {
-    padding: 6px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
-  }
-  .history-row:last-child { border-bottom: none; }
-  .history-time { color: var(--dim); font-size: 11px; }
-  .history-effect { color: var(--green); font-weight: 600; }
-  .history-device { color: var(--orange); }
-  .history-reason { color: var(--dim); font-style: italic; }
   .badge {
     display: inline-block;
     padding: 2px 8px;
@@ -85,9 +76,12 @@
   }
   .badge-playing { background: var(--green); color: #000; }
   .badge-stopped { background: var(--border); color: var(--dim); }
+  .badge-overridden { background: var(--orange); color: #000; }
+  .badge-active { background: var(--green); color: #000; }
+  .badge-disabled { background: var(--border); color: var(--dim); }
   .stat-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 12px;
     text-align: center;
   }
@@ -106,6 +100,15 @@
     padding: 20px;
     text-align: center;
   }
+  .schedule-row {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .schedule-row:last-child { border-bottom: none; }
+  .schedule-name { font-weight: 600; }
+  .schedule-time { color: var(--dim); font-size: 12px; }
+  .schedule-effect { color: var(--green); }
+  .schedule-group { color: var(--orange); font-size: 12px; }
   .discovered-row {
     display: flex;
     justify-content: space-between;
@@ -116,12 +119,18 @@
   }
   .discovered-row:last-child { border-bottom: none; }
   .discovered-ip { font-weight: 600; color: var(--green); }
+  .discovered-label { color: var(--text); }
   .discovered-mac { color: var(--dim); font-family: monospace; font-size: 12px; }
   .refresh-note {
     color: var(--dim);
     font-size: 11px;
     text-align: right;
     margin-top: 8px;
+  }
+  .group-members {
+    color: var(--dim);
+    font-size: 11px;
+    margin-top: 2px;
   }
   #auth-form {
     max-width: 400px;
@@ -166,11 +175,11 @@
   <div class="subtitle">Auto-refreshes every 5 seconds</div>
 
   <div class="card" style="margin-bottom: 16px;">
-    <div class="stat-grid" id="stats" style="grid-template-columns: repeat(4, 1fr);">
+    <div class="stat-grid">
       <div><div class="stat-value" id="stat-devices">-</div><div class="stat-label">Devices</div></div>
       <div><div class="stat-value" id="stat-playing">-</div><div class="stat-label">Playing</div></div>
       <div><div class="stat-value" id="stat-discovered" style="color: var(--green);">-</div><div class="stat-label">Found (ARP)</div></div>
-      <div><div class="stat-value" id="stat-today">-</div><div class="stat-label">Events Today</div></div>
+      <div><div class="stat-value" id="stat-schedule">-</div><div class="stat-label">Schedule</div></div>
     </div>
   </div>
 
@@ -180,14 +189,20 @@
       <div id="now-playing"><div class="error">Loading...</div></div>
     </div>
     <div class="card">
-      <h2>Recent History</h2>
-      <div id="history"><div class="error">Loading...</div></div>
+      <h2>Schedule</h2>
+      <div id="schedule"><div class="error">Loading...</div></div>
     </div>
   </div>
 
-  <div class="card">
-    <h2>Devices</h2>
-    <div id="devices"><div class="error">Loading...</div></div>
+  <div class="grid">
+    <div class="card">
+      <h2>Devices</h2>
+      <div id="devices"><div class="error">Loading...</div></div>
+    </div>
+    <div class="card">
+      <h2>Groups</h2>
+      <div id="groups"><div class="error">Loading...</div></div>
+    </div>
   </div>
 
   <div class="card" style="margin-top: 16px;">
@@ -237,10 +252,6 @@ function showDashboard() {
   document.getElementById('dashboard').style.display = 'block';
 }
 
-function showStatus(msg) {
-  document.getElementById('last-update').textContent = msg;
-}
-
 function authenticate() {
   TOKEN = document.getElementById('token-input').value.trim();
   if (!TOKEN) return;
@@ -250,7 +261,7 @@ function authenticate() {
   startPolling(POLL_INTERVAL_MS);
 }
 
-// Auto-login if token is stored
+// Auto-login if token is stored.
 window.addEventListener('load', () => {
   const saved = localStorage.getItem('glowup_token');
   if (saved) {
@@ -265,163 +276,233 @@ async function api(path) {
   const r = await fetch(BASE + path, {
     headers: { 'Authorization': 'Bearer ' + TOKEN }
   });
-  if (r.status === 401) {
-    return { _authFailed: true };
-  }
-  if (r.status === 429) {
-    return { _rateLimited: true };
-  }
-  if (!r.ok) {
-    return { _error: true, status: r.status };
-  }
+  if (r.status === 401) return { _authFailed: true };
+  if (r.status === 429) return { _rateLimited: true };
+  if (!r.ok) return { _error: true, status: r.status };
   return r.json();
-}
-
-function timeAgo(iso) {
-  const d = new Date(iso);
-  const s = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (s < 60) return s + 's ago';
-  if (s < 3600) return Math.floor(s / 60) + 'm ago';
-  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
-  return Math.floor(s / 86400) + 'd ago';
-}
-
-function formatTime(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-function duration(start, stop) {
-  if (!start || !stop) return '';
-  const ms = new Date(stop) - new Date(start);
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return s + 's';
-  if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
-  return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
 }
 
 async function refresh() {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
-    const [devices, nowPlaying, history, discovered] = await Promise.all([
+    const [devices, schedule, discovered] = await Promise.all([
       api('/api/devices'),
-      api('/api/diagnostics/now_playing'),
-      api('/api/diagnostics/history'),
+      api('/api/schedule'),
       api('/api/discovered_bulbs'),
     ]);
 
-    const results = [devices, nowPlaying, history, discovered];
+    const results = [devices, schedule, discovered];
 
-    // Any 401 → back to login (check once, not per-call).
+    // Any 401 → back to login.
     if (results.some(r => r && r._authFailed)) {
       showAuth();
       return;
     }
 
-    // Any 429 → back off polling and show status.
+    // Any 429 → back off polling.
     if (results.some(r => r && r._rateLimited)) {
       startPolling(BACKOFF_INTERVAL_MS);
-      showStatus('Rate limited — backing off to 30s polling');
+      document.getElementById('last-update').textContent =
+        'Rate limited \u2014 backing off to 30s polling';
       return;
     }
 
-    // Any other error → skip this cycle, keep normal polling.
+    // Any other error → skip this cycle.
     if (results.some(r => r && r._error)) {
-      showStatus('Server error — retrying in 5s');
+      document.getElementById('last-update').textContent =
+        'Server error \u2014 retrying in 5s';
       return;
     }
 
-    // All responses OK — ensure normal poll rate.
+    // Ensure normal poll rate after success.
     startPolling(POLL_INTERVAL_MS);
 
-    // Stats
-    const devList = devices.devices || devices || [];
-    document.getElementById('stat-devices').textContent = devList.length;
+    // Split devices into physical and groups.
+    const devList = devices.devices || [];
+    const physical = devList.filter(d => !d.is_group);
+    const groups = devList.filter(d => d.is_group);
 
-    const playing = nowPlaying || [];
+    // Determine which devices are playing (from current_effect field).
+    const playing = physical.filter(d => d.current_effect);
+
+    // Stats.
+    document.getElementById('stat-devices').textContent = physical.length;
     document.getElementById('stat-playing').textContent = playing.length;
 
-    const bulbCount = (discovered && discovered.discovered_bulbs) ? discovered.discovered_bulbs.length : 0;
-    document.getElementById('stat-discovered').textContent = bulbCount;
+    const bulbs = (discovered && discovered.discovered_bulbs) || [];
+    document.getElementById('stat-discovered').textContent = bulbs.length;
 
-    const hist = history || [];
-    document.getElementById('stat-today').textContent = hist.length;
+    const entries = (schedule && schedule.entries) || [];
+    const activeCount = entries.filter(e => e.active).length;
+    document.getElementById('stat-schedule').textContent =
+      activeCount + '/' + entries.length;
 
-    // Now Playing
+    // Now Playing — derived from device list current_effect.
     const npEl = document.getElementById('now-playing');
     if (playing.length === 0) {
-      npEl.innerHTML = '<div class="device-idle" style="padding:8px 0;">Nothing playing</div>';
+      npEl.innerHTML =
+        '<div class="device-idle" style="padding:8px 0;">Nothing playing</div>';
     } else {
-      npEl.innerHTML = playing.map(r => `
-        <div class="device-row">
-          <div>
-            <div class="device-name">${r.device_label || r.device_ip}</div>
-            <div class="device-effect">${r.effect_name}</div>
+      npEl.innerHTML = playing.map(d => {
+        const name = d.nickname || d.label || d.ip;
+        const overridden = d.overridden
+          ? ' <span class="badge badge-overridden">PHONE</span>'
+          : '';
+        return `
+          <div class="device-row">
+            <div>
+              <div class="device-name">${esc(name)}</div>
+              <div class="device-effect">${esc(d.current_effect)}</div>
+              <div class="device-meta">${esc(d.product || '')} &middot; ${d.zones || 1} zones</div>
+            </div>
+            <div style="text-align:right;">
+              <span class="badge badge-playing">LIVE</span>${overridden}
+            </div>
           </div>
-          <div>
-            <span class="badge badge-playing">LIVE</span>
-            <div class="history-time">${timeAgo(r.started_at)}</div>
-          </div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     }
 
-    // History
-    const hEl = document.getElementById('history');
-    if (hist.length === 0) {
-      hEl.innerHTML = '<div class="device-idle" style="padding:8px 0;">No events yet</div>';
-    } else {
-      hEl.innerHTML = hist.map(r => `
-        <div class="history-row">
-          <span class="history-device">${r.device_label || r.device_ip}</span>
-          <span class="history-effect">${r.effect_name}</span>
-          ${r.stop_reason ? '<span class="history-reason">' + r.stop_reason + '</span>' : '<span class="badge badge-playing">LIVE</span>'}
-          <br>
-          <span class="history-time">
-            ${formatTime(r.started_at)}
-            ${r.stopped_at ? ' - ' + formatTime(r.stopped_at) + ' (' + duration(r.started_at, r.stopped_at) + ')' : ''}
-          </span>
-        </div>
-      `).join('');
+    // Also check groups that are playing.
+    const playingGroups = groups.filter(g => g.current_effect);
+    if (playingGroups.length > 0) {
+      npEl.innerHTML += playingGroups.map(g => {
+        return `
+          <div class="device-row">
+            <div>
+              <div class="device-name">Group: ${esc(g.label || g.ip)}</div>
+              <div class="device-effect">${esc(g.current_effect)}</div>
+              <div class="device-meta">${g.zones || 0} zones</div>
+            </div>
+            <div style="text-align:right;">
+              <span class="badge badge-playing">LIVE</span>
+            </div>
+          </div>
+        `;
+      }).join('');
     }
 
-    // Devices
+    // Schedule.
+    const sEl = document.getElementById('schedule');
+    if (entries.length === 0) {
+      sEl.innerHTML =
+        '<div class="device-idle" style="padding:8px 0;">No schedule configured</div>';
+    } else {
+      sEl.innerHTML = entries.map(e => {
+        const badge = e.active
+          ? '<span class="badge badge-active">ACTIVE</span>'
+          : e.enabled
+            ? '<span class="badge badge-stopped">WAITING</span>'
+            : '<span class="badge badge-disabled">OFF</span>';
+        const times = (e.start_resolved && e.stop_resolved)
+          ? e.start_resolved + ' \u2192 ' + e.stop_resolved
+          : e.start + ' \u2192 ' + e.stop;
+        return `
+          <div class="schedule-row">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span class="schedule-name">${esc(e.name)}</span>
+              ${badge}
+            </div>
+            <div style="margin-top:4px;">
+              <span class="schedule-effect">${esc(e.effect)}</span>
+              <span class="schedule-group">${esc(e.group)}</span>
+              <span class="schedule-time">${esc(times)} &middot; ${esc(e.days_display)}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Physical Devices.
     const dEl = document.getElementById('devices');
-    dEl.innerHTML = devList.map(d => {
-      const isPlaying = playing.some(p => p.device_ip === d.ip);
-      return `
-        <div class="device-row">
-          <div>
-            <div class="device-name">${d.label || d.ip}</div>
-            <div style="color:var(--dim);font-size:12px;">${d.product || ''} &middot; ${d.zones || 1} zones</div>
+    if (physical.length === 0) {
+      dEl.innerHTML =
+        '<div class="device-idle" style="padding:8px 0;">No devices</div>';
+    } else {
+      dEl.innerHTML = physical.map(d => {
+        const name = d.nickname || d.label || d.ip;
+        const isPlaying = !!d.current_effect;
+        const badge = isPlaying
+          ? '<span class="badge badge-playing">PLAYING</span>'
+          : '<span class="badge badge-stopped">IDLE</span>';
+        const effectLine = isPlaying
+          ? `<div class="device-effect">${esc(d.current_effect)}</div>`
+          : '';
+        return `
+          <div class="device-row">
+            <div>
+              <div class="device-name">${esc(name)}</div>
+              ${effectLine}
+              <div class="device-meta">${esc(d.product || '')} &middot; ${d.zones || 1} zones</div>
+            </div>
+            ${badge}
           </div>
-          <span class="badge ${isPlaying ? 'badge-playing' : 'badge-stopped'}">${isPlaying ? 'PLAYING' : 'IDLE'}</span>
-        </div>
-      `;
-    }).join('');
+        `;
+      }).join('');
+    }
 
-    // Discovered Bulbs (ARP Keepalive)
+    // Groups.
+    const gEl = document.getElementById('groups');
+    if (groups.length === 0) {
+      gEl.innerHTML =
+        '<div class="device-idle" style="padding:8px 0;">No groups configured</div>';
+    } else {
+      gEl.innerHTML = groups.map(g => {
+        const name = g.label || g.ip;
+        const isPlaying = !!g.current_effect;
+        const badge = isPlaying
+          ? '<span class="badge badge-playing">PLAYING</span>'
+          : '<span class="badge badge-stopped">IDLE</span>';
+        const effectLine = isPlaying
+          ? `<div class="device-effect">${esc(g.current_effect)}</div>`
+          : '';
+        const memberCount = (g.member_ips || []).length;
+        return `
+          <div class="device-row">
+            <div>
+              <div class="device-name">${esc(name)}</div>
+              ${effectLine}
+              <div class="device-meta">${g.zones || 0} zones &middot; ${memberCount} devices</div>
+            </div>
+            ${badge}
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Discovered Bulbs.
     const dbEl = document.getElementById('discovered-bulbs');
-    const bulbs = (discovered && discovered.discovered_bulbs) || [];
     if (bulbs.length === 0) {
-      dbEl.innerHTML = '<div class="device-idle" style="padding:8px 0;">No bulbs discovered yet</div>';
+      dbEl.innerHTML =
+        '<div class="device-idle" style="padding:8px 0;">No bulbs discovered yet</div>';
     } else {
       dbEl.innerHTML = bulbs.map(b => `
         <div class="discovered-row">
-          <span class="discovered-ip">${b.ip}</span>
-          <span class="discovered-mac">${b.mac}</span>
+          <div>
+            <span class="discovered-ip">${esc(b.ip)}</span>
+            <span class="discovered-label">${b.label ? ' \u2014 ' + esc(b.label) : ''}</span>
+          </div>
+          <span class="discovered-mac">${esc(b.mac)}</span>
         </div>
       `).join('');
     }
 
-    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+    document.getElementById('last-update').textContent =
+      new Date().toLocaleTimeString();
   } catch (e) {
     console.error('Refresh failed:', e);
   } finally {
     refreshInFlight = false;
   }
+}
+
+// Escape HTML to prevent XSS from device labels or effect names.
+function esc(s) {
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
 }
 </script>
 </body>
