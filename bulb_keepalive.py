@@ -383,13 +383,18 @@ class BulbKeepAlive(threading.Thread):
     def __init__(
         self,
         on_new_bulb: Optional[Callable[[str, str], None]] = None,
+        on_power_query: Optional[Callable[[], None]] = None,
         *,
         arp_interval: float = ARP_SCAN_INTERVAL,
         keepalive_interval: float = KEEPALIVE_INTERVAL,
         sweep_interval: float = SUBNET_SWEEP_INTERVAL,
+        power_query_every_n: int = 2,
     ) -> None:
         super().__init__(daemon=True, name="bulb-keepalive")
         self._on_new_bulb: Optional[Callable[[str, str], None]] = on_new_bulb
+        self._on_power_query: Optional[Callable[[], None]] = on_power_query
+        self._power_query_every_n: int = power_query_every_n
+        self._arp_cycle_count: int = 0
         self._arp_interval: float = arp_interval
         self._keepalive_interval: float = keepalive_interval
         self._sweep_interval: float = sweep_interval
@@ -494,6 +499,7 @@ class BulbKeepAlive(threading.Thread):
                 if now >= next_arp:
                     self._scan_arp()
                     next_arp = now + self._arp_interval
+                    self._arp_cycle_count += 1
                     # Signal that the first scan is done so startup
                     # code waiting on wait_initial_scan() can proceed.
                     if not self._initial_scan_done.is_set():
@@ -502,6 +508,16 @@ class BulbKeepAlive(threading.Thread):
                             "Initial ARP scan complete — %d bulb(s) found",
                             len(self._known),
                         )
+                    # Periodic power state query every Nth ARP cycle.
+                    if (self._on_power_query is not None
+                            and self._arp_cycle_count % self._power_query_every_n == 0):
+                        try:
+                            self._on_power_query()
+                        except Exception:
+                            logger.warning(
+                                "on_power_query callback failed",
+                                exc_info=True,
+                            )
 
                 # --- Keepalive ping ---
                 if now >= next_ping:

@@ -559,6 +559,42 @@ class DeviceManager:
             if self._diag is not None:
                 self._diag.close_stale_records()
 
+    def query_power_state(self, ip: str) -> None:
+        """Query a single device's power state and cache the result.
+
+        Sends a UDP light-state query to the device.  On success,
+        updates ``_power_states``.  On failure (timeout, unreachable),
+        the existing cached state is left unchanged.
+
+        Args:
+            ip: Device IP address.
+        """
+        with self._lock:
+            dev: Optional[LifxDevice] = self._devices.get(ip)
+        if dev is None:
+            return
+        try:
+            state = dev.query_light_state()
+            if state is not None:
+                self._power_states[ip] = state[4] > 0
+        except Exception:
+            pass  # Leave cached state unchanged.
+
+    def query_all_power_states(self) -> None:
+        """Query power state for every loaded device.
+
+        Called at startup and periodically by the keepalive daemon.
+        """
+        with self._lock:
+            ips: list[str] = list(self._devices.keys())
+        for ip in ips:
+            self.query_power_state(ip)
+        logging.info(
+            "Power state queried: %d on, %d off",
+            sum(1 for v in self._power_states.values() if v),
+            sum(1 for v in self._power_states.values() if not v),
+        )
+
     def load_devices(self) -> list[dict[str, Any]]:
         """Query each configured device IP and cache the results.
 
@@ -4615,6 +4651,20 @@ def main() -> None:
             dm._group_config = resolved_groups
             devices: list[dict[str, Any]] = dm.load_devices()
             logging.info("Loaded %d device(s)", len(devices))
+            dm.query_all_power_states()
+
+            # Wire keepalive → DeviceManager power state queries.
+            # Every 2nd ARP cycle (~2 min), query all device power states.
+            keepalive._on_power_query = dm.query_all_power_states
+            # On new bulb discovery, query that device's power state.
+            _existing_on_new: Optional[Callable] = keepalive._on_new_bulb
+
+            def _on_new_with_power(ip: str, mac: str) -> None:
+                if _existing_on_new is not None:
+                    _existing_on_new(ip, mac)
+                dm.query_power_state(ip)
+
+            keepalive._on_new_bulb = _on_new_with_power
 
             # Start the scheduler now that devices are available.
             sched: Optional[SchedulerThread] = None
