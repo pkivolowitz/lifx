@@ -160,8 +160,15 @@ struct DeviceRow: View {
     /// API client for power toggle.
     @EnvironmentObject var apiClient: APIClient
 
-    /// Whether power is on (local state for immediate UI feedback).
+    /// Whether power is on (initialized from server, updated locally
+    /// for immediate UI feedback on toggle).
     @State private var isPoweredOn: Bool = true
+
+    /// Initialize power state from the server's response.
+    init(device: Device) {
+        self.device = device
+        _isPoweredOn = State(initialValue: device.power ?? true)
+    }
 
     /// Whether a power request is in flight.
     @State private var powerLoading: Bool = false

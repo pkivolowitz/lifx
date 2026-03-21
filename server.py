@@ -542,6 +542,9 @@ class DeviceManager:
         # Play source tracking: device ID → client name that started
         # the current effect (e.g. "Conway", "Perry's iPhone", "scheduler").
         self._play_sources: dict[str, str] = {}
+        # Power state tracking: device ID → True/False.
+        # Updated by the power endpoint; defaults to True (on).
+        self._power_states: dict[str, bool] = {}
         # Dynamic music source tracking: device ID → source name.
         # Used to clean up on-demand DirectorySource instances on stop.
         self._music_sources: dict[str, str] = {}
@@ -780,6 +783,7 @@ class DeviceManager:
         if em is not None:
             try:
                 em.power_on(duration_ms=0)
+                self._power_states[ip] = True
             except Exception as exc:
                 logging.warning("power_on failed for %s before play: %s", ip, exc)
         # Close the previous effect's diagnostics record before starting
@@ -828,6 +832,7 @@ class DeviceManager:
             raise KeyError(f"Unknown device: {ip}")
         ctrl.stop(fade_ms=DEFAULT_FADE_MS)
         ctrl.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
+        self._power_states[ip] = False
         self._play_sources.pop(ip, None)
         if self._diag is not None:
             self._diag.log_stop(ip, stop_reason="user")
@@ -1410,6 +1415,8 @@ class DeviceManager:
                 "overridden": self.is_overridden(dev_id),
                 "is_group": is_group,
             }
+            # Power state: tracked by the server when set via API.
+            entry["power"] = self._power_states.get(dev_id, True)
             # LIFX-specific fields from the transport layer.
             if isinstance(em, LifxEmitter):
                 entry["mac"] = em.transport.mac_str
@@ -2714,6 +2721,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.device_manager.mark_override(ip, active_entry)
 
             result: dict[str, Any] = self.device_manager.set_power(ip, on)
+            # Track power state for device list API response.
+            self.device_manager._power_states[ip] = on
             logging.info("API: power %s on %s", "on" if on else "off", ip)
             self._send_json(200, result)
         except KeyError:

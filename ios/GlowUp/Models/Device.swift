@@ -44,6 +44,9 @@ struct Device: Codable, Identifiable, Hashable {
     /// Whether this entry represents a virtual multizone group.
     let isGroup: Bool?
 
+    /// Power state as tracked by the server (true = on).
+    let power: Bool?
+
     /// IP addresses of member devices (groups only).
     let memberIps: [String]?
 
@@ -80,7 +83,7 @@ struct Device: Codable, Identifiable, Hashable {
 
     /// Coding keys to match the server's snake_case JSON.
     enum CodingKeys: String, CodingKey {
-        case ip, mac, label, nickname, product, group, zones
+        case ip, mac, label, nickname, product, group, zones, power
         case isMultizone = "is_multizone"
         case currentEffect = "current_effect"
         case isGroup = "is_group"

@@ -115,6 +115,7 @@ final class DeviceIdentityTests: XCTestCase {
             isMultizone: nil,
             currentEffect: nil,
             isGroup: isGroup,
+            power: nil,
             memberIps: nil
         )
     }
