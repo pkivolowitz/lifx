@@ -210,65 +210,67 @@ def render_glow_border(
     peri_left: int = tv_h
     peri_total: int = peri_top + peri_right + peri_bottom + peri_left
 
-    for i in range(n):
-        if mode == "bulb":
-            color: tuple[int, int, int] = hsb_to_rgb(
-                dominant_hue, min(1.0, dominant_sat * 0.7),
-                brightness,
-            )
-        else:
+    if mode == "bulb":
+        # Single bulb: one uniform color wash behind the entire TV.
+        color: tuple[int, int, int] = hsb_to_rgb(
+            dominant_hue, min(1.0, dominant_sat * 0.7),
+            brightness,
+        )
+        glow.fill(color)
+    else:
+        for i in range(n):
             color = hsb_to_rgb(
                 edge_hues[i],
                 min(1.0, dominant_sat * 0.7),
                 edge_bris[i],
             )
 
-        # Map zone i and i+1 to exact perimeter positions.
-        frac_lo: float = i / n
-        frac_hi: float = (i + 1) / n
-        pos_lo: float = frac_lo * peri_total
-        pos_hi: float = frac_hi * peri_total
+            # Map zone i and i+1 to exact perimeter positions.
+            frac_lo: float = i / n
+            frac_hi: float = (i + 1) / n
+            pos_lo: float = frac_lo * peri_total
+            pos_hi: float = frac_hi * peri_total
 
-        # Walk through the four edges. Each zone may span one edge.
-        # For simplicity, use the midpoint to pick the edge.
-        pos_mid: float = (pos_lo + pos_hi) / 2.0
-        seg_len: float = pos_hi - pos_lo
+            # Walk through the four edges. Each zone may span one edge.
+            # For simplicity, use the midpoint to pick the edge.
+            pos_mid: float = (pos_lo + pos_hi) / 2.0
+            seg_len: float = pos_hi - pos_lo
 
-        if pos_mid < peri_top:
-            # Top edge (left to right).
-            x: float = tv_x + pos_lo
-            rect: pygame.Rect = pygame.Rect(
-                int(x), tv_y - GLOW_STRIP_WIDTH,
-                max(1, int(seg_len)), GLOW_STRIP_WIDTH * 2,
-            )
-        elif pos_mid < peri_top + peri_right:
-            # Right edge (top to bottom).
-            local: float = pos_lo - peri_top
-            y: float = tv_y + local
-            rect = pygame.Rect(
-                tv_x + tv_w - GLOW_STRIP_WIDTH, int(y),
-                GLOW_STRIP_WIDTH * 2, max(1, int(seg_len)),
-            )
-        elif pos_mid < peri_top + peri_right + peri_bottom:
-            # Bottom edge (right to left).
-            local = pos_lo - peri_top - peri_right
-            x = tv_x + tv_w - local - seg_len
-            rect = pygame.Rect(
-                int(x), tv_y + tv_h - GLOW_STRIP_WIDTH,
-                max(1, int(seg_len)), GLOW_STRIP_WIDTH * 2,
-            )
-        else:
-            # Left edge (bottom to top).
-            local = pos_lo - peri_top - peri_right - peri_bottom
-            y = tv_y + tv_h - local - seg_len
-            rect = pygame.Rect(
-                tv_x - GLOW_STRIP_WIDTH, int(y),
-                GLOW_STRIP_WIDTH * 2, max(1, int(seg_len)),
-            )
+            if pos_mid < peri_top:
+                # Top edge (left to right).
+                x: float = tv_x + pos_lo
+                rect: pygame.Rect = pygame.Rect(
+                    int(x), tv_y - GLOW_STRIP_WIDTH,
+                    max(1, int(seg_len)), GLOW_STRIP_WIDTH * 2,
+                )
+            elif pos_mid < peri_top + peri_right:
+                # Right edge (top to bottom).
+                local: float = pos_lo - peri_top
+                y: float = tv_y + local
+                rect = pygame.Rect(
+                    tv_x + tv_w - GLOW_STRIP_WIDTH, int(y),
+                    GLOW_STRIP_WIDTH * 2, max(1, int(seg_len)),
+                )
+            elif pos_mid < peri_top + peri_right + peri_bottom:
+                # Bottom edge (right to left).
+                local = pos_lo - peri_top - peri_right
+                x = tv_x + tv_w - local - seg_len
+                rect = pygame.Rect(
+                    int(x), tv_y + tv_h - GLOW_STRIP_WIDTH,
+                    max(1, int(seg_len)), GLOW_STRIP_WIDTH * 2,
+                )
+            else:
+                # Left edge (bottom to top).
+                local = pos_lo - peri_top - peri_right - peri_bottom
+                y = tv_y + tv_h - local - seg_len
+                rect = pygame.Rect(
+                    tv_x - GLOW_STRIP_WIDTH, int(y),
+                    GLOW_STRIP_WIDTH * 2, max(1, int(seg_len)),
+                )
 
-        rect = rect.clip(glow.get_rect())
-        if rect.width > 0 and rect.height > 0:
-            pygame.draw.rect(glow, color, rect)
+            rect = rect.clip(glow.get_rect())
+            if rect.width > 0 and rect.height > 0:
+                pygame.draw.rect(glow, color, rect)
 
     # Blur the glow source heavily.
     blurred: pygame.Surface = _blur_surface(glow, BLUR_RADIUS)
@@ -451,7 +453,7 @@ def main() -> None:
     global TV_WIDTH, TV_HEIGHT, ROOM_WIDTH, ROOM_HEIGHT
     if args.aspect:
         parts: list[str] = args.aspect.split(":")
-        ratio: float = float(parts[0]) / float(parts[1])
+        ratio: float = float(parts[0]) / float(parts[1]) if len(parts) == 2 else float(parts[0])
         TV_HEIGHT = int(TV_WIDTH / ratio)
         # Ensure even height for ffmpeg.
         TV_HEIGHT = TV_HEIGHT & ~1
@@ -471,7 +473,8 @@ def main() -> None:
 
     # --- Start movie decoder ---
     decoder: MovieDecoder = MovieDecoder(
-        args.movie, start_time=args.start,
+        args.movie, width=TV_WIDTH, height=TV_HEIGHT,
+        start_time=args.start,
     )
     decoder.start()
 
