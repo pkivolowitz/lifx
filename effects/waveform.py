@@ -79,6 +79,14 @@ class Waveform(MediaEffect):
         30, min=0, max=100,
         description="Extra brightness on beat (percent, 0 to disable)",
     )
+    contrast = Param(
+        1.0, min=0.1, max=5.0,
+        description=(
+            "Dynamic range expansion (gamma curve). "
+            "1.0 = linear, 2.0 = darks darker / brights brighter, "
+            "0.5 = compressed range"
+        ),
+    )
     noise_gate = Param(
         0.15, min=0.0, max=0.5,
         description="Band energy below this threshold is treated as silence",
@@ -156,6 +164,12 @@ class Waveform(MediaEffect):
 
             # Apply sensitivity.
             energy = min(1.0, energy * self.sensitivity)
+
+            # Apply contrast (gamma curve).
+            # energy is [0, 1] at this point.  gamma > 1 expands
+            # dynamic range: darks get darker, brights stay bright.
+            if self.contrast != 1.0 and energy > 0.0:
+                energy = energy ** self.contrast
 
             # Smooth the transition.
             self._smooth[z] += SMOOTH_ALPHA * (energy - self._smooth[z])
