@@ -130,7 +130,39 @@ def hsb_to_rgb(h: float, s: float, b: float) -> tuple[int, int, int]:
 # Zone rendering
 # ---------------------------------------------------------------------------
 
-def render_strip_border(
+try:
+    from scipy.ndimage import gaussian_filter
+    _HAS_SCIPY: bool = True
+except ImportError:
+    _HAS_SCIPY = False
+
+
+def _blur_surface(surface: pygame.Surface, radius: int = 15) -> pygame.Surface:
+    """Gaussian blur using scipy.
+
+    Args:
+        surface: Source pygame surface.
+        radius:  Blur sigma in pixels.
+
+    Returns:
+        Blurred copy of the surface.
+    """
+    # surfarray gives (W, H, 3) — sigma axes match (x, y, channel).
+    arr: np.ndarray = pygame.surfarray.array3d(surface)
+    blurred: np.ndarray = gaussian_filter(
+        arr.astype(np.float32), sigma=(radius, radius, 0),
+    ).clip(0, 255).astype(np.uint8)
+    return pygame.surfarray.make_surface(blurred)
+
+
+# Width of the color strip painted just inside the TV edge (pixels).
+GLOW_STRIP_WIDTH: int = 16
+
+# Gaussian blur sigma. 15 = soft glow without killing frame rate.
+BLUR_RADIUS: int = 15
+
+
+def render_glow_border(
     surface: pygame.Surface,
     edge_hues: list[float],
     edge_bris: list[float],
@@ -139,10 +171,15 @@ def render_strip_border(
     dominant_hue: float = 0.0,
     brightness: float = 0.5,
 ) -> None:
-    """Render the simulated light strip as a glowing border.
+    """Render ambient glow around the TV.
+
+    Paints bright color zones just inside the TV border on a
+    temporary surface, blurs it heavily, then composites it onto
+    the room surface.  The result looks like light bleeding outward
+    from the screen edges — what a real strip behind a TV produces.
 
     Args:
-        surface:      Pygame surface (room window).
+        surface:      Room pygame surface.
         edge_hues:    Per-zone hue values [0, 1].
         edge_bris:    Per-zone brightness values [0, 1].
         dominant_sat: Overall saturation [0, 1].
@@ -151,62 +188,92 @@ def render_strip_border(
         brightness:   Overall brightness (for bulb mode).
     """
     n: int = len(edge_hues)
+    w: int = surface.get_width()
+    h: int = surface.get_height()
 
-    # Perimeter of the border in pixels.
-    # Top + right + bottom + left.
-    top_px: int = ROOM_WIDTH
-    right_px: int = ROOM_HEIGHT
-    bottom_px: int = ROOM_WIDTH
-    left_px: int = ROOM_HEIGHT
-    total_px: int = top_px + right_px + bottom_px + left_px
+    # Create a black surface for the glow source.
+    glow: pygame.Surface = pygame.Surface((w, h))
+    glow.fill((0, 0, 0))
+
+    # TV rectangle position.
+    tv_x: int = BORDER_PX
+    tv_y: int = BORDER_PX
+    tv_w: int = TV_WIDTH
+    tv_h: int = TV_HEIGHT
+
+    # Perimeter in pixels: top + right + bottom + left of the TV.
+    peri_top: int = tv_w
+    peri_right: int = tv_h
+    peri_bottom: int = tv_w
+    peri_left: int = tv_h
+    peri_total: int = peri_top + peri_right + peri_bottom + peri_left
 
     for i in range(n):
         if mode == "bulb":
             color: tuple[int, int, int] = hsb_to_rgb(
-                dominant_hue, dominant_sat, brightness,
+                dominant_hue, min(1.0, dominant_sat * 1.5),
+                brightness,
             )
         else:
             color = hsb_to_rgb(
-                edge_hues[i], dominant_sat, edge_bris[i],
+                edge_hues[i],
+                min(1.0, dominant_sat * 1.5),
+                edge_bris[i],
             )
 
-        # Map zone i to a position on the perimeter.
-        frac: float = i / n
-        pos: int = int(frac * total_px)
+        # Map zone i and i+1 to exact perimeter positions.
+        frac_lo: float = i / n
+        frac_hi: float = (i + 1) / n
+        pos_lo: float = frac_lo * peri_total
+        pos_hi: float = frac_hi * peri_total
 
-        if pos < top_px:
-            # Top edge.
-            x: int = pos
+        # Walk through the four edges. Each zone may span one edge.
+        # For simplicity, use the midpoint to pick the edge.
+        pos_mid: float = (pos_lo + pos_hi) / 2.0
+        seg_len: float = pos_hi - pos_lo
+
+        if pos_mid < peri_top:
+            # Top edge (left to right).
+            x: float = tv_x + pos_lo
             rect: pygame.Rect = pygame.Rect(
-                x - BORDER_PX // 2, 0,
-                max(1, total_px // n), BORDER_PX,
+                int(x), tv_y - GLOW_STRIP_WIDTH,
+                max(1, int(seg_len)), GLOW_STRIP_WIDTH * 2,
             )
-        elif pos < top_px + right_px:
-            # Right edge.
-            y: int = pos - top_px
+        elif pos_mid < peri_top + peri_right:
+            # Right edge (top to bottom).
+            local: float = pos_lo - peri_top
+            y: float = tv_y + local
             rect = pygame.Rect(
-                ROOM_WIDTH - BORDER_PX, y - BORDER_PX // 2,
-                BORDER_PX, max(1, total_px // n),
+                tv_x + tv_w - GLOW_STRIP_WIDTH, int(y),
+                GLOW_STRIP_WIDTH * 2, max(1, int(seg_len)),
             )
-        elif pos < top_px + right_px + bottom_px:
-            # Bottom edge.
-            x = ROOM_WIDTH - (pos - top_px - right_px)
+        elif pos_mid < peri_top + peri_right + peri_bottom:
+            # Bottom edge (right to left).
+            local = pos_lo - peri_top - peri_right
+            x = tv_x + tv_w - local - seg_len
             rect = pygame.Rect(
-                x - BORDER_PX // 2, ROOM_HEIGHT - BORDER_PX,
-                max(1, total_px // n), BORDER_PX,
+                int(x), tv_y + tv_h - GLOW_STRIP_WIDTH,
+                max(1, int(seg_len)), GLOW_STRIP_WIDTH * 2,
             )
         else:
-            # Left edge.
-            y = ROOM_HEIGHT - (pos - top_px - right_px - bottom_px)
+            # Left edge (bottom to top).
+            local = pos_lo - peri_top - peri_right - peri_bottom
+            y = tv_y + tv_h - local - seg_len
             rect = pygame.Rect(
-                0, y - BORDER_PX // 2,
-                BORDER_PX, max(1, total_px // n),
+                tv_x - GLOW_STRIP_WIDTH, int(y),
+                GLOW_STRIP_WIDTH * 2, max(1, int(seg_len)),
             )
 
-        # Clamp to surface bounds.
-        rect = rect.clip(surface.get_rect())
+        rect = rect.clip(glow.get_rect())
         if rect.width > 0 and rect.height > 0:
-            pygame.draw.rect(surface, color, rect)
+            pygame.draw.rect(glow, color, rect)
+
+    # Blur the glow source heavily.
+    blurred: pygame.Surface = _blur_surface(glow, BLUR_RADIUS)
+
+    # Composite: add the blurred glow onto the room surface.
+    # Use BLEND_ADD so the glow brightens the dark room.
+    surface.blit(blurred, (0, 0), special_flags=pygame.BLEND_ADD)
 
 
 # ---------------------------------------------------------------------------
@@ -229,11 +296,13 @@ class MovieDecoder:
     def __init__(
         self, path: str, width: int = TV_WIDTH,
         height: int = TV_HEIGHT, fps: int = MOVIE_FPS,
+        start_time: Optional[str] = None,
     ) -> None:
         self.path: str = path
         self.width: int = width
         self.height: int = height
         self.fps: int = fps
+        self.start_time: Optional[str] = start_time
         self._frame: Optional[bytes] = None
         self._lock: threading.Lock = threading.Lock()
         self._running: bool = False
@@ -271,17 +340,22 @@ class MovieDecoder:
         """Read frames from ffmpeg."""
         cmd: list[str] = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
+        ]
+        if self.start_time:
+            cmd.extend(["-ss", self.start_time])
+        cmd.extend([
             "-i", self.path,
             "-vf", f"scale={self.width}:{self.height}",
             "-r", str(self.fps),
             "-f", "rawvideo",
             "-pix_fmt", "rgb24",
             "pipe:1",
-        ]
+        ])
+        print(f"  Decoder cmd: {' '.join(cmd)}", flush=True)
         try:
             self._process = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, bufsize=0,
+                stderr=subprocess.DEVNULL,
             )
         except FileNotFoundError:
             print("ERROR: ffmpeg not found", file=sys.stderr)
@@ -289,12 +363,30 @@ class MovieDecoder:
 
         frame_size: int = self.width * self.height * 3
         frame_interval: float = 1.0 / self.fps
+        print(f"  Decoder: reading {frame_size} bytes/frame from ffmpeg...",
+              flush=True)
 
+        frame_count: int = 0
         while self._running:
             t_start: float = time.monotonic()
-            data: bytes = self._process.stdout.read(frame_size)
-            if not data or len(data) < frame_size:
+            # Read exactly frame_size bytes, accumulating partial reads.
+            buf: bytearray = bytearray()
+            while len(buf) < frame_size:
+                chunk: bytes = self._process.stdout.read(
+                    frame_size - len(buf)
+                )
+                if not chunk:
+                    break
+                buf.extend(chunk)
+            data: bytes = bytes(buf)
+            if len(data) < frame_size:
+                print(f"  Decoder: EOF after {frame_count} frames "
+                      f"(got {len(data)} of {frame_size} bytes)",
+                      flush=True)
                 break
+            frame_count += 1
+            if frame_count == 1:
+                print(f"  Decoder: first frame received", flush=True)
             with self._lock:
                 self._frame = data
             # Pace to real time.
@@ -322,6 +414,10 @@ def main() -> None:
     parser.add_argument(
         "--mode", choices=["strip", "bulb"], default="strip",
         help="Simulation mode: strip (spatial edges) or bulb (uniform)",
+    )
+    parser.add_argument(
+        "--start", default=None, metavar="TIME",
+        help="Seek to this position before playing (e.g. '30:00' or '1:00:00')",
     )
     parser.add_argument(
         "--zones", type=int, default=STRIP_ZONES,
@@ -352,7 +448,9 @@ def main() -> None:
     )
 
     # --- Start movie decoder ---
-    decoder: MovieDecoder = MovieDecoder(args.movie)
+    decoder: MovieDecoder = MovieDecoder(
+        args.movie, start_time=args.start,
+    )
     decoder.start()
 
     # --- Set up vision pipeline ---
@@ -380,6 +478,8 @@ def main() -> None:
         # Get the latest movie frame.
         frame_bytes: Optional[bytes] = decoder.frame
         if frame_bytes is None:
+            screen.fill(ROOM_BG)
+            pygame.display.flip()
             clock.tick(30)
             continue
 
@@ -420,36 +520,26 @@ def main() -> None:
             processed_bri = [0.5] * args.zones
 
         # --- Render ---
+        # Dark room background.
         screen.fill(ROOM_BG)
 
-        # Render the strip border.
+        # Render the ambient glow (blurred color zones behind the TV).
         if isinstance(edge_colors, list):
-            render_strip_border(
+            render_glow_border(
                 screen, edge_colors, processed_bri,
                 dominant_sat, args.mode,
                 dominant_hue=dominant_hue,
                 brightness=min(1.0, brightness * args.sensitivity),
             )
 
-        # Render the movie frame in the center (the "TV").
+        # Composite the movie frame on top (the "TV").
         frame_array: np.ndarray = np.frombuffer(
             frame_bytes, dtype=np.uint8,
         ).reshape(TV_HEIGHT, TV_WIDTH, 3)
-        # pygame expects (width, height, 3) surface from numpy.
         tv_surface: pygame.Surface = pygame.surfarray.make_surface(
             frame_array.swapaxes(0, 1),
         )
         screen.blit(tv_surface, (BORDER_PX, BORDER_PX))
-
-        # Status text.
-        font: pygame.font.Font = pygame.font.SysFont("monospace", 12)
-        status: str = (
-            f"bri={brightness:.2f}  energy={energy:.2f}  "
-            f"flash={flash:.2f}  hue={dominant_hue*360:.0f}°  "
-            f"sat={dominant_sat:.2f}"
-        )
-        text: pygame.Surface = font.render(status, True, (200, 200, 200))
-        screen.blit(text, (5, ROOM_HEIGHT - 16))
 
         pygame.display.flip()
         clock.tick(MOVIE_FPS)
