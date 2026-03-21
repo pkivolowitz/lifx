@@ -37,7 +37,7 @@ struct DeviceListView: View {
         NavigationStack {
             List(devices) { device in
                 NavigationLink(value: device) {
-                    DeviceRow(device: device)
+                    DeviceRow(device: device, onPowerToggle: refreshDevices)
                 }
                 .swipeActions(edge: .leading) {
                     Button {
@@ -157,21 +157,17 @@ struct DeviceRow: View {
     /// The device to display.
     let device: Device
 
+    /// Callback to refresh the device list after a power toggle.
+    var onPowerToggle: (() async -> Void)?
+
     /// API client for power toggle.
     @EnvironmentObject var apiClient: APIClient
 
-    /// Whether power is on (initialized from server, updated locally
-    /// for immediate UI feedback on toggle).
-    @State private var isPoweredOn: Bool = true
-
-    /// Initialize power state from the server's response.
-    init(device: Device) {
-        self.device = device
-        _isPoweredOn = State(initialValue: device.power ?? true)
-    }
-
     /// Whether a power request is in flight.
     @State private var powerLoading: Bool = false
+
+    /// Power state derived from the device's server-reported field.
+    private var isPoweredOn: Bool { device.power ?? true }
 
     var body: some View {
         HStack {
@@ -249,9 +245,12 @@ struct DeviceRow: View {
             try await apiClient.setPower(
                 deviceId: device.deviceId, on: newState
             )
-            isPoweredOn = newState
+            // Refresh the full device list so group members update too.
+            if let refresh = onPowerToggle {
+                await refresh()
+            }
         } catch {
-            // Revert on failure — state didn't change.
+            // Failed — state unchanged.
         }
         powerLoading = false
     }
