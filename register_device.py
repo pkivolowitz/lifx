@@ -7,8 +7,8 @@ thin HTTP client that talks to the server's ``/api/registry`` endpoints.
 
 Usage::
 
-    python3 register_device.py <ip> "Label Name"   # register with label
-    python3 register_device.py <ip>                 # prompts for label
+    python3 register_device.py <ip-or-mac> "Label Name"   # register with label
+    python3 register_device.py <ip-or-mac>                 # prompts for label
     python3 register_device.py --list               # show registry
     python3 register_device.py --push-labels        # write all labels to bulbs
     python3 register_device.py --clear-label <ip>   # blank the firmware label
@@ -198,20 +198,34 @@ def cmd_list() -> None:
     print(f"\n{len(devices)} device(s) registered.")
 
 
-def cmd_add(ip: str, label: str) -> None:
-    """Register a device by IP address.
-
-    The server resolves the IP to a MAC via its ARP table, registers
-    the device, and writes the label to the bulb firmware.
+def _is_mac(identifier: str) -> bool:
+    """Return True if *identifier* looks like a MAC address.
 
     Args:
-        ip:    Device IP address.
-        label: User-defined label.
+        identifier: String to test (e.g. ``d0:73:d5:69:e3:82``).
     """
-    result: dict[str, Any] = _api_post("/api/registry/device", {
-        "ip": ip,
-        "label": label,
-    })
+    parts: list[str] = identifier.split(":")
+    return len(parts) == 6 and all(len(p) == 2 for p in parts)
+
+
+def cmd_add(identifier: str, label: str) -> None:
+    """Register a device by IP address or MAC address.
+
+    The server accepts either ``ip`` or ``mac``.  When a MAC is
+    provided, the server resolves it to an IP via the keepalive
+    ARP table for the firmware label write.
+
+    Args:
+        identifier: Device IP address or MAC address.
+        label:      User-defined label.
+    """
+    body: dict[str, str] = {"label": label}
+    if _is_mac(identifier):
+        body["mac"] = identifier.lower()
+    else:
+        body["ip"] = identifier
+
+    result: dict[str, Any] = _api_post("/api/registry/device", body)
 
     mac: str = result.get("mac", "?")
     fw: bool = result.get("firmware_written", False)
@@ -237,27 +251,33 @@ def cmd_remove(identifier: str) -> None:
     print(f"Removed: {result.get('removed', identifier)}")
 
 
-def cmd_clear_label(ip: str) -> None:
+def cmd_clear_label(identifier: str) -> None:
     """Clear (blank) the firmware label on a bulb via the server API.
 
-    Sends an empty label to ``POST /api/registry/push-label`` which
-    writes a null label to the device firmware.  The server handles
+    Accepts an IP address or MAC address.  When a MAC is provided,
+    the server resolves it to an IP via the keepalive ARP table.
+
+    Sends a space label to ``POST /api/registry/push-label`` which
+    writes a minimal label to the device firmware.  The server handles
     device communication and registry consistency.
 
     Args:
-        ip: Device IP address.
+        identifier: Device IP address or MAC address.
     """
     # LIFX firmware ignores all-null labels.  A single space is the
     # smallest value the firmware will accept as a real write.
-    result: dict[str, Any] = _api_post("/api/registry/push-label", {
-        "ip": ip,
-        "label": " ",
-    })
+    body: dict[str, str] = {"label": " "}
+    if _is_mac(identifier):
+        body["mac"] = identifier.lower()
+    else:
+        body["ip"] = identifier
+
+    result: dict[str, Any] = _api_post("/api/registry/push-label", body)
     fw: bool = result.get("firmware_written", False)
     if fw:
-        print(f"Label cleared on {ip}")
+        print(f"Label cleared on {identifier}")
     else:
-        print(f"WARNING: No ack from {ip} — bulb may be offline")
+        print(f"WARNING: No ack from {identifier} — bulb may be offline")
 
 
 def cmd_push_labels() -> None:
@@ -324,16 +344,16 @@ def main() -> None:
             sys.exit(1)
         cmd_clear_label(sys.argv[2])
     else:
-        # register_device.py <ip> [label]
-        ip: str = arg1
+        # register_device.py <ip-or-mac> [label]
+        identifier: str = arg1
         if len(sys.argv) >= 3:
             label: str = sys.argv[2]
         else:
-            label = input(f"Label for {ip}: ").strip()
+            label = input(f"Label for {identifier}: ").strip()
             if not label:
                 print("ERROR: Label cannot be empty", file=sys.stderr)
                 sys.exit(1)
-        cmd_add(ip, label)
+        cmd_add(identifier, label)
 
 
 if __name__ == "__main__":
