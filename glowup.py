@@ -1383,6 +1383,144 @@ def _run_calibration(
     return total
 
 
+def _play_screen_reactive(args: argparse.Namespace) -> None:
+    """Run screen-reactive lighting locally.
+
+    Captures the local screen, runs VisionExtractor, and drives the
+    screen_light effect on a device (via --ip or --device) or the
+    simulator (via --sim-only or --zones).
+
+    Args:
+        args: Parsed CLI arguments.
+    """
+    from media.screen_source import ScreenSource
+    from media.vision import VisionExtractor
+    from media import SignalBus
+    from engine import Controller
+
+    has_ip: bool = bool(getattr(args, "ip", None))
+    has_device: bool = bool(getattr(args, "device", None))
+    sim_only: bool = bool(getattr(args, "sim_only", False))
+    virtual_zones: int = getattr(args, "zones", None) or 0
+
+    # Determine zone count and emitter.
+    zone_count: int = 1
+    em: Any = None
+
+    if virtual_zones > 0 or sim_only:
+        # Sim mode.
+        zone_count = virtual_zones if virtual_zones > 0 else 102
+        em = _NullEmitter(
+            zone_count=zone_count,
+            label="screen-sim",
+            product_name="Simulator",
+            polychrome_map=[True] * zone_count,
+        )
+    elif has_ip:
+        # Direct device connection.
+        ip: str = args.ip
+        try:
+            dev: LifxDevice = LifxDevice(ip)
+            dev.query_all()
+            zone_count = dev.zone_count or 1
+            em = LifxEmitter.from_device(dev)
+            _print(f"  Connected: {dev.label or ip} — {zone_count} zones")
+        except Exception as exc:
+            _print(f"ERROR: Cannot connect to {ip}: {exc}",
+                   file=sys.stderr)
+            sys.exit(1)
+    elif has_device and _server_url:
+        # Fetch geometry from server, but run effect locally.
+        device: str = args.device
+        encoded: str = quote(device, safe="")
+        resp: dict = _server_get(
+            _server_url, f"/api/devices/{encoded}/status"
+        )
+        dev_list: list = resp.get("devices", [])
+        if not dev_list:
+            _print("ERROR: Device not found on server.", file=sys.stderr)
+            sys.exit(1)
+        dev_info: dict = dev_list[0]
+        zone_count = dev_info.get("zones", 1)
+        dev_ip: str = dev_info.get("ip", "")
+        _print(f"  {dev_info.get('label', device)} — {zone_count} zones")
+        try:
+            dev_obj: LifxDevice = LifxDevice(dev_ip)
+            dev_obj.query_all()
+            em = LifxEmitter.from_device(dev_obj)
+        except Exception as exc:
+            _print(f"ERROR: Cannot connect to {dev_ip}: {exc}",
+                   file=sys.stderr)
+            sys.exit(1)
+    else:
+        _print("ERROR: --screen requires --ip, --device, --sim-only, "
+               "or --zones", file=sys.stderr)
+        sys.exit(1)
+
+    # Set up the vision pipeline.
+    bus: SignalBus = SignalBus()
+    extractor: VisionExtractor = VisionExtractor(
+        source_name="screen", bus=bus,
+        edge_regions=getattr(args, "zones_edge", 24),
+    )
+    screen_src: ScreenSource = ScreenSource("screen", {
+        "fps": 15,
+    })
+    screen_src.add_callback(extractor.process_pyramid)
+    screen_src.start()
+
+    _print(f"  Screen capture: {screen_src.width}x{screen_src.height} "
+           f"@ {screen_src.fps} fps")
+
+    # Set up simulator if in sim mode.
+    sim: Any = None
+    frame_cb: Any = None
+    if sim_only or virtual_zones > 0:
+        try:
+            from simulator import SimulatorWindow
+            sim = SimulatorWindow(
+                zone_count=zone_count,
+                effect_name="screen_light",
+                polychrome_map=[True] * zone_count,
+            )
+            frame_cb = sim.update
+        except Exception:
+            pass
+
+    # Build controller and start the effect.
+    fps: int = getattr(args, "fps", None) or 20
+    ctrl: Controller = Controller(
+        [em], fps=fps,
+        frame_callback=frame_cb,
+        zones_per_bulb=1,
+    )
+
+    # Collect effect params.
+    params: Dict[str, Any] = {
+        "source": "screen",
+    }
+    for pname in ("sensitivity", "contrast", "saturation_boost",
+                  "min_brightness", "max_brightness",
+                  "flash_intensity", "motion_influence"):
+        val: Any = getattr(args, pname, None)
+        if val is not None:
+            params[pname] = val
+
+    ctrl.play("screen_light", signal_bus=bus, **params)
+
+    _print("Screen-reactive mode active. Press Ctrl+C to stop.\n")
+
+    stop_event: threading.Event = threading.Event()
+    _install_stop_signal(stop_event)
+    stop_event.wait()
+
+    _print("\nStopping...")
+    screen_src.stop()
+    ctrl.stop(fade_ms=500)
+    if sim is not None:
+        sim.stop()
+
+
 def _play_via_server(args: argparse.Namespace) -> None:
     """Run an effect on a device identified by label or MAC.
 
@@ -1675,6 +1813,12 @@ def cmd_play(args: argparse.Namespace) -> None:
             )
             sys.exit(1)
         _play_via_server(args)
+        return
+
+    # -- Screen-reactive mode --------------------------------------------------
+    has_screen: bool = bool(getattr(args, "screen", False))
+    if has_screen:
+        _play_screen_reactive(args)
         return
 
     # --config without --group is meaningless.
@@ -2540,6 +2684,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_play.add_argument(
         "--skip-calibration", action="store_true",
         help="Skip automatic audio sync calibration (debug only)",
+    )
+    p_play.add_argument(
+        "--screen", action="store_true",
+        help=(
+            "Screen-reactive mode: capture the local screen and drive "
+            "the effect from screen content.  Automatically selects the "
+            "screen_light effect.  Works with --device, --ip, or --sim."
+        ),
     )
     p_play.add_argument(
         "--config", default=None,
