@@ -92,6 +92,10 @@ check **Connect via network**.
 2. **Device List** — Shows all configured devices with name, product
    type, group, and current effect.  Virtual multizone groups are
    prefixed with "Group:" and display a group icon with member count.
+   Each row has a power toggle button (lightbulb icon) — yellow when
+   on, gray when off.  Toggling a group powers all member devices
+   and refreshes the list.  Power state is queried from the server
+   at startup and periodically via the keepalive daemon.
    Pull-to-refresh fetches the latest state.
 
 3. **Device Detail** — Live color strip visualization (SSE-fed at 4 Hz),

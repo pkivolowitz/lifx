@@ -258,6 +258,21 @@ python3 glowup.py record --help              # record options
 python3 glowup.py record fireworks --help     # effect parameters
 ```
 
+### power
+
+Turn a device or group on or off.  Requires the server.
+
+```bash
+python3 glowup.py power on  --device "group:main_bedroom"
+python3 glowup.py power off --device "PORCH STRING LIGHTS"
+python3 glowup.py power on  --device "group:all"
+```
+
+| Option     | Description                                        |
+|------------|----------------------------------------------------|
+| `state`    | Required: `on` or `off`                            |
+| `--device` | Device label, MAC, IP, or group (e.g. `group:all`) |
+
 ### off
 
 ⚠️  **EMERGENCY POWER-OFF** — Power off all LIFX devices on the network.
