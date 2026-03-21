@@ -57,11 +57,24 @@ except ImportError:
 # = 100 pixels of perimeter, divided into N regions.
 DEFAULT_EDGE_REGIONS: int = 24
 
+# Number of random pixel samples per edge region for stochastic sampling.
+# Higher = more stable color, more CPU.  64 at 24 regions = 1536 samples
+# total per frame — negligible cost vs the blur.
+SAMPLES_PER_REGION: int = 64
+
+# Edge strip depth: how many pixels into the frame from the border
+# to sample.  Deeper = more scene content, less edge artifact.
+EDGE_DEPTH_PX: int = 16
+
 # Hue histogram bins (0-360° mapped to N bins).
 HUE_BINS: int = 36
 
 # Smoothing factor for temporal signals (EMA alpha).
+# Lower = heavier time weighting = less flicker.
 SMOOTH_ALPHA: float = 0.3
+
+# Separate heavier smoothing for edge colors to suppress stochastic boil.
+EDGE_SMOOTH_ALPHA: float = 0.15
 
 # Flash detection: brightness delta must exceed this threshold.
 FLASH_THRESHOLD: float = 0.3
@@ -320,15 +333,21 @@ class VisionExtractor:
             dominant_sat - self._smooth_dominant_sat
         )
 
-        # --- Edge colors (perimeter sampling) ---
-        edge_hues, edge_bris = self._extract_edges_numpy(
-            hue, sat, max_c, h, w,
+        # --- Edge colors (median cut from full-res frame) ---
+        full_frame = pyramid[0] if len(pyramid) > 0 else frame
+        edge_hues, edge_bris = self._extract_edges_median_cut(
+            full_frame,
         )
+        # Pad or trim edge arrays to match expected region count.
+        while len(edge_hues) < self._edge_regions:
+            edge_hues.append(0.0)
+        while len(edge_bris) < self._edge_regions:
+            edge_bris.append(0.0)
         for i in range(self._edge_regions):
-            self._smooth_edge_colors[i] += SMOOTH_ALPHA * (
+            self._smooth_edge_colors[i] += EDGE_SMOOTH_ALPHA * (
                 edge_hues[i] - self._smooth_edge_colors[i]
             )
-            self._smooth_edge_brightness[i] += SMOOTH_ALPHA * (
+            self._smooth_edge_brightness[i] += EDGE_SMOOTH_ALPHA * (
                 edge_bris[i] - self._smooth_edge_brightness[i]
             )
 
@@ -405,6 +424,138 @@ class VisionExtractor:
         self._bus.write(
             f"{prefix}:motion_magnitude", self._smooth_motion_mag,
         )
+
+    def _median_cut(
+        self,
+        pixels: "np.ndarray",
+        depth: int = 2,
+    ) -> "np.ndarray":
+        """Median cut color quantization.
+
+        Recursively splits the pixel set along the channel with the
+        widest range, returning the median color of the largest cluster.
+
+        Args:
+            pixels: (N, 3) float32 array of RGB values in [0, 1].
+            depth:  Number of cuts (2 = 4 clusters, pick largest).
+
+        Returns:
+            (3,) float32 array — the dominant color (RGB [0, 1]).
+        """
+        if len(pixels) == 0:
+            return np.zeros(3, dtype=np.float32)
+
+        if depth == 0 or len(pixels) < 2:
+            return np.median(pixels, axis=0).astype(np.float32)
+
+        # Find the channel with the widest range.
+        ranges: np.ndarray = pixels.max(axis=0) - pixels.min(axis=0)
+        channel: int = int(np.argmax(ranges))
+
+        # Sort along that channel and split at the median.
+        sorted_idx: np.ndarray = np.argsort(pixels[:, channel])
+        mid: int = len(sorted_idx) // 2
+        lo: np.ndarray = pixels[sorted_idx[:mid]]
+        hi: np.ndarray = pixels[sorted_idx[mid:]]
+
+        # Recurse on both halves, return the larger cluster's result.
+        lo_color: np.ndarray = self._median_cut(lo, depth - 1)
+        hi_color: np.ndarray = self._median_cut(hi, depth - 1)
+
+        # Weight by cluster size — the larger cluster is more dominant.
+        if len(lo) >= len(hi):
+            return lo_color
+        return hi_color
+
+    def _extract_edges_median_cut(
+        self,
+        frame: "np.ndarray",
+    ) -> tuple[list[float], list[float]]:
+        """Extract edge colors via median cut at full resolution.
+
+        For each edge region, extracts the pixel strip, runs median
+        cut to find the dominant color, and converts to HSB.  Median
+        cut finds actual color populations — no averaging, no random
+        sampling noise.
+
+        Args:
+            frame: Full-resolution RGB frame (H, W, 3) uint8.
+
+        Returns:
+            (edge_hues, edge_bris) — lists of N floats each in [0, 1].
+        """
+        h, w = frame.shape[:2]
+        n: int = self._edge_regions
+        depth: int = min(EDGE_DEPTH_PX, h // 4, w // 4)
+
+        # Perimeter segments: regions per edge, proportional to length.
+        peri_total: float = 2.0 * (w + h)
+        n_top: int = max(1, round(n * w / peri_total))
+        n_right: int = max(1, round(n * h / peri_total))
+        n_bottom: int = max(1, round(n * w / peri_total))
+        n_left: int = n - n_top - n_right - n_bottom
+        if n_left < 1:
+            n_left = 1
+            n_bottom = n - n_top - n_right - n_left
+
+        edge_hues: list[float] = []
+        edge_bris: list[float] = []
+
+        def _region_color(
+            y_lo: int, y_hi: int, x_lo: int, x_hi: int,
+        ) -> tuple[float, float]:
+            """Get dominant color of a rectangular region via median cut."""
+            strip: np.ndarray = frame[
+                max(0, y_lo):min(h, y_hi),
+                max(0, x_lo):min(w, x_hi),
+            ]
+            if strip.size == 0:
+                return 0.0, 0.0
+            # Flatten to (N, 3) and normalize.
+            pixels: np.ndarray = strip.reshape(-1, 3).astype(
+                np.float32
+            ) / 255.0
+            # Median cut → dominant RGB color.
+            dom: np.ndarray = self._median_cut(pixels, depth=2)
+            r, g, b = float(dom[0]), float(dom[1]), float(dom[2])
+            hue, sat, bri = _rgb_to_hsb(r, g, b)
+            return hue, bri
+
+        # Top edge.
+        region_w: float = w / max(1, n_top)
+        for i in range(n_top):
+            x_lo: int = int(i * region_w)
+            x_hi: int = int((i + 1) * region_w)
+            hv, bv = _region_color(0, depth, x_lo, x_hi)
+            edge_hues.append(hv)
+            edge_bris.append(bv)
+
+        # Right edge.
+        region_h: float = h / max(1, n_right)
+        for i in range(n_right):
+            y_lo: int = int(i * region_h)
+            y_hi: int = int((i + 1) * region_h)
+            hv, bv = _region_color(y_lo, y_hi, w - depth, w)
+            edge_hues.append(hv)
+            edge_bris.append(bv)
+
+        # Bottom edge (right to left).
+        for i in range(n_bottom):
+            x_hi: int = int(w - i * region_w)
+            x_lo: int = int(w - (i + 1) * region_w)
+            hv, bv = _region_color(h - depth, h, x_lo, x_hi)
+            edge_hues.append(hv)
+            edge_bris.append(bv)
+
+        # Left edge (bottom to top).
+        for i in range(n_left):
+            y_hi: int = int(h - i * region_h)
+            y_lo: int = int(h - (i + 1) * region_h)
+            hv, bv = _region_color(y_lo, y_hi, 0, depth)
+            edge_hues.append(hv)
+            edge_bris.append(bv)
+
+        return edge_hues, edge_bris
 
     def _extract_edges_numpy(
         self,

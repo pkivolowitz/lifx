@@ -213,13 +213,13 @@ def render_glow_border(
     for i in range(n):
         if mode == "bulb":
             color: tuple[int, int, int] = hsb_to_rgb(
-                dominant_hue, min(1.0, dominant_sat * 1.5),
+                dominant_hue, min(1.0, dominant_sat * 0.7),
                 brightness,
             )
         else:
             color = hsb_to_rgb(
                 edge_hues[i],
-                min(1.0, dominant_sat * 1.5),
+                min(1.0, dominant_sat * 0.7),
                 edge_bris[i],
             )
 
