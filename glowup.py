@@ -290,7 +290,7 @@ class _NullEmitter(Emitter):
     # --- Frame dispatch (all no-ops) ---
 
     def send_zones(self, colors: list[HSBK], duration_ms: int = 0,
-                   rapid: bool = True) -> None:
+                   rapid: bool = True, **kwargs: Any) -> None:
         """No-op — sim-only mode never writes to physical devices."""
 
     def send_color(self, hue: int, sat: int, bri: int, kelvin: int,
@@ -1393,44 +1393,42 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
     Args:
         args: Parsed CLI arguments.
     """
-    from media.screen_source import ScreenSource
+    print("Screen-reactive mode starting...", flush=True)
+
+    # Use the same proven code path as the test harness: MovieDecoder
+    # pointed at avfoundation for screen capture, direct pyramid +
+    # extraction on the main thread, render to pygame or LIFX emitter.
+    import signal
+    import numpy as np
+    from media.screen_source import build_pyramid
     from media.vision import VisionExtractor
     from media import SignalBus
-    from engine import Controller
 
     has_ip: bool = bool(getattr(args, "ip", None))
     has_device: bool = bool(getattr(args, "device", None))
     sim_only: bool = bool(getattr(args, "sim_only", False))
     virtual_zones: int = getattr(args, "zones", None) or 0
+    use_sim: bool = sim_only or virtual_zones > 0
 
-    # Determine zone count and emitter.
-    zone_count: int = 1
-    em: Any = None
+    # Determine zone count and emitter target.
+    zone_count: int = 60
+    emitter: Any = None
 
-    if virtual_zones > 0 or sim_only:
-        # Sim mode.
-        zone_count = virtual_zones if virtual_zones > 0 else 102
-        em = _NullEmitter(
-            zone_count=zone_count,
-            label="screen-sim",
-            product_name="Simulator",
-            polychrome_map=[True] * zone_count,
-        )
+    if use_sim:
+        zone_count = virtual_zones if virtual_zones > 0 else 60
     elif has_ip:
-        # Direct device connection.
         ip: str = args.ip
         try:
             dev: LifxDevice = LifxDevice(ip)
             dev.query_all()
             zone_count = dev.zone_count or 1
-            em = LifxEmitter.from_device(dev)
+            emitter = LifxEmitter.from_device(dev)
             _print(f"  Connected: {dev.label or ip} — {zone_count} zones")
         except Exception as exc:
             _print(f"ERROR: Cannot connect to {ip}: {exc}",
                    file=sys.stderr)
             sys.exit(1)
     elif has_device and _server_url:
-        # Fetch geometry from server, but run effect locally.
         device: str = args.device
         encoded: str = quote(device, safe="")
         resp: dict = _server_get(
@@ -1447,7 +1445,7 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
         try:
             dev_obj: LifxDevice = LifxDevice(dev_ip)
             dev_obj.query_all()
-            em = LifxEmitter.from_device(dev_obj)
+            emitter = LifxEmitter.from_device(dev_obj)
         except Exception as exc:
             _print(f"ERROR: Cannot connect to {dev_ip}: {exc}",
                    file=sys.stderr)
@@ -1457,68 +1455,219 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                "or --zones", file=sys.stderr)
         sys.exit(1)
 
-    # Set up the vision pipeline.
+    # Capture dimensions (what we decode frames at).
+    cap_w: int = 640
+    cap_h: int = 360
+
+    # Sensitivity and contrast params.
+    sensitivity: float = getattr(args, "sensitivity", None) or 1.5
+    contrast: float = getattr(args, "contrast", None) or 1.5
+
+    # Vision pipeline (same as test harness).
     bus: SignalBus = SignalBus()
     extractor: VisionExtractor = VisionExtractor(
         source_name="screen", bus=bus,
-        edge_regions=getattr(args, "zones_edge", 24),
+        edge_regions=zone_count,
     )
-    screen_src: ScreenSource = ScreenSource("screen", {
-        "fps": 15,
-    })
-    screen_src.add_callback(extractor.process_pyramid)
-    screen_src.start()
 
-    _print(f"  Screen capture: {screen_src.width}x{screen_src.height} "
-           f"@ {screen_src.fps} fps")
+    # Screen capture via ffmpeg avfoundation (same as MovieDecoder).
+    import subprocess as _sp
+    cap_cmd: list[str] = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-f", "avfoundation", "-framerate", "10",
+        "-capture_cursor", "0",
+        "-i", "3:",
+        "-vf", f"scale={cap_w}:{cap_h}",
+        "-r", "10",
+        "-f", "rawvideo", "-pix_fmt", "rgb24",
+        "pipe:1",
+    ]
+    print(f"  Starting screen capture: {cap_w}x{cap_h} @ 15 fps",
+          flush=True)
+    cap_proc: _sp.Popen = _sp.Popen(
+        cap_cmd, stdout=_sp.PIPE, stderr=_sp.DEVNULL,
+    )
+    frame_size: int = cap_w * cap_h * 3
 
-    # Set up simulator if in sim mode.
-    sim: Any = None
-    frame_cb: Any = None
-    if sim_only or virtual_zones > 0:
+    # Set up pygame for simulator mode.
+    BORDER_PX: int = 40
+    if use_sim:
         try:
-            from simulator import SimulatorWindow
-            sim = SimulatorWindow(
-                zone_count=zone_count,
-                effect_name="screen_light",
-                polychrome_map=[True] * zone_count,
+            import pygame
+            from tools.screen_test_harness import hsb_to_rgb
+            pygame.init()
+            room_w: int = cap_w + BORDER_PX * 2
+            room_h: int = cap_h + BORDER_PX * 2
+            pg_screen: pygame.Surface = pygame.display.set_mode(
+                (room_w, room_h),
             )
-            frame_cb = sim.update
-        except Exception:
-            pass
+            pygame.display.set_caption("GlowUp Screen Reactive")
+            clock: pygame.time.Clock = pygame.time.Clock()
+        except ImportError as exc:
+            _print(f"ERROR: Missing dependency for sim mode: {exc}",
+                   file=sys.stderr)
+            cap_proc.kill()
+            sys.exit(1)
 
-    # Build controller and start the effect.
-    fps: int = getattr(args, "fps", None) or 20
-    ctrl: Controller = Controller(
-        [em], fps=fps,
-        frame_callback=frame_cb,
-        zones_per_bulb=1,
-    )
+    # Signal handler for clean exit.
+    running: bool = True
 
-    # Collect effect params.
-    params: Dict[str, Any] = {
-        "source": "screen",
-    }
-    for pname in ("sensitivity", "contrast", "saturation_boost",
-                  "min_brightness", "max_brightness",
-                  "flash_intensity", "motion_influence"):
-        val: Any = getattr(args, pname, None)
-        if val is not None:
-            params[pname] = val
+    def _sig_handler(signum: int, frame: Any) -> None:
+        nonlocal running
+        running = False
 
-    ctrl.play("screen_light", signal_bus=bus, **params)
+    signal.signal(signal.SIGINT, _sig_handler)
+    signal.signal(signal.SIGTERM, _sig_handler)
 
-    _print("Screen-reactive mode active. Press Ctrl+C to stop.\n")
+    print("Screen-reactive mode active. Press Ctrl+C to stop.\n",
+          flush=True)
 
-    stop_event: threading.Event = threading.Event()
-    _install_stop_signal(stop_event)
-    stop_event.wait()
+    # Main loop — same structure as the test harness.
+    room_bg: tuple[int, int, int] = (15, 15, 20)
+    src: str = "screen"
 
+    while running:
+        # Read one complete frame, accumulating partial reads.
+        buf: bytearray = bytearray()
+        while len(buf) < frame_size:
+            chunk: bytes = cap_proc.stdout.read(frame_size - len(buf))
+            if not chunk:
+                break
+            buf.extend(chunk)
+        frame_bytes: bytes = bytes(buf)
+        if len(frame_bytes) < frame_size:
+            print("  Screen capture EOF.", flush=True)
+            break
+
+        # Build pyramid and extract vision signals.
+        pyramid: list[Any] = build_pyramid(frame_bytes, cap_w, cap_h)
+        extractor.process_pyramid(pyramid, cap_w, cap_h)
+
+        # Read signals from the bus.
+        brightness: float = float(bus.read(f"{src}:vision:brightness", 0.0))
+        flash: float = float(bus.read(f"{src}:vision:flash", 0.0))
+        dominant_hue: float = float(
+            bus.read(f"{src}:vision:dominant_hue", 0.0)
+        )
+        dominant_sat: float = float(
+            bus.read(f"{src}:vision:dominant_sat", 0.5)
+        )
+        edge_colors: Any = bus.read(
+            f"{src}:vision:edge_colors", [0.0] * zone_count,
+        )
+        edge_brightness: Any = bus.read(
+            f"{src}:vision:edge_brightness", [0.0] * zone_count,
+        )
+
+        # Apply sensitivity and contrast.
+        if isinstance(edge_brightness, list):
+            processed_bri: list[float] = []
+            for b_val in edge_brightness:
+                b_val = min(1.0, b_val * sensitivity)
+                if contrast != 1.0 and b_val > 0.0:
+                    b_val = b_val ** contrast
+                b_val = min(1.0, b_val + flash * 0.4)
+                processed_bri.append(b_val)
+        else:
+            processed_bri = [0.5] * zone_count
+
+        if use_sim:
+            # Render to pygame — flat color rects (no blur for speed).
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+
+            pg_screen.fill(room_bg)
+
+            # Draw flat color zones around the TV perimeter.
+            if isinstance(edge_colors, list):
+                n_z: int = len(edge_colors)
+                tv_x: int = BORDER_PX
+                tv_y: int = BORDER_PX
+                peri_top: int = cap_w
+                peri_right: int = cap_h
+                peri_bottom: int = cap_w
+                peri_left: int = cap_h
+                peri_total: int = peri_top + peri_right + peri_bottom + peri_left
+                d_sat: float = min(1.0, dominant_sat * 0.7)
+
+                for iz in range(n_z):
+                    h_z: float = edge_colors[iz] if iz < len(edge_colors) else 0.0
+                    b_z: float = processed_bri[iz] if iz < len(processed_bri) else 0.0
+                    color: tuple[int, int, int] = hsb_to_rgb(h_z, d_sat, b_z)
+                    frac_lo: float = iz / n_z
+                    frac_hi: float = (iz + 1) / n_z
+                    pos_lo: float = frac_lo * peri_total
+                    pos_mid: float = (pos_lo + frac_hi * peri_total) / 2.0
+                    seg_len: float = (frac_hi - frac_lo) * peri_total
+
+                    if pos_mid < peri_top:
+                        rect = pygame.Rect(
+                            int(tv_x + pos_lo), 0,
+                            max(1, int(seg_len)), BORDER_PX,
+                        )
+                    elif pos_mid < peri_top + peri_right:
+                        local: float = pos_lo - peri_top
+                        rect = pygame.Rect(
+                            tv_x + cap_w, int(tv_y + local),
+                            BORDER_PX, max(1, int(seg_len)),
+                        )
+                    elif pos_mid < peri_top + peri_right + peri_bottom:
+                        local = pos_lo - peri_top - peri_right
+                        rect = pygame.Rect(
+                            int(tv_x + cap_w - local - seg_len), tv_y + cap_h,
+                            max(1, int(seg_len)), BORDER_PX,
+                        )
+                    else:
+                        local = pos_lo - peri_top - peri_right - peri_bottom
+                        rect = pygame.Rect(
+                            0, int(tv_y + cap_h - local - seg_len),
+                            BORDER_PX, max(1, int(seg_len)),
+                        )
+
+                    rect = rect.clip(pg_screen.get_rect())
+                    if rect.width > 0 and rect.height > 0:
+                        pygame.draw.rect(pg_screen, color, rect)
+
+            # Composite the live screen frame as the "TV".
+            frame_arr: np.ndarray = np.frombuffer(
+                frame_bytes, dtype=np.uint8,
+            ).reshape(cap_h, cap_w, 3)
+            tv_surf: pygame.Surface = pygame.surfarray.make_surface(
+                frame_arr.swapaxes(0, 1),
+            )
+            pg_screen.blit(tv_surf, (BORDER_PX, BORDER_PX))
+
+            pygame.display.flip()
+            clock.tick(10)
+        elif emitter is not None:
+            # Send to real LIFX device.
+            if isinstance(edge_colors, list) and len(edge_colors) >= zone_count:
+                colors: list[tuple[int, int, int, int]] = []
+                for i in range(zone_count):
+                    h_val: float = edge_colors[i] if i < len(edge_colors) else 0.0
+                    b_val2: float = processed_bri[i] if i < len(processed_bri) else 0.0
+                    s_val: float = min(1.0, dominant_sat * 0.7)
+                    colors.append((
+                        int(h_val * 65535) & 0xFFFF,
+                        int(s_val * 65535) & 0xFFFF,
+                        int(b_val2 * 65535) & 0xFFFF,
+                        3500,
+                    ))
+                emitter.send_zones(colors)
+
+    # Cleanup.
     _print("\nStopping...")
-    screen_src.stop()
-    ctrl.stop(fade_ms=500)
-    if sim is not None:
-        sim.stop()
+    cap_proc.kill()
+    cap_proc.wait(timeout=3)
+    if use_sim:
+        pygame.quit()
+    if emitter is not None:
+        # Turn off the lights.
+        off_colors: list[tuple[int, int, int, int]] = [
+            (0, 0, 0, 3500)
+        ] * zone_count
+        emitter.send_zones(off_colors)
 
 
 def _play_via_server(args: argparse.Namespace) -> None:

@@ -175,9 +175,15 @@ class ScreenLight(MediaEffect):
         )
 
         n_edges: int = len(edge_colors) if isinstance(edge_colors, list) else 1
+        if n_edges == 0:
+            n_edges = 1
+            edge_colors = [0.0]
         n_edge_bri: int = (
             len(edge_brightness) if isinstance(edge_brightness, list) else 1
         )
+        if n_edge_bri == 0:
+            n_edge_bri = 1
+            edge_brightness = [0.0]
 
         colors: list[HSBK] = []
 

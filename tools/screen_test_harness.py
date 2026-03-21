@@ -161,7 +161,7 @@ def _blur_surface(surface: pygame.Surface, radius: int = 15) -> pygame.Surface:
 GLOW_STRIP_WIDTH: int = 16
 
 # Gaussian blur sigma. 15 = soft glow without killing frame rate.
-BLUR_RADIUS: int = 15
+BLUR_RADIUS: int = 8
 
 
 def render_glow_border(

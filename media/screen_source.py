@@ -406,7 +406,7 @@ class ScreenSource:
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
-                    bufsize=0,
+                    bufsize=691200,
                 )
                 logger.info(
                     "Screen capture started: %dx%d @ %d fps (pid %d)",
@@ -430,15 +430,21 @@ class ScreenSource:
             while self._running and self._process:
                 t_start: float = time.monotonic()
 
-                # Read one complete frame.
+                # Read one complete frame, accumulating partial reads.
                 try:
-                    frame_bytes: bytes = self._process.stdout.read(
-                        frame_size
-                    )
+                    chunks: list[bytes] = []
+                    remaining: int = frame_size
+                    while remaining > 0:
+                        chunk: bytes = self._process.stdout.read(remaining)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    frame_bytes: bytes = b"".join(chunks)
                 except Exception:
                     break
 
-                if not frame_bytes or len(frame_bytes) < frame_size:
+                if len(frame_bytes) < frame_size:
                     logger.warning(
                         "Screen capture '%s': incomplete frame (EOF?)",
                         self.name,
