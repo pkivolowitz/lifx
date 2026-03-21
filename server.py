@@ -342,6 +342,9 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("POST", ("api", "schedule", "{index}", "enabled"),
            "_handle_post_schedule_enabled",
            param_types={"index": int}),
+    _Route("PUT", ("api", "schedule", "{index}"),
+           "_handle_put_schedule_entry",
+           param_types={"index": int}),
     _Route("POST", ("api", "media", "sources", "{name}", "start"),
            "_handle_post_media_source_start"),
     _Route("POST", ("api", "media", "sources", "{name}", "stop"),
@@ -2203,6 +2206,10 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         """Route POST requests to the appropriate handler."""
         self._dispatch("POST")
 
+    def do_PUT(self) -> None:
+        """Route PUT requests to the appropriate handler."""
+        self._dispatch("PUT")
+
     def do_DELETE(self) -> None:
         """Route DELETE requests to the appropriate handler."""
         self._dispatch("DELETE")
@@ -2414,6 +2421,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 "stop": spec.get("stop", ""),
                 "start_resolved": start_str,
                 "stop_resolved": stop_str,
+                "params": spec.get("params", {}),
                 "days": days_raw,
                 "days_display": _days_display(days_raw),
                 "enabled": enabled,
@@ -2900,6 +2908,128 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             "index": index,
             "name": name,
             "enabled": enabled,
+        })
+
+    def _handle_put_schedule_entry(self, index: int) -> None:
+        """PUT /api/schedule/{index} — update a schedule entry.
+
+        Request body::
+
+            {
+                "name": "porch evening aurora",
+                "group": "porch",
+                "start": "sunset-30m",
+                "stop": "23:00",
+                "effect": "aurora",
+                "params": {"speed": 10.0, "brightness": 100},
+                "enabled": true,
+                "days": ""
+            }
+
+        Validates time specs and effect name before persisting.
+        Sends 400 with details on validation failure.
+        """
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        specs: list[dict[str, Any]] = self.config.get("schedule", [])
+        if index < 0 or index >= len(specs):
+            self._send_json(404, {"error": "Schedule entry not found"})
+            return
+
+        # --- Validate required fields ---
+        errors: list[str] = []
+
+        name: str = body.get("name", "").strip()
+        if not name:
+            errors.append("Name is required")
+
+        group: str = body.get("group", "").strip()
+        if not group:
+            errors.append("Group is required")
+
+        effect: str = body.get("effect", "").strip()
+        if not effect:
+            errors.append("Effect is required")
+
+        start_spec: str = body.get("start", "").strip()
+        stop_spec: str = body.get("stop", "").strip()
+        if not start_spec:
+            errors.append("Start time is required")
+        if not stop_spec:
+            errors.append("Stop time is required")
+
+        # Validate time specs parse correctly.
+        if start_spec and not (
+            _FIXED_TIME_RE.match(start_spec) or _SYMBOLIC_RE.match(start_spec)
+        ):
+            errors.append(
+                f"Invalid start time: {start_spec!r} "
+                "(use HH:MM or sunrise/sunset/dawn/dusk/noon/midnight[+-Nh][Mm])"
+            )
+        if stop_spec and not (
+            _FIXED_TIME_RE.match(stop_spec) or _SYMBOLIC_RE.match(stop_spec)
+        ):
+            errors.append(
+                f"Invalid stop time: {stop_spec!r} "
+                "(use HH:MM or sunrise/sunset/dawn/dusk/noon/midnight[+-Nh][Mm])"
+            )
+
+        # Validate effect exists.
+        if effect:
+            from effects import EFFECTS
+            if effect not in EFFECTS:
+                errors.append(f"Unknown effect: {effect!r}")
+
+        # Validate group exists in config.
+        if group:
+            config_groups: dict[str, Any] = self.config.get("groups", {})
+            sched_groups: dict[str, Any] = (
+                self.config.get("schedule_groups", {})
+                or self.config.get("groups", {})
+            )
+            # Check both server groups and schedule-specific groups.
+            if group not in config_groups and group not in sched_groups:
+                errors.append(f"Unknown group: {group!r}")
+
+        # Validate days if provided.
+        days_raw: str = body.get("days", "").strip()
+
+        # Validate params is a dict if provided.
+        params: Any = body.get("params", {})
+        if not isinstance(params, dict):
+            errors.append("params must be an object")
+
+        if errors:
+            self._send_json(400, {"error": "; ".join(errors)})
+            return
+
+        # --- Apply update ---
+        enabled: bool = body.get("enabled", specs[index].get("enabled", True))
+
+        specs[index] = {
+            "name": name,
+            "group": group,
+            "start": start_spec,
+            "stop": stop_spec,
+            "effect": effect,
+            "params": params if isinstance(params, dict) else {},
+            "enabled": enabled,
+        }
+        if days_raw:
+            specs[index]["days"] = days_raw
+
+        self._save_config_field("schedule", specs)
+
+        logging.info(
+            "API: schedule entry %d updated: '%s' %s on %s (%s→%s)",
+            index, name, effect, group, start_spec, stop_spec,
+        )
+        self._send_json(200, {
+            "index": index,
+            "name": name,
+            "updated": True,
         })
 
     # -- Media handlers -----------------------------------------------------
@@ -3977,11 +4107,29 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         """Persist a single config field to the config file.
 
         Reads the config JSON, updates the given key, and writes back.
+        Schedule entries are saved to the external schedule file if
+        one is configured (``_schedule_path``).
 
         Args:
             key:   Top-level config key to update.
             value: The new value.
         """
+        # Route schedule writes to the schedule file if it exists.
+        sched_path: Optional[str] = self.config.get("_schedule_path")
+        if key == "schedule" and sched_path:
+            try:
+                with open(sched_path, "r") as f:
+                    sched_config: dict[str, Any] = json.load(f)
+                sched_config["schedule"] = value
+                with open(sched_path, "w") as f:
+                    json.dump(sched_config, f, indent=4)
+                    f.write("\n")
+            except Exception as exc:
+                logging.warning(
+                    "Failed to save schedule to '%s': %s", sched_path, exc,
+                )
+            return
+
         config_path: Optional[str] = self.config_path
         if config_path is None:
             return
@@ -4117,6 +4265,8 @@ def _load_config(config_path: str) -> dict[str, Any]:
             )
         with open(schedule_path, "r") as sf:
             sched_config: dict[str, Any] = json.load(sf)
+        # Store resolved path for live schedule editing via API.
+        config["_schedule_path"] = schedule_path
         logging.info(
             "Loaded schedule from external file: %s", schedule_path,
         )

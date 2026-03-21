@@ -148,6 +148,86 @@
     font-size: 11px;
     margin-top: 2px;
   }
+  /* Schedule edit modal */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    width: 480px;
+    max-width: 90vw;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+  .modal h3 { margin-bottom: 16px; }
+  .modal label {
+    display: block;
+    font-size: 12px;
+    color: var(--dim);
+    margin-top: 12px;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+  }
+  .modal input, .modal select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 14px;
+    width: 100%;
+    font-family: inherit;
+  }
+  .modal select { cursor: pointer; }
+  .modal-buttons {
+    display: flex;
+    gap: 8px;
+    margin-top: 20px;
+    justify-content: flex-end;
+  }
+  .modal-buttons button {
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+    border: none;
+  }
+  .btn-save { background: var(--green); color: #000; font-weight: 600; }
+  .btn-cancel { background: var(--border); color: var(--text); }
+  .modal-error {
+    color: var(--accent);
+    font-size: 13px;
+    margin-top: 12px;
+    display: none;
+  }
+  .btn-edit {
+    background: var(--border);
+    color: var(--text);
+    border: none;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+    margin-left: 8px;
+  }
+  .btn-edit:hover { background: var(--accent); color: #fff; }
+  .time-hint {
+    font-size: 11px;
+    color: var(--dim);
+    margin-top: 2px;
+  }
   #auth-form {
     max-width: 400px;
     margin: 100px auto;
@@ -235,6 +315,33 @@
   </details>
 
   <div class="refresh-note">Last update: <span id="last-update">-</span></div>
+</div>
+
+<div class="modal-overlay" id="sched-modal">
+  <div class="modal">
+    <h3 id="sched-modal-title">Edit Schedule Entry</h3>
+    <input type="hidden" id="sched-idx">
+    <label>Name</label>
+    <input type="text" id="sched-name" placeholder="porch evening aurora">
+    <label>Group</label>
+    <select id="sched-group"></select>
+    <label>Effect</label>
+    <select id="sched-effect"></select>
+    <label>Start</label>
+    <input type="text" id="sched-start" placeholder="sunset-30m">
+    <label>Stop</label>
+    <input type="text" id="sched-stop" placeholder="23:00">
+    <div class="time-hint">HH:MM or sunrise/sunset/dawn/dusk/noon/midnight with optional +-Nh/Mm offset</div>
+    <label>Days (blank = every day)</label>
+    <input type="text" id="sched-days" placeholder="mon,wed,fri or blank for all">
+    <label>Params (JSON)</label>
+    <input type="text" id="sched-params" placeholder='{"speed": 10.0, "brightness": 100}'>
+    <div class="modal-error" id="sched-error"></div>
+    <div class="modal-buttons">
+      <button class="btn-cancel" onclick="closeScheduleModal()">Cancel</button>
+      <button class="btn-save" onclick="saveScheduleEntry()">Save</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -424,10 +531,14 @@ async function refresh() {
         const times = (e.start_resolved && e.stop_resolved)
           ? e.start_resolved + ' \u2192 ' + e.stop_resolved
           : e.start + ' \u2192 ' + e.stop;
+        const edata = JSON.stringify(e).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
         return `
           <div class="schedule-row">
             <div style="display:flex;justify-content:space-between;align-items:center;">
-              <span class="schedule-name">${esc(e.name)}</span>
+              <span>
+                <span class="schedule-name">${esc(e.name)}</span>
+                <button class="btn-edit" data-entry="${edata}" onclick="openScheduleModal(JSON.parse(this.dataset.entry))">Edit</button>
+              </span>
               ${badge}
             </div>
             <div style="margin-top:4px;">
@@ -541,6 +652,143 @@ function esc(s) {
   d.textContent = String(s);
   return d.innerHTML;
 }
+
+// ---- Schedule edit modal ----
+
+// Cache of groups and effects for dropdowns.
+let _cachedGroups = [];
+let _cachedEffects = [];
+
+async function openScheduleModal(entry) {
+  const modal = document.getElementById('sched-modal');
+  const errEl = document.getElementById('sched-error');
+  errEl.style.display = 'none';
+  errEl.textContent = '';
+
+  // Populate index and fields from entry data.
+  document.getElementById('sched-idx').value = entry.index;
+  document.getElementById('sched-name').value = entry.name || '';
+  document.getElementById('sched-start').value = entry.start || '';
+  document.getElementById('sched-stop').value = entry.stop || '';
+  document.getElementById('sched-days').value = entry.days || '';
+  document.getElementById('sched-params').value =
+    (entry.params && Object.keys(entry.params).length)
+      ? JSON.stringify(entry.params) : '';
+
+  // Fetch groups and effects for dropdowns if not cached.
+  try {
+    if (_cachedGroups.length === 0) {
+      const devData = await api('/api/devices');
+      const devs = (devData && devData.devices) || [];
+      _cachedGroups = devs.filter(d => d.is_group).map(d => d.label || d.ip);
+    }
+    if (_cachedEffects.length === 0) {
+      const effData = await api('/api/effects');
+      _cachedEffects = (effData && effData.effects)
+        ? effData.effects.map(e => e.name).sort()
+        : [];
+    }
+  } catch (e) {
+    console.error('Failed to load groups/effects:', e);
+  }
+
+  // Populate group dropdown.
+  const gSel = document.getElementById('sched-group');
+  gSel.innerHTML = _cachedGroups.map(g =>
+    `<option value="${esc(g)}" ${g === entry.group ? 'selected' : ''}>${esc(g)}</option>`
+  ).join('');
+  // Add current group if not in list (schedule-specific group).
+  if (entry.group && !_cachedGroups.includes(entry.group)) {
+    gSel.innerHTML = `<option value="${esc(entry.group)}" selected>${esc(entry.group)}</option>` + gSel.innerHTML;
+  }
+
+  // Populate effect dropdown.
+  const eSel = document.getElementById('sched-effect');
+  eSel.innerHTML = _cachedEffects.map(e =>
+    `<option value="${esc(e)}" ${e === entry.effect ? 'selected' : ''}>${esc(e)}</option>`
+  ).join('');
+
+  // Pause auto-refresh while editing.
+  stopPolling();
+  modal.classList.add('active');
+}
+
+function closeScheduleModal() {
+  document.getElementById('sched-modal').classList.remove('active');
+  startPolling();
+}
+
+async function saveScheduleEntry() {
+  const errEl = document.getElementById('sched-error');
+  errEl.style.display = 'none';
+
+  const idx = parseInt(document.getElementById('sched-idx').value, 10);
+  const name = document.getElementById('sched-name').value.trim();
+  const group = document.getElementById('sched-group').value;
+  const effect = document.getElementById('sched-effect').value;
+  const start = document.getElementById('sched-start').value.trim();
+  const stop = document.getElementById('sched-stop').value.trim();
+  const days = document.getElementById('sched-days').value.trim();
+  const paramsRaw = document.getElementById('sched-params').value.trim();
+
+  // Client-side validation.
+  const errs = [];
+  if (!name) errs.push('Name is required');
+  if (!start) errs.push('Start time is required');
+  if (!stop) errs.push('Stop time is required');
+
+  // Validate time format client-side.
+  const timeRe = /^(\d{1,2}:\d{2}|(sunrise|sunset|dawn|dusk|noon|midnight)([+-](\d+h)?(\d+m)?)?)$/;
+  if (start && !timeRe.test(start)) errs.push('Invalid start time format');
+  if (stop && !timeRe.test(stop)) errs.push('Invalid stop time format');
+
+  // Validate params JSON.
+  let params = {};
+  if (paramsRaw) {
+    try {
+      params = JSON.parse(paramsRaw);
+      if (typeof params !== 'object' || Array.isArray(params)) {
+        errs.push('Params must be a JSON object {}');
+      }
+    } catch (e) {
+      errs.push('Invalid JSON in params: ' + e.message);
+    }
+  }
+
+  if (errs.length) {
+    errEl.textContent = errs.join('. ');
+    errEl.style.display = 'block';
+    return;
+  }
+
+  // Send to server.
+  try {
+    const resp = await fetch(BASE + '/api/schedule/' + idx, {
+      method: 'PUT',
+      headers: {
+        'Authorization': 'Bearer ' + TOKEN,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name, group, effect, start, stop, days, params }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      errEl.textContent = data.error || 'Server error';
+      errEl.style.display = 'block';
+      return;
+    }
+    closeScheduleModal();
+    refresh();
+  } catch (e) {
+    errEl.textContent = 'Network error: ' + e.message;
+    errEl.style.display = 'block';
+  }
+}
+
+// Close modal on Escape key.
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeScheduleModal();
+});
 </script>
 </body>
 </html>
