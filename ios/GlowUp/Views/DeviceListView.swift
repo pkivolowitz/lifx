@@ -157,56 +157,95 @@ struct DeviceRow: View {
     /// The device to display.
     let device: Device
 
+    /// API client for power toggle.
+    @EnvironmentObject var apiClient: APIClient
+
+    /// Whether power is on (local state for immediate UI feedback).
+    @State private var isPoweredOn: Bool = true
+
+    /// Whether a power request is in flight.
+    @State private var powerLoading: Bool = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // Device name and current effect.
-            HStack {
-                Text(device.displayName)
-                    .font(.headline)
-                Spacer()
-                if let effect = device.currentEffect {
-                    Text(effect)
-                        .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(Color.green.opacity(0.2))
-                        .cornerRadius(6)
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                // Device name and current effect.
+                HStack {
+                    Text(device.displayName)
+                        .font(.headline)
+                    Spacer()
+                    if let effect = device.currentEffect {
+                        Text(effect)
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.2))
+                            .cornerRadius(6)
+                    }
+                }
+
+                // Product type, group, and zone count.
+                HStack {
+                    if device.isVirtualGroup {
+                        // Virtual group: show member count.
+                        let count = device.memberIps?.count ?? 0
+                        Label(
+                            "\(count) devices",
+                            systemImage: "rectangle.3.group"
+                        )
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    } else {
+                        if let product = device.product {
+                            Text(product)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let group = device.group, !group.isEmpty {
+                            Text("·")
+                                .foregroundStyle(.secondary)
+                            Text(group)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    if let zones = device.zones, zones > 1 {
+                        Text("\(zones) zones")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
-            // Product type, group, and zone count.
-            HStack {
-                if device.isVirtualGroup {
-                    // Virtual group: show member count.
-                    let count = device.memberIps?.count ?? 0
-                    Label(
-                        "\(count) devices",
-                        systemImage: "rectangle.3.group"
-                    )
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                } else {
-                    if let product = device.product {
-                        Text(product)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    if let group = device.group, !group.isEmpty {
-                        Text("·")
-                            .foregroundStyle(.secondary)
-                        Text(group)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-                if let zones = device.zones, zones > 1 {
-                    Text("\(zones) zones")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            // Power toggle button.
+            Button {
+                Task { await togglePower() }
+            } label: {
+                Image(systemName: isPoweredOn
+                      ? "lightbulb.fill"
+                      : "lightbulb.slash")
+                    .font(.title2)
+                    .foregroundStyle(isPoweredOn ? .yellow : .secondary)
             }
+            .buttonStyle(.plain)
+            .disabled(powerLoading)
         }
         .padding(.vertical, 2)
+    }
+
+    /// Toggle power on/off for this device or group.
+    private func togglePower() async {
+        let newState = !isPoweredOn
+        powerLoading = true
+        do {
+            try await apiClient.setPower(
+                deviceId: device.deviceId, on: newState
+            )
+            isPoweredOn = newState
+        } catch {
+            // Revert on failure — state didn't change.
+        }
+        powerLoading = false
     }
 }

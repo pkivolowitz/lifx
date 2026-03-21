@@ -929,6 +929,41 @@ def cmd_identify(args: argparse.Namespace) -> None:
     _print("Done.")
 
 
+def cmd_power(args: argparse.Namespace) -> None:
+    """Turn a device or group on or off via the server.
+
+    Usage::
+
+        glowup power on  --device "group:main_bedroom"
+        glowup power off --device "PORCH STRING LIGHTS"
+        glowup power on  --device "group:all"
+
+    Args:
+        args: Parsed CLI arguments with ``state`` and ``device``.
+    """
+    device: str = args.device
+    on: bool = args.state == "on"
+
+    if not _server_url:
+        _print("ERROR: Power command requires a reachable server.",
+               file=sys.stderr)
+        sys.exit(1)
+
+    encoded: str = quote(device, safe="")
+    try:
+        _server_post(
+            _server_url,
+            f"/api/devices/{encoded}/power",
+            {"on": on},
+        )
+        _print(f"{'On' if on else 'Off'}: {device}")
+    except SystemExit:
+        raise
+    except Exception as exc:
+        _print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_off(args: argparse.Namespace) -> None:
     """Emergency power-off: all LIFX devices off immediately.
 
@@ -2402,6 +2437,23 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # -- power ----------------------------------------------------------------
+    p_power = sub.add_parser(
+        "power",
+        help="Turn a device or group on or off",
+    )
+    p_power.add_argument(
+        "state", choices=["on", "off"],
+        help="Power state: 'on' or 'off'",
+    )
+    p_power.add_argument(
+        "--device", required=True,
+        help=(
+            "Device label, MAC, IP, or group (e.g. 'group:main_bedroom', "
+            "'PORCH STRING LIGHTS', 'group:all')"
+        ),
+    )
+
     # -- off ----------------------------------------------------------------
     sub.add_parser(
         "off",
@@ -2793,6 +2845,7 @@ def main() -> None:
         "identify": cmd_identify,
         "monitor": cmd_monitor,
         "off": cmd_off,
+        "power": cmd_power,
         "play": cmd_play,
         "record": cmd_record,
         "replay": cmd_replay,
