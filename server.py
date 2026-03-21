@@ -820,6 +820,9 @@ class DeviceManager:
             try:
                 em.power_on(duration_ms=0)
                 self._power_states[ip] = True
+                if isinstance(em, VirtualMultizoneEmitter):
+                    for member in em.get_emitter_list():
+                        self._power_states[member.emitter_id] = True
             except Exception as exc:
                 logging.warning("power_on failed for %s before play: %s", ip, exc)
         # Close the previous effect's diagnostics record before starting
@@ -869,6 +872,10 @@ class DeviceManager:
         ctrl.stop(fade_ms=DEFAULT_FADE_MS)
         ctrl.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
         self._power_states[ip] = False
+        em_stop: Optional[Emitter] = self.get_emitter(ip)
+        if em_stop is not None and isinstance(em_stop, VirtualMultizoneEmitter):
+            for member in em_stop.get_emitter_list():
+                self._power_states[member.emitter_id] = False
         self._play_sources.pop(ip, None)
         if self._diag is not None:
             self._diag.log_stop(ip, stop_reason="user")
@@ -2758,7 +2765,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
             result: dict[str, Any] = self.device_manager.set_power(ip, on)
             # Track power state for device list API response.
+            # For groups, propagate to all member devices.
             self.device_manager._power_states[ip] = on
+            em: Optional[Emitter] = self.device_manager.get_emitter(ip)
+            if em is not None and isinstance(em, VirtualMultizoneEmitter):
+                for member in em.get_emitter_list():
+                    self.device_manager._power_states[member.emitter_id] = on
             logging.info("API: power %s on %s", "on" if on else "off", ip)
             self._send_json(200, result)
         except KeyError:
