@@ -63,14 +63,16 @@ from media import SignalBus
 # Constants
 # ---------------------------------------------------------------------------
 
-# TV window size (the "screen" being watched).
-TV_WIDTH: int = 640
-TV_HEIGHT: int = 360
+# Default TV window size (the "screen" being watched).
+DEFAULT_TV_WIDTH: int = 640
+DEFAULT_TV_HEIGHT: int = 360
 
 # Border thickness around the TV (simulated strip width).
 BORDER_PX: int = 60
 
-# Room window size (TV + border on all sides).
+# These are set by main() based on --aspect.
+TV_WIDTH: int = DEFAULT_TV_WIDTH
+TV_HEIGHT: int = DEFAULT_TV_HEIGHT
 ROOM_WIDTH: int = TV_WIDTH + BORDER_PX * 2
 ROOM_HEIGHT: int = TV_HEIGHT + BORDER_PX * 2
 
@@ -431,12 +433,32 @@ def main() -> None:
         "--contrast", type=float, default=1.5,
         help="Dynamic range gamma (default 1.5)",
     )
+    parser.add_argument(
+        "--aspect", default=None, metavar="W:H",
+        help=(
+            "TV aspect ratio (e.g. '2.35:1' for cinemascope, "
+            "'16:9' default).  Adjusts TV height to match."
+        ),
+    )
     args: argparse.Namespace = parser.parse_args()
 
     if not os.path.isfile(args.movie):
         print(f"ERROR: Movie file not found: {args.movie}",
               file=sys.stderr)
         sys.exit(1)
+
+    # --- Apply aspect ratio ---
+    global TV_WIDTH, TV_HEIGHT, ROOM_WIDTH, ROOM_HEIGHT
+    if args.aspect:
+        parts: list[str] = args.aspect.split(":")
+        ratio: float = float(parts[0]) / float(parts[1])
+        TV_HEIGHT = int(TV_WIDTH / ratio)
+        # Ensure even height for ffmpeg.
+        TV_HEIGHT = TV_HEIGHT & ~1
+    ROOM_WIDTH = TV_WIDTH + BORDER_PX * 2
+    ROOM_HEIGHT = TV_HEIGHT + BORDER_PX * 2
+    print(f"  TV: {TV_WIDTH}x{TV_HEIGHT} "
+          f"(aspect {TV_WIDTH/TV_HEIGHT:.2f}:1)")
 
     # --- Initialize pygame ---
     pygame.init()
