@@ -38,7 +38,7 @@ from server import (
 # ---------------------------------------------------------------------------
 
 # Methods the routing table covers.
-SUPPORTED_METHODS: tuple[str, ...] = ("GET", "POST", "DELETE")
+SUPPORTED_METHODS: tuple[str, ...] = ("GET", "POST", "PUT", "DELETE")
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +273,18 @@ class TestRouteFlags(unittest.TestCase):
                     )
 
     def test_non_dashboard_routes_require_auth(self) -> None:
-        """All routes except dashboard must require auth."""
+        """All routes except explicitly auth-free ones must require auth."""
+        # Routes that are intentionally public:
+        # - dashboard: served without token so the page can load
+        # - media/stream: SSE endpoint consumed by media pipeline nodes
+        # - calibrate/time_sync: device-facing, no user credentials
+        AUTH_FREE_PATTERNS: set[tuple[str, ...]] = {
+            ("dashboard",),
+            ("api", "media", "stream", "{source_name}"),
+            ("api", "calibrate", "time_sync"),
+        }
         for route in _ROUTES:
-            if route.pattern == ("dashboard",):
+            if route.pattern in AUTH_FREE_PATTERNS:
                 continue
             self.assertTrue(
                 route.requires_auth,
@@ -294,19 +303,28 @@ class TestRouteCount(unittest.TestCase):
     def test_get_route_count(self) -> None:
         """GET routes should match the expected count."""
         get_routes: list[_Route] = [r for r in _ROUTES if r.method == "GET"]
-        # 1 dashboard + 14 static + 3 device = 18
+        # 1 dashboard + 16 static + 3 device = 20
         self.assertEqual(
-            len(get_routes), 18,
-            f"Expected 18 GET routes, got {len(get_routes)}",
+            len(get_routes), 20,
+            f"Expected 20 GET routes, got {len(get_routes)}",
         )
 
     def test_post_route_count(self) -> None:
         """POST routes should match the expected count."""
         post_routes: list[_Route] = [r for r in _ROUTES if r.method == "POST"]
-        # 7 device + 5 parameterized + 7 static = 19
+        # 7 device + 7 parameterized + 7 static = 21
         self.assertEqual(
-            len(post_routes), 19,
-            f"Expected 19 POST routes, got {len(post_routes)}",
+            len(post_routes), 21,
+            f"Expected 21 POST routes, got {len(post_routes)}",
+        )
+
+    def test_put_route_count(self) -> None:
+        """PUT routes should match the expected count."""
+        put_routes: list[_Route] = [r for r in _ROUTES if r.method == "PUT"]
+        # 1 schedule entry update = 1
+        self.assertEqual(
+            len(put_routes), 1,
+            f"Expected 1 PUT route, got {len(put_routes)}",
         )
 
     def test_delete_route_count(self) -> None:
