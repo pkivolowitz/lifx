@@ -2423,7 +2423,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         # Update runtime group config so next scan cycle builds
         # the VirtualMultizoneEmitter.
-        self._dm._group_config[name] = clean_members
+        self.device_manager._group_config[name] = clean_members
 
         logging.info(
             "API: group '%s' created with %d member(s): %s",
