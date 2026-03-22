@@ -196,25 +196,38 @@
   .btn-confirm-delete:hover { opacity: 0.85; }
   /* Group creation modal — scrollable device checklist */
   .group-device-list {
-    max-height: 240px;
+    max-height: 280px;
     overflow-y: auto;
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 8px;
     background: var(--bg);
   }
+  .group-device-list .section-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--dim);
+    padding: 4px 0 2px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2px;
+  }
   .group-device-item {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
     align-items: center;
     gap: 8px;
-    padding: 6px 4px;
+    padding: 5px 4px;
     border-bottom: 1px solid var(--border);
     cursor: pointer;
   }
   .group-device-item:last-child { border-bottom: none; }
   .group-device-item:hover { background: rgba(255,255,255,0.04); }
+  /* Override modal-wide input styles for checkboxes in device list */
   .group-device-item input[type="checkbox"] {
     width: auto;
+    padding: 0;
+    border: none;
+    background: none;
     flex-shrink: 0;
     accent-color: var(--green);
   }
@@ -225,6 +238,24 @@
   }
   .group-device-label .dev-name { font-size: 13px; font-weight: 600; }
   .group-device-label .dev-meta { font-size: 11px; color: var(--dim); }
+  /* Reorder arrows for selected devices */
+  .group-reorder {
+    display: flex;
+    gap: 2px;
+  }
+  .group-reorder button {
+    background: var(--border);
+    color: var(--text);
+    border: none;
+    border-radius: 3px;
+    width: 22px;
+    height: 22px;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+  }
+  .group-reorder button:hover { background: var(--accent); color: #fff; }
   /* Group row — 3-column grid like schedule rows */
   .group-row {
     display: grid;
@@ -909,8 +940,12 @@ async function executeDeleteSchedule(index) {
 // Tracks whether the group modal is in create or edit mode.
 let _groupModalIsCreate = true;
 
-// Shared helper: fetch devices and populate the checklist.
-// selectedIps is an array of IPs to pre-check (empty for create).
+// All available devices — populated on modal open, reused by render.
+let _groupAllDevices = [];
+// Ordered list of selected device IPs — order = group member order.
+let _groupSelectedIps = [];
+
+// Fetch devices and build the master list; then render.
 async function _populateGroupDeviceList(selectedIps) {
   const listEl = document.getElementById('group-device-list');
   listEl.innerHTML = '<span style="color:var(--dim)">Loading devices...</span>';
@@ -923,14 +958,12 @@ async function _populateGroupDeviceList(selectedIps) {
     const devices = ((devData && devData.devices) || []).filter(d => !d.is_group);
     const bulbs = (discData && discData.discovered_bulbs) || [];
 
-    // Build a lookup from known devices by IP.
     const devByIp = {};
     devices.forEach(d => { devByIp[d.ip] = d; });
 
-    // Merge: configured devices first, then discovered-only bulbs.
-    const allDevices = [];
+    _groupAllDevices = [];
     devices.forEach(d => {
-      allDevices.push({
+      _groupAllDevices.push({
         ip: d.ip,
         name: d.nickname || d.label || d.ip,
         meta: (d.product || '') + (d.zones > 1 ? ' \u00b7 ' + d.zones + ' zones' : ''),
@@ -938,7 +971,7 @@ async function _populateGroupDeviceList(selectedIps) {
     });
     bulbs.forEach(b => {
       if (!devByIp[b.ip]) {
-        allDevices.push({
+        _groupAllDevices.push({
           ip: b.ip,
           name: b.mac || b.ip,
           meta: 'Discovered (not configured)',
@@ -946,25 +979,95 @@ async function _populateGroupDeviceList(selectedIps) {
       }
     });
 
-    if (allDevices.length === 0) {
-      listEl.innerHTML = '<span style="color:var(--dim)">No devices available</span>';
-      return;
-    }
+    // Preserve the order from selectedIps (group member order).
+    const selSet = new Set(selectedIps || []);
+    _groupSelectedIps = (selectedIps || []).filter(ip => ip);
+    // Add any selected IPs not in our device list (offline members).
+    _groupSelectedIps.forEach(ip => {
+      if (!_groupAllDevices.find(d => d.ip === ip)) {
+        _groupAllDevices.push({ ip: ip, name: ip, meta: 'Offline / not discovered' });
+      }
+    });
 
-    const selected = new Set(selectedIps || []);
-    listEl.innerHTML = allDevices.map(d => `
-      <label class="group-device-item">
-        <input type="checkbox" value="${esc(d.ip)}" ${selected.has(d.ip) ? 'checked' : ''}>
-        <div class="group-device-label">
-          <span class="dev-name">${esc(d.name)}</span>
-          <span class="dev-meta">${esc(d.ip)}${d.meta ? ' \u00b7 ' + esc(d.meta) : ''}</span>
-        </div>
-      </label>
-    `).join('');
+    _renderGroupDeviceList();
   } catch (e) {
     listEl.innerHTML = '<span style="color:var(--accent)">Failed to load devices</span>';
     console.error('Failed to load devices for group modal:', e);
   }
+}
+
+// Render the two-section device list: Members (ordered) + Available.
+function _renderGroupDeviceList() {
+  const listEl = document.getElementById('group-device-list');
+  const devByIp = {};
+  _groupAllDevices.forEach(d => { devByIp[d.ip] = d; });
+  const selSet = new Set(_groupSelectedIps);
+
+  let html = '';
+
+  // Members section — ordered, with reorder arrows.
+  if (_groupSelectedIps.length > 0) {
+    html += '<div class="section-label">Members (drag order = zone order)</div>';
+    _groupSelectedIps.forEach((ip, idx) => {
+      const d = devByIp[ip] || { ip: ip, name: ip, meta: '' };
+      html += `
+        <div class="group-device-item">
+          <input type="checkbox" value="${esc(d.ip)}" checked
+                 onchange="_groupToggleDevice('${esc(d.ip)}', false)">
+          <div class="group-device-label">
+            <span class="dev-name">${esc(d.name)}</span>
+            <span class="dev-meta">${esc(d.ip)}${d.meta ? ' \u00b7 ' + esc(d.meta) : ''}</span>
+          </div>
+          <div class="group-reorder">
+            <button onclick="_groupMoveDevice(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>&uarr;</button>
+            <button onclick="_groupMoveDevice(${idx}, 1)" ${idx === _groupSelectedIps.length - 1 ? 'disabled' : ''}>&darr;</button>
+          </div>
+        </div>`;
+    });
+  }
+
+  // Available section — unchecked devices.
+  const available = _groupAllDevices.filter(d => !selSet.has(d.ip));
+  if (available.length > 0) {
+    html += '<div class="section-label">Available</div>';
+    available.forEach(d => {
+      html += `
+        <div class="group-device-item">
+          <input type="checkbox" value="${esc(d.ip)}"
+                 onchange="_groupToggleDevice('${esc(d.ip)}', true)">
+          <div class="group-device-label">
+            <span class="dev-name">${esc(d.name)}</span>
+            <span class="dev-meta">${esc(d.ip)}${d.meta ? ' \u00b7 ' + esc(d.meta) : ''}</span>
+          </div>
+          <div></div>
+        </div>`;
+    });
+  }
+
+  if (!html) {
+    html = '<span style="color:var(--dim)">No devices available</span>';
+  }
+  listEl.innerHTML = html;
+}
+
+// Toggle a device in/out of the selected list and re-render.
+function _groupToggleDevice(ip, adding) {
+  if (adding) {
+    if (!_groupSelectedIps.includes(ip)) _groupSelectedIps.push(ip);
+  } else {
+    _groupSelectedIps = _groupSelectedIps.filter(x => x !== ip);
+  }
+  _renderGroupDeviceList();
+}
+
+// Move a selected device up or down and re-render.
+function _groupMoveDevice(idx, direction) {
+  const newIdx = idx + direction;
+  if (newIdx < 0 || newIdx >= _groupSelectedIps.length) return;
+  const temp = _groupSelectedIps[idx];
+  _groupSelectedIps[idx] = _groupSelectedIps[newIdx];
+  _groupSelectedIps[newIdx] = temp;
+  _renderGroupDeviceList();
 }
 
 async function openNewGroupModal() {
@@ -997,9 +1100,8 @@ async function saveGroup() {
 
   const name = document.getElementById('group-name').value.trim();
   const originalName = document.getElementById('group-original-name').value;
-  const checked = Array.from(
-    document.querySelectorAll('#group-device-list input[type="checkbox"]:checked')
-  ).map(cb => cb.value);
+  // Use the ordered selection list — order = zone order in group.
+  const checked = _groupSelectedIps.slice();
 
   // Client-side validation.
   const errors = [];
