@@ -342,6 +342,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_post_effect_defaults"),
     _Route("POST", ("api", "groups"),
            "_handle_post_group_create"),
+    _Route("PUT", ("api", "groups", "{name}"),
+           "_handle_put_group_update"),
     _Route("POST", ("api", "schedule"),
            "_handle_post_schedule_create"),
     _Route("POST", ("api", "schedule", "{index}", "enabled"),
@@ -383,6 +385,8 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("DELETE", ("api", "schedule", "{index}"),
            "_handle_delete_schedule_entry",
            param_types={"index": int}),
+    _Route("DELETE", ("api", "groups", "{name}"),
+           "_handle_delete_group"),
 )
 
 # Pre-built index: (method, segment_count) → list of candidate routes.
@@ -2416,10 +2420,11 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         # Sanitize member list — strip whitespace.
         clean_members: list[str] = [m.strip() for m in members]
 
-        # Persist to config file.
+        # Persist to config file and update in-memory config.
         all_groups: dict[str, Any] = dict(existing_groups)
         all_groups[name] = clean_members
         self._save_config_field("groups", all_groups)
+        self.config["groups"] = all_groups
 
         # Update runtime group config so next scan cycle builds
         # the VirtualMultizoneEmitter.
@@ -2430,6 +2435,99 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             name, len(clean_members), ", ".join(clean_members),
         )
         self._send_json(201, {"name": name, "members": clean_members})
+
+    def _handle_put_group_update(self, name: str) -> None:
+        """PUT /api/groups/{name} — update an existing group.
+
+        Request body::
+
+            {
+                "name": "new_name",
+                "members": ["192.0.2.25", "192.0.2.26"]
+            }
+
+        The ``name`` field in the body is the new name (may be the
+        same as the URL name for member-only changes).  Validates
+        that the group exists, that the new name is valid, and that
+        at least one member is provided.
+        """
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        existing_groups: dict[str, Any] = self.config.get("groups", {})
+        if name not in existing_groups:
+            self._send_json(404, {"error": f"Group '{name}' not found"})
+            return
+
+        errors: list[str] = []
+
+        new_name: str = body.get("name", "").strip()
+        if not new_name:
+            errors.append("Group name is required")
+        elif new_name.startswith("_"):
+            errors.append("Group name must not start with '_'")
+        elif new_name != name and new_name in existing_groups:
+            errors.append(f"Group '{new_name}' already exists")
+
+        members: Any = body.get("members", [])
+        if not isinstance(members, list) or len(members) == 0:
+            errors.append("At least one member device is required")
+        elif not all(isinstance(m, str) and m.strip() for m in members):
+            errors.append("Each member must be a non-empty string")
+
+        if errors:
+            self._send_json(400, {"error": "; ".join(errors)})
+            return
+
+        clean_members: list[str] = [m.strip() for m in members]
+
+        # Build updated groups dict — remove old name, add new.
+        updated: dict[str, Any] = {
+            k: v for k, v in existing_groups.items() if k != name
+        }
+        updated[new_name] = clean_members
+        self._save_config_field("groups", updated)
+        self.config["groups"] = updated
+
+        # Update runtime group config.
+        self.device_manager._group_config.pop(name, None)
+        self.device_manager._group_config[new_name] = clean_members
+
+        logging.info(
+            "API: group '%s' updated%s — %d member(s): %s",
+            name,
+            f" (renamed to '{new_name}')" if new_name != name else "",
+            len(clean_members),
+            ", ".join(clean_members),
+        )
+        self._send_json(200, {
+            "name": new_name,
+            "members": clean_members,
+        })
+
+    def _handle_delete_group(self, name: str) -> None:
+        """DELETE /api/groups/{name} — remove a device group.
+
+        Validates the group exists, removes it from config and
+        runtime state, and persists the change.
+        """
+        existing_groups: dict[str, Any] = self.config.get("groups", {})
+        if name not in existing_groups:
+            self._send_json(404, {"error": f"Group '{name}' not found"})
+            return
+
+        updated: dict[str, Any] = {
+            k: v for k, v in existing_groups.items() if k != name
+        }
+        self._save_config_field("groups", updated)
+        self.config["groups"] = updated
+
+        # Remove from runtime group config.
+        self.device_manager._group_config.pop(name, None)
+
+        logging.info("API: group '%s' deleted", name)
+        self._send_json(200, {"deleted": name})
 
     def _handle_get_schedule(self) -> None:
         """GET /api/schedule — schedule entries with resolved times.

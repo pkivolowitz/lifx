@@ -225,6 +225,17 @@
   }
   .group-device-label .dev-name { font-size: 13px; font-weight: 600; }
   .group-device-label .dev-meta { font-size: 11px; color: var(--dim); }
+  /* Group row — 3-column grid like schedule rows */
+  .group-row {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .group-row:last-child { border-bottom: none; }
+  .group-actions { display: flex; align-items: center; justify-content: center; gap: 6px; }
   /* Add-schedule button beside the Schedule heading */
   .btn-add-schedule {
     background: var(--green);
@@ -468,7 +479,8 @@
 
 <div class="modal-overlay" id="group-modal">
   <div class="modal">
-    <h3>New Group</h3>
+    <h3 id="group-modal-title">New Group</h3>
+    <input type="hidden" id="group-original-name" value="">
     <label>Group Name</label>
     <input type="text" id="group-name" placeholder="e.g. porch, office">
     <label>Devices</label>
@@ -476,7 +488,7 @@
     <div class="modal-error" id="group-error"></div>
     <div class="modal-buttons">
       <button class="btn-cancel" onclick="closeGroupModal()">Cancel</button>
-      <button class="btn-save" onclick="saveNewGroup()">Save</button>
+      <button class="btn-save" onclick="saveGroup()">Save</button>
     </div>
   </div>
 </div>
@@ -757,14 +769,21 @@ async function refresh() {
           ? `<div class="device-effect">${esc(g.current_effect)}</div>`
           : '';
         const memberCount = (g.member_ips || []).length;
+        const membersJson = JSON.stringify(g.member_ips || []).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
         return `
-          <div class="device-row">
+          <div class="group-row">
             <div>
               <div class="device-name">${esc(name)}</div>
               ${effectLine}
               <div class="device-meta">${g.zones || 0} zones &middot; ${memberCount} devices</div>
             </div>
-            ${badge}
+            <div class="group-actions">
+              <button class="btn-edit" onclick="openEditGroupModal('${esc(name).replace(/'/g, "\\'")}', JSON.parse(this.dataset.members))" data-members="${membersJson}">Edit</button>
+              <button class="btn-delete" onclick="confirmDeleteGroup(this, '${esc(name).replace(/'/g, "\\'")}')">&times;</button>
+            </div>
+            <div class="schedule-status">
+              ${badge}
+            </div>
           </div>
         `;
       }).join('');
@@ -883,18 +902,16 @@ async function executeDeleteSchedule(index) {
   }
 }
 
-// ---- Group creation modal ----
+// ---- Group modal (create + edit) and deletion ----
 
-async function openNewGroupModal() {
-  const errEl = document.getElementById('group-error');
-  errEl.style.display = 'none';
-  errEl.textContent = '';
-  document.getElementById('group-name').value = '';
+// Tracks whether the group modal is in create or edit mode.
+let _groupModalIsCreate = true;
 
-  // Fetch devices and discovered bulbs to build the checklist.
+// Shared helper: fetch devices and populate the checklist.
+// selectedIps is an array of IPs to pre-check (empty for create).
+async function _populateGroupDeviceList(selectedIps) {
   const listEl = document.getElementById('group-device-list');
   listEl.innerHTML = '<span style="color:var(--dim)">Loading devices...</span>';
-  document.getElementById('group-modal').classList.add('active');
 
   try {
     const [devData, discData] = await Promise.all([
@@ -904,11 +921,11 @@ async function openNewGroupModal() {
     const devices = ((devData && devData.devices) || []).filter(d => !d.is_group);
     const bulbs = (discData && discData.discovered_bulbs) || [];
 
-    // Build a lookup from known devices by IP for enriching discovered bulbs.
+    // Build a lookup from known devices by IP.
     const devByIp = {};
     devices.forEach(d => { devByIp[d.ip] = d; });
 
-    // Merge: start with configured devices, then add any discovered-only bulbs.
+    // Merge: configured devices first, then discovered-only bulbs.
     const allDevices = [];
     devices.forEach(d => {
       allDevices.push({
@@ -932,9 +949,10 @@ async function openNewGroupModal() {
       return;
     }
 
+    const selected = new Set(selectedIps || []);
     listEl.innerHTML = allDevices.map(d => `
       <label class="group-device-item">
-        <input type="checkbox" value="${esc(d.ip)}">
+        <input type="checkbox" value="${esc(d.ip)}" ${selected.has(d.ip) ? 'checked' : ''}>
         <div class="group-device-label">
           <span class="dev-name">${esc(d.name)}</span>
           <span class="dev-meta">${esc(d.ip)}${d.meta ? ' \u00b7 ' + esc(d.meta) : ''}</span>
@@ -947,15 +965,36 @@ async function openNewGroupModal() {
   }
 }
 
+async function openNewGroupModal() {
+  _groupModalIsCreate = true;
+  document.getElementById('group-modal-title').textContent = 'New Group';
+  document.getElementById('group-original-name').value = '';
+  document.getElementById('group-name').value = '';
+  document.getElementById('group-error').style.display = 'none';
+  document.getElementById('group-modal').classList.add('active');
+  await _populateGroupDeviceList([]);
+}
+
+async function openEditGroupModal(name, memberIps) {
+  _groupModalIsCreate = false;
+  document.getElementById('group-modal-title').textContent = 'Edit Group';
+  document.getElementById('group-original-name').value = name;
+  document.getElementById('group-name').value = name;
+  document.getElementById('group-error').style.display = 'none';
+  document.getElementById('group-modal').classList.add('active');
+  await _populateGroupDeviceList(memberIps);
+}
+
 function closeGroupModal() {
   document.getElementById('group-modal').classList.remove('active');
 }
 
-async function saveNewGroup() {
+async function saveGroup() {
   const errEl = document.getElementById('group-error');
   errEl.style.display = 'none';
 
   const name = document.getElementById('group-name').value.trim();
+  const originalName = document.getElementById('group-original-name').value;
   const checked = Array.from(
     document.querySelectorAll('#group-device-list input[type="checkbox"]:checked')
   ).map(cb => cb.value);
@@ -973,8 +1012,12 @@ async function saveNewGroup() {
   }
 
   try {
-    const resp = await fetch(BASE + '/api/groups', {
-      method: 'POST',
+    const url = _groupModalIsCreate
+      ? BASE + '/api/groups'
+      : BASE + '/api/groups/' + encodeURIComponent(originalName);
+    const method = _groupModalIsCreate ? 'POST' : 'PUT';
+    const resp = await fetch(url, {
+      method: method,
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + TOKEN,
@@ -992,7 +1035,47 @@ async function saveNewGroup() {
   } catch (e) {
     errEl.textContent = 'Request failed';
     errEl.style.display = 'block';
-    console.error('Group creation failed:', e);
+    console.error('Group save failed:', e);
+  }
+}
+
+// Inline delete confirmation for groups — same pattern as schedule.
+function confirmDeleteGroup(btn, name) {
+  const row = btn.closest('.group-row');
+  row._originalHTML = row.innerHTML;
+  row.innerHTML = `
+    <div class="schedule-confirm-delete">
+      <span class="confirm-msg">Delete <strong>${esc(name)}</strong>?</span>
+      <div class="confirm-buttons">
+        <button class="btn-confirm-cancel" onclick="cancelDeleteGroup(this)">Cancel</button>
+        <button class="btn-confirm-delete" onclick="executeDeleteGroup('${name.replace(/'/g, "\\'")}')">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+function cancelDeleteGroup(btn) {
+  const row = btn.closest('.group-row');
+  if (row._originalHTML) {
+    row.innerHTML = row._originalHTML;
+    delete row._originalHTML;
+  }
+}
+
+async function executeDeleteGroup(name) {
+  try {
+    const resp = await fetch(BASE + '/api/groups/' + encodeURIComponent(name), {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + TOKEN },
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      console.error('Delete group failed:', err.error || resp.status);
+      return;
+    }
+    refresh();
+  } catch (e) {
+    console.error('Delete group request failed:', e);
   }
 }
 
