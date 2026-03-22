@@ -730,9 +730,9 @@ async function _loadDropdownCaches() {
   // Fetch groups and effects for dropdowns if not already cached.
   try {
     if (_cachedGroups.length === 0) {
-      const devData = await api('/api/devices');
-      const devs = (devData && devData.devices) || [];
-      _cachedGroups = devs.filter(d => d.is_group).map(d => d.label || d.ip);
+      const grpData = await api('/api/groups');
+      const groups = (grpData && grpData.groups) || {};
+      _cachedGroups = Object.keys(groups).filter(g => !g.startsWith('_')).sort();
     }
     if (_cachedEffects.length === 0) {
       const effData = await api('/api/effects');

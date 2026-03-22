@@ -2346,6 +2346,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         Returns all device groups defined in the server config,
         excluding comment keys (those starting with ``_``).
+        Merges both ``groups`` and ``schedule_groups`` sections
+        so the dashboard schedule modal shows every valid target.
 
         Response::
 
@@ -2357,6 +2359,11 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             }
         """
         groups: dict[str, list[str]] = _get_groups(self.config)
+        # Include schedule-specific groups so schedule dropdowns are complete.
+        sched_groups: dict[str, Any] = self.config.get("schedule_groups", {})
+        for name, entries in sched_groups.items():
+            if not name.startswith("_") and name not in groups:
+                groups[name] = entries
         self._send_json(200, {"groups": groups})
 
     def _handle_get_schedule(self) -> None:
