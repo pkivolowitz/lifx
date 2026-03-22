@@ -26,6 +26,7 @@ Run::
 __version__ = "1.0"
 
 import json
+import logging
 import math
 import os
 import struct
@@ -33,6 +34,11 @@ import unittest
 from pathlib import Path
 from typing import Any, Optional
 from unittest.mock import MagicMock, call, patch
+
+# Suppress expected WARNING/ERROR output from the orchestrator during tests.
+# These log lines (e.g. "went offline", "port pool exhausted") are exercised
+# intentionally and are not errors in the test run.
+logging.getLogger("glowup.distributed.orchestrator").setLevel(logging.CRITICAL + 1)
 
 # ---------------------------------------------------------------------------
 # Fixture paths

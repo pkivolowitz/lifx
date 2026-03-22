@@ -22,11 +22,16 @@ Run::
 __version__ = "1.0"
 
 import json
+import logging
 import os
 import tempfile
 import unittest
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
+
+# Suppress expected "Group is empty" warnings from server code under test.
+# The warning is correct behavior being exercised, not an error in the test.
+logging.getLogger().setLevel(logging.CRITICAL + 1)
 
 # ---------------------------------------------------------------------------
 # Constants
