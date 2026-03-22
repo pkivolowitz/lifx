@@ -117,10 +117,18 @@
     text-align: center;
   }
   .schedule-row {
+    display: grid;
+    /* Three columns: info takes remaining space, buttons and status are sized to content */
+    grid-template-columns: 1fr auto auto;
+    align-items: center;
+    gap: 12px;
     padding: 8px 0;
     border-bottom: 1px solid var(--border);
   }
   .schedule-row:last-child { border-bottom: none; }
+  .schedule-info { min-width: 0; } /* Allow text to truncate in tight layouts */
+  .schedule-actions { display: flex; align-items: center; justify-content: center; }
+  .schedule-status { display: flex; align-items: center; justify-content: flex-end; }
   .schedule-name { font-weight: 600; }
   .schedule-time { color: var(--dim); font-size: 12px; }
   .schedule-effect { color: var(--green); }
@@ -534,17 +542,19 @@ async function refresh() {
         const edata = JSON.stringify(e).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
         return `
           <div class="schedule-row">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <span>
-                <span class="schedule-name">${esc(e.name)}</span>
-                <button class="btn-edit" data-entry="${edata}" onclick="openScheduleModal(JSON.parse(this.dataset.entry))">Edit</button>
-              </span>
-              ${badge}
+            <div class="schedule-info">
+              <span class="schedule-name">${esc(e.name)}</span>
+              <div style="margin-top:4px;">
+                <span class="schedule-effect">${esc(e.effect)}</span>
+                <span class="schedule-group">${esc(e.group)}</span>
+                <span class="schedule-time">${esc(times)} &middot; ${esc(e.days_display)}</span>
+              </div>
             </div>
-            <div style="margin-top:4px;">
-              <span class="schedule-effect">${esc(e.effect)}</span>
-              <span class="schedule-group">${esc(e.group)}</span>
-              <span class="schedule-time">${esc(times)} &middot; ${esc(e.days_display)}</span>
+            <div class="schedule-actions">
+              <button class="btn-edit" data-entry="${edata}" onclick="openScheduleModal(JSON.parse(this.dataset.entry))">Edit</button>
+            </div>
+            <div class="schedule-status">
+              ${badge}
             </div>
           </div>
         `;
