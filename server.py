@@ -1439,25 +1439,55 @@ class DeviceManager:
         ``member_ips`` array.  Individual emitters have
         ``is_group: false``.
 
+        Group status is derived from member state:
+
+        - *power*: ``True`` if any member is powered on.
+        - *current_effect*: from the group's own controller.
+
+        Individual devices participating in a group effect are
+        annotated with ``group_effect`` and ``group_name`` so the
+        dashboard can show an IN GROUP badge.
+
         Returns:
             A sorted list of emitter metadata dicts.
         """
+        # First pass: build group membership and active-effect maps.
+        # group_id → (effect_name, group_label, [member_ips])
+        active_groups: dict[str, tuple[str, str, list[str]]] = {}
+        for dev_id, em in self._emitters.items():
+            if not isinstance(em, VirtualMultizoneEmitter):
+                continue
+            with self._lock:
+                ctrl: Optional[Controller] = self._controllers.get(dev_id)
+            effect_name: Optional[str] = None
+            if ctrl is not None:
+                status: dict[str, Any] = ctrl.get_status()
+                if status.get("running"):
+                    effect_name = status.get("effect")
+            if effect_name:
+                member_ips: list[str] = [
+                    m.emitter_id for m in em.get_emitter_list()
+                ]
+                active_groups[dev_id] = (effect_name, em.label, member_ips)
+
+        # Reverse map: member IP → (effect_name, group_label) for
+        # annotating individual devices that are in an active group.
+        ip_to_group_effect: dict[str, tuple[str, str]] = {}
+        for _gid, (eff, glabel, mips) in active_groups.items():
+            for mip in mips:
+                ip_to_group_effect[mip] = (eff, glabel)
+
         result: list[dict[str, Any]] = []
         for dev_id, em in sorted(self._emitters.items()):
             with self._lock:
-                ctrl: Optional[Controller] = self._controllers.get(dev_id)
+                ctrl = self._controllers.get(dev_id)
             current_effect: Optional[str] = None
             if ctrl is not None:
-                status: dict[str, Any] = ctrl.get_status()
-                # Only report an effect if the engine is actively running.
-                # After stop(), get_status() still returns the last effect
-                # name for client convenience — but the dashboard and
-                # playing counter should not treat stopped effects as live.
+                status = ctrl.get_status()
                 if status.get("running"):
                     current_effect = status.get("effect")
             is_group: bool = isinstance(em, VirtualMultizoneEmitter)
             nickname: Optional[str] = self._nicknames.get(dev_id)
-            # Include source only when actively playing.
             source: Optional[str] = (
                 self._play_sources.get(dev_id) if current_effect else None
             )
@@ -1473,18 +1503,33 @@ class DeviceManager:
                 "overridden": self.is_overridden(dev_id),
                 "is_group": is_group,
             }
-            # Power state: tracked by the server when set via API.
-            entry["power"] = self._power_states.get(dev_id, True)
-            # LIFX-specific fields from the transport layer.
-            if isinstance(em, LifxEmitter):
-                entry["mac"] = em.transport.mac_str
-                entry["group"] = em.transport.group
-            elif is_group:
+
+            if is_group:
                 entry["mac"] = ""
                 entry["group"] = em.label
-                entry["member_ips"] = [
+                member_ip_list: list[str] = [
                     m.emitter_id for m in em.get_emitter_list()
                 ]
+                entry["member_ips"] = member_ip_list
+                # Derive group power from member power states:
+                # on if ANY member is powered on.
+                entry["power"] = any(
+                    self._power_states.get(mip, True)
+                    for mip in member_ip_list
+                )
+            else:
+                # Individual device power state.
+                entry["power"] = self._power_states.get(dev_id, True)
+                if isinstance(em, LifxEmitter):
+                    entry["mac"] = em.transport.mac_str
+                    entry["group"] = em.transport.group
+                # Annotate with group effect if this device is a
+                # member of an active group.
+                ge: Optional[tuple[str, str]] = ip_to_group_effect.get(dev_id)
+                if ge is not None:
+                    entry["group_effect"] = ge[0]
+                    entry["group_name"] = ge[1]
+
             result.append(entry)
         return result
 

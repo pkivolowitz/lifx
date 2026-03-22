@@ -95,6 +95,8 @@
   .badge-overridden { background: var(--orange); color: #000; }
   .badge-active { background: var(--green); color: #000; }
   .badge-disabled { background: var(--border); color: var(--dim); }
+  .badge-in-group { background: var(--accent); color: #fff; }
+  .badge-off { background: var(--border); color: var(--dim); opacity: 0.6; }
   .stat-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -655,8 +657,10 @@ async function refresh() {
       });
     }
 
-    // Determine which devices/groups are playing (from current_effect field).
-    const playing = physical.filter(d => d.current_effect);
+    // Determine which devices/groups are playing.
+    // Devices count as playing if they have a direct effect OR are
+    // in an active group effect.
+    const playing = physical.filter(d => d.current_effect || d.group_effect);
     const playingGroups = groups.filter(g => g.current_effect);
 
     // Stats — count both physical and group playing.
@@ -676,21 +680,25 @@ async function refresh() {
     const npEl = document.getElementById('now-playing');
     let npHtml = '';
 
-    // Physical devices playing.
+    // Physical devices playing (direct effect or group effect).
     npHtml += playing.map(d => {
       const name = d.nickname || d.label || d.ip;
+      const effectName = d.current_effect || d.group_effect;
       const srcBadge = d.source
         ? ` <span class="badge badge-overridden">${esc(d.source)}</span>`
+        : '';
+      const viaBadge = d.group_effect && !d.current_effect
+        ? ` <span class="badge badge-in-group">via ${esc(d.group_name)}</span>`
         : '';
       return `
         <div class="device-row">
           <div>
             <div class="device-name">${esc(name)}</div>
-            <div class="device-effect">${esc(d.current_effect)}</div>
+            <div class="device-effect">${esc(effectName)}</div>
             <div class="device-meta">${esc(d.product || '')} &middot; ${d.zones || 1} zones</div>
           </div>
           <div style="text-align:right;">
-            <span class="badge badge-playing">LIVE</span>${srcBadge}
+            <span class="badge badge-playing">LIVE</span>${srcBadge}${viaBadge}
           </div>
         </div>
       `;
@@ -767,12 +775,19 @@ async function refresh() {
       dEl.innerHTML = physical.map(d => {
         const name = d.nickname || d.label || d.ip;
         const isPlaying = !!d.current_effect;
-        const badge = isPlaying
-          ? '<span class="badge badge-playing">PLAYING</span>'
-          : '<span class="badge badge-stopped">IDLE</span>';
-        const effectLine = isPlaying
-          ? `<div class="device-effect">${esc(d.current_effect)}</div>`
-          : '';
+        const inGroup = !!d.group_effect;
+        let badge, effectLine = '';
+        if (isPlaying) {
+          badge = '<span class="badge badge-playing">PLAYING</span>';
+          effectLine = `<div class="device-effect">${esc(d.current_effect)}</div>`;
+        } else if (inGroup) {
+          badge = `<span class="badge badge-in-group">${esc(d.group_effect)}</span>`;
+          effectLine = `<div class="device-effect">via ${esc(d.group_name)}</div>`;
+        } else if (d.power === false) {
+          badge = '<span class="badge badge-off">OFF</span>';
+        } else {
+          badge = '<span class="badge badge-stopped">IDLE</span>';
+        }
         return `
           <div class="device-row">
             <div>
@@ -795,12 +810,15 @@ async function refresh() {
       gEl.innerHTML = groups.map(g => {
         const name = g.label || g.ip;
         const isPlaying = !!g.current_effect;
-        const badge = isPlaying
-          ? '<span class="badge badge-playing">PLAYING</span>'
-          : '<span class="badge badge-stopped">IDLE</span>';
-        const effectLine = isPlaying
-          ? `<div class="device-effect">${esc(g.current_effect)}</div>`
-          : '';
+        let badge, effectLine = '';
+        if (isPlaying) {
+          badge = '<span class="badge badge-playing">PLAYING</span>';
+          effectLine = `<div class="device-effect">${esc(g.current_effect)}</div>`;
+        } else if (g.power === false) {
+          badge = '<span class="badge badge-off">OFF</span>';
+        } else {
+          badge = '<span class="badge badge-stopped">IDLE</span>';
+        }
         const memberCount = (g.member_ips || []).length;
         const membersJson = JSON.stringify(g.member_ips || []).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
         return `
