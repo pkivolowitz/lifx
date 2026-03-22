@@ -2494,16 +2494,30 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self.device_manager._group_config.pop(name, None)
         self.device_manager._group_config[new_name] = clean_members
 
+        # Cascade rename into schedule entries that reference this group.
+        renamed_count: int = 0
+        if new_name != name:
+            specs: list[dict[str, Any]] = self.config.get("schedule", [])
+            for spec in specs:
+                if spec.get("group") == name:
+                    spec["group"] = new_name
+                    renamed_count += 1
+            if renamed_count > 0:
+                self._save_config_field("schedule", specs)
+
         logging.info(
-            "API: group '%s' updated%s — %d member(s): %s",
+            "API: group '%s' updated%s — %d member(s): %s%s",
             name,
             f" (renamed to '{new_name}')" if new_name != name else "",
             len(clean_members),
             ", ".join(clean_members),
+            f" — {renamed_count} schedule entries updated"
+            if renamed_count > 0 else "",
         )
         self._send_json(200, {
             "name": new_name,
             "members": clean_members,
+            "schedule_entries_updated": renamed_count,
         })
 
     def _handle_delete_group(self, name: str) -> None:
@@ -2526,8 +2540,26 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         # Remove from runtime group config.
         self.device_manager._group_config.pop(name, None)
 
-        logging.info("API: group '%s' deleted", name)
-        self._send_json(200, {"deleted": name})
+        # Report any schedule entries that reference the deleted group.
+        specs: list[dict[str, Any]] = self.config.get("schedule", [])
+        orphaned: list[str] = [
+            s.get("name", f"entry_{i}")
+            for i, s in enumerate(specs) if s.get("group") == name
+        ]
+
+        logging.info(
+            "API: group '%s' deleted%s", name,
+            f" — {len(orphaned)} schedule entries now reference "
+            f"a missing group: {', '.join(orphaned)}"
+            if orphaned else "",
+        )
+        response: dict[str, Any] = {"deleted": name}
+        if orphaned:
+            response["warning"] = (
+                f"{len(orphaned)} schedule entries still reference "
+                f"this group: {', '.join(orphaned)}"
+            )
+        self._send_json(200, response)
 
     def _handle_get_schedule(self) -> None:
         """GET /api/schedule — schedule entries with resolved times.
