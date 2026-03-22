@@ -21,6 +21,9 @@ If the file is missing, tell Perry: "The NAS at ~/NAS is not mounted. Run: `moun
 
 4. Read project memory index: `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/MEMORY.md`
 
+5. Check for compaction context (read, internalize, delete if found):
+   `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/_precompact.md`
+
 ## Code Standards
 - PEP 257 docstrings on all public classes, methods, and functions
 - Explanatory inline comments
