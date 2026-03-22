@@ -554,13 +554,14 @@ async function refresh() {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
-    const [devices, schedule, discovered] = await Promise.all([
+    const [devices, schedule, discovered, configGroups] = await Promise.all([
       api('/api/devices'),
       api('/api/schedule'),
       api('/api/discovered_bulbs'),
+      api('/api/groups'),
     ]);
 
-    const results = [devices, schedule, discovered];
+    const results = [devices, schedule, discovered, configGroups];
 
     // Any 401 → back to login.
     if (results.some(r => r && r._authFailed)) {
@@ -590,6 +591,24 @@ async function refresh() {
     const devList = devices.devices || [];
     const physical = devList.filter(d => !d.is_group);
     const groups = devList.filter(d => d.is_group);
+
+    // Merge config-defined groups not yet in the runtime device list.
+    // These are groups saved to config but not yet built into
+    // VirtualMultizoneEmitters (requires a discovery cycle / restart).
+    const cfgGroups = (configGroups && configGroups.groups) || {};
+    const runtimeGroupNames = new Set(groups.map(g => g.label || g.ip));
+    for (const [gName, gMembers] of Object.entries(cfgGroups)) {
+      if (gName.startsWith('_')) continue;
+      if (runtimeGroupNames.has(gName)) continue;
+      groups.push({
+        ip: 'group:' + gName,
+        label: gName,
+        is_group: true,
+        current_effect: null,
+        zones: 0,
+        member_ips: Array.isArray(gMembers) ? gMembers : [],
+      });
+    }
 
     // Determine which devices/groups are playing (from current_effect field).
     const playing = physical.filter(d => d.current_effect);
