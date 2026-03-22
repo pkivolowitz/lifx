@@ -685,7 +685,7 @@ async function openScheduleModal(entry) {
     if (_cachedEffects.length === 0) {
       const effData = await api('/api/effects');
       _cachedEffects = (effData && effData.effects)
-        ? effData.effects.map(e => e.name).sort()
+        ? Object.keys(effData.effects).filter(n => !n.startsWith('_')).sort()
         : [];
     }
   } catch (e) {
