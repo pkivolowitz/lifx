@@ -194,6 +194,37 @@
     cursor: pointer;
   }
   .btn-confirm-delete:hover { opacity: 0.85; }
+  /* Group creation modal — scrollable device checklist */
+  .group-device-list {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    background: var(--bg);
+  }
+  .group-device-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .group-device-item:last-child { border-bottom: none; }
+  .group-device-item:hover { background: rgba(255,255,255,0.04); }
+  .group-device-item input[type="checkbox"] {
+    width: auto;
+    flex-shrink: 0;
+    accent-color: var(--green);
+  }
+  .group-device-label {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .group-device-label .dev-name { font-size: 13px; font-weight: 600; }
+  .group-device-label .dev-meta { font-size: 11px; color: var(--dim); }
   /* Add-schedule button beside the Schedule heading */
   .btn-add-schedule {
     background: var(--green);
@@ -393,7 +424,9 @@
       <div id="devices" style="margin-top:12px;"><div class="error">Loading...</div></div>
     </details>
     <details class="card" id="groups-details">
-      <summary><h2 style="display:inline;cursor:pointer;">Groups</h2></summary>
+      <summary><h2 style="display:inline;cursor:pointer;">Groups</h2>
+        <button class="btn-add-schedule" onclick="event.preventDefault(); openNewGroupModal();">+</button>
+      </summary>
       <div id="groups" style="margin-top:12px;"><div class="error">Loading...</div></div>
     </details>
   </div>
@@ -429,6 +462,21 @@
     <div class="modal-buttons">
       <button class="btn-cancel" onclick="closeScheduleModal()">Cancel</button>
       <button class="btn-save" onclick="saveScheduleEntry()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="group-modal">
+  <div class="modal">
+    <h3>New Group</h3>
+    <label>Group Name</label>
+    <input type="text" id="group-name" placeholder="e.g. porch, office">
+    <label>Devices</label>
+    <div id="group-device-list" class="group-device-list"></div>
+    <div class="modal-error" id="group-error"></div>
+    <div class="modal-buttons">
+      <button class="btn-cancel" onclick="closeGroupModal()">Cancel</button>
+      <button class="btn-save" onclick="saveNewGroup()">Save</button>
     </div>
   </div>
 </div>
@@ -813,6 +861,119 @@ async function executeDeleteSchedule(index) {
     refresh();
   } catch (e) {
     console.error('Delete request failed:', e);
+  }
+}
+
+// ---- Group creation modal ----
+
+async function openNewGroupModal() {
+  const errEl = document.getElementById('group-error');
+  errEl.style.display = 'none';
+  errEl.textContent = '';
+  document.getElementById('group-name').value = '';
+
+  // Fetch devices and discovered bulbs to build the checklist.
+  const listEl = document.getElementById('group-device-list');
+  listEl.innerHTML = '<span style="color:var(--dim)">Loading devices...</span>';
+  document.getElementById('group-modal').classList.add('active');
+
+  try {
+    const [devData, discData] = await Promise.all([
+      api('/api/devices'),
+      api('/api/discovered_bulbs'),
+    ]);
+    const devices = ((devData && devData.devices) || []).filter(d => !d.is_group);
+    const bulbs = (discData && discData.discovered_bulbs) || [];
+
+    // Build a lookup from known devices by IP for enriching discovered bulbs.
+    const devByIp = {};
+    devices.forEach(d => { devByIp[d.ip] = d; });
+
+    // Merge: start with configured devices, then add any discovered-only bulbs.
+    const allDevices = [];
+    devices.forEach(d => {
+      allDevices.push({
+        ip: d.ip,
+        name: d.nickname || d.label || d.ip,
+        meta: (d.product || '') + (d.zones > 1 ? ' \u00b7 ' + d.zones + ' zones' : ''),
+      });
+    });
+    bulbs.forEach(b => {
+      if (!devByIp[b.ip]) {
+        allDevices.push({
+          ip: b.ip,
+          name: b.mac || b.ip,
+          meta: 'Discovered (not configured)',
+        });
+      }
+    });
+
+    if (allDevices.length === 0) {
+      listEl.innerHTML = '<span style="color:var(--dim)">No devices available</span>';
+      return;
+    }
+
+    listEl.innerHTML = allDevices.map(d => `
+      <label class="group-device-item">
+        <input type="checkbox" value="${esc(d.ip)}">
+        <div class="group-device-label">
+          <span class="dev-name">${esc(d.name)}</span>
+          <span class="dev-meta">${esc(d.ip)}${d.meta ? ' \u00b7 ' + esc(d.meta) : ''}</span>
+        </div>
+      </label>
+    `).join('');
+  } catch (e) {
+    listEl.innerHTML = '<span style="color:var(--accent)">Failed to load devices</span>';
+    console.error('Failed to load devices for group modal:', e);
+  }
+}
+
+function closeGroupModal() {
+  document.getElementById('group-modal').classList.remove('active');
+}
+
+async function saveNewGroup() {
+  const errEl = document.getElementById('group-error');
+  errEl.style.display = 'none';
+
+  const name = document.getElementById('group-name').value.trim();
+  const checked = Array.from(
+    document.querySelectorAll('#group-device-list input[type="checkbox"]:checked')
+  ).map(cb => cb.value);
+
+  // Client-side validation.
+  const errors = [];
+  if (!name) errors.push('Group name is required');
+  if (name.startsWith('_')) errors.push("Group name must not start with '_'");
+  if (checked.length === 0) errors.push('Select at least one device');
+
+  if (errors.length) {
+    errEl.textContent = errors.join('; ');
+    errEl.style.display = 'block';
+    return;
+  }
+
+  try {
+    const resp = await fetch(BASE + '/api/groups', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + TOKEN,
+      },
+      body: JSON.stringify({ name: name, members: checked }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      errEl.textContent = data.error || ('Error ' + resp.status);
+      errEl.style.display = 'block';
+      return;
+    }
+    closeGroupModal();
+    refresh();
+  } catch (e) {
+    errEl.textContent = 'Request failed';
+    errEl.style.display = 'block';
+    console.error('Group creation failed:', e);
   }
 }
 

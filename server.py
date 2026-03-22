@@ -340,6 +340,8 @@ _ROUTES: tuple[_Route, ...] = (
     # -- POST: parameterized -------------------------------------------------
     _Route("POST", ("api", "effects", "{name}", "defaults"),
            "_handle_post_effect_defaults"),
+    _Route("POST", ("api", "groups"),
+           "_handle_post_group_create"),
     _Route("POST", ("api", "schedule"),
            "_handle_post_schedule_create"),
     _Route("POST", ("api", "schedule", "{index}", "enabled"),
@@ -2368,6 +2370,66 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             if not name.startswith("_") and name not in groups:
                 groups[name] = entries
         self._send_json(200, {"groups": groups})
+
+    def _handle_post_group_create(self) -> None:
+        """POST /api/groups — create a new device group.
+
+        Request body::
+
+            {
+                "name": "porch",
+                "members": ["192.0.2.25", "192.0.2.26"]
+            }
+
+        Saves to the ``groups`` config section (the server's device
+        groups, not ``schedule_groups`` which is for standalone
+        scheduler use).  Updates the runtime group config so the next
+        discovery cycle picks up the new group.
+        """
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        errors: list[str] = []
+
+        name: str = body.get("name", "").strip()
+        if not name:
+            errors.append("Group name is required")
+        elif name.startswith("_"):
+            errors.append("Group name must not start with '_'")
+
+        members: Any = body.get("members", [])
+        if not isinstance(members, list) or len(members) == 0:
+            errors.append("At least one member device is required")
+        elif not all(isinstance(m, str) and m.strip() for m in members):
+            errors.append("Each member must be a non-empty string")
+
+        # Check for duplicate group name.
+        existing_groups: dict[str, Any] = self.config.get("groups", {})
+        if name and name in existing_groups:
+            errors.append(f"Group '{name}' already exists")
+
+        if errors:
+            self._send_json(400, {"error": "; ".join(errors)})
+            return
+
+        # Sanitize member list — strip whitespace.
+        clean_members: list[str] = [m.strip() for m in members]
+
+        # Persist to config file.
+        all_groups: dict[str, Any] = dict(existing_groups)
+        all_groups[name] = clean_members
+        self._save_config_field("groups", all_groups)
+
+        # Update runtime group config so next scan cycle builds
+        # the VirtualMultizoneEmitter.
+        self._dm._group_config[name] = clean_members
+
+        logging.info(
+            "API: group '%s' created with %d member(s): %s",
+            name, len(clean_members), ", ".join(clean_members),
+        )
+        self._send_json(201, {"name": name, "members": clean_members})
 
     def _handle_get_schedule(self) -> None:
         """GET /api/schedule — schedule entries with resolved times.
