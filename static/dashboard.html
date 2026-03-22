@@ -684,9 +684,12 @@ async function openScheduleModal(entry) {
     }
     if (_cachedEffects.length === 0) {
       const effData = await api('/api/effects');
-      _cachedEffects = (effData && effData.effects)
-        ? Object.keys(effData.effects).filter(n => !n.startsWith('_')).sort()
-        : [];
+      if (effData && effData.effects) {
+        _cachedEffects = Object.entries(effData.effects)
+          .filter(([n, info]) => !n.startsWith('_') && !((info.params || {}).source))
+          .map(([n]) => n)
+          .sort();
+      }
     }
   } catch (e) {
     console.error('Failed to load groups/effects:', e);
