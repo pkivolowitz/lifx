@@ -378,6 +378,9 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("DELETE", ("api", "command", "identify", "{id}"),
            "_handle_delete_command_identify",
            device_param="id", unquote_params=("id",)),
+    _Route("DELETE", ("api", "schedule", "{index}"),
+           "_handle_delete_schedule_entry",
+           param_types={"index": int}),
 )
 
 # Pre-built index: (method, segment_count) → list of candidate routes.
@@ -3035,6 +3038,25 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             "name": name,
             "enabled": enabled,
         })
+
+    def _handle_delete_schedule_entry(self, index: int) -> None:
+        """DELETE /api/schedule/{index} — remove a schedule entry.
+
+        Validates the index is within bounds, removes the entry from
+        the schedule list, and persists the change.  Returns the name
+        of the deleted entry for confirmation.
+        """
+        specs: list[dict[str, Any]] = self.config.get("schedule", [])
+        if index < 0 or index >= len(specs):
+            self._send_json(404, {"error": "Schedule entry not found"})
+            return
+
+        removed: dict[str, Any] = specs.pop(index)
+        self._save_config_field("schedule", specs)
+
+        name: str = removed.get("name", f"entry_{index}")
+        logging.info("API: schedule entry deleted: '%s' (was index %d)", name, index)
+        self._send_json(200, {"deleted": name, "former_index": index})
 
     def _handle_put_schedule_entry(self, index: int) -> None:
         """PUT /api/schedule/{index} — update a schedule entry.

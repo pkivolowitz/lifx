@@ -142,6 +142,58 @@
   .btn-toggle:hover { background: var(--accent); color: #fff; }
   .btn-toggle.is-enabled { background: var(--green); color: #000; }
   .btn-toggle.is-disabled { background: var(--border); color: var(--dim); }
+  /* Delete button in schedule row */
+  .btn-delete {
+    background: transparent;
+    color: var(--red, #e74c3c);
+    border: 1px solid var(--red, #e74c3c);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .btn-delete:hover { background: var(--red, #e74c3c); color: #fff; }
+  /* Inline confirmation strip replaces schedule-row content */
+  .schedule-confirm-delete {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 0;
+  }
+  .schedule-confirm-delete .confirm-msg {
+    font-size: 13px;
+    color: var(--text);
+  }
+  .schedule-confirm-delete .confirm-msg strong {
+    color: var(--red, #e74c3c);
+  }
+  .schedule-confirm-delete .confirm-buttons {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .btn-confirm-cancel {
+    background: var(--border);
+    color: var(--text);
+    border: none;
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .btn-confirm-cancel:hover { background: var(--accent); color: #fff; }
+  .btn-confirm-delete {
+    background: var(--red, #e74c3c);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-confirm-delete:hover { opacity: 0.85; }
   /* Add-schedule button beside the Schedule heading */
   .btn-add-schedule {
     background: var(--green);
@@ -583,6 +635,8 @@ async function refresh() {
               <button class="btn-edit" data-entry="${edata}" onclick="openScheduleModal(JSON.parse(this.dataset.entry))">Edit</button>
               <button class="btn-toggle ${e.enabled ? 'is-enabled' : 'is-disabled'}"
                       onclick="toggleScheduleEnabled(${e.index}, ${!e.enabled})">${e.enabled ? 'ON' : 'OFF'}</button>
+              <button class="btn-delete"
+                      onclick="confirmDeleteSchedule(this, ${e.index}, '${esc(e.name).replace(/'/g, "\\'")}')">&times;</button>
             </div>
             <div class="schedule-status">
               ${badge}
@@ -714,6 +768,51 @@ async function toggleScheduleEnabled(index, enabled) {
     refresh();
   } catch (e) {
     console.error('Toggle request failed:', e);
+  }
+}
+
+// ---- Schedule deletion with inline confirmation ----
+
+// Show an inline confirmation strip replacing the schedule row content.
+function confirmDeleteSchedule(btn, index, name) {
+  const row = btn.closest('.schedule-row');
+  // Stash original HTML so Cancel can restore it.
+  row._originalHTML = row.innerHTML;
+  row.innerHTML = `
+    <div class="schedule-confirm-delete">
+      <span class="confirm-msg">Delete <strong>${esc(name)}</strong>?</span>
+      <div class="confirm-buttons">
+        <button class="btn-confirm-cancel" onclick="cancelDeleteSchedule(this)">Cancel</button>
+        <button class="btn-confirm-delete" onclick="executeDeleteSchedule(${index})">Delete</button>
+      </div>
+    </div>
+  `;
+}
+
+// Restore the original row content on cancel.
+function cancelDeleteSchedule(btn) {
+  const row = btn.closest('.schedule-row');
+  if (row._originalHTML) {
+    row.innerHTML = row._originalHTML;
+    delete row._originalHTML;
+  }
+}
+
+// Execute the delete API call and refresh.
+async function executeDeleteSchedule(index) {
+  try {
+    const resp = await fetch(BASE + '/api/schedule/' + index, {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + TOKEN },
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      console.error('Delete failed:', err.error || resp.status);
+      return;
+    }
+    refresh();
+  } catch (e) {
+    console.error('Delete request failed:', e);
   }
 }
 
