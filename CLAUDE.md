@@ -15,6 +15,12 @@ ls ~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/MEMORY.md
 ```
 If the file is missing, tell Perry: "The NAS at ~/NAS is not mounted. Run: `mount_smbfs //<user>@<nas-ip>/perryk ~/NAS` — shared memory is unavailable until it's mounted."
 
+3. Read the global layer (REQUIRED — both files, every session, no exceptions):
+   - `~/NAS/.claude/global/identity.md`
+   - `~/NAS/.claude/global/rules.md`
+
+4. Read project memory index: `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/MEMORY.md`
+
 ## Code Standards
 - PEP 257 docstrings on all public classes, methods, and functions
 - Explanatory inline comments
