@@ -142,6 +142,21 @@
   .btn-toggle:hover { background: var(--accent); color: #fff; }
   .btn-toggle.is-enabled { background: var(--green); color: #000; }
   .btn-toggle.is-disabled { background: var(--border); color: var(--dim); }
+  /* Add-schedule button beside the Schedule heading */
+  .btn-add-schedule {
+    background: var(--green);
+    color: #000;
+    border: none;
+    border-radius: 4px;
+    padding: 0 8px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    margin-left: 8px;
+    vertical-align: middle;
+    line-height: 1.4;
+  }
+  .btn-add-schedule:hover { background: var(--accent); color: #fff; }
   .schedule-name { font-weight: 600; }
   .schedule-time { color: var(--dim); font-size: 12px; }
   .schedule-effect { color: var(--green); }
@@ -314,7 +329,8 @@
       <div id="now-playing"><div class="error">Loading...</div></div>
     </div>
     <div class="card">
-      <h2>Schedule</h2>
+      <h2 style="display:inline;">Schedule</h2>
+      <button class="btn-add-schedule" onclick="openNewScheduleModal()">+</button>
       <div id="schedule"><div class="error">Loading...</div></div>
     </div>
   </div>
@@ -701,29 +717,17 @@ async function toggleScheduleEnabled(index, enabled) {
   }
 }
 
-// ---- Schedule edit modal ----
+// ---- Schedule modal (create + edit) ----
 
 // Cache of groups and effects for dropdowns.
 let _cachedGroups = [];
 let _cachedEffects = [];
 
-async function openScheduleModal(entry) {
-  const modal = document.getElementById('sched-modal');
-  const errEl = document.getElementById('sched-error');
-  errEl.style.display = 'none';
-  errEl.textContent = '';
+// Tracks whether the modal is in "create" or "edit" mode.
+let _schedModalIsCreate = false;
 
-  // Populate index and fields from entry data.
-  document.getElementById('sched-idx').value = entry.index;
-  document.getElementById('sched-name').value = entry.name || '';
-  document.getElementById('sched-start').value = entry.start || '';
-  document.getElementById('sched-stop').value = entry.stop || '';
-  document.getElementById('sched-days').value = entry.days || '';
-  document.getElementById('sched-params').value =
-    (entry.params && Object.keys(entry.params).length)
-      ? JSON.stringify(entry.params) : '';
-
-  // Fetch groups and effects for dropdowns if not cached.
+async function _loadDropdownCaches() {
+  // Fetch groups and effects for dropdowns if not already cached.
   try {
     if (_cachedGroups.length === 0) {
       const devData = await api('/api/devices');
@@ -742,24 +746,66 @@ async function openScheduleModal(entry) {
   } catch (e) {
     console.error('Failed to load groups/effects:', e);
   }
+}
 
-  // Populate group dropdown.
+function _populateDropdowns(selectedGroup, selectedEffect) {
   const gSel = document.getElementById('sched-group');
   gSel.innerHTML = _cachedGroups.map(g =>
-    `<option value="${esc(g)}" ${g === entry.group ? 'selected' : ''}>${esc(g)}</option>`
+    `<option value="${esc(g)}" ${g === selectedGroup ? 'selected' : ''}>${esc(g)}</option>`
   ).join('');
   // Add current group if not in list (schedule-specific group).
-  if (entry.group && !_cachedGroups.includes(entry.group)) {
-    gSel.innerHTML = `<option value="${esc(entry.group)}" selected>${esc(entry.group)}</option>` + gSel.innerHTML;
+  if (selectedGroup && !_cachedGroups.includes(selectedGroup)) {
+    gSel.innerHTML = `<option value="${esc(selectedGroup)}" selected>${esc(selectedGroup)}</option>` + gSel.innerHTML;
   }
 
-  // Populate effect dropdown.
   const eSel = document.getElementById('sched-effect');
   eSel.innerHTML = _cachedEffects.map(e =>
-    `<option value="${esc(e)}" ${e === entry.effect ? 'selected' : ''}>${esc(e)}</option>`
+    `<option value="${esc(e)}" ${e === selectedEffect ? 'selected' : ''}>${esc(e)}</option>`
   ).join('');
+}
 
-  // Pause auto-refresh while editing.
+async function openNewScheduleModal() {
+  _schedModalIsCreate = true;
+  const modal = document.getElementById('sched-modal');
+  const errEl = document.getElementById('sched-error');
+  errEl.style.display = 'none';
+  errEl.textContent = '';
+
+  document.getElementById('sched-modal-title').textContent = 'New Schedule Entry';
+  document.getElementById('sched-idx').value = '';
+  document.getElementById('sched-name').value = '';
+  document.getElementById('sched-start').value = '';
+  document.getElementById('sched-stop').value = '';
+  document.getElementById('sched-days').value = '';
+  document.getElementById('sched-params').value = '';
+
+  await _loadDropdownCaches();
+  _populateDropdowns('', '');
+
+  stopPolling();
+  modal.classList.add('active');
+}
+
+async function openScheduleModal(entry) {
+  _schedModalIsCreate = false;
+  const modal = document.getElementById('sched-modal');
+  const errEl = document.getElementById('sched-error');
+  errEl.style.display = 'none';
+  errEl.textContent = '';
+
+  document.getElementById('sched-modal-title').textContent = 'Edit Schedule Entry';
+  document.getElementById('sched-idx').value = entry.index;
+  document.getElementById('sched-name').value = entry.name || '';
+  document.getElementById('sched-start').value = entry.start || '';
+  document.getElementById('sched-stop').value = entry.stop || '';
+  document.getElementById('sched-days').value = entry.days || '';
+  document.getElementById('sched-params').value =
+    (entry.params && Object.keys(entry.params).length)
+      ? JSON.stringify(entry.params) : '';
+
+  await _loadDropdownCaches();
+  _populateDropdowns(entry.group || '', entry.effect || '');
+
   stopPolling();
   modal.classList.add('active');
 }
@@ -785,6 +831,8 @@ async function saveScheduleEntry() {
   // Client-side validation.
   const errs = [];
   if (!name) errs.push('Name is required');
+  if (!group) errs.push('Group is required');
+  if (!effect) errs.push('Effect is required');
   if (!start) errs.push('Start time is required');
   if (!stop) errs.push('Stop time is required');
 
@@ -792,6 +840,14 @@ async function saveScheduleEntry() {
   const timeRe = /^(\d{1,2}:\d{2}|(sunrise|sunset|dawn|dusk|noon|midnight)([+-](\d+h)?(\d+m)?)?)$/;
   if (start && !timeRe.test(start)) errs.push('Invalid start time format');
   if (stop && !timeRe.test(stop)) errs.push('Invalid stop time format');
+
+  // Validate days — must be comma-separated 3-letter day abbreviations.
+  if (days) {
+    const validDays = ['mon','tue','wed','thu','fri','sat','sun'];
+    const parts = days.split(',').map(d => d.trim().toLowerCase());
+    const bad = parts.filter(d => !validDays.includes(d));
+    if (bad.length) errs.push('Invalid day(s): ' + bad.join(', '));
+  }
 
   // Validate params JSON.
   let params = {};
@@ -812,10 +868,16 @@ async function saveScheduleEntry() {
     return;
   }
 
-  // Send to server.
+  // Send to server — POST for create, PUT for edit.
+  const isCreate = _schedModalIsCreate;
+  const url = isCreate
+    ? BASE + '/api/schedule'
+    : BASE + '/api/schedule/' + idx;
+  const method = isCreate ? 'POST' : 'PUT';
+
   try {
-    const resp = await fetch(BASE + '/api/schedule/' + idx, {
-      method: 'PUT',
+    const resp = await fetch(url, {
+      method: method,
       headers: {
         'Authorization': 'Bearer ' + TOKEN,
         'Content-Type': 'application/json',

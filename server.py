@@ -43,6 +43,7 @@ Endpoints::
     POST /api/effects/{name}/defaults    Save tuned params as effect defaults
     GET  /api/groups                     Device groups from config
     GET  /api/schedule                   Schedule entries with resolved times
+    POST /api/schedule                   Create a new schedule entry
     POST /api/schedule/{index}/enabled   Enable or disable a schedule entry
     GET  /api/media/sources              List media sources with status
     GET  /api/media/signals              List available signal names
@@ -339,6 +340,8 @@ _ROUTES: tuple[_Route, ...] = (
     # -- POST: parameterized -------------------------------------------------
     _Route("POST", ("api", "effects", "{name}", "defaults"),
            "_handle_post_effect_defaults"),
+    _Route("POST", ("api", "schedule"),
+           "_handle_post_schedule_create"),
     _Route("POST", ("api", "schedule", "{index}", "enabled"),
            "_handle_post_schedule_enabled",
            param_types={"index": int}),
@@ -2872,6 +2875,122 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             return
 
         self._send_json(200, {"ok": True})
+
+    def _handle_post_schedule_create(self) -> None:
+        """POST /api/schedule — create a new schedule entry.
+
+        Request body::
+
+            {
+                "name": "porch evening aurora",
+                "group": "porch",
+                "start": "sunset-30m",
+                "stop": "23:00",
+                "effect": "aurora",
+                "params": {"speed": 10.0, "brightness": 100},
+                "days": ""
+            }
+
+        Validates all fields identically to the PUT handler.
+        New entries are created enabled by default.
+        """
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        # --- Validate required fields (same checks as PUT) ---
+        errors: list[str] = []
+
+        name: str = body.get("name", "").strip()
+        if not name:
+            errors.append("Name is required")
+
+        group: str = body.get("group", "").strip()
+        if not group:
+            errors.append("Group is required")
+
+        effect: str = body.get("effect", "").strip()
+        if not effect:
+            errors.append("Effect is required")
+
+        start_spec: str = body.get("start", "").strip()
+        stop_spec: str = body.get("stop", "").strip()
+        if not start_spec:
+            errors.append("Start time is required")
+        if not stop_spec:
+            errors.append("Stop time is required")
+
+        # Validate time specs parse correctly.
+        if start_spec and not (
+            _FIXED_TIME_RE.match(start_spec) or _SYMBOLIC_RE.match(start_spec)
+        ):
+            errors.append(
+                f"Invalid start time: {start_spec!r} "
+                "(use HH:MM or sunrise/sunset/dawn/dusk/noon/midnight[+-Nh][Mm])"
+            )
+        if stop_spec and not (
+            _FIXED_TIME_RE.match(stop_spec) or _SYMBOLIC_RE.match(stop_spec)
+        ):
+            errors.append(
+                f"Invalid stop time: {stop_spec!r} "
+                "(use HH:MM or sunrise/sunset/dawn/dusk/noon/midnight[+-Nh][Mm])"
+            )
+
+        # Validate effect exists in registry.
+        if effect:
+            registry: dict = get_registry()
+            if effect not in registry:
+                errors.append(f"Unknown effect: {effect!r}")
+
+        # Validate group exists in config.
+        if group:
+            config_groups: dict[str, Any] = self.config.get("groups", {})
+            sched_groups: dict[str, Any] = (
+                self.config.get("schedule_groups", {})
+                or self.config.get("groups", {})
+            )
+            if group not in config_groups and group not in sched_groups:
+                errors.append(f"Unknown group: {group!r}")
+
+        # Validate days if provided.
+        days_raw: str = body.get("days", "").strip()
+
+        # Validate params is a dict if provided.
+        params: Any = body.get("params", {})
+        if not isinstance(params, dict):
+            errors.append("params must be an object")
+
+        if errors:
+            self._send_json(400, {"error": "; ".join(errors)})
+            return
+
+        # --- Append new entry ---
+        entry: dict[str, Any] = {
+            "name": name,
+            "group": group,
+            "start": start_spec,
+            "stop": stop_spec,
+            "effect": effect,
+            "params": params if isinstance(params, dict) else {},
+            "enabled": True,
+        }
+        if days_raw:
+            entry["days"] = days_raw
+
+        specs: list[dict[str, Any]] = self.config.get("schedule", [])
+        specs.append(entry)
+        self._save_config_field("schedule", specs)
+
+        new_index: int = len(specs) - 1
+        logging.info(
+            "API: schedule entry %d created: '%s' %s on %s (%s→%s)",
+            new_index, name, effect, group, start_spec, stop_spec,
+        )
+        self._send_json(201, {
+            "index": new_index,
+            "name": name,
+            "created": True,
+        })
 
     def _handle_post_schedule_enabled(self, index: int) -> None:
         """POST /api/schedule/{index}/enabled — enable or disable an entry.
