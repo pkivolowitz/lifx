@@ -2978,8 +2978,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         # Validate effect exists.
         if effect:
-            from effects import EFFECTS
-            if effect not in EFFECTS:
+            registry: dict = get_registry()
+            if effect not in registry:
                 errors.append(f"Unknown effect: {effect!r}")
 
         # Validate group exists in config.
