@@ -312,27 +312,28 @@ class TestRouteCount(unittest.TestCase):
     def test_post_route_count(self) -> None:
         """POST routes should match the expected count."""
         post_routes: list[_Route] = [r for r in _ROUTES if r.method == "POST"]
-        # 7 device + 7 parameterized + 7 static = 21
+        # 7 device + 7 parameterized + 7 static + 2 CRUD (groups, schedule) = 23
         self.assertEqual(
-            len(post_routes), 21,
-            f"Expected 21 POST routes, got {len(post_routes)}",
+            len(post_routes), 23,
+            f"Expected 23 POST routes, got {len(post_routes)}",
         )
 
     def test_put_route_count(self) -> None:
         """PUT routes should match the expected count."""
         put_routes: list[_Route] = [r for r in _ROUTES if r.method == "PUT"]
-        # 1 schedule entry update = 1
+        # 1 schedule entry update + 1 group update = 2
         self.assertEqual(
-            len(put_routes), 1,
-            f"Expected 1 PUT route, got {len(put_routes)}",
+            len(put_routes), 2,
+            f"Expected 2 PUT routes, got {len(put_routes)}",
         )
 
     def test_delete_route_count(self) -> None:
         """DELETE routes should match the expected count."""
         del_routes: list[_Route] = [r for r in _ROUTES if r.method == "DELETE"]
+        # 2 original + 2 CRUD (schedule entry, group) = 4
         self.assertEqual(
-            len(del_routes), 2,
-            f"Expected 2 DELETE routes, got {len(del_routes)}",
+            len(del_routes), 4,
+            f"Expected 4 DELETE routes, got {len(del_routes)}",
         )
 
 

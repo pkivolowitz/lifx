@@ -384,9 +384,11 @@ _ROUTES: tuple[_Route, ...] = (
            device_param="id", unquote_params=("id",)),
     _Route("DELETE", ("api", "schedule", "{index}"),
            "_handle_delete_schedule_entry",
+           unquote_params=("index",),
            param_types={"index": int}),
     _Route("DELETE", ("api", "groups", "{name}"),
-           "_handle_delete_group"),
+           "_handle_delete_group",
+           unquote_params=("name",)),
 )
 
 # Pre-built index: (method, segment_count) → list of candidate routes.
@@ -1842,13 +1844,16 @@ class SchedulerThread(threading.Thread):
         self._group_entries: dict[str, Optional[str]] = {}
 
     def run(self) -> None:
-        """Scheduler main loop — poll for schedule transitions."""
+        """Scheduler main loop — poll for schedule transitions.
+
+        Groups and schedule entries are re-read each iteration so
+        that runtime changes (group rename/create/delete, schedule
+        edits) take effect without a server restart.
+        """
         lat: float = self._config["location"]["latitude"]
         lon: float = self._config["location"]["longitude"]
-        # Use the DeviceManager's resolved groups (IPs), not the raw
-        # config groups (which may contain labels or MACs that the
-        # DeviceManager can't look up directly).  The resolution
-        # happened in _background_startup → _resolve_config_groups.
+
+        # Initial snapshot for the startup log line.
         groups: dict[str, list[str]] = dict(self._dm._group_config)
         specs: list[dict[str, Any]] = self._config.get("schedule", [])
 
@@ -1871,6 +1876,23 @@ class SchedulerThread(threading.Thread):
         while not self._stop_event.is_set():
             now: datetime = datetime.now(timezone.utc).astimezone()
             today: date = now.date()
+
+            # Re-read groups and schedule entries each iteration so
+            # runtime API changes (rename, create, delete) are picked
+            # up without restarting.
+            groups = dict(self._dm._group_config)
+            specs = self._config.get("schedule", [])
+
+            # Initialize tracking for newly-appeared groups and
+            # clean up entries for groups that were deleted.
+            for group_name in groups:
+                if group_name not in self._group_entries:
+                    self._group_entries[group_name] = None
+            stale_groups: list[str] = [
+                g for g in self._group_entries if g not in groups
+            ]
+            for g in stale_groups:
+                del self._group_entries[g]
 
             # Log sun times once per day.
             if today != last_logged_date:
