@@ -1467,9 +1467,10 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
     cap_w: int = 640
     cap_h: int = 360
 
-    # Sensitivity and contrast params.
+    # Sensitivity, contrast, and blur params.
     sensitivity: float = getattr(args, "sensitivity", None) or 1.5
     contrast: float = getattr(args, "contrast", None) or 1.5
+    no_blur: bool = bool(getattr(args, "no_blur", False))
 
     # Vision pipeline (same as test harness).
     bus: SignalBus = SignalBus()
@@ -1607,15 +1608,58 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
 
             pg_screen.fill(room_bg)
 
-            # Gaussian-blurred glow border (same as test harness).
             if isinstance(edge_colors, list):
-                render_glow_border(
-                    pg_screen,
-                    edge_hues=list(edge_colors),
-                    edge_bris=list(processed_bri),
-                    dominant_sat=dominant_sat,
-                    mode="strip",
-                )
+                if no_blur:
+                    # Flat color rects — no scipy, fast baseline.
+                    n_z: int = len(edge_colors)
+                    tv_x: int = BORDER_PX
+                    tv_y: int = BORDER_PX
+                    peri_total: int = 2 * (cap_w + cap_h)
+                    d_sat: float = min(1.0, dominant_sat * 0.7)
+                    for iz in range(n_z):
+                        h_z: float = edge_colors[iz]
+                        b_z: float = processed_bri[iz] if iz < len(processed_bri) else 0.0
+                        color: tuple[int, int, int] = hsb_to_rgb(h_z, d_sat, b_z)
+                        frac_lo: float = iz / n_z
+                        frac_hi: float = (iz + 1) / n_z
+                        pos_lo: float = frac_lo * peri_total
+                        pos_mid: float = (pos_lo + frac_hi * peri_total) / 2.0
+                        seg_len: float = (frac_hi - frac_lo) * peri_total
+                        if pos_mid < cap_w:
+                            rect = pygame.Rect(
+                                int(tv_x + pos_lo), 0,
+                                max(1, int(seg_len)), BORDER_PX,
+                            )
+                        elif pos_mid < cap_w + cap_h:
+                            local: float = pos_lo - cap_w
+                            rect = pygame.Rect(
+                                tv_x + cap_w, int(tv_y + local),
+                                BORDER_PX, max(1, int(seg_len)),
+                            )
+                        elif pos_mid < 2 * cap_w + cap_h:
+                            local = pos_lo - cap_w - cap_h
+                            rect = pygame.Rect(
+                                int(tv_x + cap_w - local - seg_len), tv_y + cap_h,
+                                max(1, int(seg_len)), BORDER_PX,
+                            )
+                        else:
+                            local = pos_lo - 2 * cap_w - cap_h
+                            rect = pygame.Rect(
+                                0, int(tv_y + cap_h - local - seg_len),
+                                BORDER_PX, max(1, int(seg_len)),
+                            )
+                        rect = rect.clip(pg_screen.get_rect())
+                        if rect.width > 0 and rect.height > 0:
+                            pygame.draw.rect(pg_screen, color, rect)
+                else:
+                    # Gaussian-blurred glow border (same as test harness).
+                    render_glow_border(
+                        pg_screen,
+                        edge_hues=list(edge_colors),
+                        edge_bris=list(processed_bri),
+                        dominant_sat=dominant_sat,
+                        mode="strip",
+                    )
 
             # Composite the live video frame as the "TV".
             frame_arr: np.ndarray = np.frombuffer(
@@ -2847,6 +2891,14 @@ def build_parser() -> argparse.ArgumentParser:
             "Video input URL for --screen mode (replaces screen capture). "
             "Use with HDHomeRun: http://<ip>:5004/auto/v<channel>  "
             "Any ffmpeg-compatible URL works (RTSP, HTTP, UDP, etc.)."
+        ),
+    )
+    p_play.add_argument(
+        "--no-blur", action="store_true",
+        help=(
+            "Disable Gaussian blur in screen-reactive sim mode.  "
+            "Shows flat color rects instead of the blurred glow.  "
+            "Useful for performance comparison and debugging."
         ),
     )
     p_play.add_argument(
