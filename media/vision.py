@@ -284,8 +284,11 @@ class VisionExtractor:
         min_c: np.ndarray = np.minimum(np.minimum(r, g), b)
         delta_c: np.ndarray = max_c - min_c
 
-        # Saturation.
-        sat: np.ndarray = np.where(max_c > 0, delta_c / max_c, 0.0)
+        # Saturation — guard against divide-by-zero on black pixels.
+        # np.where evaluates both branches eagerly, so pre-fill with
+        # zeros and only divide where max_c > 0.
+        safe_max: np.ndarray = np.where(max_c > 0, max_c, 1.0)
+        sat: np.ndarray = np.where(max_c > 0, delta_c / safe_max, 0.0)
 
         # Hue (0-1).
         hue: np.ndarray = np.zeros_like(max_c)
