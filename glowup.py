@@ -1467,10 +1467,11 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
     cap_w: int = 640
     cap_h: int = 360
 
-    # Sensitivity, contrast, and blur params.
+    # Sensitivity, contrast, blur, and fps params.
     sensitivity: float = getattr(args, "sensitivity", None) or 1.5
     contrast: float = getattr(args, "contrast", None) or 1.5
     no_blur: bool = bool(getattr(args, "no_blur", False))
+    cap_fps: int = getattr(args, "fps", None) or 10
 
     # Vision pipeline (same as test harness).
     bus: SignalBus = SignalBus()
@@ -1488,26 +1489,26 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-i", video_url,
             "-vf", f"scale={cap_w}:{cap_h}",
-            "-r", "10",
+            "-r", str(cap_fps),
             "-f", "rawvideo", "-pix_fmt", "rgb24",
             "pipe:1",
         ]
         print(f"  Starting video capture from URL: {video_url}",
               flush=True)
-        print(f"  Decoding at {cap_w}x{cap_h} @ 10 fps", flush=True)
+        print(f"  Decoding at {cap_w}x{cap_h} @ {cap_fps} fps", flush=True)
     else:
         # Local screen capture via AVFoundation.
         cap_cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-f", "avfoundation", "-framerate", "10",
+            "-f", "avfoundation", "-framerate", str(cap_fps),
             "-capture_cursor", "0",
             "-i", "3:",
             "-vf", f"scale={cap_w}:{cap_h}",
-            "-r", "10",
+            "-r", str(cap_fps),
             "-f", "rawvideo", "-pix_fmt", "rgb24",
             "pipe:1",
         ]
-        print(f"  Starting screen capture: {cap_w}x{cap_h} @ 10 fps",
+        print(f"  Starting screen capture: {cap_w}x{cap_h} @ {cap_fps} fps",
               flush=True)
     cap_proc: _sp.Popen = _sp.Popen(
         cap_cmd, stdout=_sp.PIPE, stderr=_sp.DEVNULL,
@@ -1671,7 +1672,7 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
             pg_screen.blit(tv_surf, (BORDER_PX, BORDER_PX))
 
             pygame.display.flip()
-            clock.tick(10)
+            clock.tick(cap_fps)
         elif emitter is not None:
             # Send to real LIFX device.
             if isinstance(edge_colors, list) and len(edge_colors) >= zone_count:
