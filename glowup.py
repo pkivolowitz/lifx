@@ -1518,8 +1518,13 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
     if use_sim:
         try:
             import pygame
-            from tools.screen_test_harness import hsb_to_rgb
+            from tools import screen_test_harness
+            from tools.screen_test_harness import hsb_to_rgb, render_glow_border
             pygame.init()
+            # Sync harness globals with our layout dimensions.
+            screen_test_harness.BORDER_PX = BORDER_PX
+            screen_test_harness.TV_WIDTH = cap_w
+            screen_test_harness.TV_HEIGHT = cap_h
             room_w: int = cap_w + BORDER_PX * 2
             room_h: int = cap_h + BORDER_PX * 2
             pg_screen: pygame.Surface = pygame.display.set_mode(
@@ -1596,64 +1601,23 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
             processed_bri = [0.5] * zone_count
 
         if use_sim:
-            # Render to pygame — flat color rects (no blur for speed).
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
 
             pg_screen.fill(room_bg)
 
-            # Draw flat color zones around the TV perimeter.
+            # Gaussian-blurred glow border (same as test harness).
             if isinstance(edge_colors, list):
-                n_z: int = len(edge_colors)
-                tv_x: int = BORDER_PX
-                tv_y: int = BORDER_PX
-                peri_top: int = cap_w
-                peri_right: int = cap_h
-                peri_bottom: int = cap_w
-                peri_left: int = cap_h
-                peri_total: int = peri_top + peri_right + peri_bottom + peri_left
-                d_sat: float = min(1.0, dominant_sat * 0.7)
+                render_glow_border(
+                    pg_screen,
+                    edge_hues=list(edge_colors),
+                    edge_bris=list(processed_bri),
+                    dominant_sat=dominant_sat,
+                    mode="strip",
+                )
 
-                for iz in range(n_z):
-                    h_z: float = edge_colors[iz] if iz < len(edge_colors) else 0.0
-                    b_z: float = processed_bri[iz] if iz < len(processed_bri) else 0.0
-                    color: tuple[int, int, int] = hsb_to_rgb(h_z, d_sat, b_z)
-                    frac_lo: float = iz / n_z
-                    frac_hi: float = (iz + 1) / n_z
-                    pos_lo: float = frac_lo * peri_total
-                    pos_mid: float = (pos_lo + frac_hi * peri_total) / 2.0
-                    seg_len: float = (frac_hi - frac_lo) * peri_total
-
-                    if pos_mid < peri_top:
-                        rect = pygame.Rect(
-                            int(tv_x + pos_lo), 0,
-                            max(1, int(seg_len)), BORDER_PX,
-                        )
-                    elif pos_mid < peri_top + peri_right:
-                        local: float = pos_lo - peri_top
-                        rect = pygame.Rect(
-                            tv_x + cap_w, int(tv_y + local),
-                            BORDER_PX, max(1, int(seg_len)),
-                        )
-                    elif pos_mid < peri_top + peri_right + peri_bottom:
-                        local = pos_lo - peri_top - peri_right
-                        rect = pygame.Rect(
-                            int(tv_x + cap_w - local - seg_len), tv_y + cap_h,
-                            max(1, int(seg_len)), BORDER_PX,
-                        )
-                    else:
-                        local = pos_lo - peri_top - peri_right - peri_bottom
-                        rect = pygame.Rect(
-                            0, int(tv_y + cap_h - local - seg_len),
-                            BORDER_PX, max(1, int(seg_len)),
-                        )
-
-                    rect = rect.clip(pg_screen.get_rect())
-                    if rect.width > 0 and rect.height > 0:
-                        pygame.draw.rect(pg_screen, color, rect)
-
-            # Composite the live screen frame as the "TV".
+            # Composite the live video frame as the "TV".
             frame_arr: np.ndarray = np.frombuffer(
                 frame_bytes, dtype=np.uint8,
             ).reshape(cap_h, cap_w, 3)
