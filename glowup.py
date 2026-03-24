@@ -1709,14 +1709,68 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                             pygame.Rect(cx, cy, BORDER_PX, BORDER_PX),
                         )
                 else:
-                    # Gaussian-blurred glow border (same as test harness).
-                    render_glow_border(
-                        pg_screen,
-                        edge_hues=list(edge_colors),
-                        edge_bris=list(processed_bri),
-                        dominant_sat=dominant_sat,
-                        mode="strip",
+                    # 1D edge convolution blur — sample video frame
+                    # edges and blur outward into the border.  Top/bottom
+                    # use vertical kernels, left/right use horizontal.
+                    # Much faster than the full 2D gaussian_filter.
+                    from scipy.ndimage import gaussian_filter1d
+                    _blur_sigma: float = BORDER_PX / 3.0
+                    _kernel_depth: int = BORDER_PX
+                    fframe: np.ndarray = np.frombuffer(
+                        frame_bytes, dtype=np.uint8,
+                    ).reshape(cap_h, cap_w, 3).astype(np.float32)
+
+                    # Top border: black pad above + top edge rows → blur vertically.
+                    top_src: np.ndarray = np.zeros(
+                        (BORDER_PX + _kernel_depth, cap_w, 3), dtype=np.float32,
                     )
+                    top_src[BORDER_PX:, :, :] = fframe[:_kernel_depth, :, :]
+                    top_blurred: np.ndarray = gaussian_filter1d(
+                        top_src, sigma=_blur_sigma, axis=0,
+                    )[:BORDER_PX].clip(0, 255).astype(np.uint8)
+                    top_surf: pygame.Surface = pygame.surfarray.make_surface(
+                        top_blurred.swapaxes(0, 1),
+                    )
+                    pg_screen.blit(top_surf, (BORDER_PX, 0))
+
+                    # Bottom border: bottom edge rows + black pad below → blur vertically.
+                    bot_src: np.ndarray = np.zeros(
+                        (_kernel_depth + BORDER_PX, cap_w, 3), dtype=np.float32,
+                    )
+                    bot_src[:_kernel_depth, :, :] = fframe[-_kernel_depth:, :, :]
+                    bot_blurred: np.ndarray = gaussian_filter1d(
+                        bot_src, sigma=_blur_sigma, axis=0,
+                    )[_kernel_depth:].clip(0, 255).astype(np.uint8)
+                    bot_surf: pygame.Surface = pygame.surfarray.make_surface(
+                        bot_blurred.swapaxes(0, 1),
+                    )
+                    pg_screen.blit(bot_surf, (BORDER_PX, BORDER_PX + cap_h))
+
+                    # Left border: black pad left + left edge cols → blur horizontally.
+                    left_src: np.ndarray = np.zeros(
+                        (cap_h, BORDER_PX + _kernel_depth, 3), dtype=np.float32,
+                    )
+                    left_src[:, BORDER_PX:, :] = fframe[:, :_kernel_depth, :]
+                    left_blurred: np.ndarray = gaussian_filter1d(
+                        left_src, sigma=_blur_sigma, axis=1,
+                    )[:, :BORDER_PX].clip(0, 255).astype(np.uint8)
+                    left_surf: pygame.Surface = pygame.surfarray.make_surface(
+                        left_blurred.swapaxes(0, 1),
+                    )
+                    pg_screen.blit(left_surf, (0, BORDER_PX))
+
+                    # Right border: right edge cols + black pad right → blur horizontally.
+                    right_src: np.ndarray = np.zeros(
+                        (cap_h, _kernel_depth + BORDER_PX, 3), dtype=np.float32,
+                    )
+                    right_src[:, :_kernel_depth, :] = fframe[:, -_kernel_depth:, :]
+                    right_blurred: np.ndarray = gaussian_filter1d(
+                        right_src, sigma=_blur_sigma, axis=1,
+                    )[:, _kernel_depth:].clip(0, 255).astype(np.uint8)
+                    right_surf: pygame.Surface = pygame.surfarray.make_surface(
+                        right_blurred.swapaxes(0, 1),
+                    )
+                    pg_screen.blit(right_surf, (BORDER_PX + cap_w, BORDER_PX))
 
             # Composite the live video frame as the "TV".
             frame_arr: np.ndarray = np.frombuffer(
