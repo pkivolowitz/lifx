@@ -1735,14 +1735,17 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                 _fps_display = _fps_frame_count / _fps_elapsed
                 _fps_frame_count = 0
                 _fps_last_time = _fps_now
-            fps_font: pygame.font.Font = pygame.font.SysFont("monospace", 14)
             fps_text: str = f"{_fps_display:.1f} fps"
             if no_blur:
                 fps_text += "  [no blur]"
-            fps_surf: pygame.Surface = fps_font.render(
-                fps_text, True, (200, 200, 200),
+            import pygame.freetype
+            if not hasattr(_play_screen_reactive, '_fps_font'):
+                _play_screen_reactive._fps_font = pygame.freetype.SysFont(
+                    "monospace", 14,
+                )
+            _play_screen_reactive._fps_font.render_to(
+                pg_screen, (4, 2), fps_text, (200, 200, 200),
             )
-            pg_screen.blit(fps_surf, (4, 2))
 
             pygame.display.flip()
             clock.tick(cap_fps)
