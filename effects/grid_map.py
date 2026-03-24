@@ -131,10 +131,10 @@ class GridMap(Effect):
                     f"\r  zone {step:3d}/{total}  "
                     f"row={row} col={col}  "
                 )
-                # Announce new row, then column number.
+                # Announce row change and every column number.
                 if row != self._last_row:
                     self._last_row = row
-                    self._speak(f"row {row}")
+                    self._speak(f"row {row}, {col}")
                 else:
                     self._speak(str(col))
             else:
