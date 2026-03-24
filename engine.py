@@ -429,10 +429,12 @@ class Engine:
                             colors.append(colors[-1] if colors else (0, 0, 0, 3500))
                     frame[id(em)] = colors
                 except Exception:
+                    import traceback as _tb
                     _log.warning(
-                        "Render failed for emitter %s: %s",
+                        "Render failed for emitter %s: %s\n%s",
                         getattr(em, 'label', id(em)),
                         _exc_oneliner(),
+                        _tb.format_exc(),
                     )
 
             if not frame:
