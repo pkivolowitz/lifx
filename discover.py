@@ -290,8 +290,39 @@ PRODUCT_MAP: dict[int, str] = {
     204: "String Light Intl",
     205: "Indoor Neon US",
     206: "Indoor Neon Intl",
+    137: "Candle Color US",
+    138: "Candle Colour Intl",
+    171: "Round Spot US",
+    173: "Round Path US",
+    174: "Square Path US",
+    176: "Ceiling US",
+    177: "Ceiling Intl",
+    185: "Candle Color US",
+    186: "Candle Colour Intl",
+    201: "Ceiling US",
+    202: "Ceiling Intl",
     213: "Permanent Outdoor US",
     214: "Permanent Outdoor Intl",
+    215: "Candle Color US",
+    216: "Candle Colour Intl",
+    217: "Tube US",
+    218: "Tube Intl",
+    219: "Luna US",
+    220: "Luna Intl",
+    221: "Round Spot Intl",
+    222: "Round Path Intl",
+}
+
+#: Product IDs for multizone (1D strip) devices.
+MULTIZONE_PRODUCTS: set[int] = {
+    31, 32, 38, 117, 118, 119, 120, 125, 141, 142, 143, 144,
+    161, 162, 203, 204, 205, 206, 213, 214,
+}
+
+#: Product IDs for matrix (2D grid) devices.
+MATRIX_PRODUCTS: set[int] = {
+    55, 57, 68, 137, 138, 171, 173, 174, 176, 177, 185, 186,
+    201, 202, 215, 216, 217, 218, 219, 220, 221, 222,
 }
 
 
@@ -833,9 +864,18 @@ def main() -> None:
             bright = "?"
             color = "?"
 
+        # Classify device type based on product ID.
+        if product in MATRIX_PRODUCTS:
+            dtype = "Matrix"
+        elif product in MULTIZONE_PRODUCTS:
+            dtype = "Strip"
+        else:
+            dtype = "Bulb"
+
         rows.append({
             "label": label,
             "product": product_name,
+            "type": dtype,
             "mac": dev["mac"],
             "ip": dev["ip"],
             "group": group,
@@ -852,6 +892,7 @@ def main() -> None:
     cols: list[tuple[str, str, int]] = [
         ("Label",       "label",   12),
         ("Product",     "product", 14),
+        ("Type",        "type",     6),
         ("Group",       "group",    8),
         ("MAC Address", "mac",     17),
         ("IP Address",  "ip",      13),

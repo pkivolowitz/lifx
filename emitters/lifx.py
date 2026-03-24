@@ -187,7 +187,9 @@ class LifxEmitter(Emitter):
         try:
             duration_ms: int = int(metadata.get("duration_ms", 0))
             if isinstance(frame, list):
-                if self.is_multizone:
+                if self.is_matrix:
+                    self.send_tile_zones(frame, duration_ms=duration_ms)
+                elif self.is_multizone:
                     self.send_zones(frame, duration_ms=duration_ms)
                 elif len(frame) > 0:
                     h, s, b, k = frame[0]
@@ -217,15 +219,25 @@ class LifxEmitter(Emitter):
     def capabilities(self) -> EmitterCapabilities:
         """Declare LIFX device capabilities.
 
-        Multizone devices accept ``"strip"`` and ``"single"`` frame types.
-        Single-zone bulbs accept only ``"single"``.  Zone count is
-        populated after device query.
+        Matrix devices report ``width`` and ``height`` for the 2D grid.
+        Multizone devices accept ``"strip"`` and ``"single"`` frame
+        types.  Single-zone bulbs accept only ``"single"``.  Zone count
+        is populated after device query.
 
         Returns:
             An :class:`EmitterCapabilities` for this device.
         """
-        if self._device is not None and self.is_multizone:
+        if self._device is not None and self.is_matrix:
             frame_types: list[str] = [_FRAME_TYPE_STRIP, _FRAME_TYPE_SINGLE]
+            return EmitterCapabilities(
+                accepted_frame_types=frame_types,
+                max_rate_hz=_MAX_RATE_HZ,
+                zones=self.zone_count or 0,
+                width=self._device.matrix_width or 0,
+                height=self._device.matrix_height or 0,
+            )
+        if self._device is not None and self.is_multizone:
+            frame_types = [_FRAME_TYPE_STRIP, _FRAME_TYPE_SINGLE]
         else:
             frame_types = [_FRAME_TYPE_SINGLE]
         return EmitterCapabilities(
@@ -251,6 +263,27 @@ class LifxEmitter(Emitter):
         if self._device is None:
             return False
         return bool(self._device.is_multizone)
+
+    @property
+    def is_matrix(self) -> bool:
+        """Whether this device is a matrix/tile device (2D pixel grid)."""
+        if self._device is None:
+            return False
+        return bool(self._device.is_matrix)
+
+    @property
+    def matrix_width(self) -> Optional[int]:
+        """Matrix pixel width, or ``None`` if not a matrix device."""
+        if self._device is None:
+            return None
+        return self._device.matrix_width
+
+    @property
+    def matrix_height(self) -> Optional[int]:
+        """Matrix pixel height, or ``None`` if not a matrix device."""
+        if self._device is None:
+            return None
+        return self._device.matrix_height
 
     @property
     def emitter_id(self) -> str:
@@ -307,6 +340,20 @@ class LifxEmitter(Emitter):
             self._device.set_zones(colors, duration_ms=duration_ms,
                                    mode=send_mode)
 
+    def send_tile_zones(self, colors: list[HSBK],
+                        duration_ms: int = 0) -> None:
+        """Send a matrix frame via LIFX tile protocol (Set64, type 715).
+
+        Delegates to :meth:`LifxDevice.set_tile_zones` which handles
+        single-packet and double-buffer paths internally.
+
+        Args:
+            colors:      Flat row-major HSBK list (width × height).
+            duration_ms: Firmware transition duration in milliseconds.
+        """
+        if self._device is not None:
+            self._device.set_tile_zones(colors, duration_ms=duration_ms)
+
     def send_color(self, hue: int, sat: int, bri: int, kelvin: int,
                    duration_ms: int = 0) -> None:
         """Send a single color to the device (type 102).
@@ -355,8 +402,11 @@ class LifxEmitter(Emitter):
             if not skip_wake:
                 # Broadcast wake burst — wakes all bulbs on the network.
                 broadcast_wake()
-            # Clear the committed layer to black on multizone devices.
-            if self.is_multizone and self.zone_count:
+            # Clear firmware effects that would fight our renders.
+            if self.is_matrix:
+                self._device.clear_tile_effect()
+            elif self.is_multizone and self.zone_count:
+                # Clear the committed layer to black on multizone devices.
                 self._device.set_color(0, 0, 0, _CLEAR_KELVIN, duration_ms=0)
 
     def power_on(self, duration_ms: int = 0) -> None:

@@ -333,7 +333,10 @@ class Engine:
         if fade_ms > 0:
             for em in self.emitters:
                 if em.zone_count:
-                    if em.is_multizone:
+                    if hasattr(em, 'is_matrix') and em.is_matrix:
+                        off = [(0, 0, 0, KELVIN_DEFAULT)] * em.zone_count
+                        em.send_tile_zones(off, duration_ms=0)
+                    elif em.is_multizone:
                         off = [(0, 0, 0, KELVIN_DEFAULT)] * em.zone_count
                         em.send_zones(off, duration_ms=0,
                                       mode=SendMode.GUARANTEED)
@@ -512,7 +515,10 @@ class Engine:
                     continue
                 colors = em_colors
                 try:
-                    if em.is_multizone:
+                    if hasattr(em, 'is_matrix') and em.is_matrix:
+                        em.send_tile_zones(em_colors,
+                                           duration_ms=transition_ms)
+                    elif em.is_multizone:
                         em.send_zones(em_colors,
                                       duration_ms=transition_ms)
                     else:

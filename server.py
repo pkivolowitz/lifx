@@ -963,12 +963,18 @@ class DeviceManager:
         # Blank all zones before powering off so the firmware's stored
         # state is clean.  Without this, the device flashes stale colors
         # the next time it powers on.
-        if not on and em.is_multizone and em.zone_count:
-            blank: list[HSBK] = [
-                (0, 0, 0, KELVIN_DEFAULT)
-            ] * em.zone_count
-            em.send_zones(blank, duration_ms=0,
-                         mode=SendMode.GUARANTEED)
+        if not on and em.zone_count:
+            if hasattr(em, 'is_matrix') and em.is_matrix:
+                blank: list[HSBK] = [
+                    (0, 0, 0, KELVIN_DEFAULT)
+                ] * em.zone_count
+                em.send_tile_zones(blank, duration_ms=0)
+            elif em.is_multizone:
+                blank = [
+                    (0, 0, 0, KELVIN_DEFAULT)
+                ] * em.zone_count
+                em.send_zones(blank, duration_ms=0,
+                             mode=SendMode.GUARANTEED)
 
         if on:
             em.power_on(duration_ms=DEFAULT_FADE_MS)
@@ -1025,8 +1031,17 @@ class DeviceManager:
         for lem in lifx_members:
             dev: LifxDevice = lem.transport
 
-            # 2. Clear any firmware-level multizone effect.
-            if dev.is_multizone:
+            # 2. Clear any firmware-level effect (multizone or tile).
+            if dev.is_matrix:
+                try:
+                    dev.clear_tile_effect()
+                    logging.info("Reset %s: tile effect cleared", dev.ip)
+                except Exception as exc:
+                    logging.warning(
+                        "Reset %s: clear_tile_effect failed: %s",
+                        dev.ip, exc,
+                    )
+            elif dev.is_multizone:
                 try:
                     dev.clear_firmware_effect()
                     logging.info("Reset %s: firmware effect cleared", dev.ip)
@@ -1105,9 +1120,13 @@ class DeviceManager:
                     )
                     bri: int = int(bri_frac * HSBK_MAX)
 
-                    if em.is_multizone:
+                    if hasattr(em, 'is_matrix') and em.is_matrix:
                         color: HSBK = (0, 0, bri, KELVIN_DEFAULT)
                         colors: list[HSBK] = [color] * (em.zone_count or 1)
+                        em.send_tile_zones(colors, duration_ms=0)
+                    elif em.is_multizone:
+                        color = (0, 0, bri, KELVIN_DEFAULT)
+                        colors = [color] * (em.zone_count or 1)
                         em.send_zones(colors, duration_ms=0)
                     else:
                         em.send_color(0, 0, bri, KELVIN_DEFAULT, duration_ms=0)
@@ -1493,6 +1512,9 @@ class DeviceManager:
             source: Optional[str] = (
                 self._play_sources.get(dev_id) if current_effect else None
             )
+            is_matrix: bool = (
+                hasattr(em, 'is_matrix') and em.is_matrix
+            )
             entry: dict[str, Any] = {
                 "ip": dev_id,
                 "label": em.label,
@@ -1500,11 +1522,15 @@ class DeviceManager:
                 "product": em.product_name,
                 "zones": em.zone_count,
                 "is_multizone": em.is_multizone,
+                "is_matrix": is_matrix,
                 "current_effect": current_effect,
                 "source": source,
                 "overridden": self.is_overridden(dev_id),
                 "is_group": is_group,
             }
+            if is_matrix:
+                entry["width"] = getattr(em, 'matrix_width', None)
+                entry["height"] = getattr(em, 'matrix_height', None)
 
             if is_group:
                 entry["mac"] = ""
