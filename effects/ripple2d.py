@@ -160,10 +160,8 @@ class Ripple2D(Effect):
                     # Raw sine in [-1, +1].
                     wave_sum += math.sin(k * dist - spd * t)
 
-                # Normalize by source count → [-1, +1], take absolute
-                # value so both constructive peaks are bright and
-                # destructive cancellation is black.
-                intensity: float = abs(wave_sum / n)
+                # Sum ranges [-n, +n].  Map to [0, 1]: -n→0, +n→1.
+                intensity: float = wave_sum / (2.0 * n) + 0.5
 
                 bri: int = int(bri_max * intensity)
                 if bri < 1:
