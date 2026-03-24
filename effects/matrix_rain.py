@@ -71,9 +71,9 @@ class MatrixRain(Effect):
                   description="Grid width in pixels (columns)")
     height = Param(DEFAULT_HEIGHT, min=1, max=300,
                    description="Grid height in pixels (rows)")
-    speed = Param(3.0, min=0.5, max=20.0,
+    speed = Param(10.0, min=0.5, max=20.0,
                   description="Rows per second (fall speed)")
-    tail = Param(3, min=1, max=10,
+    tail = Param(2, min=1, max=10,
                  description="Trail tail length in rows")
     brightness = Param(80, min=1, max=100,
                        description="Peak brightness (percent)")
