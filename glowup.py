@@ -1471,7 +1471,7 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
     sensitivity: float = getattr(args, "sensitivity", None) or 1.5
     contrast: float = getattr(args, "contrast", None) or 1.5
     no_blur: bool = bool(getattr(args, "no_blur", False))
-    cap_fps: int = getattr(args, "fps", None) or 10
+    cap_fps: int = getattr(args, "fps", None) or 30
 
     # Vision pipeline (same as test harness).
     bus: SignalBus = SignalBus()
@@ -1557,6 +1557,11 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
     # Main loop — same structure as the test harness.
     room_bg: tuple[int, int, int] = (15, 15, 20)
     src: str = "screen"
+
+    # FPS measurement state.
+    _fps_frame_count: int = 0
+    _fps_last_time: float = time.time()
+    _fps_display: float = 0.0
 
     while running:
         # Read one complete frame, accumulating partial reads.
@@ -1721,6 +1726,23 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                 frame_arr.swapaxes(0, 1),
             )
             pg_screen.blit(tv_surf, (BORDER_PX, BORDER_PX))
+
+            # FPS overlay.
+            _fps_frame_count += 1
+            _fps_now: float = time.time()
+            _fps_elapsed: float = _fps_now - _fps_last_time
+            if _fps_elapsed >= 1.0:
+                _fps_display = _fps_frame_count / _fps_elapsed
+                _fps_frame_count = 0
+                _fps_last_time = _fps_now
+            fps_font: pygame.font.Font = pygame.font.SysFont("monospace", 14)
+            fps_text: str = f"{_fps_display:.1f} fps"
+            if no_blur:
+                fps_text += "  [no blur]"
+            fps_surf: pygame.Surface = fps_font.render(
+                fps_text, True, (200, 200, 200),
+            )
+            pg_screen.blit(fps_surf, (4, 2))
 
             pygame.display.flip()
             clock.tick(cap_fps)
