@@ -58,6 +58,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from media.vision import VisionExtractor
 from media.screen_source import build_pyramid
 from media import SignalBus
+from colorspace import srgb_to_oklab, oklab_to_srgb
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -271,6 +272,48 @@ def render_glow_border(
             rect = rect.clip(glow.get_rect())
             if rect.width > 0 and rect.height > 0:
                 pygame.draw.rect(glow, color, rect)
+
+        # Fill corners with oklab midpoint of the two adjacent zones.
+        # Painted before the blur so the Gaussian spreads them naturally.
+        d_sat: float = min(1.0, dominant_sat * 0.7)
+        corner_peri: list[float] = [
+            0.0,                                          # top-left
+            float(peri_top),                              # top-right
+            float(peri_top + peri_right),                 # bottom-right
+            float(peri_top + peri_right + peri_bottom),   # bottom-left
+        ]
+        corner_xy: list[tuple[int, int]] = [
+            (tv_x - GLOW_STRIP_WIDTH, tv_y - GLOW_STRIP_WIDTH),
+            (tv_x + tv_w - GLOW_STRIP_WIDTH, tv_y - GLOW_STRIP_WIDTH),
+            (tv_x + tv_w - GLOW_STRIP_WIDTH, tv_y + tv_h - GLOW_STRIP_WIDTH),
+            (tv_x - GLOW_STRIP_WIDTH, tv_y + tv_h - GLOW_STRIP_WIDTH),
+        ]
+        corner_size: int = GLOW_STRIP_WIDTH * 2
+        for ci in range(4):
+            frac_c: float = corner_peri[ci] / peri_total
+            iz_after: int = int(frac_c * n) % n
+            iz_before: int = (iz_after - 1) % n
+            rgb_a: tuple[int, int, int] = hsb_to_rgb(
+                edge_hues[iz_before], d_sat, edge_bris[iz_before],
+            )
+            rgb_b: tuple[int, int, int] = hsb_to_rgb(
+                edge_hues[iz_after], d_sat, edge_bris[iz_after],
+            )
+            L1, a1, b1 = srgb_to_oklab(rgb_a[0] / 255.0, rgb_a[1] / 255.0, rgb_a[2] / 255.0)
+            L2, a2, b2 = srgb_to_oklab(rgb_b[0] / 255.0, rgb_b[1] / 255.0, rgb_b[2] / 255.0)
+            rm, gm, bm = oklab_to_srgb(
+                (L1 + L2) * 0.5, (a1 + a2) * 0.5, (b1 + b2) * 0.5,
+            )
+            c_color: tuple[int, int, int] = (
+                max(0, min(255, int(rm * 255))),
+                max(0, min(255, int(gm * 255))),
+                max(0, min(255, int(bm * 255))),
+            )
+            cx, cy = corner_xy[ci]
+            crect: pygame.Rect = pygame.Rect(cx, cy, corner_size, corner_size)
+            crect = crect.clip(glow.get_rect())
+            if crect.width > 0 and crect.height > 0:
+                pygame.draw.rect(glow, c_color, crect)
 
     # Blur the glow source heavily.
     blurred: pygame.Surface = _blur_surface(glow, BLUR_RADIUS)
