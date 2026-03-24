@@ -73,7 +73,7 @@ class Ripple2D(Effect):
                   description="Grid width in pixels (columns)")
     height = Param(DEFAULT_HEIGHT, min=1, max=300,
                    description="Grid height in pixels (rows)")
-    sources = Param(3, min=1, max=8,
+    sources = Param(2, min=1, max=8,
                     description="Number of simultaneous ripple sources")
     speed = Param(4.0, min=0.1, max=30.0,
                   description="Ring expansion speed (units per second)")
@@ -160,8 +160,10 @@ class Ripple2D(Effect):
                     # Raw sine in [-1, +1].
                     wave_sum += math.sin(k * dist - spd * t)
 
-                # Sum ranges [-n, +n].  Map to [0, 1]: -n→0, +n→1.
-                intensity: float = wave_sum / (2.0 * n) + 0.5
+                # abs(sum/n): zero-crossings → black, both peaks → bright.
+                # Cube for non-linear contrast — crushes lows, punches highs.
+                intensity: float = abs(wave_sum / n)
+                intensity = intensity * intensity * intensity
 
                 bri: int = int(bri_max * intensity)
                 if bri < 1:
