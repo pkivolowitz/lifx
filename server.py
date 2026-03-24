@@ -3992,10 +3992,15 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         if daemon is None:
             self._send_json(200, {"discovered_bulbs": []})
             return
-        bulbs: list[dict[str, str]] = [
-            {"ip": ip, "mac": mac}
-            for ip, mac in sorted(daemon.known_bulbs.items())
-        ]
+        reg: Optional[DeviceRegistry] = self.registry
+        bulbs: list[dict[str, str]] = []
+        for ip, mac in sorted(daemon.known_bulbs.items()):
+            entry: dict[str, str] = {"ip": ip, "mac": mac}
+            if reg is not None:
+                label: Optional[str] = reg.mac_to_label(mac)
+                if label is not None:
+                    entry["label"] = label
+            bulbs.append(entry)
         self._send_json(200, {"discovered_bulbs": bulbs})
 
     def _handle_delete_command_identify(self, ip: str) -> None:
@@ -5240,6 +5245,31 @@ def main() -> None:
                 logging.warning(
                     "No devices resolved from config groups — "
                     "check registry and device connectivity"
+                )
+
+            # -- Step 4b: Auto-load registered devices not in groups ------
+            # Registration implies management.  Any registered device
+            # that is online (in ARP) but not already in a config group
+            # gets added to the managed set automatically.
+            group_ip_set: set[str] = set(device_ips)
+            mac_to_ip: dict[str, str] = keepalive.known_bulbs_by_mac
+            registered_extras: int = 0
+            for mac in device_reg.all_devices():
+                ip: Optional[str] = mac_to_ip.get(mac)
+                if ip is not None and ip not in group_ip_set:
+                    device_ips.append(ip)
+                    group_ip_set.add(ip)
+                    label: Optional[str] = device_reg.mac_to_label(mac)
+                    logging.info(
+                        "Auto-loading registered device %s (%s) at %s",
+                        label or "?", mac, ip,
+                    )
+                    registered_extras += 1
+            if registered_extras:
+                device_ips.sort()
+                logging.info(
+                    "Added %d registered device(s) not in any group",
+                    registered_extras,
                 )
 
             # -- Step 5: Populate DeviceManager and load ------------------

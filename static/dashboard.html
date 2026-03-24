@@ -690,12 +690,15 @@ async function refresh() {
       const viaBadge = d.group_effect && !d.current_effect
         ? ` <span class="badge badge-in-group">via ${esc(d.group_name)}</span>`
         : '';
+      const zoneMeta = d.is_matrix
+        ? (d.width + '\u00d7' + d.height + ' matrix')
+        : ((d.zones || 1) + ' zones');
       return `
         <div class="device-row">
           <div>
             <div class="device-name">${esc(name)}</div>
             <div class="device-effect">${esc(effectName)}</div>
-            <div class="device-meta">${esc(d.product || '')} &middot; ${d.zones || 1} zones</div>
+            <div class="device-meta">${esc(d.product || '')} &middot; ${zoneMeta}</div>
           </div>
           <div style="text-align:right;">
             <span class="badge badge-playing">LIVE</span>${srcBadge}${viaBadge}
@@ -788,12 +791,15 @@ async function refresh() {
         } else {
           badge = '<span class="badge badge-stopped">IDLE</span>';
         }
+        const zoneMeta = d.is_matrix
+          ? (d.width + '\u00d7' + d.height + ' matrix')
+          : ((d.zones || 1) + ' zones');
         return `
           <div class="device-row">
             <div>
               <div class="device-name">${esc(name)}</div>
               ${effectLine}
-              <div class="device-meta">${esc(d.product || '')} &middot; ${d.zones || 1} zones</div>
+              <div class="device-meta">${esc(d.product || '')} &middot; ${zoneMeta}</div>
             </div>
             ${badge}
           </div>
@@ -851,11 +857,15 @@ async function refresh() {
     } else {
       dbEl.innerHTML = bulbs.map(b => {
         const dev = devByIp[b.ip];
-        const label = (dev && dev.label) || '';
+        const label = (dev && dev.label) || b.label || '';
         const product = (dev && dev.product) || '';
         const zones = (dev && dev.zones) || 1;
+        const isMatrix = dev && dev.is_matrix;
         const nameCol = label || b.mac;
-        const meta = product ? product + ' \u00b7 ' + zones + ' zone' + (zones !== 1 ? 's' : '') : '';
+        const zoneMeta = isMatrix
+          ? (dev.width + '\u00d7' + dev.height + ' matrix')
+          : (zones + ' zone' + (zones !== 1 ? 's' : ''));
+        const meta = product ? product + ' \u00b7 ' + zoneMeta : '';
         return `
           <div class="discovered-row">
             <div>
