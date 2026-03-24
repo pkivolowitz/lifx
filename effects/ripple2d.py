@@ -144,14 +144,23 @@ class Ripple2D(Effect):
             if t >= self._sources[i][3]:
                 self._sources[i] = self._new_source(t)
 
-        # Pre-compute per-source cosine envelope (birth→expiry maps to 1→0).
+        # Pre-compute per-source envelope: fast linear ramp-in over
+        # the first 10% of lifetime, then cosine fade for the rest.
         envelopes: list[float] = []
         half_pi: float = math.pi * 0.5
+        ramp_frac: float = 0.1
         for _, _, birth, expiry in self._sources:
             lifetime: float = expiry - birth
             age: float = t - birth
-            # cos(0)=1 at birth, cos(pi/2)=0 at expiry.
-            envelopes.append(math.cos(half_pi * age / lifetime))
+            ramp_end: float = lifetime * ramp_frac
+            if age < ramp_end:
+                # Linear ramp: 0 → 1 over first 10% of life.
+                envelopes.append(age / ramp_end)
+            else:
+                # Cosine fade: 1 → 0 over remaining 90%.
+                fade_age: float = age - ramp_end
+                fade_dur: float = lifetime - ramp_end
+                envelopes.append(math.cos(half_pi * fade_age / fade_dur))
 
         colors: list[HSBK] = [BLACK] * total
 
