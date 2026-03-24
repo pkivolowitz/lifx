@@ -1522,6 +1522,7 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
             import pygame
             from tools import screen_test_harness
             from tools.screen_test_harness import hsb_to_rgb, render_glow_border
+            from colorspace import srgb_to_oklab, oklab_to_srgb
             pygame.init()
             # Sync harness globals with our layout dimensions.
             screen_test_harness.BORDER_PX = BORDER_PX
@@ -1652,6 +1653,56 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                         rect = rect.clip(pg_screen.get_rect())
                         if rect.width > 0 and rect.height > 0:
                             pygame.draw.rect(pg_screen, color, rect)
+
+                    # Fill corners with oklab midpoint of adjacent zones.
+                    # Corners sit at perimeter positions where one edge
+                    # ends and the next begins.  Each corner's two
+                    # adjacent zone indices come from the perimeter
+                    # fraction at that corner.
+                    corner_positions: list[float] = [
+                        0.0,                              # top-left
+                        float(cap_w),                     # top-right
+                        float(cap_w + cap_h),             # bottom-right
+                        float(2 * cap_w + cap_h),         # bottom-left
+                    ]
+                    corner_rects: list[tuple[int, int]] = [
+                        (0, 0),                           # top-left
+                        (tv_x + cap_w, 0),                # top-right
+                        (tv_x + cap_w, tv_y + cap_h),     # bottom-right
+                        (0, tv_y + cap_h),                 # bottom-left
+                    ]
+                    for ci in range(4):
+                        # Zone index just after this corner.
+                        frac_c: float = corner_positions[ci] / peri_total
+                        iz_after: int = int(frac_c * n_z) % n_z
+                        iz_before: int = (iz_after - 1) % n_z
+                        # Get RGB of both adjacent zones.
+                        rgb_a: tuple[int, int, int] = hsb_to_rgb(
+                            edge_colors[iz_before], d_sat,
+                            processed_bri[iz_before] if iz_before < len(processed_bri) else 0.0,
+                        )
+                        rgb_b: tuple[int, int, int] = hsb_to_rgb(
+                            edge_colors[iz_after], d_sat,
+                            processed_bri[iz_after] if iz_after < len(processed_bri) else 0.0,
+                        )
+                        # Oklab midpoint.
+                        L1, a1, b1 = srgb_to_oklab(rgb_a[0] / 255.0, rgb_a[1] / 255.0, rgb_a[2] / 255.0)
+                        L2, a2, b2 = srgb_to_oklab(rgb_b[0] / 255.0, rgb_b[1] / 255.0, rgb_b[2] / 255.0)
+                        rm, gm, bm = oklab_to_srgb(
+                            (L1 + L2) * 0.5,
+                            (a1 + a2) * 0.5,
+                            (b1 + b2) * 0.5,
+                        )
+                        corner_color: tuple[int, int, int] = (
+                            max(0, min(255, int(rm * 255))),
+                            max(0, min(255, int(gm * 255))),
+                            max(0, min(255, int(bm * 255))),
+                        )
+                        cx, cy = corner_rects[ci]
+                        pygame.draw.rect(
+                            pg_screen, corner_color,
+                            pygame.Rect(cx, cy, BORDER_PX, BORDER_PX),
+                        )
                 else:
                     # Gaussian-blurred glow border (same as test harness).
                     render_glow_border(
