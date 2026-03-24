@@ -76,6 +76,7 @@ the network, device objects, or anything outside their render function.
 > | `_crossfade` | Two-color crossfade with zone lag — validates smooth HSBK interpolation |
 > | `_polychrome_test` | Renders differently on color vs mono bulbs — verifies BT.709 luma path |
 > | `_zone_map` | Lights one zone at a time in sequence — identifies physical zone indices |
+> | `_grid_map` | Walks one pixel across a 2D matrix grid — maps physical layout with speech output |
 
 No imports in `__init__.py` are needed. The framework auto-discovers all
 `.py` files in the `effects/` directory via `pkgutil.iter_modules` and

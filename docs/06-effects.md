@@ -50,6 +50,7 @@ listings so users see relevant effects first.
 | `wave` | strip |
 | `waveform` | strip |
 | `zone_map` | strip |
+| `_grid_map` | matrix |
 
 ---
 
@@ -1088,3 +1089,50 @@ worker agents).  See [SOE Pipeline](21-soe-pipeline.md) for setup.
 | Effect | Description |
 |--------|-------------|
 | `theremin` | Maps hand-distance sensor data to a continuous tone |
+
+## Diagnostic Effects (Hidden)
+
+Hidden effects (names starting with `_`) are omitted from the iOS app
+by default.  Use the "Show Hidden" toggle to reveal them.
+
+### _grid_map
+
+**Matrix pixel mapper** — walks one white pixel sequentially across a 2D
+matrix grid.  Designed for discovering the physical pixel layout on
+devices like the LIFX Luna, whose oval shape means some positions in
+the rectangular protocol grid have no physical LED.
+
+Two modes:
+
+- **show_all** (default) — visits every position in the protocol grid.
+  Dead zones produce a dark beat.  Use to discover which positions
+  are physically absent.
+- **hide_missing** — skips positions listed in `--missing`, visiting
+  only physical LEDs.  At low `--hold` values this produces a
+  continuous sweep with no gaps.
+
+When `--hold` is >= 0.5s, macOS `say` announces column numbers audibly
+so the user can watch the device without looking at the terminal.
+
+| Parameter    | Default        | Range       | Description                                    |
+|--------------|----------------|-------------|------------------------------------------------|
+| `width`      | 7              | 1–500       | Grid width in pixels (columns)                 |
+| `height`     | 5              | 1–300       | Grid height in pixels (rows)                   |
+| `hold`       | 2.0            | 0.1–10.0    | Seconds each zone is held before advancing     |
+| `brightness` | 50             | 1–100       | Lit zone brightness (percent)                  |
+| `mode`       | show_all       | show_all, hide_missing | Walk mode              |
+| `missing`    | 0:0,0:6,4:0,4:6 | —         | Dead zones as row:col pairs                    |
+
+**Luna pixel mask:** The LIFX Luna reports a 7×5 = 35 zone rectangular
+grid, but its oval shape has only 31 physical LEDs.  Four corner
+positions are dead:
+
+```
+Row 0:  _  ●  ●  ●  ●  ●  _     (5 active, cols 1–5)
+Row 1:  ●  ●  ●  ●  ●  ●  ●     (7 active, cols 0–6)
+Row 2:  ●  ●  ●  ●  ●  ●  ●     (7 active)
+Row 3:  ●  ●  ●  ●  ●  ●  ●     (7 active)
+Row 4:  _  ●  ●  ●  ●  ●  _     (5 active, cols 1–5)
+```
+
+The default `--missing 0:0,0:6,4:0,4:6` encodes this mask.
