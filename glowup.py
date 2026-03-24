@@ -1478,20 +1478,36 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
         edge_regions=zone_count,
     )
 
-    # Screen capture via ffmpeg avfoundation (same as MovieDecoder).
+    # Video input via ffmpeg — screen capture or URL (HDHomeRun, RTSP, etc.).
     import subprocess as _sp
-    cap_cmd: list[str] = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error",
-        "-f", "avfoundation", "-framerate", "10",
-        "-capture_cursor", "0",
-        "-i", "3:",
-        "-vf", f"scale={cap_w}:{cap_h}",
-        "-r", "10",
-        "-f", "rawvideo", "-pix_fmt", "rgb24",
-        "pipe:1",
-    ]
-    print(f"  Starting screen capture: {cap_w}x{cap_h} @ 15 fps",
-          flush=True)
+    video_url: Optional[str] = getattr(args, "video_url", None)
+    if video_url:
+        # External video source (e.g. HDHomeRun).
+        cap_cmd: list[str] = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", video_url,
+            "-vf", f"scale={cap_w}:{cap_h}",
+            "-r", "10",
+            "-f", "rawvideo", "-pix_fmt", "rgb24",
+            "pipe:1",
+        ]
+        print(f"  Starting video capture from URL: {video_url}",
+              flush=True)
+        print(f"  Decoding at {cap_w}x{cap_h} @ 10 fps", flush=True)
+    else:
+        # Local screen capture via AVFoundation.
+        cap_cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-f", "avfoundation", "-framerate", "10",
+            "-capture_cursor", "0",
+            "-i", "3:",
+            "-vf", f"scale={cap_w}:{cap_h}",
+            "-r", "10",
+            "-f", "rawvideo", "-pix_fmt", "rgb24",
+            "pipe:1",
+        ]
+        print(f"  Starting screen capture: {cap_w}x{cap_h} @ 10 fps",
+              flush=True)
     cap_proc: _sp.Popen = _sp.Popen(
         cap_cmd, stdout=_sp.PIPE, stderr=_sp.DEVNULL,
     )
@@ -1973,7 +1989,9 @@ def cmd_play(args: argparse.Namespace) -> None:
         return
 
     # -- Screen-reactive mode --------------------------------------------------
-    has_screen: bool = bool(getattr(args, "screen", False))
+    # --video-url implies --screen.
+    has_video_url: bool = bool(getattr(args, "video_url", None))
+    has_screen: bool = bool(getattr(args, "screen", False)) or has_video_url
     if has_screen:
         _play_screen_reactive(args)
         return
@@ -2857,6 +2875,14 @@ def build_parser() -> argparse.ArgumentParser:
             "Screen-reactive mode: capture the local screen and drive "
             "the effect from screen content.  Automatically selects the "
             "screen_light effect.  Works with --device, --ip, or --sim."
+        ),
+    )
+    p_play.add_argument(
+        "--video-url", default=None, metavar="URL",
+        help=(
+            "Video input URL for --screen mode (replaces screen capture). "
+            "Use with HDHomeRun: http://<ip>:5004/auto/v<channel>  "
+            "Any ffmpeg-compatible URL works (RTSP, HTTP, UDP, etc.)."
         ),
     )
     p_play.add_argument(

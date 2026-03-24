@@ -15,8 +15,9 @@ normalized [0, 1] signal values from the bus.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
+import math
 from effects import Effect, MediaEffect, Param, HSBK, HSBK_MAX, KELVIN_DEFAULT
 
 # ---------------------------------------------------------------------------
@@ -28,6 +29,55 @@ ZONE_SMOOTH_ALPHA: float = 0.25
 
 # Minimum perceptible brightness change (prevents micro-flicker).
 MIN_BRIGHTNESS_DELTA: float = 0.005
+
+# Maximum kernel half-width — caps memory and compute for large zone counts.
+MAX_KERNEL_RADIUS: int = 20
+
+
+def _gaussian_kernel(radius: int, sigma: float) -> list[float]:
+    """Build a normalized 1D Gaussian kernel.
+
+    Args:
+        radius: Half-width of the kernel (full width = 2*radius + 1).
+        sigma:  Standard deviation in zones.
+
+    Returns:
+        Normalized kernel weights (sum = 1.0).
+    """
+    r: int = min(radius, MAX_KERNEL_RADIUS)
+    raw: list[float] = [
+        math.exp(-0.5 * (i / sigma) ** 2) for i in range(-r, r + 1)
+    ]
+    total: float = sum(raw)
+    return [w / total for w in raw]
+
+
+def _blur_channel(values: list[float], kernel: list[float]) -> list[float]:
+    """Apply a 1D Gaussian blur to a channel, wrapping at edges.
+
+    The strip wraps around the TV perimeter, so zones at the start
+    are spatially adjacent to zones at the end.  Circular convolution
+    handles this correctly.
+
+    Args:
+        values: Per-zone float values.
+        kernel: Normalized Gaussian kernel from :func:`_gaussian_kernel`.
+
+    Returns:
+        Blurred values, same length as input.
+    """
+    n: int = len(values)
+    if n <= 1:
+        return list(values)
+    r: int = len(kernel) // 2
+    result: list[float] = []
+    for i in range(n):
+        acc: float = 0.0
+        for k, w in enumerate(kernel):
+            j: int = (i + k - r) % n  # circular wrap
+            acc += values[j] * w
+        result.append(acc)
+    return result
 
 
 def hue_to_u16(hue_01: float) -> int:
@@ -108,6 +158,13 @@ class ScreenLight(MediaEffect):
             "0 = static, 100 = full sweep with motion direction."
         ),
     )
+    blur = Param(
+        3.0, min=0.0, max=15.0,
+        description=(
+            "Spatial Gaussian blur radius in zones.  Softens color "
+            "boundaries for a natural glow.  0 = sharp edges."
+        ),
+    )
 
     def __init__(self, **overrides) -> None:
         """Initialize with per-zone smoothing state.
@@ -118,6 +175,10 @@ class ScreenLight(MediaEffect):
         super().__init__(**overrides)
         self._smooth_zones: list[tuple[float, float, float]] = []
         self._flash: float = 0.0
+        # Cached Gaussian kernel — rebuilt when blur param or zone count changes.
+        self._cached_kernel: list[float] = []
+        self._cached_blur: float = -1.0
+        self._cached_zone_count: int = -1
 
     def render(self, t: float, zone_count: int) -> list[HSBK]:
         """Produce one frame from vision signals.
@@ -185,7 +246,10 @@ class ScreenLight(MediaEffect):
             n_edge_bri = 1
             edge_brightness = [0.0]
 
-        colors: list[HSBK] = []
+        # -- Pass 1: compute raw HSB per zone ----------------------------------
+        raw_h: list[float] = []
+        raw_s: list[float] = []
+        raw_b: list[float] = []
 
         for z in range(zone_count):
             if zone_count == 1:
@@ -240,14 +304,37 @@ class ScreenLight(MediaEffect):
             bri_final: float = min_bri + bri_val * (max_bri - min_bri)
             bri_final = min(1.0, bri_final + flash_add)
 
-            # Smooth per-zone to prevent flickering.
+            raw_h.append(hue_val)
+            raw_s.append(sat_val)
+            raw_b.append(bri_final)
+
+        # -- Pass 2: spatial Gaussian blur -------------------------------------
+        # Softens color boundaries for a natural ambient glow.  The strip
+        # wraps the TV perimeter so the blur uses circular convolution.
+        blur_r: float = self.blur
+        if blur_r > 0.5 and zone_count > 1:
+            # Rebuild kernel only when blur param or zone count changes.
+            if (blur_r != self._cached_blur
+                    or zone_count != self._cached_zone_count):
+                radius: int = max(1, int(math.ceil(blur_r)))
+                sigma: float = blur_r / 2.0
+                self._cached_kernel = _gaussian_kernel(radius, sigma)
+                self._cached_blur = blur_r
+                self._cached_zone_count = zone_count
+            kernel: list[float] = self._cached_kernel
+            raw_h = _blur_channel(raw_h, kernel)
+            raw_s = _blur_channel(raw_s, kernel)
+            raw_b = _blur_channel(raw_b, kernel)
+
+        # -- Pass 3: temporal smoothing + HSBK conversion ----------------------
+        colors: list[HSBK] = []
+        for z in range(zone_count):
             prev_h, prev_s, prev_b = self._smooth_zones[z]
-            new_h: float = prev_h + ZONE_SMOOTH_ALPHA * (hue_val - prev_h)
-            new_s: float = prev_s + ZONE_SMOOTH_ALPHA * (sat_val - prev_s)
-            new_b: float = prev_b + ZONE_SMOOTH_ALPHA * (bri_final - prev_b)
+            new_h: float = prev_h + ZONE_SMOOTH_ALPHA * (raw_h[z] - prev_h)
+            new_s: float = prev_s + ZONE_SMOOTH_ALPHA * (raw_s[z] - prev_s)
+            new_b: float = prev_b + ZONE_SMOOTH_ALPHA * (raw_b[z] - prev_b)
             self._smooth_zones[z] = (new_h, new_s, new_b)
 
-            # Convert to LIFX HSBK.
             colors.append((
                 hue_to_u16(new_h),
                 int(new_s * HSBK_MAX),
