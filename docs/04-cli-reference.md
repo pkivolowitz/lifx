@@ -129,9 +129,9 @@ luma-converted brightness.  You can mix any device types freely.
 
 | Option      | Default | Description                               |
 |-------------|---------|-------------------------------------------|
-| `--device`  | *(none)* | Target device by registry label or MAC address.  **Requires server.** The server resolves the identifier and runs the effect. |
-| `--ip`      | *(none)* | Target device IP address (direct UDP, works standalone) |
-| `--group`   | *(none)* | Device group name (fetched from server, or from local file with `--config`) |
+| `--device`  | *(none)* | Target device by registry label or MAC address.  **Requires server.** The server resolves the identifier and runs the effect.  **Visible on dashboard.** |
+| `--ip`      | *(none)* | Target device IP address (direct UDP, works standalone).  **Not visible on dashboard** — the server is not involved. |
+| `--group`   | *(none)* | Device group name (fetched from server, or from local file with `--config`).  **Visible on dashboard** when fetched from server. |
 | `--config`  | *(none)* | Path to local config file containing device groups |
 | `--server`  | `192.0.2.48:8420` | Server host:port for remote group lookup |
 | `--fps`     | 20      | Frames per second for the render loop     |

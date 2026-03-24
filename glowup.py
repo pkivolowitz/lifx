@@ -2300,6 +2300,7 @@ def _print_effect_help(effect_name: str) -> None:
             print(f"  {'':>{col}}  default: {pdef.default}{range_str}")
 
     print(f"\nUsage:")
+    print(f"  python3 glowup.py play {effect_name} --device <label> [parameters]")
     print(f"  python3 glowup.py play {effect_name} --ip <device-ip> [parameters]")
     print(f"  python3 glowup.py play {effect_name} "
           f"--group <name> [parameters]")
@@ -2309,6 +2310,9 @@ def _print_effect_help(effect_name: str) -> None:
           f"--ip <device-ip> --sim-only [parameters]")
     print(f"  python3 glowup.py play {effect_name} "
           f"--zones 36 --zpb 3 [parameters]")
+    print()
+    print(f"  --device and --group run through the server (visible on dashboard).")
+    print(f"  --ip sends UDP directly (standalone, not visible on dashboard).")
     print()
 
 
@@ -2510,14 +2514,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_play.add_argument(
         "--ip", default=None,
-        help="Target device IP address or hostname",
+        help=(
+            "Target device IP address or hostname (direct UDP, "
+            "bypasses the server — effect will NOT appear on "
+            "the dashboard)"
+        ),
     )
     p_play.add_argument(
         "--device", default=None,
         help=(
             "Target device by registry label or MAC address. "
             "Requires the GlowUp server — the server resolves "
-            "the identifier and runs the effect."
+            "the identifier and runs the effect.  Visible on "
+            "the dashboard."
         ),
     )
     p_play.add_argument(
