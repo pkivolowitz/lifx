@@ -593,7 +593,7 @@ def mac_bytes_to_str(mac_bytes: bytes) -> str:
 # _AckWorker — per-device ack-paced send thread
 # ---------------------------------------------------------------------------
 
-# Module logger (used by _AckWorker and elsewhere).
+# Module _log (used by _AckWorker and elsewhere).
 _log: logging.Logger = logging.getLogger("glowup.transport")
 
 
@@ -1387,7 +1387,7 @@ class LifxDevice:
             timeout=3.0,
         )
         if payload is None or len(payload) < STATE_DEVICE_CHAIN_PAYLOAD_SIZE:
-            logger.debug(
+            _log.debug(
                 "query_device_chain(%s): no/short response, "
                 "falling back to product defaults", self.ip,
             )
@@ -1417,7 +1417,7 @@ class LifxDevice:
                 first_height = h
 
         if actual_tiles == 0:
-            logger.debug(
+            _log.debug(
                 "query_device_chain(%s): chain empty, using defaults",
                 self.ip,
             )
@@ -1427,7 +1427,7 @@ class LifxDevice:
         self.matrix_height = first_height
         self.tile_count = actual_tiles
         self.zone_count = first_width * first_height
-        logger.info(
+        _log.info(
             "query_device_chain(%s): %dx%d, %d tile(s), %d zones",
             self.ip, first_width, first_height,
             actual_tiles, self.zone_count,
@@ -1463,7 +1463,7 @@ class LifxDevice:
         self.matrix_height = h
         self.tile_count = 1
         self.zone_count = w * h
-        logger.info(
+        _log.info(
             "_matrix_defaults(%s): using %dx%d for product %d",
             self.ip, w, h, self.product,
         )
@@ -1507,7 +1507,7 @@ class LifxDevice:
             #          + width(u8) + 64×HSBK(8B) = 517 bytes minimum.
             min_size: int = 5 + TILE_PIXELS_PER_PACKET * HSBK_SIZE
             if len(resp) < min_size:
-                logger.warning(
+                _log.warning(
                     "query_tile_colors(%s): State64 too short "
                     "(%d bytes, need %d)", self.ip, len(resp), min_size,
                 )
@@ -1766,7 +1766,7 @@ class LifxDevice:
             y:           Y offset within the tile.
         """
         header_bytes: bytes = struct.pack(
-            "<BBBBBI",
+            "<BBBBB BI",
             tile_index,
             1,              # length: one tile
             fb_index,

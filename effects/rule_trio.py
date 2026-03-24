@@ -96,6 +96,7 @@ import random
 from colorspace import lerp_color
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -300,6 +301,7 @@ class RuleTrio(Effect):
     description: str = (
         "Three independent 1-D cellular automata blended through CIELAB colour space"
     )
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     # ------------------------------------------------------------------
     # Tunable parameters

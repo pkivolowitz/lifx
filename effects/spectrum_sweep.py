@@ -24,6 +24,7 @@ import os
 import sys
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
 )
@@ -65,6 +66,7 @@ class SpectrumSweep(Effect):
 
     name: str = "spectrum_sweep"
     description: str = "Three-phase sine sweep — traveling rainbow"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(3.0, min=0.5, max=20.0,
                   description="Seconds per full sweep cycle")

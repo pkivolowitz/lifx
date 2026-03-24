@@ -16,6 +16,7 @@ import math
 from typing import Optional
 
 from . import (
+    DEVICE_TYPE_BULB, DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -44,6 +45,7 @@ class Cylon(Effect):
 
     name: str = "cylon"
     description: str = "Larson scanner — a bright eye sweeps back and forth"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_BULB, DEVICE_TYPE_STRIP})
 
     speed = Param(2.0, min=0.2, max=30.0,
                   description="Seconds per full sweep (there and back)")

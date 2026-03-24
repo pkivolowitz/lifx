@@ -22,6 +22,7 @@ __version__ = "1.2"
 import math
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -55,6 +56,7 @@ class Spin(Effect):
 
     name: str = "spin"
     description: str = "Migrate colors through the concentric rings of each bulb"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(2.0, min=0.2, max=30.0,
                   description="Seconds per full rotation")

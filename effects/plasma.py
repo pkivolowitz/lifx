@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -128,6 +129,7 @@ class Plasma(Effect):
 
     name: str = "plasma"
     description: str = "Plasma ball — electric tendrils crackle from a pulsing core"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(2.0, min=0.3, max=10.0,
                   description="Core pulse period in seconds")

@@ -409,9 +409,16 @@ class Engine:
                 if em.zone_count is None:
                     continue
                 try:
-                    logical_zones: int = max(1, em.zone_count // zpb)
+                    # Matrix devices use 1:1 pixel mapping — no bulb
+                    # grouping.  zpb only applies to 1D multizone strips
+                    # where N adjacent zones form one physical bulb.
+                    em_is_matrix: bool = (
+                        hasattr(em, 'is_matrix') and em.is_matrix
+                    )
+                    em_zpb: int = 1 if em_is_matrix else zpb
+                    logical_zones: int = max(1, em.zone_count // em_zpb)
                     colors: list = effect.render(t, logical_zones)
-                    if zpb > 1:
+                    if em_zpb > 1:
                         # Replicate each color zpb times.
                         expanded: list = []
                         for c in colors:

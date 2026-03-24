@@ -23,6 +23,7 @@ __version__ = "1.2"
 import time
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -166,6 +167,7 @@ class BinClock(Effect):
 
     name: str = "binclock"
     description: str = "Display the current time in binary"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     hour_hue = Param(0.0, min=0.0, max=360.0,
                      description="Hour hue in degrees (0=red)")

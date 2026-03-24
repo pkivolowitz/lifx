@@ -3,6 +3,56 @@
 > Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 > Licensed under the [MIT License](../LICENSE).
 
+## Device Affinity
+
+Each effect declares which device types it supports:
+
+| Tag | Devices |
+|-----|---------|
+| **bulb** | Single-zone (A19, BR30, Mini) |
+| **strip** | 1D multizone (String Light, Neon, Beam, Z) |
+| **matrix** | 2D grid (Luna, Tile, Candle, Ceiling) |
+
+Effects marked **all** work on every device type.  Affinity is advisory —
+the engine plays any effect on any device, but the iOS app and CLI filter
+listings so users see relevant effects first.
+
+| Effect | Affinity |
+|--------|----------|
+| `aurora` | strip |
+| `binclock` | strip |
+| `bloom` | bulb |
+| `breathe` | all |
+| `crossfade` | strip |
+| `cylon` | bulb, strip |
+| `double_slit` | strip |
+| `embers` | strip |
+| `fireworks` | strip |
+| `flag` | strip |
+| `jacobs_ladder` | strip |
+| `morse` | all |
+| `newtons_cradle` | strip |
+| `pendulum_wave` | strip |
+| `plasma` | strip |
+| `plasma2d` | matrix |
+| `primary_cycle` | all |
+| `ripple` | strip |
+| `rule30` | strip |
+| `rule_trio` | strip |
+| `sine` | strip |
+| `sonar` | strip |
+| `soundlevel` | all |
+| `spectrum2d` | matrix, strip |
+| `spectrum_sweep` | strip |
+| `spin` | strip |
+| `theremin` | strip |
+| `twinkle` | all |
+| `wave` | strip |
+| `waveform` | strip |
+| `zone_map` | strip |
+
+---
+
 ### cylon
 
 **Larson scanner** — a bright eye sweeps back and forth with a smooth

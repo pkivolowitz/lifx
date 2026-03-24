@@ -47,8 +47,19 @@ struct Effect: Identifiable {
     /// Whether this effect is hidden by default (name starts with ``_``).
     let hidden: Bool
 
+    /// Device types this effect is designed for ("bulb", "strip", "matrix").
+    ///
+    /// Universal effects contain all three types.  Clients use this
+    /// for UI filtering — the engine does not enforce affinity.
+    let affinity: [String]
+
     /// Conform to ``Identifiable`` using the effect name.
     var id: String { name }
+
+    /// Whether this effect supports the given device type.
+    func supportsDeviceType(_ type: String) -> Bool {
+        affinity.contains(type)
+    }
 }
 
 /// Wrapper for the ``GET /api/effects`` JSON response.
@@ -69,6 +80,9 @@ struct EffectListResponse: Codable {
 
         /// Whether this effect is hidden by default (name starts with ``_``).
         let hidden: Bool
+
+        /// Device types this effect supports ("bulb", "strip", "matrix").
+        let affinity: [String]
     }
 
     /// Convert to a sorted array of ``Effect`` for display.
@@ -78,7 +92,8 @@ struct EffectListResponse: Codable {
                 name: name,
                 description: detail.description,
                 params: detail.params,
-                hidden: detail.hidden
+                hidden: detail.hidden,
+                affinity: detail.affinity
             )
         }
         .sorted { $0.name < $1.name }

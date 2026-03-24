@@ -85,11 +85,12 @@ registers any `Effect` subclass that defines a `name`.
 ### The Effect Base Class
 
 ```python
-from effects import Effect, Param, HSBK
+from effects import Effect, Param, HSBK, DEVICE_TYPE_STRIP
 
 class MyEffect(Effect):
     name: str = "myeffect"           # Unique ID — used in CLI and API
     description: str = "One-liner"   # Shown in effect listings
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})  # Device types
 
     def render(self, t: float, zone_count: int) -> list[HSBK]:
         """Produce one animation frame.
@@ -114,6 +115,42 @@ class MyEffect(Effect):
 | `get_params() -> dict`        | Returns current parameter values as `{name: value}`. |
 | `set_params(**kwargs)`        | Update parameters at runtime (validates and clamps). |
 | `get_param_defs() -> dict`    | Class method. Returns `{name: Param}` definitions.  |
+
+### Device Affinity
+
+Effects declare which device form factors they're designed for via the
+`affinity` class attribute — a `frozenset` of device type strings.
+
+```python
+from effects import (
+    Effect, DEVICE_TYPE_BULB, DEVICE_TYPE_STRIP, DEVICE_TYPE_MATRIX,
+    ALL_DEVICE_TYPES,
+)
+
+class StripOnly(Effect):
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
+
+class BulbAndStrip(Effect):
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_BULB, DEVICE_TYPE_STRIP})
+
+class Universal(Effect):
+    # This is the default — omit affinity to support all devices.
+    pass
+```
+
+| Type constant       | Value      | Devices                          |
+|---------------------|------------|----------------------------------|
+| `DEVICE_TYPE_BULB`  | `"bulb"`   | A19, BR30, Mini — single-zone   |
+| `DEVICE_TYPE_STRIP` | `"strip"`  | String, Neon, Beam, Z — 1D      |
+| `DEVICE_TYPE_MATRIX`| `"matrix"` | Luna, Tile, Candle, Ceiling — 2D |
+| `ALL_DEVICE_TYPES`  | all three  | Default when `affinity` is omitted |
+
+Affinity is **advisory** — the engine does not block playback on
+"wrong" devices.  The iOS app and CLI use it to filter effect lists
+so users see relevant options first.
+
+The `EffectMeta` metaclass validates affinity at class-definition time:
+invalid type strings or an empty set raise `ValueError` immediately.
 
 ### The Param System
 
@@ -385,6 +422,7 @@ class Rainbow(Effect):
 
     name: str = "rainbow"
     description: str = "Rotating rainbow across all zones"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(4.0, min=0.5, max=60.0,
                   description="Seconds per full rotation")

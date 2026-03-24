@@ -28,6 +28,7 @@ import os
 import sys
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -69,6 +70,7 @@ class PendulumWave(Effect):
 
     name: str = "pendulum_wave"
     description: str = "Row of pendulums drifting in and out of phase"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(30.0, min=5.0, max=120.0,
                   description="Seconds for full realignment cycle")

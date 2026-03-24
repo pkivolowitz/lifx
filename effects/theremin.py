@@ -22,6 +22,7 @@ import math
 from typing import Optional
 
 from . import (
+    DEVICE_TYPE_STRIP,
     HSBK,
     HSBK_MAX,
     KELVIN_DEFAULT,
@@ -71,6 +72,7 @@ class Theremin(MediaEffect):
 
     name: str = "theremin"
     description: str = "Laser rangefinder Theremin — sensor-driven zones"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     glow_width = Param(
         2.5, min=0.5, max=10.0,

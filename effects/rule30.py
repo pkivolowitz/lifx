@@ -20,6 +20,7 @@ __version__ = "1.0"
 import random
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -67,6 +68,7 @@ class Rule30(Effect):
     description: str = (
         "Wolfram 1-D cellular automaton — default Rule 30 (chaotic organic animation)"
     )
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     # ------------------------------------------------------------------
     # Tunable parameters

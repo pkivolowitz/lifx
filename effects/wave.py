@@ -17,6 +17,7 @@ import os
 import sys
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -50,6 +51,7 @@ class Wave(Effect):
 
     name: str = "wave"
     description: str = "Standing wave — bulbs vibrate between two colors with fixed nodes"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(3.0, min=0.3, max=30.0,
                   description="Seconds per oscillation cycle")

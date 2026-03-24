@@ -6,8 +6,9 @@ of HSBK color tuples. They carry no device or network knowledge.
 To create a new effect:
     1. Create a file in ``effects/`` (e.g., ``effects/rainbow.py``).
     2. Subclass :class:`Effect`.
-    3. Define params as class-level :class:`Param` instances.
-    4. Implement :meth:`Effect.render`.
+    3. Set ``affinity`` to the device types the effect is designed for.
+    4. Define params as class-level :class:`Param` instances.
+    5. Implement :meth:`Effect.render`.
 
 The effect is automatically registered and available by name.
 
@@ -16,6 +17,7 @@ Example::
     class Rainbow(Effect):
         name = "rainbow"
         description = "Rotating rainbow across all zones"
+        affinity = frozenset({DEVICE_TYPE_STRIP})
 
         speed = Param(2.0, min=0.1, max=30.0,
                       description="Seconds per full rotation")
@@ -31,7 +33,7 @@ Example::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "0.5"
+__version__ = "0.6"
 
 from dataclasses import dataclass
 from typing import Any, Optional, Union
@@ -60,6 +62,26 @@ KELVIN_DEFAULT: int = 3500
 # Type alias for a single LIFX HSBK color value.
 # (hue_u16, saturation_u16, brightness_u16, kelvin)
 HSBK = tuple[int, int, int, int]
+
+# ---------------------------------------------------------------------------
+# Device form-factor constants — used by Effect.affinity to declare which
+# device types an effect is designed for.  Matches the taxonomy in
+# discover.py ("Bulb" / "Strip" / "Matrix").
+# ---------------------------------------------------------------------------
+
+# Single-zone devices (A19, BR30, etc.).
+DEVICE_TYPE_BULB: str = "bulb"
+# 1D multizone devices (Neon, String, Beam, Z strip).
+DEVICE_TYPE_STRIP: str = "strip"
+# 2D grid devices (Luna, Tile, Candle, Ceiling).
+DEVICE_TYPE_MATRIX: str = "matrix"
+
+# Convenience set: effect works on all device types (default for Effect).
+ALL_DEVICE_TYPES: frozenset[str] = frozenset({
+    DEVICE_TYPE_BULB,
+    DEVICE_TYPE_STRIP,
+    DEVICE_TYPE_MATRIX,
+})
 
 # Global registry mapping effect name -> Effect subclass.
 _registry: dict[str, type["Effect"]] = {}
@@ -141,6 +163,19 @@ class EffectMeta(type):
         # abstract Effect base class itself.
         if bases and hasattr(cls, "name") and cls.name is not None:
             _registry[cls.name] = cls
+        # Validate affinity at class-definition time so typos fail fast.
+        if bases and hasattr(cls, "affinity"):
+            if not cls.affinity:
+                raise ValueError(
+                    f"Effect {name} has empty affinity — must support "
+                    f"at least one device type",
+                )
+            invalid: frozenset[str] = cls.affinity - ALL_DEVICE_TYPES
+            if invalid:
+                raise ValueError(
+                    f"Effect {name} declares unknown affinity "
+                    f"values: {invalid}",
+                )
 
 
 class Effect(metaclass=EffectMeta):
@@ -150,6 +185,14 @@ class Effect(metaclass=EffectMeta):
 
     * ``name: str`` — unique identifier (used in CLI and API).
     * ``description: str`` — human-readable one-liner.
+
+    Subclasses **should** define:
+
+    * ``affinity: frozenset[str]`` — device types this effect is designed
+      for.  Defaults to :data:`ALL_DEVICE_TYPES` (universal).  Use the
+      ``DEVICE_TYPE_BULB``, ``DEVICE_TYPE_STRIP``, and/or
+      ``DEVICE_TYPE_MATRIX`` constants.  Advisory only — the engine does
+      not block execution on mismatched devices.
 
     Subclasses **must** implement:
 
@@ -161,6 +204,7 @@ class Effect(metaclass=EffectMeta):
 
     name: Optional[str] = None
     description: str = ""
+    affinity: frozenset[str] = ALL_DEVICE_TYPES
 
     def __init__(self, **overrides: Any) -> None:
         """Initialize with default params, applying any *overrides*.

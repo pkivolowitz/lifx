@@ -26,6 +26,7 @@ import sys
 from typing import Any
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -298,6 +299,7 @@ class Flag(Effect):
 
     name: str = "flag"
     description: str = "Waving national flag with perspective ripple"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     country = Param("us", description="Country name (e.g., us, france, japan)")
     speed = Param(1.5, min=0.1, max=20.0,

@@ -21,6 +21,7 @@ import math
 import random
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -131,6 +132,7 @@ class JacobsLadder(Effect):
 
     name: str = "jacobs_ladder"
     description: str = "Rising electric arcs between electrode pairs (Frankenstein lab)"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(0.15, min=0.02, max=1.0,
                   description="Arc drift speed in bulbs per frame")

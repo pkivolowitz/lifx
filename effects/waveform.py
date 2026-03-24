@@ -16,6 +16,7 @@ __version__ = "1.0"
 import math
 
 from . import (
+    DEVICE_TYPE_STRIP,
     MediaEffect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -45,6 +46,7 @@ class Waveform(MediaEffect):
 
     name = "waveform"
     description = "Audio spectrum visualizer across zones"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     # -- Tunable parameters --------------------------------------------------
 

@@ -37,6 +37,7 @@ import math
 from colorspace import lerp_color
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -97,6 +98,7 @@ class NewtonsCradle(Effect):
     description: str = (
         "Newton's Cradle — alternating pendulum balls with Phong sphere shading"
     )
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     # ------------------------------------------------------------------
     # Parameters

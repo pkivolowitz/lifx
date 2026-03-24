@@ -29,6 +29,7 @@ import sys
 import os
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -107,6 +108,7 @@ class Crossfade(Effect):
 
     name: str = "_crossfade"
     description: str = "A/B test: HSB flat vs Lab staggered color transitions"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(2.0, min=0.5, max=30.0,
                   description="Seconds per color transition")

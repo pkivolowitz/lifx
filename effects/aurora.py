@@ -15,6 +15,7 @@ import os
 import sys
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -78,6 +79,7 @@ class Aurora(Effect):
 
     name: str = "aurora"
     description: str = "Slow-moving curtains of color like the northern lights"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(8.0, min=1.0, max=60.0,
                   description="Seconds per full drift cycle")

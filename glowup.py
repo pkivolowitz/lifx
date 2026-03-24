@@ -42,7 +42,10 @@ from emitters import Emitter
 from emitters.lifx import LifxEmitter
 from emitters.virtual import VirtualMultizoneEmitter
 from engine import Controller
-from effects import get_registry, get_effect_names, create_effect, HSBK, HSBK_MAX, KELVIN_DEFAULT
+from effects import (
+    get_registry, get_effect_names, create_effect,
+    HSBK, HSBK_MAX, KELVIN_DEFAULT, ALL_DEVICE_TYPES,
+)
 from colorspace import set_lerp_method
 from network_config import net
 from simulator import create_simulator
@@ -807,7 +810,12 @@ def cmd_effects(args: argparse.Namespace) -> None:
 
     for name in sorted(registry):
         cls = registry[name]
-        _print(f"\n  {name}: {cls.description}")
+        # Show affinity as [all] for universal effects, else sorted list
+        aff_tag: str = (
+            "[all]" if cls.affinity == ALL_DEVICE_TYPES
+            else "[" + ", ".join(sorted(cls.affinity)) + "]"
+        )
+        _print(f"\n  {name} {aff_tag}: {cls.description}")
         params = cls.get_param_defs()
         if params:
             for pname, pdef in sorted(params.items()):

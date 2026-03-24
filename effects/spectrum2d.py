@@ -19,6 +19,7 @@ Works on both 1D strips (single-row spectrum) and 2D matrix emitters.
 __version__ = "1.0"
 
 from . import (
+    DEVICE_TYPE_MATRIX, DEVICE_TYPE_STRIP,
     MediaEffect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT,
 )
@@ -63,6 +64,7 @@ class Spectrum2D(MediaEffect):
 
     name: str = "spectrum2d"
     description: str = "2D audio spectrum — frequency bars with peak hold"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_MATRIX, DEVICE_TYPE_STRIP})
 
     source = Param("mic", description="Audio source name")
     width = Param(DEFAULT_WIDTH, min=4, max=500,

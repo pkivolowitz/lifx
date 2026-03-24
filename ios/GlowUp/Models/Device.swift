@@ -38,6 +38,9 @@ struct Device: Codable, Identifiable, Hashable {
     /// Whether this device supports the multizone protocol.
     let isMultizone: Bool?
 
+    /// Whether this device is a 2D matrix (Tile, Luna, Candle, Ceiling).
+    let isMatrix: Bool?
+
     /// Name of the currently running effect, if any.
     let currentEffect: String?
 
@@ -69,6 +72,16 @@ struct Device: Codable, Identifiable, Hashable {
     /// True if this is a virtual multizone group.
     var isVirtualGroup: Bool { isGroup ?? false }
 
+    /// The device form factor: "matrix", "strip", or "bulb".
+    ///
+    /// Derived from ``isMatrix`` and ``isMultizone`` flags sent by
+    /// the server.  Used to filter effects by affinity.
+    var deviceType: String {
+        if isMatrix ?? false { return "matrix" }
+        if isMultizone ?? false { return "strip" }
+        return "bulb"
+    }
+
     /// The best available display name: nickname, then label, then IP.
     /// Virtual groups are prefixed with "Group: " for clarity.
     var displayName: String {
@@ -85,6 +98,7 @@ struct Device: Codable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case ip, mac, label, nickname, product, group, zones, power
         case isMultizone = "is_multizone"
+        case isMatrix = "is_matrix"
         case currentEffect = "current_effect"
         case isGroup = "is_group"
         case memberIps = "member_ips"

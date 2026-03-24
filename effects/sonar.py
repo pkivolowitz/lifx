@@ -29,6 +29,7 @@ import random
 from typing import Optional
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -120,6 +121,7 @@ class Sonar(Effect):
 
     name: str = "sonar"
     description: str = "Sonar pulses reflect off drifting obstacles"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(8.0, min=0.3, max=20.0,
                   description="Wavefront travel speed in bulbs per second")

@@ -32,6 +32,7 @@ import sys
 from typing import Optional
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT,
     hue_to_u16,
@@ -95,6 +96,7 @@ class ZoneMap(Effect):
 
     name: str = "_zone_map"
     description: str = "Diagnostic tool — walk, fill, or stride-strobe to reveal zone layout"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     mode = Param(MODE_STRIDE, min=MODE_STRIDE, max=MODE_FILL,
                  description="0=stride (R/G/B cycle), 1=walk (single zone), 2=fill (progressive)")

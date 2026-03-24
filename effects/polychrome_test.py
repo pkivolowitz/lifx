@@ -14,6 +14,7 @@ This knowledge informs the design of polychrome-aware effects like
 __version__ = "1.0"
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT,
 )
@@ -44,6 +45,7 @@ class PolychromeTest(Effect):
 
     name: str = "_polychrome_test"
     description: str = "Static R/G/B pattern to reveal zone positions within each bulb"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     zones_per_bulb = Param(ZONES_PER_BULB_DEFAULT, min=1, max=16,
                            description="Number of zones per physical bulb")

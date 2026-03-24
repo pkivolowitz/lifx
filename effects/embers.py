@@ -31,6 +31,7 @@ __version__ = "1.1"
 import random
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -119,6 +120,7 @@ class Embers(Effect):
 
     name: str = "embers"
     description: str = "Rising embers — heat diffusion with cooling gradient"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     intensity = Param(0.7, min=0.0, max=1.0,
                       description="Probability of heat injection per frame")

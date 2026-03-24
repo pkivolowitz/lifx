@@ -32,6 +32,7 @@ final class ModelDecodingTests: XCTestCase {
             "current_effect": "aurora",
             "overridden": false,
             "is_group": false,
+            "is_matrix": false,
             "mac": "d0:73:d5:d4:79:9c",
             "group": "porch"
         }
@@ -44,12 +45,14 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertEqual(device.product, "String Light US")
         XCTAssertEqual(device.zones, 102)
         XCTAssertEqual(device.isMultizone, true)
+        XCTAssertEqual(device.isMatrix, false)
         XCTAssertEqual(device.currentEffect, "aurora")
         XCTAssertEqual(device.isGroup, false)
         XCTAssertEqual(device.mac, "d0:73:d5:d4:79:9c")
         XCTAssertEqual(device.group, "porch")
         XCTAssertNil(device.memberIps)
         XCTAssertFalse(device.isVirtualGroup)
+        XCTAssertEqual(device.deviceType, "strip")
         // deviceId should prefer label.
         XCTAssertEqual(device.deviceId, "PORCH STRING LIGHTS")
     }
@@ -80,6 +83,53 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertEqual(device.memberIps?.first, "10.0.0.45")
         // deviceId: label "all" wins over "group:all".
         XCTAssertEqual(device.deviceId, "all")
+    }
+
+    /// Decode a matrix device — deviceType should be "matrix".
+    func testDecodeDevice_matrix() throws {
+        let json = """
+        {
+            "ip": "10.0.0.99",
+            "mac": "d0:73:d5:aa:bb:cc",
+            "label": "Luna",
+            "nickname": null,
+            "product": "LIFX Tile",
+            "zones": 35,
+            "is_multizone": false,
+            "is_matrix": true,
+            "current_effect": null,
+            "overridden": false,
+            "is_group": false,
+            "group": ""
+        }
+        """.data(using: .utf8)!
+
+        let device = try decoder.decode(Device.self, from: json)
+        XCTAssertEqual(device.isMatrix, true)
+        XCTAssertEqual(device.deviceType, "matrix")
+    }
+
+    /// Decode a single-zone bulb — deviceType should be "bulb".
+    func testDecodeDevice_bulb() throws {
+        let json = """
+        {
+            "ip": "10.0.0.5",
+            "mac": "d0:73:d5:6a:88:79",
+            "label": "Living Room Floor Lamp",
+            "nickname": null,
+            "product": "Mini White",
+            "zones": 1,
+            "is_multizone": false,
+            "is_matrix": false,
+            "current_effect": null,
+            "overridden": false,
+            "is_group": false,
+            "group": ""
+        }
+        """.data(using: .utf8)!
+
+        let device = try decoder.decode(Device.self, from: json)
+        XCTAssertEqual(device.deviceType, "bulb")
     }
 
     /// Decode a device with no label (unregistered bulb).
@@ -297,17 +347,20 @@ final class ModelDecodingTests: XCTestCase {
                             "type": "float"
                         }
                     },
-                    "hidden": false
+                    "hidden": false,
+                    "affinity": ["bulb", "strip"]
                 },
                 "aurora": {
                     "description": "Northern lights",
                     "params": {},
-                    "hidden": false
+                    "hidden": false,
+                    "affinity": ["strip"]
                 },
                 "_test": {
                     "description": "Diagnostic effect",
                     "params": {},
-                    "hidden": true
+                    "hidden": true,
+                    "affinity": ["bulb", "matrix", "strip"]
                 }
             }
         }
@@ -322,6 +375,14 @@ final class ModelDecodingTests: XCTestCase {
         // Hidden flag propagated.
         XCTAssertTrue(effects[0].hidden)
         XCTAssertFalse(effects[1].hidden)
+
+        // Affinity propagated.
+        XCTAssertEqual(effects[0].affinity, ["bulb", "matrix", "strip"])
+        XCTAssertEqual(effects[1].affinity, ["strip"])
+        XCTAssertEqual(effects[2].affinity, ["bulb", "strip"])
+        XCTAssertTrue(effects[2].supportsDeviceType("strip"))
+        XCTAssertTrue(effects[2].supportsDeviceType("bulb"))
+        XCTAssertFalse(effects[2].supportsDeviceType("matrix"))
 
         // Parameter metadata intact.
         let speedParam = effects[2].params["speed"]
@@ -349,7 +410,8 @@ final class ModelDecodingTests: XCTestCase {
                             "choices": ["us", "gb", "fr", "de"]
                         }
                     },
-                    "hidden": false
+                    "hidden": false,
+                    "affinity": ["strip"]
                 }
             }
         }

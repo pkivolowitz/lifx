@@ -1273,6 +1273,7 @@ class DeviceManager:
                 "description": cls.description,
                 "params": params,
                 "hidden": name.startswith("_"),
+                "affinity": sorted(cls.affinity),
             }
         return result
 

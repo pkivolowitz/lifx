@@ -116,7 +116,7 @@ Authorization: Bearer your-secret-token-here
 |--------|------|-------------|
 | `GET` | `/api/status` | Server readiness and version |
 | `GET` | `/api/devices` | List all configured devices |
-| `GET` | `/api/effects` | List effects with full parameter metadata |
+| `GET` | `/api/effects` | List effects with parameter metadata and device affinity |
 | `GET` | `/api/devices/{ip}/status` | Current effect name, params, FPS |
 | `GET` | `/api/devices/{ip}/colors` | Snapshot of zone HSBK values |
 | `GET` | `/api/devices/{ip}/colors/stream` | SSE stream of zone colors at 4 Hz |

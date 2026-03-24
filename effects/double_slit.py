@@ -25,6 +25,7 @@ import os
 import sys
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -64,6 +65,7 @@ class DoubleSlit(Effect):
 
     name: str = "double_slit"
     description: str = "Two-source wave interference with shifting fringe patterns"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(4.0, min=0.5, max=30.0,
                   description="Wave propagation period in seconds")

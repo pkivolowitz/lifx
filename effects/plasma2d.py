@@ -19,7 +19,7 @@ __version__ = "1.0"
 
 import math
 
-from . import Effect, Param, HSBK, HSBK_MAX, KELVIN_DEFAULT
+from . import DEVICE_TYPE_MATRIX, Effect, Param, HSBK, HSBK_MAX, KELVIN_DEFAULT
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -46,6 +46,7 @@ class Plasma2D(Effect):
 
     name: str = "plasma2d"
     description: str = "2D plasma — sine-wave interference color field"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_MATRIX})
 
     speed = Param(1.0, min=0.1, max=5.0,
                   description="Animation speed multiplier")

@@ -19,6 +19,7 @@ __version__ = "1.0"
 import math
 
 from . import (
+    DEVICE_TYPE_BULB,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -59,6 +60,7 @@ class Bloom(Effect):
 
     name: str = "_bloom"
     description: str = "Bulbs grow and shrink using polychrome concentric zones"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_BULB})
 
     speed = Param(4.0, min=0.5, max=30.0,
                   description="Seconds per full bloom cycle")

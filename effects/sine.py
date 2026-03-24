@@ -21,6 +21,7 @@ import os
 import sys
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -71,6 +72,7 @@ class Sine(Effect):
 
     name: str = "sine"
     description: str = "Traveling ease wave — bright humps roll with smooth cubic transitions"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(4.0, min=0.3, max=30.0,
                   description="Seconds per full wave cycle (travel speed)")

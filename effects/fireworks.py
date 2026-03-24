@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16,
@@ -148,6 +149,7 @@ class Fireworks(Effect):
 
     name: str = "fireworks"
     description: str = "Rockets from both ends burst into spreading color halos"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     max_rockets = Param(
         3, min=1, max=20,

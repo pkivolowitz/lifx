@@ -28,6 +28,7 @@ import sys
 from typing import Optional
 
 from . import (
+    DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
     hue_to_u16, pct_to_u16,
@@ -68,6 +69,7 @@ class Ripple(Effect):
 
     name: str = "ripple"
     description: str = "Raindrops on water — wavefronts propagate, reflect, and interfere"
+    affinity: frozenset[str] = frozenset({DEVICE_TYPE_STRIP})
 
     speed = Param(30.0, min=5.0, max=100.0,
                   description="Wave propagation speed in zones per second")
