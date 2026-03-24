@@ -1738,14 +1738,7 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
             fps_text: str = f"{_fps_display:.1f} fps"
             if no_blur:
                 fps_text += "  [no blur]"
-            import pygame.freetype
-            if not hasattr(_play_screen_reactive, '_fps_font'):
-                _play_screen_reactive._fps_font = pygame.freetype.SysFont(
-                    "monospace", 14,
-                )
-            _play_screen_reactive._fps_font.render_to(
-                pg_screen, (4, 2), fps_text, (200, 200, 200),
-            )
+            pygame.display.set_caption(f"GlowUp Screen Reactive — {fps_text}")
 
             pygame.display.flip()
             clock.tick(cap_fps)
