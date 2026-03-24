@@ -94,25 +94,25 @@ class Ripple2D(Effect):
         Args:
             zone_count: Number of zones on the target device.
         """
-        self._sources: list[tuple[float, float, float]] = []
+        self._sources: list[tuple[float, float, float, float]] = []
         for _ in range(int(self.sources)):
             self._sources.append(self._new_source(0.0))
 
-    def _new_source(self, t: float) -> tuple[float, float, float]:
-        """Create a source at a random position with a random expiry.
+    def _new_source(self, t: float) -> tuple[float, float, float, float]:
+        """Create a source at a random position with birth and expiry times.
 
         Args:
             t: Current time in seconds.
 
         Returns:
-            Tuple of (x, y, expiry_time).
+            Tuple of (x, y, birth_time, expiry_time).
         """
         w: int = int(self.width)
         h: int = int(self.height)
         x: float = random.uniform(-SPAWN_MARGIN, w - 1 + SPAWN_MARGIN)
         y: float = random.uniform(-SPAWN_MARGIN, h - 1 + SPAWN_MARGIN)
-        expiry: float = t + random.uniform(MIN_LIFETIME, MAX_LIFETIME)
-        return (x, y, expiry)
+        lifetime: float = random.uniform(MIN_LIFETIME, MAX_LIFETIME)
+        return (x, y, t, t + lifetime)
 
     def render(self, t: float, zone_count: int) -> list[HSBK]:
         """Produce one frame of interfering ripples.
@@ -141,24 +141,33 @@ class Ripple2D(Effect):
 
         # Respawn expired sources.
         for i in range(len(self._sources)):
-            if t >= self._sources[i][2]:
+            if t >= self._sources[i][3]:
                 self._sources[i] = self._new_source(t)
+
+        # Pre-compute per-source cosine envelope (birth→expiry maps to 1→0).
+        envelopes: list[float] = []
+        half_pi: float = math.pi * 0.5
+        for _, _, birth, expiry in self._sources:
+            lifetime: float = expiry - birth
+            age: float = t - birth
+            # cos(0)=1 at birth, cos(pi/2)=0 at expiry.
+            envelopes.append(math.cos(half_pi * age / lifetime))
 
         colors: list[HSBK] = [BLACK] * total
 
         for row in range(h):
             for col in range(w):
-                # Sum waves from all sources.
+                # Sum envelope-weighted waves from all sources.
                 wave_sum: float = 0.0
                 min_dist: float = 1e9
-                for sx, sy, _ in self._sources:
+                for i, (sx, sy, _, _) in enumerate(self._sources):
                     dx: float = col - sx
                     dy: float = row - sy
                     dist: float = math.sqrt(dx * dx + dy * dy)
                     if dist < min_dist:
                         min_dist = dist
-                    # Raw sine in [-1, +1].
-                    wave_sum += math.sin(k * dist - spd * t)
+                    # Raw sine in [-1, +1], scaled by cosine envelope.
+                    wave_sum += math.sin(k * dist - spd * t) * envelopes[i]
 
                 # abs(sum/n): zero-crossings → black, both peaks → bright.
                 # Cube for non-linear contrast — crushes lows, punches highs.
