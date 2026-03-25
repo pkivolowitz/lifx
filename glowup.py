@@ -1761,29 +1761,18 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                             y0_l: int = max(0, int(cap_h - (frac_hi * peri_total - 2 * cap_w - cap_h)))
                             left_line[y0_l:y1_l, :] = frgb
 
-                    # Extend strips to overlap into corner regions.
-                    # Top/bottom become (BORDER_PX, cap_w + 2*BORDER_PX)
-                    # Left/right become (cap_h + 2*BORDER_PX, BORDER_PX)
-                    # Zone colors fill the middle; black padding at ends
-                    # lets the cross-blur fade naturally into corners.
-                    # Additive blit of overlapping strips handles corners
-                    # with no separate corner code — no seams.
-                    _ext_w: int = cap_w + 2 * BORDER_PX
-                    _ext_h: int = cap_h + 2 * BORDER_PX
+                    # Replicate to strips (no corner extension needed).
+                    top_strip: np.ndarray = np.zeros((BORDER_PX, cap_w, 3), dtype=np.float32)
+                    top_strip[BORDER_PX - _inner_depth:, :, :] = top_line[np.newaxis, :, :]
 
-                    top_strip: np.ndarray = np.zeros((_ext_w, 3), dtype=np.float32)
-                    top_strip[BORDER_PX:BORDER_PX + cap_w, :] = top_line
-                    top_strip = np.zeros((BORDER_PX, _ext_w, 3), dtype=np.float32)
-                    top_strip[BORDER_PX - _inner_depth:, BORDER_PX:BORDER_PX + cap_w, :] = top_line[np.newaxis, :, :]
+                    bot_strip: np.ndarray = np.zeros((BORDER_PX, cap_w, 3), dtype=np.float32)
+                    bot_strip[:_inner_depth, :, :] = bot_line[np.newaxis, :, :]
 
-                    bot_strip: np.ndarray = np.zeros((BORDER_PX, _ext_w, 3), dtype=np.float32)
-                    bot_strip[:_inner_depth, BORDER_PX:BORDER_PX + cap_w, :] = bot_line[np.newaxis, :, :]
+                    left_strip: np.ndarray = np.zeros((cap_h, BORDER_PX, 3), dtype=np.float32)
+                    left_strip[:, BORDER_PX - _inner_depth:, :] = left_line[:, np.newaxis, :]
 
-                    left_strip: np.ndarray = np.zeros((_ext_h, BORDER_PX, 3), dtype=np.float32)
-                    left_strip[BORDER_PX:BORDER_PX + cap_h, BORDER_PX - _inner_depth:, :] = left_line[:, np.newaxis, :]
-
-                    right_strip: np.ndarray = np.zeros((_ext_h, BORDER_PX, 3), dtype=np.float32)
-                    right_strip[BORDER_PX:BORDER_PX + cap_h, :_inner_depth, :] = right_line[:, np.newaxis, :]
+                    right_strip: np.ndarray = np.zeros((cap_h, BORDER_PX, 3), dtype=np.float32)
+                    right_strip[:, :_inner_depth, :] = right_line[:, np.newaxis, :]
 
                     # Pass 1 — outward blur (perpendicular to TV edge).
                     top_strip = gaussian_filter1d(top_strip, sigma=_blur_sigma, axis=0)
@@ -1792,51 +1781,98 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                     right_strip = gaussian_filter1d(right_strip, sigma=_blur_sigma, axis=1)
 
                     # Pass 2 — cross blur (parallel to TV edge).
-                    # This softens zone seams AND bleeds color into the
-                    # corner padding regions naturally.
                     top_strip = gaussian_filter1d(top_strip, sigma=_blur_sigma, axis=1)
                     bot_strip = gaussian_filter1d(bot_strip, sigma=_blur_sigma, axis=1)
                     left_strip = gaussian_filter1d(left_strip, sigma=_blur_sigma, axis=0)
                     right_strip = gaussian_filter1d(right_strip, sigma=_blur_sigma, axis=0)
 
-                    # Blit with additive blending.  Strips overlap in the
-                    # corner regions — BLEND_ADD combines them seamlessly.
+                    # Blit edge strips with additive blending.
                     def _blit_add(arr: np.ndarray, x: int, y: int) -> None:
                         s: pygame.Surface = pygame.surfarray.make_surface(
                             arr.clip(0, 255).astype(np.uint8).swapaxes(0, 1),
                         )
                         pg_screen.blit(s, (x, y), special_flags=pygame.BLEND_ADD)
 
-                    _blit_add(top_strip, 0, 0)
-                    _blit_add(bot_strip, 0, BORDER_PX + cap_h)
-                    _blit_add(left_strip, 0, 0)
-                    _blit_add(right_strip, BORDER_PX + cap_w, 0)
+                    _blit_add(top_strip, BORDER_PX, 0)
+                    _blit_add(bot_strip, BORDER_PX, BORDER_PX + cap_h)
+                    _blit_add(left_strip, 0, BORDER_PX)
+                    _blit_add(right_strip, BORDER_PX + cap_w, BORDER_PX)
 
-                    # Final pass: read back each corner region from the
-                    # composited surface, heavy 2D blur, write back.
-                    # Destroys any remaining seam artifacts where strips
-                    # overlap.
-                    from scipy.ndimage import gaussian_filter
-                    _corner_sigma: float = _blur_sigma * 1.5
-                    room_w: int = cap_w + 2 * BORDER_PX
-                    room_h: int = cap_h + 2 * BORDER_PX
-                    corner_rects: list[tuple[int, int, int, int]] = [
-                        (0, 0, BORDER_PX, BORDER_PX),                          # TL
-                        (room_w - BORDER_PX, 0, BORDER_PX, BORDER_PX),         # TR
-                        (room_w - BORDER_PX, room_h - BORDER_PX, BORDER_PX, BORDER_PX),  # BR
-                        (0, room_h - BORDER_PX, BORDER_PX, BORDER_PX),         # BL
+                    # Corner fans: at each corner, sweep 90° from one
+                    # edge to the other with thin filled triangles.  The
+                    # apex is the TV corner; the base spans the outer
+                    # border arc.  Color interpolates between the two
+                    # adjacent edge zone colors via oklab.
+                    _FAN_SLICES: int = 32
+                    _fan_radius: float = float(BORDER_PX)
+                    # Corner definitions: (apex_x, apex_y, start_angle,
+                    # edge_before_index, edge_after_index).
+                    # Angles: 0=right, pi/2=down, pi=left, 3pi/2=up.
+                    # Each corner sweeps 90° CCW from start_angle.
+                    corner_peri: list[float] = [
+                        0.0,
+                        float(cap_w),
+                        float(cap_w + cap_h),
+                        float(2 * cap_w + cap_h),
                     ]
-                    for cx, cy, cw, ch in corner_rects:
-                        # surfarray gives (W, H, 3) so read, blur, write.
-                        region: pygame.Surface = pg_screen.subsurface(
-                            pygame.Rect(cx, cy, cw, ch),
-                        ).copy()
-                        arr: np.ndarray = pygame.surfarray.array3d(region).astype(np.float32)
-                        arr = gaussian_filter(arr, sigma=(_corner_sigma, _corner_sigma, 0))
-                        blurred_surf: pygame.Surface = pygame.surfarray.make_surface(
-                            arr.clip(0, 255).astype(np.uint8),
+                    tv_x: int = BORDER_PX
+                    tv_y: int = BORDER_PX
+                    corner_defs: list[tuple[int, int, float, float]] = [
+                        # TL: apex at TV top-left, sweep from left (pi) to up (3pi/2)
+                        (tv_x, tv_y, math.pi, 3 * math.pi / 2),
+                        # TR: apex at TV top-right, sweep from up (3pi/2) to right (2pi)
+                        (tv_x + cap_w, tv_y, 3 * math.pi / 2, 2 * math.pi),
+                        # BR: apex at TV bottom-right, sweep from right (0) to down (pi/2)
+                        (tv_x + cap_w, tv_y + cap_h, 0.0, math.pi / 2),
+                        # BL: apex at TV bottom-left, sweep from down (pi/2) to left (pi)
+                        (tv_x, tv_y + cap_h, math.pi / 2, math.pi),
+                    ]
+                    for ci in range(4):
+                        frac_c: float = corner_peri[ci] / peri_total
+                        iz_after: int = int(frac_c * n_z) % n_z
+                        iz_before: int = (iz_after - 1) % n_z
+                        rgb_a: tuple[int, int, int] = hsb_to_rgb(
+                            edge_colors[iz_before], d_sat,
+                            processed_bri[iz_before] if iz_before < len(processed_bri) else 0.0,
                         )
-                        pg_screen.blit(blurred_surf, (cx, cy))
+                        rgb_b: tuple[int, int, int] = hsb_to_rgb(
+                            edge_colors[iz_after], d_sat,
+                            processed_bri[iz_after] if iz_after < len(processed_bri) else 0.0,
+                        )
+                        # Oklab endpoints for interpolation.
+                        L1, a1, b1 = srgb_to_oklab(rgb_a[0] / 255.0, rgb_a[1] / 255.0, rgb_a[2] / 255.0)
+                        L2, a2, b2 = srgb_to_oklab(rgb_b[0] / 255.0, rgb_b[1] / 255.0, rgb_b[2] / 255.0)
+
+                        ax, ay, ang0, ang1 = corner_defs[ci]
+                        for si in range(_FAN_SLICES):
+                            t0: float = si / _FAN_SLICES
+                            t1: float = (si + 1) / _FAN_SLICES
+                            t_mid: float = (t0 + t1) * 0.5
+                            # Oklab lerp at midpoint.
+                            Lm: float = L1 + (L2 - L1) * t_mid
+                            am: float = a1 + (a2 - a1) * t_mid
+                            bm: float = b1 + (b2 - b1) * t_mid
+                            rm, gm, bmm = oklab_to_srgb(Lm, am, bm)
+                            tri_color: tuple[int, int, int] = (
+                                max(0, min(255, int(rm * 255))),
+                                max(0, min(255, int(gm * 255))),
+                                max(0, min(255, int(bmm * 255))),
+                            )
+                            # Triangle vertices: apex + two arc points.
+                            a0: float = ang0 + (ang1 - ang0) * t0
+                            a1_a: float = ang0 + (ang1 - ang0) * t1
+                            p0: tuple[float, float] = (
+                                ax + math.cos(a0) * _fan_radius,
+                                ay + math.sin(a0) * _fan_radius,
+                            )
+                            p1: tuple[float, float] = (
+                                ax + math.cos(a1_a) * _fan_radius,
+                                ay + math.sin(a1_a) * _fan_radius,
+                            )
+                            pygame.draw.polygon(
+                                pg_screen, tri_color,
+                                [(ax, ay), p0, p1],
+                            )
 
             # Composite the live video frame as the "TV".
             frame_arr: np.ndarray = np.frombuffer(
