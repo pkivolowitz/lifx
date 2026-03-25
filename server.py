@@ -3070,11 +3070,53 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 active_entry: Optional[str] = self._get_active_entry_for_ip(ip)
                 self.device_manager.mark_override(ip, active_entry)
 
+            # If this is a group without a virtual emitter (members were
+            # unreachable at startup), fall back to direct per-member
+            # power commands using the group config.
+            em: Optional[Emitter] = self.device_manager.get_emitter(ip)
+            if em is None and _is_group_id(ip):
+                group_name: str = _group_name_from_id(ip)
+                member_ips: list[str] = (
+                    self.device_manager._group_config.get(group_name, [])
+                )
+                if not member_ips:
+                    self._send_json(404, {"error": "Group not found"})
+                    return
+                succeeded: int = 0
+                for mip in member_ips:
+                    try:
+                        dev: LifxDevice = LifxDevice(mip)
+                        try:
+                            if on:
+                                dev.set_power(True, duration_ms=DEFAULT_FADE_MS)
+                            else:
+                                dev.set_power(False, duration_ms=DEFAULT_FADE_MS)
+                            self.device_manager._power_states[mip] = on
+                            succeeded += 1
+                        finally:
+                            dev.close()
+                    except Exception as exc:
+                        logging.warning(
+                            "API: power %s failed for group member %s: %s",
+                            "on" if on else "off", mip, exc,
+                        )
+                self.device_manager._power_states[ip] = on
+                logging.info(
+                    "API: power %s on group %s (%d/%d members)",
+                    "on" if on else "off", group_name,
+                    succeeded, len(member_ips),
+                )
+                self._send_json(200, {
+                    "ip": ip, "power": "on" if on else "off",
+                    "members_reached": succeeded,
+                    "members_total": len(member_ips),
+                })
+                return
+
             result: dict[str, Any] = self.device_manager.set_power(ip, on)
             # Track power state for device list API response.
             # For groups, propagate to all member devices.
             self.device_manager._power_states[ip] = on
-            em: Optional[Emitter] = self.device_manager.get_emitter(ip)
             if em is not None and isinstance(em, VirtualMultizoneEmitter):
                 for member in em.get_emitter_list():
                     self.device_manager._power_states[member.emitter_id] = on
