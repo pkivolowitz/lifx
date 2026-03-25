@@ -22,6 +22,9 @@ struct DeviceDetailView: View {
     /// Current effect engine status.
     @State private var status: DeviceStatus?
 
+    /// Power state derived from the device's server-reported field.
+    @State private var isPoweredOn: Bool = true
+
     /// Error message for display.
     @State private var errorMessage: String?
 
@@ -188,7 +191,11 @@ struct DeviceDetailView: View {
                 Button {
                     Task { await togglePower() }
                 } label: {
-                    Label("Power Off", systemImage: "power")
+                    Label(
+                        isPoweredOn ? "Power Off" : "Power On",
+                        systemImage: isPoweredOn
+                            ? "lightbulb.fill" : "lightbulb.slash"
+                    )
                 }
 
                 // Deep reset — clears stale zone colors from device firmware.
@@ -204,6 +211,8 @@ struct DeviceDetailView: View {
         .navigationTitle(device.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            // Initialise power state from the device snapshot.
+            isPoweredOn = device.power ?? true
             // Fetch status first, then start SSE only if an effect is running.
             await refreshStatus()
             if status?.running == true {
@@ -300,11 +309,12 @@ struct DeviceDetailView: View {
         isLoading = false
     }
 
-    /// Toggle device power off.
+    /// Toggle device power on or off.
     private func togglePower() async {
+        let newState = !isPoweredOn
         do {
-            try await apiClient.setPower(deviceId: device.deviceId, on: false)
-            // Refresh status after power change.
+            try await apiClient.setPower(deviceId: device.deviceId, on: newState)
+            isPoweredOn = newState
             await refreshStatus()
         } catch {
             errorMessage = error.localizedDescription

@@ -183,6 +183,21 @@ class APIClient: ObservableObject {
         )
     }
 
+    /// Set brightness on a device or group (dimmer control).
+    ///
+    /// - Parameters:
+    ///   - deviceId: Device identifier (label, MAC, or IP).
+    ///   - brightness: Brightness percentage (0–100).
+    /// - Throws: ``APIError`` on failure.
+    func setBrightness(deviceId: String, brightness: Int) async throws {
+        struct BrightnessBody: Codable { let brightness: Int }
+        let encoded = urlEncodeDeviceId(deviceId)
+        let _: [String: AnyCodableValue] = try await post(
+            "/api/devices/\(encoded)/brightness",
+            body: BrightnessBody(brightness: brightness)
+        )
+    }
+
     /// Pulse a device's brightness to visually locate it.
     ///
     /// The server pulses the device for ~10 seconds in the background.

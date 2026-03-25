@@ -76,7 +76,7 @@ struct EffectPickerView: View {
         .overlay {
             if isLoading {
                 ProgressView("Loading effects...")
-            } else if visibleEffects.isEmpty {
+            } else if matchingEffects.isEmpty && otherEffects.isEmpty {
                 ContentUnavailableView(
                     "No Effects",
                     systemImage: "sparkles",

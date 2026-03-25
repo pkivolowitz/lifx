@@ -31,7 +31,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             if apiClient.isAuthenticated {
-                HubView(apiClient: apiClient)
+                LightsView()
             } else {
                 LoginView()
             }

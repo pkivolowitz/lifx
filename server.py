@@ -328,6 +328,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_post_stop", device_param="id"),
     _Route("POST", ("api", "devices", "{id}", "power"),
            "_handle_post_power", device_param="id"),
+    _Route("POST", ("api", "devices", "{id}", "brightness"),
+           "_handle_post_brightness", device_param="id"),
     _Route("POST", ("api", "devices", "{id}", "identify"),
            "_handle_post_identify", device_param="id"),
     _Route("POST", ("api", "devices", "{id}", "resume"),
@@ -374,6 +376,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_post_command_identify"),
     _Route("POST", ("api", "server", "power-off-all"),
            "_handle_post_server_power_off_all"),
+    _Route("POST", ("api", "server", "rediscover"),
+           "_handle_post_server_rediscover"),
 
     # -- DELETE --------------------------------------------------------------
     _Route("DELETE", ("api", "registry", "device", "{mac}"),
@@ -1038,6 +1042,45 @@ class DeviceManager:
         else:
             em.power_off(duration_ms=DEFAULT_FADE_MS)
         return {"ip": ip, "power": "on" if on else "off"}
+
+    def set_brightness(self, ip: str, brightness: int) -> dict[str, Any]:
+        """Set brightness on a device or group without changing colour.
+
+        Brightness is specified as a percentage (0–100) and mapped to
+        the LIFX HSBK brightness range (0–65535).  For groups the
+        command fans out to every member.
+
+        Args:
+            ip: Device IP address or group identifier.
+            brightness: Brightness percentage (0–100).
+
+        Returns:
+            A dict confirming the action.
+
+        Raises:
+            KeyError: If the device IP is not configured.
+        """
+        em: Optional[Emitter] = self.get_emitter(ip)
+        if em is None:
+            raise KeyError(f"Unknown device: {ip}")
+
+        # Map 0–100 → 0–65535.
+        bri: int = int(HSBK_MAX * max(0, min(100, brightness)) / 100)
+
+        if isinstance(em, VirtualMultizoneEmitter):
+            for member in em.get_emitter_list():
+                if hasattr(member, '_device') and member._device is not None:
+                    member._device.set_color(
+                        0, 0, bri, KELVIN_DEFAULT,
+                        duration_ms=DEFAULT_FADE_MS,
+                    )
+        elif hasattr(em, '_device') and em._device is not None:
+            em._device.set_color(
+                0, 0, bri, KELVIN_DEFAULT,
+                duration_ms=DEFAULT_FADE_MS,
+            )
+
+        return {"ip": ip, "brightness": brightness}
 
     def reset(self, ip: str) -> dict[str, Any]:
         """Deep-reset a device: stop effects, clear firmware state, blank zones.
@@ -3182,6 +3225,42 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         except KeyError:
             self._send_json(404, {"error": "Device not found"})
 
+    def _handle_post_brightness(self, ip: str) -> None:
+        """POST /api/devices/{ip}/brightness — set brightness (dimmer).
+
+        Request body::
+
+            {"brightness": 75}
+
+        Brightness is an integer percentage (0–100).  Sets warm white
+        at the given brightness.  For groups, fans out to every member.
+        """
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        brightness: Any = body.get("brightness")
+        if not isinstance(brightness, (int, float)):
+            self._send_json(
+                400, {"error": "'brightness' must be a number (0-100)"},
+            )
+            return
+        brightness = int(brightness)
+        if not (0 <= brightness <= 100):
+            self._send_json(
+                400, {"error": "'brightness' must be between 0 and 100"},
+            )
+            return
+
+        try:
+            result: dict[str, Any] = (
+                self.device_manager.set_brightness(ip, brightness)
+            )
+            logging.info("API: brightness %d%% on %s", brightness, ip)
+            self._send_json(200, result)
+        except KeyError:
+            self._send_json(404, {"error": "Device not found"})
+
     def _handle_post_identify(self, ip: str) -> None:
         """POST /api/devices/{ip}/identify — pulse brightness to locate device.
 
@@ -4171,6 +4250,63 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                     ip, exc,
                 )
         self._send_json(200, {"devices_off": off_count})
+
+    def _handle_post_server_rediscover(self) -> None:
+        """POST /api/server/rediscover — re-resolve groups and reload devices.
+
+        Re-runs the label/MAC → IP resolution, rebuilds virtual group
+        emitters, and probes all devices.  Equivalent to the startup
+        sequence (steps 4–5) but without restarting the server.
+
+        Use this after powering on new bulbs, adding devices to
+        groups, or changing the device registry.
+        """
+        config: dict[str, Any] = self.server.config
+        keepalive = self.keepalive
+        device_reg: DeviceRegistry = self.registry
+        dm: DeviceManager = self.device_manager
+
+        # Re-resolve groups from config (picks up any API changes).
+        raw_groups: dict[str, list[str]] = _get_groups(config)
+        resolved_groups: dict[str, list[str]]
+        device_ips: list[str]
+        unresolved: list[tuple[str, str]]
+        resolved_groups, device_ips, unresolved = (
+            _resolve_config_groups(raw_groups, device_reg, keepalive)
+        )
+
+        for group_name, ident in unresolved:
+            logging.warning(
+                "Rediscover: group '%s' cannot resolve '%s'",
+                group_name, ident,
+            )
+
+        # Auto-load registered devices not in any group.
+        group_ip_set: set[str] = set(device_ips)
+        mac_to_ip: dict[str, str] = keepalive.known_bulbs_by_mac
+        for mac in device_reg.all_devices():
+            ip: Optional[str] = mac_to_ip.get(mac)
+            if ip is not None and ip not in group_ip_set:
+                device_ips.append(ip)
+                group_ip_set.add(ip)
+
+        device_ips.sort()
+
+        # Reload devices with the fresh resolution.
+        dm._device_ips = device_ips
+        dm._group_config = resolved_groups
+        devices: list[dict[str, Any]] = dm.load_devices()
+        dm.query_all_power_states()
+
+        logging.info(
+            "API: rediscover — %d devices, %d groups, %d unresolved",
+            len(devices), len(resolved_groups), len(unresolved),
+        )
+        self._send_json(200, {
+            "devices": len(devices),
+            "groups": len(resolved_groups),
+            "unresolved": len(unresolved),
+        })
 
     # -- Registry handlers ---------------------------------------------------
 
