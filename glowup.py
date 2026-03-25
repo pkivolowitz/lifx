@@ -1857,6 +1857,12 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                             csq[:half, :half, :] = c_rgb
                         else:
                             csq[:half, half:, :] = c_rgb
+                        # Two 1D blurs at the seams before the 2D blur:
+                        # vertical to blend with the horizontal neighbor
+                        # (top/bottom strip), horizontal to blend with the
+                        # vertical neighbor (left/right strip).
+                        csq = gaussian_filter1d(csq, sigma=_blur_sigma, axis=0)
+                        csq = gaussian_filter1d(csq, sigma=_blur_sigma, axis=1)
                         csq = gaussian_filter(csq, sigma=(_blur_sigma, _blur_sigma, 0))
                         _blit_add(csq, corner_xy[ci][0], corner_xy[ci][1])
 
