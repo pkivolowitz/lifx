@@ -352,9 +352,38 @@ struct HubView: View {
                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
             }
         }
+
+        Section {
+            Button {
+                Task { await rediscoverDevices() }
+            } label: {
+                Label("Rediscover Devices", systemImage: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(.primary)
+            }
+            .disabled(isLoading)
+        } footer: {
+            Text("Re-scan the network for new or changed devices without restarting the server.")
+        }
     }
 
     // MARK: - Data loading
+
+    /// Trigger a server-side device rediscovery.
+    private func rediscoverDevices() async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            let _: [String: AnyCodableValue] = try await apiClient.post(
+                "/api/server/rediscover",
+                body: EmptyBody()
+            )
+            // Reload local data with the refreshed device list.
+            await loadData()
+        } catch {
+            errorMessage = error.localizedDescription
+            isLoading = false
+        }
+    }
 
     /// Fetch devices, effects, and media sources from the server.
     private func loadData() async {

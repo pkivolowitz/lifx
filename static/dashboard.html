@@ -461,6 +461,7 @@
       <div><div class="stat-value" id="stat-playing">-</div><div class="stat-label">Playing</div></div>
       <div><div class="stat-value" id="stat-discovered" style="color: var(--green);">-</div><div class="stat-label">Found (ARP)</div></div>
       <div><div class="stat-value" id="stat-schedule">-</div><div class="stat-label">Schedule</div></div>
+      <div><button class="btn-power" style="padding: 8px 16px; font-size: 14px;" onclick="rediscover()">Rediscover</button></div>
     </div>
   </div>
 
@@ -919,6 +920,23 @@ function esc(s) {
 }
 
 // ---- Power toggle for devices and groups ----
+
+async function rediscover() {
+  try {
+    const resp = await fetch(BASE + '/api/server/rediscover', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN },
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      console.error('Rediscover failed:', err.error || resp.status);
+      return;
+    }
+    refresh();
+  } catch (e) {
+    console.error('Rediscover request failed:', e);
+  }
+}
 
 async function togglePower(deviceId, currentlyOn) {
   try {
