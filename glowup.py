@@ -1894,13 +1894,12 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                         # the corner fades to black like the edge strips.
                         c_arr: np.ndarray = pygame.surfarray.array3d(c_surf).astype(np.float32)
                         # c_arr is (W, H, 3) from surfarray.
-                        for px in range(csz):
-                            for py in range(csz):
-                                dx: float = px - lx
-                                dy: float = py - ly
-                                dist: float = math.sqrt(dx * dx + dy * dy)
-                                falloff: float = math.exp(-0.5 * (dist / _blur_sigma) ** 2)
-                                c_arr[px, py, :] *= falloff
+                        # Vectorized distance field from the apex.
+                        _xs: np.ndarray = np.arange(csz, dtype=np.float32) - lx
+                        _ys: np.ndarray = np.arange(csz, dtype=np.float32) - ly
+                        _dist2: np.ndarray = _xs[:, np.newaxis] ** 2 + _ys[np.newaxis, :] ** 2
+                        _falloff: np.ndarray = np.exp(-0.5 * _dist2 / (_blur_sigma ** 2))
+                        c_arr *= _falloff[:, :, np.newaxis]
                         c_blurred: pygame.Surface = pygame.surfarray.make_surface(
                             c_arr.clip(0, 255).astype(np.uint8),
                         )
