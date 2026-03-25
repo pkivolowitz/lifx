@@ -96,7 +96,7 @@ from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
 from media import MediaManager, SignalBus
 from media.source import AudioStreamServer
 from solar import SunTimes, sun_times
-from transport import LifxDevice, SendMode, SOCKET_TIMEOUT
+from transport import LifxDevice, SendMode, SOCKET_TIMEOUT, SINGLE_ZONE_COUNT
 
 # Optional distributed compute subsystem.
 try:
@@ -634,16 +634,35 @@ class DeviceManager:
         new_map: dict[str, LifxDevice] = {}
 
         def _probe_device(ip: str) -> tuple[str, Optional[LifxDevice]]:
-            """Query a single device.  Returns (ip, device) or (ip, None)."""
+            """Query a single device.  Returns (ip, device) or (ip, None).
+
+            Some bulbs accept fire-and-forget commands but never respond
+            to query packets.  This appears to be Orbi mesh router
+            filtering — bulbs on certain satellites don't forward unicast
+            UDP replies back to the Pi.  The bulbs work fine for effects
+            and power commands (fire-and-forget), they just can't answer
+            queries.
+
+            When query_all fails, we keep the device with safe defaults
+            (single zone, unknown product) so it participates in groups
+            and accepts commands.  The config says the device exists;
+            we trust the config.
+            """
             try:
                 dev: LifxDevice = LifxDevice(ip)
                 dev.query_all()
                 if dev.product is not None:
                     return (ip, dev)
+                # Query failed but the device is in the config.
+                # Keep it with defaults — it can still accept commands.
+                dev.product_name = "LIFX (query-silent)"
+                dev.zone_count = SINGLE_ZONE_COUNT
                 logging.warning(
-                    "Device %s responded but returned no product info", ip,
+                    "Device %s did not answer queries — loaded with "
+                    "defaults (1 zone, commands only)",
+                    ip,
                 )
-                dev.close()
+                return (ip, dev)
             except Exception as exc:
                 logging.warning("Device %s unreachable: %s", ip, exc)
             return (ip, None)
