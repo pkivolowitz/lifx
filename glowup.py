@@ -1719,16 +1719,17 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                     peri_total: int = 2 * (cap_w + cap_h)
                     d_sat: float = min(1.0, dominant_sat * 0.7)
 
-                    # Allocate four border strips as numpy arrays (black).
-                    top_strip: np.ndarray = np.zeros((BORDER_PX, cap_w, 3), dtype=np.float32)
-                    bot_strip: np.ndarray = np.zeros((BORDER_PX, cap_w, 3), dtype=np.float32)
-                    left_strip: np.ndarray = np.zeros((cap_h, BORDER_PX, 3), dtype=np.float32)
-                    right_strip: np.ndarray = np.zeros((cap_h, BORDER_PX, 3), dtype=np.float32)
-
-                    # Paint zone color rects onto the appropriate strip.
-                    # Rects are painted at the inner edge (closest to TV)
-                    # so the blur spreads them outward toward the wall.
+                    # Build 1-pixel-wide color lines for top/bottom
+                    # (horizontal, cap_w pixels) and left/right (vertical,
+                    # cap_h pixels).  Each zone paints its span into the
+                    # line.  Then replicate to _inner_depth and embed at
+                    # the inner edge of the border strip before blurring.
                     _inner_depth: int = max(4, BORDER_PX // 3)
+                    top_line: np.ndarray = np.zeros((cap_w, 3), dtype=np.float32)
+                    bot_line: np.ndarray = np.zeros((cap_w, 3), dtype=np.float32)
+                    left_line: np.ndarray = np.zeros((cap_h, 3), dtype=np.float32)
+                    right_line: np.ndarray = np.zeros((cap_h, 3), dtype=np.float32)
+
                     for iz in range(n_z):
                         h_z: float = edge_colors[iz]
                         b_z: float = processed_bri[iz] if iz < len(processed_bri) else 0.0
@@ -1741,28 +1742,38 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                         pos_mid: float = (pos_lo + frac_hi * peri_total) / 2.0
 
                         if pos_mid < cap_w:
-                            # Top edge.
                             x0: int = max(0, int(pos_lo))
                             x1: int = min(cap_w, int(frac_hi * peri_total))
-                            top_strip[BORDER_PX - _inner_depth:, x0:x1, :] = frgb
+                            top_line[x0:x1, :] = frgb
                         elif pos_mid < cap_w + cap_h:
-                            # Right edge.
                             local: float = pos_lo - cap_w
                             y0: int = max(0, int(local))
                             y1: int = min(cap_h, int(frac_hi * peri_total - cap_w))
-                            right_strip[y0:y1, :_inner_depth, :] = frgb
+                            right_line[y0:y1, :] = frgb
                         elif pos_mid < 2 * cap_w + cap_h:
-                            # Bottom edge.
                             local = pos_lo - cap_w - cap_h
                             x1_b: int = min(cap_w, int(cap_w - local))
                             x0_b: int = max(0, int(cap_w - (frac_hi * peri_total - cap_w - cap_h)))
-                            bot_strip[:_inner_depth, x0_b:x1_b, :] = frgb
+                            bot_line[x0_b:x1_b, :] = frgb
                         else:
-                            # Left edge.
                             local = pos_lo - 2 * cap_w - cap_h
                             y1_l: int = min(cap_h, int(cap_h - local))
                             y0_l: int = max(0, int(cap_h - (frac_hi * peri_total - 2 * cap_w - cap_h)))
-                            left_strip[y0_l:y1_l, BORDER_PX - _inner_depth:, :] = frgb
+                            left_line[y0_l:y1_l, :] = frgb
+
+                    # Replicate each 1-pixel line to _inner_depth rows/cols
+                    # and embed at the inner edge of a black border strip.
+                    top_strip: np.ndarray = np.zeros((BORDER_PX, cap_w, 3), dtype=np.float32)
+                    top_strip[BORDER_PX - _inner_depth:, :, :] = top_line[np.newaxis, :, :]
+
+                    bot_strip: np.ndarray = np.zeros((BORDER_PX, cap_w, 3), dtype=np.float32)
+                    bot_strip[:_inner_depth, :, :] = bot_line[np.newaxis, :, :]
+
+                    right_strip: np.ndarray = np.zeros((cap_h, BORDER_PX, 3), dtype=np.float32)
+                    right_strip[:, :_inner_depth, :] = right_line[:, np.newaxis, :]
+
+                    left_strip: np.ndarray = np.zeros((cap_h, BORDER_PX, 3), dtype=np.float32)
+                    left_strip[:, BORDER_PX - _inner_depth:, :] = left_line[:, np.newaxis, :]
 
                     # 1D blur: top/bottom vertical, left/right horizontal.
                     top_strip = gaussian_filter1d(top_strip, sigma=_blur_sigma, axis=0)
