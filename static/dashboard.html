@@ -847,7 +847,7 @@ async function refresh() {
         }
         const memberCount = (g.member_ips || []).length;
         const membersJson = JSON.stringify(g.member_ips || []).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
-        const gPowerOn = g.power !== false;
+        const gPowerOn = g.power === true;
         const gPowerBtn = `<button class="btn-power ${gPowerOn ? 'is-on' : 'is-off'}" onclick="togglePower('${esc(g.ip).replace(/'/g, "\\'")}', ${gPowerOn})">${gPowerOn ? 'ON' : 'OFF'}</button>`;
         return `
           <div class="group-row">

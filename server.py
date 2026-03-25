@@ -632,22 +632,40 @@ class DeviceManager:
             A list of JSON-serializable device info dicts.
         """
         new_map: dict[str, LifxDevice] = {}
-        for ip in self._device_ips:
+
+        def _probe_device(ip: str) -> tuple[str, Optional[LifxDevice]]:
+            """Query a single device.  Returns (ip, device) or (ip, None)."""
             try:
                 dev: LifxDevice = LifxDevice(ip)
                 dev.query_all()
                 if dev.product is not None:
-                    new_map[dev.ip] = dev
+                    return (ip, dev)
+                logging.warning(
+                    "Device %s responded but returned no product info", ip,
+                )
+                dev.close()
+            except Exception as exc:
+                logging.warning("Device %s unreachable: %s", ip, exc)
+            return (ip, None)
+
+        # Probe all devices in parallel — unreachable devices time out
+        # concurrently instead of serializing ~18s each.
+        with ThreadPoolExecutor(
+            max_workers=len(self._device_ips) or 1,
+        ) as pool:
+            futures = {
+                pool.submit(_probe_device, ip): ip
+                for ip in self._device_ips
+            }
+            for future in as_completed(futures):
+                ip, dev = future.result()
+                if dev is not None:
+                    new_map[ip] = dev
                     logging.info(
                         "  loaded %s — %s (%s) [%s zones]",
                         dev.label or "?", dev.product_name or "?",
                         dev.ip, dev.zone_count or "?",
                     )
-                else:
-                    logging.warning("Device %s responded but returned no product info", ip)
-                    dev.close()
-            except Exception as exc:
-                logging.warning("Device %s unreachable: %s", ip, exc)
 
         with self._lock:
             # Close sockets for devices no longer in the config.
@@ -4579,6 +4597,10 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            # Prevent browser caching so dashboard updates deploy instantly.
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
             self.end_headers()
             self.wfile.write(body)
         except FileNotFoundError:
