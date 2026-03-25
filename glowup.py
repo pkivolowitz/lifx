@@ -1812,6 +1812,32 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                     _blit_add(left_strip, 0, 0)
                     _blit_add(right_strip, BORDER_PX + cap_w, 0)
 
+                    # Final pass: read back each corner region from the
+                    # composited surface, heavy 2D blur, write back.
+                    # Destroys any remaining seam artifacts where strips
+                    # overlap.
+                    from scipy.ndimage import gaussian_filter
+                    _corner_sigma: float = _blur_sigma * 1.5
+                    room_w: int = cap_w + 2 * BORDER_PX
+                    room_h: int = cap_h + 2 * BORDER_PX
+                    corner_rects: list[tuple[int, int, int, int]] = [
+                        (0, 0, BORDER_PX, BORDER_PX),                          # TL
+                        (room_w - BORDER_PX, 0, BORDER_PX, BORDER_PX),         # TR
+                        (room_w - BORDER_PX, room_h - BORDER_PX, BORDER_PX, BORDER_PX),  # BR
+                        (0, room_h - BORDER_PX, BORDER_PX, BORDER_PX),         # BL
+                    ]
+                    for cx, cy, cw, ch in corner_rects:
+                        # surfarray gives (W, H, 3) so read, blur, write.
+                        region: pygame.Surface = pg_screen.subsurface(
+                            pygame.Rect(cx, cy, cw, ch),
+                        ).copy()
+                        arr: np.ndarray = pygame.surfarray.array3d(region).astype(np.float32)
+                        arr = gaussian_filter(arr, sigma=(_corner_sigma, _corner_sigma, 0))
+                        blurred_surf: pygame.Surface = pygame.surfarray.make_surface(
+                            arr.clip(0, 255).astype(np.uint8),
+                        )
+                        pg_screen.blit(blurred_surf, (cx, cy))
+
             # Composite the live video frame as the "TV".
             frame_arr: np.ndarray = np.frombuffer(
                 frame_bytes, dtype=np.uint8,
