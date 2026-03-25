@@ -332,6 +332,7 @@ struct HubView: View {
     }
 
     /// Navigation to sub-screens.
+    @ViewBuilder
     private var navigationSection: some View {
         Section {
             Button { showDevices = true } label: {
