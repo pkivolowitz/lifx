@@ -300,7 +300,6 @@ PRODUCT_MAP: dict[int, str] = {
     176: "Ceiling US", 177: "Ceiling Intl",
     185: "Candle Color US", 186: "Candle Colour Intl",
     201: "Ceiling US", 202: "Ceiling Intl",
-    205: "Indoor Neon US", 206: "Indoor Neon Intl",
     213: "Permanent Outdoor US", 214: "Permanent Outdoor Intl",
     215: "Candle Color US", 216: "Candle Colour Intl",
     217: "Tube US", 218: "Tube Intl",

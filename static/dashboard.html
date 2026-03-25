@@ -386,6 +386,20 @@
     margin-left: 8px;
   }
   .btn-edit:hover { background: var(--accent); color: #fff; }
+  /* Power toggle button — green when on, dim when off */
+  .btn-power {
+    background: var(--border);
+    color: var(--dim);
+    border: none;
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .btn-power:hover { background: var(--accent); color: #fff; }
+  .btn-power.is-on { background: var(--green); color: #000; }
+  .btn-power.is-off { background: var(--border); color: var(--dim); }
   .time-hint {
     font-size: 11px;
     color: var(--dim);
@@ -652,6 +666,7 @@ async function refresh() {
         label: gName,
         is_group: true,
         current_effect: rt ? rt.current_effect : null,
+        power: rt ? rt.power : undefined,
         zones: rt ? rt.zones : 0,
         member_ips: rt ? (rt.member_ips || []) : (Array.isArray(gMembers) ? gMembers : []),
       });
@@ -794,6 +809,8 @@ async function refresh() {
         const zoneMeta = d.is_matrix
           ? (d.width + '\u00d7' + d.height + ' matrix')
           : ((d.zones || 1) + ' zones');
+        const powerOn = d.power !== false;
+        const powerBtn = `<button class="btn-power ${powerOn ? 'is-on' : 'is-off'}" onclick="togglePower('${esc(d.ip).replace(/'/g, "\\'")}', ${powerOn})">${powerOn ? 'ON' : 'OFF'}</button>`;
         return `
           <div class="device-row">
             <div>
@@ -801,7 +818,10 @@ async function refresh() {
               ${effectLine}
               <div class="device-meta">${esc(d.product || '')} &middot; ${zoneMeta}</div>
             </div>
-            ${badge}
+            <div style="display:flex;align-items:center;gap:8px;">
+              ${powerBtn}
+              ${badge}
+            </div>
           </div>
         `;
       }).join('');
@@ -827,6 +847,8 @@ async function refresh() {
         }
         const memberCount = (g.member_ips || []).length;
         const membersJson = JSON.stringify(g.member_ips || []).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+        const gPowerOn = g.power !== false;
+        const gPowerBtn = `<button class="btn-power ${gPowerOn ? 'is-on' : 'is-off'}" onclick="togglePower('${esc(g.ip).replace(/'/g, "\\'")}', ${gPowerOn})">${gPowerOn ? 'ON' : 'OFF'}</button>`;
         return `
           <div class="group-row">
             <div>
@@ -835,6 +857,7 @@ async function refresh() {
               <div class="device-meta">${g.zones || 0} zones &middot; ${memberCount} devices</div>
             </div>
             <div class="group-actions">
+              ${gPowerBtn}
               <button class="btn-edit" onclick="openEditGroupModal('${esc(name).replace(/'/g, "\\'")}', JSON.parse(this.dataset.members))" data-members="${membersJson}">Edit</button>
               <button class="btn-delete" onclick="confirmDeleteGroup(this, '${esc(name).replace(/'/g, "\\'")}')">&times;</button>
             </div>
@@ -893,6 +916,29 @@ function esc(s) {
   const d = document.createElement('div');
   d.textContent = String(s);
   return d.innerHTML;
+}
+
+// ---- Power toggle for devices and groups ----
+
+async function togglePower(deviceId, currentlyOn) {
+  try {
+    const resp = await fetch(BASE + '/api/devices/' + encodeURIComponent(deviceId) + '/power', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + TOKEN,
+      },
+      body: JSON.stringify({ on: !currentlyOn }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      console.error('Power toggle failed:', err.error || resp.status);
+      return;
+    }
+    refresh();
+  } catch (e) {
+    console.error('Power toggle request failed:', e);
+  }
 }
 
 // ---- Schedule enable/disable toggle ----

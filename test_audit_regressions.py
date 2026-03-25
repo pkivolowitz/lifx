@@ -533,11 +533,11 @@ class TestInstallStopSignal(unittest.TestCase):
         sigint_calls: list[str] = re.findall(
             r"signal\.signal\(signal\.SIGINT", source,
         )
-        # Expected: 1 in _install_stop_signal + 1 in cmd_replay _shutdown = 2
+        # Expected: 1 in _install_stop_signal + 1 in cmd_replay + 1 in cmd_screen_replay = 3
         self.assertEqual(
-            len(sigint_calls), 2,
-            f"Expected exactly 2 signal.SIGINT installations "
-            f"(helper + replay), found {len(sigint_calls)}",
+            len(sigint_calls), 3,
+            f"Expected exactly 3 signal.SIGINT installations "
+            f"(helper + replay + screen-replay), found {len(sigint_calls)}",
         )
 
 
