@@ -1859,6 +1859,55 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
             )
             pg_screen.blit(tv_surf, (BORDER_PX, BORDER_PX))
 
+            # "SIMULATION" banner — bitmap font, no pygame.font needed.
+            if not hasattr(_play_screen_reactive, '_sim_surf'):
+                # 5×7 bitmap glyphs for needed characters.
+                _glyphs: dict[str, list[str]] = {
+                    'S': ['01110','10001','10000','01110','00001','10001','01110'],
+                    'I': ['11111','00100','00100','00100','00100','00100','11111'],
+                    'M': ['10001','11011','10101','10101','10001','10001','10001'],
+                    'U': ['10001','10001','10001','10001','10001','10001','01110'],
+                    'L': ['10000','10000','10000','10000','10000','10000','11111'],
+                    'A': ['01110','10001','10001','11111','10001','10001','10001'],
+                    'T': ['11111','00100','00100','00100','00100','00100','00100'],
+                    'O': ['01110','10001','10001','10001','10001','10001','01110'],
+                    'N': ['10001','11001','10101','10011','10001','10001','10001'],
+                }
+                _text: str = "SIMULATION"
+                _scale: int = max(2, min(8, cap_w // (len(_text) * 7)))
+                _gw: int = 5 * _scale
+                _gh: int = 7 * _scale
+                _gap: int = _scale
+                _tw: int = len(_text) * (_gw + _gap) - _gap
+                _th: int = _gh
+                _txt_arr: np.ndarray = np.zeros((_th, _tw, 4), dtype=np.uint8)
+                for ci_t, ch in enumerate(_text):
+                    glyph: list[str] = _glyphs.get(ch, _glyphs['S'])
+                    x_off: int = ci_t * (_gw + _gap)
+                    for gy in range(7):
+                        for gx in range(5):
+                            if glyph[gy][gx] == '1':
+                                _txt_arr[
+                                    gy * _scale:(gy + 1) * _scale,
+                                    x_off + gx * _scale:x_off + (gx + 1) * _scale,
+                                    :,
+                                ] = [255, 255, 255, 180]
+                # Build pygame surface with alpha.
+                _sim_surf: pygame.Surface = pygame.Surface((_tw, _th), pygame.SRCALPHA)
+                pygame.surfarray.blit_array(
+                    _sim_surf,
+                    _txt_arr[:, :, :3].swapaxes(0, 1),
+                )
+                # Apply alpha channel.
+                _alpha_arr: np.ndarray = _txt_arr[:, :, 3].swapaxes(0, 1)
+                pygame.surfarray.pixels_alpha(_sim_surf)[:] = _alpha_arr
+                _play_screen_reactive._sim_surf = _sim_surf
+
+            _ss: pygame.Surface = _play_screen_reactive._sim_surf
+            _sx: int = BORDER_PX + (cap_w - _ss.get_width()) // 2
+            _sy: int = BORDER_PX + (cap_h - _ss.get_height()) // 2
+            pg_screen.blit(_ss, (_sx, _sy))
+
             # FPS overlay.
             _fps_frame_count += 1
             _fps_now: float = time.time()
