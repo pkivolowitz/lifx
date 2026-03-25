@@ -1844,11 +1844,28 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                         L2, a2, b2 = srgb_to_oklab(rgb_b[0] / 255.0, rgb_b[1] / 255.0, rgb_b[2] / 255.0)
 
                         ax, ay, ang0, ang1 = corner_defs[ci]
+
+                        # Draw fan onto a local surface, then apply
+                        # radial Gaussian falloff and BLEND_ADD blit.
+                        csz: int = BORDER_PX
+                        c_surf: pygame.Surface = pygame.Surface((csz, csz))
+                        c_surf.fill((0, 0, 0))
+                        # Local apex relative to the corner surface.
+                        # ci: 0=TL(apex=bottom-right), 1=TR(apex=bottom-left),
+                        #     2=BR(apex=top-left), 3=BL(apex=top-right)
+                        if ci == 0:
+                            lx, ly = csz, csz
+                        elif ci == 1:
+                            lx, ly = 0, csz
+                        elif ci == 2:
+                            lx, ly = 0, 0
+                        else:
+                            lx, ly = csz, 0
+
                         for si in range(_FAN_SLICES):
                             t0: float = si / _FAN_SLICES
                             t1: float = (si + 1) / _FAN_SLICES
                             t_mid: float = (t0 + t1) * 0.5
-                            # Oklab lerp at midpoint.
                             Lm: float = L1 + (L2 - L1) * t_mid
                             am: float = a1 + (a2 - a1) * t_mid
                             bm: float = b1 + (b2 - b1) * t_mid
@@ -1858,21 +1875,46 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                                 max(0, min(255, int(gm * 255))),
                                 max(0, min(255, int(bmm * 255))),
                             )
-                            # Triangle vertices: apex + two arc points.
                             a0: float = ang0 + (ang1 - ang0) * t0
                             a1_a: float = ang0 + (ang1 - ang0) * t1
                             p0: tuple[float, float] = (
-                                ax + math.cos(a0) * _fan_radius,
-                                ay + math.sin(a0) * _fan_radius,
+                                lx + math.cos(a0) * _fan_radius,
+                                ly + math.sin(a0) * _fan_radius,
                             )
                             p1: tuple[float, float] = (
-                                ax + math.cos(a1_a) * _fan_radius,
-                                ay + math.sin(a1_a) * _fan_radius,
+                                lx + math.cos(a1_a) * _fan_radius,
+                                ly + math.sin(a1_a) * _fan_radius,
                             )
                             pygame.draw.polygon(
-                                pg_screen, tri_color,
-                                [(ax, ay), p0, p1],
+                                c_surf, tri_color,
+                                [(lx, ly), p0, p1],
                             )
+
+                        # Apply radial Gaussian falloff from the apex so
+                        # the corner fades to black like the edge strips.
+                        c_arr: np.ndarray = pygame.surfarray.array3d(c_surf).astype(np.float32)
+                        # c_arr is (W, H, 3) from surfarray.
+                        for px in range(csz):
+                            for py in range(csz):
+                                dx: float = px - lx
+                                dy: float = py - ly
+                                dist: float = math.sqrt(dx * dx + dy * dy)
+                                falloff: float = math.exp(-0.5 * (dist / _blur_sigma) ** 2)
+                                c_arr[px, py, :] *= falloff
+                        c_blurred: pygame.Surface = pygame.surfarray.make_surface(
+                            c_arr.clip(0, 255).astype(np.uint8),
+                        )
+                        # Position: corner of the room surface.
+                        corner_blit: list[tuple[int, int]] = [
+                            (0, 0),
+                            (BORDER_PX + cap_w, 0),
+                            (BORDER_PX + cap_w, BORDER_PX + cap_h),
+                            (0, BORDER_PX + cap_h),
+                        ]
+                        pg_screen.blit(
+                            c_blurred, corner_blit[ci],
+                            special_flags=pygame.BLEND_ADD,
+                        )
 
             # Composite the live video frame as the "TV".
             frame_arr: np.ndarray = np.frombuffer(
