@@ -25,7 +25,8 @@ from effects import Effect, MediaEffect, Param, HSBK, HSBK_MAX, KELVIN_DEFAULT
 # ---------------------------------------------------------------------------
 
 # Smoothing alpha for per-zone brightness (prevents flickering).
-ZONE_SMOOTH_ALPHA: float = 0.25
+# Lower = heavier temporal smoothing = less boil.
+ZONE_SMOOTH_ALPHA: float = 0.12
 
 # Minimum perceptible brightness change (prevents micro-flicker).
 MIN_BRIGHTNESS_DELTA: float = 0.005

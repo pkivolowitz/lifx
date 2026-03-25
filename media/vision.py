@@ -74,7 +74,8 @@ HUE_BINS: int = 36
 SMOOTH_ALPHA: float = 0.3
 
 # Separate heavier smoothing for edge colors to suppress stochastic boil.
-EDGE_SMOOTH_ALPHA: float = 0.15
+# Lower = heavier time weighting = less flicker.
+EDGE_SMOOTH_ALPHA: float = 0.07
 
 # Flash detection: brightness delta must exceed this threshold.
 FLASH_THRESHOLD: float = 0.3
