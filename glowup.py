@@ -1850,43 +1850,6 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                         # (row, col, 3) → surfarray needs (col, row, 3)
                         _blit_add(corner_arr, bx, by)
 
-            # Massive 2D blur over each corner region, extending
-            # well into the neighboring strips to smash seams.
-            from scipy.ndimage import gaussian_filter
-            _corner_blur_margin: int = BORDER_PX  # bleed into strips
-            _corner_sigma: float = BORDER_PX / 2.5
-            room_w: int = cap_w + 2 * BORDER_PX
-            room_h: int = cap_h + 2 * BORDER_PX
-            # Each corner: (x, y) of the region's top-left.
-            # Region is (BORDER_PX + margin) × (BORDER_PX + margin).
-            csz: int = BORDER_PX + _corner_blur_margin
-            corner_regions: list[tuple[int, int]] = [
-                (0, 0),                                    # TL
-                (room_w - csz, 0),                         # TR
-                (room_w - csz, room_h - csz),              # BR
-                (0, room_h - csz),                         # BL
-            ]
-            for crx, cry in corner_regions:
-                # Clamp to surface bounds.
-                cx0: int = max(0, crx)
-                cy0: int = max(0, cry)
-                cx1: int = min(room_w, crx + csz)
-                cy1: int = min(room_h, cry + csz)
-                cw: int = cx1 - cx0
-                ch: int = cy1 - cy0
-                if cw < 2 or ch < 2:
-                    continue
-                region: pygame.Surface = pg_screen.subsurface(
-                    pygame.Rect(cx0, cy0, cw, ch),
-                ).copy()
-                # surfarray gives (W, H, 3).
-                arr: np.ndarray = pygame.surfarray.array3d(region).astype(np.float32)
-                arr = gaussian_filter(arr, sigma=(_corner_sigma, _corner_sigma, 0))
-                blurred_surf: pygame.Surface = pygame.surfarray.make_surface(
-                    arr.clip(0, 255).astype(np.uint8),
-                )
-                pg_screen.blit(blurred_surf, (cx0, cy0))
-
             # Composite the live video frame as the "TV".
             frame_arr: np.ndarray = np.frombuffer(
                 frame_bytes, dtype=np.uint8,
