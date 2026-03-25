@@ -1834,21 +1834,46 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                         rm, gm, bm = oklab_to_srgb(
                             (L1 + L2) * 0.5, (a1 + a2) * 0.5, (b1 + b2) * 0.5,
                         )
-                        # Paint the inner quadrant of the corner square,
-                        # leave the outer portion black, then 2D blur so
-                        # the color bleeds outward like the edge strips.
+                        # Seed the corner square from the already-blurred
+                        # neighbor strips so the 1D seam passes have real
+                        # color data to blend with (not just black).
+                        #
+                        # ci: 0=TL, 1=TR, 2=BR, 3=BL
+                        # Each corner touches one horizontal strip (top or
+                        # bottom) and one vertical strip (left or right).
+                        # Copy the neighboring edge of each strip into the
+                        # corresponding edge of the corner square.
                         csq: np.ndarray = np.zeros(
                             (BORDER_PX, BORDER_PX, 3), dtype=np.float32,
                         )
+                        if ci == 0:
+                            # Top-left: bottom edge from top strip's left end,
+                            # right edge from left strip's top end.
+                            csq[-1, :, :] = top_strip[:, 0, :]    # bottom row ← top strip col 0
+                            csq[:, -1, :] = left_strip[0, :, :]   # right col ← left strip row 0
+                        elif ci == 1:
+                            # Top-right: bottom edge from top strip's right end,
+                            # left edge from right strip's top end.
+                            csq[-1, :, :] = top_strip[:, -1, :]   # bottom row ← top strip last col
+                            csq[:, 0, :] = right_strip[0, :, :]   # left col ← right strip row 0
+                        elif ci == 2:
+                            # Bottom-right: top edge from bottom strip's right end,
+                            # left edge from right strip's bottom end.
+                            csq[0, :, :] = bot_strip[:, -1, :]    # top row ← bot strip last col
+                            csq[:, 0, :] = right_strip[-1, :, :]  # left col ← right strip last row
+                        else:
+                            # Bottom-left: top edge from bottom strip's left end,
+                            # right edge from left strip's bottom end.
+                            csq[0, :, :] = bot_strip[:, 0, :]     # top row ← bot strip col 0
+                            csq[:, -1, :] = left_strip[-1, :, :]  # right col ← left strip last row
+
+                        # Fill the inner quadrant with the oklab midpoint.
                         c_rgb: list[float] = [
                             max(0.0, min(255.0, rm * 255.0)),
                             max(0.0, min(255.0, gm * 255.0)),
                             max(0.0, min(255.0, bm * 255.0)),
                         ]
-                        # Inner quadrant is the quarter closest to the TV.
                         half: int = BORDER_PX // 2
-                        # ci: 0=TL(inner=bottom-right), 1=TR(inner=bottom-left),
-                        #     2=BR(inner=top-left), 3=BL(inner=top-right)
                         if ci == 0:
                             csq[half:, half:, :] = c_rgb
                         elif ci == 1:
@@ -1857,10 +1882,8 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                             csq[:half, :half, :] = c_rgb
                         else:
                             csq[:half, half:, :] = c_rgb
-                        # Two 1D blurs at the seams before the 2D blur:
-                        # vertical to blend with the horizontal neighbor
-                        # (top/bottom strip), horizontal to blend with the
-                        # vertical neighbor (left/right strip).
+
+                        # 1D seam blurs then 2D finish.
                         csq = gaussian_filter1d(csq, sigma=_blur_sigma, axis=0)
                         csq = gaussian_filter1d(csq, sigma=_blur_sigma, axis=1)
                         csq = gaussian_filter(csq, sigma=(_blur_sigma, _blur_sigma, 0))
