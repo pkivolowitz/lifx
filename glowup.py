@@ -1709,68 +1709,78 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                             pygame.Rect(cx, cy, BORDER_PX, BORDER_PX),
                         )
                 else:
-                    # 1D edge convolution blur — sample video frame
-                    # edges and blur outward into the border.  Top/bottom
-                    # use vertical kernels, left/right use horizontal.
-                    # Much faster than the full 2D gaussian_filter.
+                    # 1D blur: paint zone color rects onto border strips,
+                    # then blur each strip along the perpendicular axis
+                    # (vertical for top/bottom, horizontal for left/right).
+                    # Additive blit onto room background so glow fades.
                     from scipy.ndimage import gaussian_filter1d
                     _blur_sigma: float = BORDER_PX / 3.0
-                    _kernel_depth: int = BORDER_PX
-                    fframe: np.ndarray = np.frombuffer(
-                        frame_bytes, dtype=np.uint8,
-                    ).reshape(cap_h, cap_w, 3).astype(np.float32)
+                    n_z: int = len(edge_colors)
+                    peri_total: int = 2 * (cap_w + cap_h)
+                    d_sat: float = min(1.0, dominant_sat * 0.7)
 
-                    # Top border: black pad above + top edge rows → blur vertically.
-                    top_src: np.ndarray = np.zeros(
-                        (BORDER_PX + _kernel_depth, cap_w, 3), dtype=np.float32,
-                    )
-                    top_src[BORDER_PX:, :, :] = fframe[:_kernel_depth, :, :]
-                    top_blurred: np.ndarray = gaussian_filter1d(
-                        top_src, sigma=_blur_sigma, axis=0,
-                    )[:BORDER_PX].clip(0, 255).astype(np.uint8)
-                    top_surf: pygame.Surface = pygame.surfarray.make_surface(
-                        top_blurred.swapaxes(0, 1),
-                    )
-                    pg_screen.blit(top_surf, (BORDER_PX, 0))
+                    # Allocate four border strips as numpy arrays (black).
+                    top_strip: np.ndarray = np.zeros((BORDER_PX, cap_w, 3), dtype=np.float32)
+                    bot_strip: np.ndarray = np.zeros((BORDER_PX, cap_w, 3), dtype=np.float32)
+                    left_strip: np.ndarray = np.zeros((cap_h, BORDER_PX, 3), dtype=np.float32)
+                    right_strip: np.ndarray = np.zeros((cap_h, BORDER_PX, 3), dtype=np.float32)
 
-                    # Bottom border: bottom edge rows + black pad below → blur vertically.
-                    bot_src: np.ndarray = np.zeros(
-                        (_kernel_depth + BORDER_PX, cap_w, 3), dtype=np.float32,
-                    )
-                    bot_src[:_kernel_depth, :, :] = fframe[-_kernel_depth:, :, :]
-                    bot_blurred: np.ndarray = gaussian_filter1d(
-                        bot_src, sigma=_blur_sigma, axis=0,
-                    )[_kernel_depth:].clip(0, 255).astype(np.uint8)
-                    bot_surf: pygame.Surface = pygame.surfarray.make_surface(
-                        bot_blurred.swapaxes(0, 1),
-                    )
-                    pg_screen.blit(bot_surf, (BORDER_PX, BORDER_PX + cap_h))
+                    # Paint zone color rects onto the appropriate strip.
+                    # Rects are painted at the inner edge (closest to TV)
+                    # so the blur spreads them outward toward the wall.
+                    _inner_depth: int = max(4, BORDER_PX // 3)
+                    for iz in range(n_z):
+                        h_z: float = edge_colors[iz]
+                        b_z: float = processed_bri[iz] if iz < len(processed_bri) else 0.0
+                        rgb: tuple[int, int, int] = hsb_to_rgb(h_z, d_sat, b_z)
+                        frgb: np.ndarray = np.array([rgb[0], rgb[1], rgb[2]], dtype=np.float32)
 
-                    # Left border: black pad left + left edge cols → blur horizontally.
-                    left_src: np.ndarray = np.zeros(
-                        (cap_h, BORDER_PX + _kernel_depth, 3), dtype=np.float32,
-                    )
-                    left_src[:, BORDER_PX:, :] = fframe[:, :_kernel_depth, :]
-                    left_blurred: np.ndarray = gaussian_filter1d(
-                        left_src, sigma=_blur_sigma, axis=1,
-                    )[:, :BORDER_PX].clip(0, 255).astype(np.uint8)
-                    left_surf: pygame.Surface = pygame.surfarray.make_surface(
-                        left_blurred.swapaxes(0, 1),
-                    )
-                    pg_screen.blit(left_surf, (0, BORDER_PX))
+                        frac_lo: float = iz / n_z
+                        frac_hi: float = (iz + 1) / n_z
+                        pos_lo: float = frac_lo * peri_total
+                        pos_mid: float = (pos_lo + frac_hi * peri_total) / 2.0
 
-                    # Right border: right edge cols + black pad right → blur horizontally.
-                    right_src: np.ndarray = np.zeros(
-                        (cap_h, _kernel_depth + BORDER_PX, 3), dtype=np.float32,
-                    )
-                    right_src[:, :_kernel_depth, :] = fframe[:, -_kernel_depth:, :]
-                    right_blurred: np.ndarray = gaussian_filter1d(
-                        right_src, sigma=_blur_sigma, axis=1,
-                    )[:, _kernel_depth:].clip(0, 255).astype(np.uint8)
-                    right_surf: pygame.Surface = pygame.surfarray.make_surface(
-                        right_blurred.swapaxes(0, 1),
-                    )
-                    pg_screen.blit(right_surf, (BORDER_PX + cap_w, BORDER_PX))
+                        if pos_mid < cap_w:
+                            # Top edge.
+                            x0: int = max(0, int(pos_lo))
+                            x1: int = min(cap_w, int(frac_hi * peri_total))
+                            top_strip[BORDER_PX - _inner_depth:, x0:x1, :] = frgb
+                        elif pos_mid < cap_w + cap_h:
+                            # Right edge.
+                            local: float = pos_lo - cap_w
+                            y0: int = max(0, int(local))
+                            y1: int = min(cap_h, int(frac_hi * peri_total - cap_w))
+                            right_strip[y0:y1, :_inner_depth, :] = frgb
+                        elif pos_mid < 2 * cap_w + cap_h:
+                            # Bottom edge.
+                            local = pos_lo - cap_w - cap_h
+                            x1_b: int = min(cap_w, int(cap_w - local))
+                            x0_b: int = max(0, int(cap_w - (frac_hi * peri_total - cap_w - cap_h)))
+                            bot_strip[:_inner_depth, x0_b:x1_b, :] = frgb
+                        else:
+                            # Left edge.
+                            local = pos_lo - 2 * cap_w - cap_h
+                            y1_l: int = min(cap_h, int(cap_h - local))
+                            y0_l: int = max(0, int(cap_h - (frac_hi * peri_total - 2 * cap_w - cap_h)))
+                            left_strip[y0_l:y1_l, BORDER_PX - _inner_depth:, :] = frgb
+
+                    # 1D blur: top/bottom vertical, left/right horizontal.
+                    top_strip = gaussian_filter1d(top_strip, sigma=_blur_sigma, axis=0)
+                    bot_strip = gaussian_filter1d(bot_strip, sigma=_blur_sigma, axis=0)
+                    left_strip = gaussian_filter1d(left_strip, sigma=_blur_sigma, axis=1)
+                    right_strip = gaussian_filter1d(right_strip, sigma=_blur_sigma, axis=1)
+
+                    # Blit with additive blending so glow fades into wall.
+                    def _blit_add(arr: np.ndarray, x: int, y: int) -> None:
+                        s: pygame.Surface = pygame.surfarray.make_surface(
+                            arr.clip(0, 255).astype(np.uint8).swapaxes(0, 1),
+                        )
+                        pg_screen.blit(s, (x, y), special_flags=pygame.BLEND_ADD)
+
+                    _blit_add(top_strip, BORDER_PX, 0)
+                    _blit_add(bot_strip, BORDER_PX, BORDER_PX + cap_h)
+                    _blit_add(left_strip, 0, BORDER_PX)
+                    _blit_add(right_strip, BORDER_PX + cap_w, BORDER_PX)
 
             # Composite the live video frame as the "TV".
             frame_arr: np.ndarray = np.frombuffer(
