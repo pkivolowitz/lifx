@@ -1890,15 +1890,19 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                                 [(lx, ly), p0, p1],
                             )
 
-                        # Apply radial Gaussian falloff from the apex so
-                        # the corner fades to black like the edge strips.
+                        # Axis-aligned falloff matching the strip blur
+                        # profiles.  At each seam, only the perpendicular
+                        # axis matters — take the max of the two 1D
+                        # Gaussians so each seam edge reproduces the
+                        # adjacent strip's brightness exactly.
                         c_arr: np.ndarray = pygame.surfarray.array3d(c_surf).astype(np.float32)
-                        # c_arr is (W, H, 3) from surfarray.
-                        # Vectorized distance field from the apex.
-                        _xs: np.ndarray = np.arange(csz, dtype=np.float32) - lx
-                        _ys: np.ndarray = np.arange(csz, dtype=np.float32) - ly
-                        _dist2: np.ndarray = _xs[:, np.newaxis] ** 2 + _ys[np.newaxis, :] ** 2
-                        _falloff: np.ndarray = np.exp(-0.5 * _dist2 / (_blur_sigma ** 2))
+                        _xs: np.ndarray = np.abs(np.arange(csz, dtype=np.float32) - lx)
+                        _ys: np.ndarray = np.abs(np.arange(csz, dtype=np.float32) - ly)
+                        _gx: np.ndarray = np.exp(-0.5 * (_xs / _blur_sigma) ** 2)
+                        _gy: np.ndarray = np.exp(-0.5 * (_ys / _blur_sigma) ** 2)
+                        _falloff: np.ndarray = np.maximum(
+                            _gx[:, np.newaxis], _gy[np.newaxis, :],
+                        )
                         c_arr *= _falloff[:, :, np.newaxis]
                         c_blurred: pygame.Surface = pygame.surfarray.make_surface(
                             c_arr.clip(0, 255).astype(np.uint8),
