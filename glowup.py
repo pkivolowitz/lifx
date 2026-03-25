@@ -1775,11 +1775,20 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                     left_strip: np.ndarray = np.zeros((cap_h, BORDER_PX, 3), dtype=np.float32)
                     left_strip[:, BORDER_PX - _inner_depth:, :] = left_line[:, np.newaxis, :]
 
-                    # 1D blur: top/bottom vertical, left/right horizontal.
+                    # Pass 1 — outward blur: spread color from inner
+                    # edge toward the wall (perpendicular to TV edge).
                     top_strip = gaussian_filter1d(top_strip, sigma=_blur_sigma, axis=0)
                     bot_strip = gaussian_filter1d(bot_strip, sigma=_blur_sigma, axis=0)
                     left_strip = gaussian_filter1d(left_strip, sigma=_blur_sigma, axis=1)
                     right_strip = gaussian_filter1d(right_strip, sigma=_blur_sigma, axis=1)
+
+                    # Pass 2 — cross blur: soften zone seams along the
+                    # TV edge (parallel to it).  Top/bottom get horizontal
+                    # blur, left/right get vertical blur.
+                    top_strip = gaussian_filter1d(top_strip, sigma=_blur_sigma, axis=1)
+                    bot_strip = gaussian_filter1d(bot_strip, sigma=_blur_sigma, axis=1)
+                    left_strip = gaussian_filter1d(left_strip, sigma=_blur_sigma, axis=0)
+                    right_strip = gaussian_filter1d(right_strip, sigma=_blur_sigma, axis=0)
 
                     # Blit with additive blending so glow fades into wall.
                     def _blit_add(arr: np.ndarray, x: int, y: int) -> None:
