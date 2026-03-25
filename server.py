@@ -1015,6 +1015,26 @@ class DeviceManager:
 
         if on:
             em.power_on(duration_ms=DEFAULT_FADE_MS)
+            # Restore full-brightness warm white after power-on.
+            # The blank-before-off logic writes black to all zones so
+            # the firmware doesn't flash stale effect colors on next
+            # power-on.  But that means powering on restores zero
+            # brightness — the bulb is electrically on but dark.
+            # Write a clean neutral state so the lights are visible.
+            if em.zone_count:
+                warm_white: list[HSBK] = [
+                    (0, 0, HSBK_MAX, KELVIN_DEFAULT)
+                ] * em.zone_count
+                if hasattr(em, 'is_matrix') and em.is_matrix:
+                    em.send_tile_zones(warm_white, duration_ms=DEFAULT_FADE_MS)
+                elif em.is_multizone:
+                    em.send_zones(warm_white, duration_ms=DEFAULT_FADE_MS,
+                                 mode=SendMode.GUARANTEED)
+                elif hasattr(em, '_device') and em._device is not None:
+                    em._device.set_color(
+                        0, 0, HSBK_MAX, KELVIN_DEFAULT,
+                        duration_ms=DEFAULT_FADE_MS,
+                    )
         else:
             em.power_off(duration_ms=DEFAULT_FADE_MS)
         return {"ip": ip, "power": "on" if on else "off"}
