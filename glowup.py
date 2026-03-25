@@ -1802,6 +1802,64 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                     _blit_add(left_strip, 0, BORDER_PX)
                     _blit_add(right_strip, BORDER_PX + cap_w, BORDER_PX)
 
+                    # Corners: oklab midpoint of two adjacent edge zones,
+                    # filled into a BORDER_PX square and 2D blurred.
+                    from scipy.ndimage import gaussian_filter
+                    corner_peri: list[float] = [
+                        0.0,                              # top-left
+                        float(cap_w),                     # top-right
+                        float(cap_w + cap_h),             # bottom-right
+                        float(2 * cap_w + cap_h),         # bottom-left
+                    ]
+                    corner_xy: list[tuple[int, int]] = [
+                        (0, 0),
+                        (BORDER_PX + cap_w, 0),
+                        (BORDER_PX + cap_w, BORDER_PX + cap_h),
+                        (0, BORDER_PX + cap_h),
+                    ]
+                    for ci in range(4):
+                        frac_c: float = corner_peri[ci] / peri_total
+                        iz_after: int = int(frac_c * n_z) % n_z
+                        iz_before: int = (iz_after - 1) % n_z
+                        rgb_a: tuple[int, int, int] = hsb_to_rgb(
+                            edge_colors[iz_before], d_sat,
+                            processed_bri[iz_before] if iz_before < len(processed_bri) else 0.0,
+                        )
+                        rgb_b: tuple[int, int, int] = hsb_to_rgb(
+                            edge_colors[iz_after], d_sat,
+                            processed_bri[iz_after] if iz_after < len(processed_bri) else 0.0,
+                        )
+                        L1, a1, b1 = srgb_to_oklab(rgb_a[0] / 255.0, rgb_a[1] / 255.0, rgb_a[2] / 255.0)
+                        L2, a2, b2 = srgb_to_oklab(rgb_b[0] / 255.0, rgb_b[1] / 255.0, rgb_b[2] / 255.0)
+                        rm, gm, bm = oklab_to_srgb(
+                            (L1 + L2) * 0.5, (a1 + a2) * 0.5, (b1 + b2) * 0.5,
+                        )
+                        # Paint the inner quadrant of the corner square,
+                        # leave the outer portion black, then 2D blur so
+                        # the color bleeds outward like the edge strips.
+                        csq: np.ndarray = np.zeros(
+                            (BORDER_PX, BORDER_PX, 3), dtype=np.float32,
+                        )
+                        c_rgb: list[float] = [
+                            max(0.0, min(255.0, rm * 255.0)),
+                            max(0.0, min(255.0, gm * 255.0)),
+                            max(0.0, min(255.0, bm * 255.0)),
+                        ]
+                        # Inner quadrant is the quarter closest to the TV.
+                        half: int = BORDER_PX // 2
+                        # ci: 0=TL(inner=bottom-right), 1=TR(inner=bottom-left),
+                        #     2=BR(inner=top-left), 3=BL(inner=top-right)
+                        if ci == 0:
+                            csq[half:, half:, :] = c_rgb
+                        elif ci == 1:
+                            csq[half:, :half, :] = c_rgb
+                        elif ci == 2:
+                            csq[:half, :half, :] = c_rgb
+                        else:
+                            csq[:half, half:, :] = c_rgb
+                        csq = gaussian_filter(csq, sigma=(_blur_sigma, _blur_sigma, 0))
+                        _blit_add(csq, corner_xy[ci][0], corner_xy[ci][1])
+
             # Composite the live video frame as the "TV".
             frame_arr: np.ndarray = np.frombuffer(
                 frame_bytes, dtype=np.uint8,
