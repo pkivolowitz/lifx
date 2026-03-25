@@ -1761,133 +1761,56 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
                             y0_l: int = max(0, int(cap_h - (frac_hi * peri_total - 2 * cap_w - cap_h)))
                             left_line[y0_l:y1_l, :] = frgb
 
-                    # Replicate each 1-pixel line to _inner_depth rows/cols
-                    # and embed at the inner edge of a black border strip.
-                    top_strip: np.ndarray = np.zeros((BORDER_PX, cap_w, 3), dtype=np.float32)
-                    top_strip[BORDER_PX - _inner_depth:, :, :] = top_line[np.newaxis, :, :]
+                    # Extend strips to overlap into corner regions.
+                    # Top/bottom become (BORDER_PX, cap_w + 2*BORDER_PX)
+                    # Left/right become (cap_h + 2*BORDER_PX, BORDER_PX)
+                    # Zone colors fill the middle; black padding at ends
+                    # lets the cross-blur fade naturally into corners.
+                    # Additive blit of overlapping strips handles corners
+                    # with no separate corner code — no seams.
+                    _ext_w: int = cap_w + 2 * BORDER_PX
+                    _ext_h: int = cap_h + 2 * BORDER_PX
 
-                    bot_strip: np.ndarray = np.zeros((BORDER_PX, cap_w, 3), dtype=np.float32)
-                    bot_strip[:_inner_depth, :, :] = bot_line[np.newaxis, :, :]
+                    top_strip: np.ndarray = np.zeros((_ext_w, 3), dtype=np.float32)
+                    top_strip[BORDER_PX:BORDER_PX + cap_w, :] = top_line
+                    top_strip = np.zeros((BORDER_PX, _ext_w, 3), dtype=np.float32)
+                    top_strip[BORDER_PX - _inner_depth:, BORDER_PX:BORDER_PX + cap_w, :] = top_line[np.newaxis, :, :]
 
-                    right_strip: np.ndarray = np.zeros((cap_h, BORDER_PX, 3), dtype=np.float32)
-                    right_strip[:, :_inner_depth, :] = right_line[:, np.newaxis, :]
+                    bot_strip: np.ndarray = np.zeros((BORDER_PX, _ext_w, 3), dtype=np.float32)
+                    bot_strip[:_inner_depth, BORDER_PX:BORDER_PX + cap_w, :] = bot_line[np.newaxis, :, :]
 
-                    left_strip: np.ndarray = np.zeros((cap_h, BORDER_PX, 3), dtype=np.float32)
-                    left_strip[:, BORDER_PX - _inner_depth:, :] = left_line[:, np.newaxis, :]
+                    left_strip: np.ndarray = np.zeros((_ext_h, BORDER_PX, 3), dtype=np.float32)
+                    left_strip[BORDER_PX:BORDER_PX + cap_h, BORDER_PX - _inner_depth:, :] = left_line[:, np.newaxis, :]
 
-                    # Pass 1 — outward blur: spread color from inner
-                    # edge toward the wall (perpendicular to TV edge).
+                    right_strip: np.ndarray = np.zeros((_ext_h, BORDER_PX, 3), dtype=np.float32)
+                    right_strip[BORDER_PX:BORDER_PX + cap_h, :_inner_depth, :] = right_line[:, np.newaxis, :]
+
+                    # Pass 1 — outward blur (perpendicular to TV edge).
                     top_strip = gaussian_filter1d(top_strip, sigma=_blur_sigma, axis=0)
                     bot_strip = gaussian_filter1d(bot_strip, sigma=_blur_sigma, axis=0)
                     left_strip = gaussian_filter1d(left_strip, sigma=_blur_sigma, axis=1)
                     right_strip = gaussian_filter1d(right_strip, sigma=_blur_sigma, axis=1)
 
-                    # Pass 2 — cross blur: soften zone seams along the
-                    # TV edge (parallel to it).  Top/bottom get horizontal
-                    # blur, left/right get vertical blur.
+                    # Pass 2 — cross blur (parallel to TV edge).
+                    # This softens zone seams AND bleeds color into the
+                    # corner padding regions naturally.
                     top_strip = gaussian_filter1d(top_strip, sigma=_blur_sigma, axis=1)
                     bot_strip = gaussian_filter1d(bot_strip, sigma=_blur_sigma, axis=1)
                     left_strip = gaussian_filter1d(left_strip, sigma=_blur_sigma, axis=0)
                     right_strip = gaussian_filter1d(right_strip, sigma=_blur_sigma, axis=0)
 
-                    # Blit with additive blending so glow fades into wall.
+                    # Blit with additive blending.  Strips overlap in the
+                    # corner regions — BLEND_ADD combines them seamlessly.
                     def _blit_add(arr: np.ndarray, x: int, y: int) -> None:
                         s: pygame.Surface = pygame.surfarray.make_surface(
                             arr.clip(0, 255).astype(np.uint8).swapaxes(0, 1),
                         )
                         pg_screen.blit(s, (x, y), special_flags=pygame.BLEND_ADD)
 
-                    _blit_add(top_strip, BORDER_PX, 0)
-                    _blit_add(bot_strip, BORDER_PX, BORDER_PX + cap_h)
-                    _blit_add(left_strip, 0, BORDER_PX)
-                    _blit_add(right_strip, BORDER_PX + cap_w, BORDER_PX)
-
-                    # Corners: oklab midpoint of two adjacent edge zones,
-                    # filled into a BORDER_PX square and 2D blurred.
-                    from scipy.ndimage import gaussian_filter
-                    corner_peri: list[float] = [
-                        0.0,                              # top-left
-                        float(cap_w),                     # top-right
-                        float(cap_w + cap_h),             # bottom-right
-                        float(2 * cap_w + cap_h),         # bottom-left
-                    ]
-                    corner_xy: list[tuple[int, int]] = [
-                        (0, 0),
-                        (BORDER_PX + cap_w, 0),
-                        (BORDER_PX + cap_w, BORDER_PX + cap_h),
-                        (0, BORDER_PX + cap_h),
-                    ]
-                    for ci in range(4):
-                        frac_c: float = corner_peri[ci] / peri_total
-                        iz_after: int = int(frac_c * n_z) % n_z
-                        iz_before: int = (iz_after - 1) % n_z
-                        rgb_a: tuple[int, int, int] = hsb_to_rgb(
-                            edge_colors[iz_before], d_sat,
-                            processed_bri[iz_before] if iz_before < len(processed_bri) else 0.0,
-                        )
-                        rgb_b: tuple[int, int, int] = hsb_to_rgb(
-                            edge_colors[iz_after], d_sat,
-                            processed_bri[iz_after] if iz_after < len(processed_bri) else 0.0,
-                        )
-                        L1, a1, b1 = srgb_to_oklab(rgb_a[0] / 255.0, rgb_a[1] / 255.0, rgb_a[2] / 255.0)
-                        L2, a2, b2 = srgb_to_oklab(rgb_b[0] / 255.0, rgb_b[1] / 255.0, rgb_b[2] / 255.0)
-                        rm, gm, bm = oklab_to_srgb(
-                            (L1 + L2) * 0.5, (a1 + a2) * 0.5, (b1 + b2) * 0.5,
-                        )
-                        # Seed the corner square from the already-blurred
-                        # neighbor strips so the 1D seam passes have real
-                        # color data to blend with (not just black).
-                        #
-                        # ci: 0=TL, 1=TR, 2=BR, 3=BL
-                        # Each corner touches one horizontal strip (top or
-                        # bottom) and one vertical strip (left or right).
-                        # Copy the neighboring edge of each strip into the
-                        # corresponding edge of the corner square.
-                        csq: np.ndarray = np.zeros(
-                            (BORDER_PX, BORDER_PX, 3), dtype=np.float32,
-                        )
-                        if ci == 0:
-                            # Top-left: bottom edge from top strip's left end,
-                            # right edge from left strip's top end.
-                            csq[-1, :, :] = top_strip[:, 0, :]    # bottom row ← top strip col 0
-                            csq[:, -1, :] = left_strip[0, :, :]   # right col ← left strip row 0
-                        elif ci == 1:
-                            # Top-right: bottom edge from top strip's right end,
-                            # left edge from right strip's top end.
-                            csq[-1, :, :] = top_strip[:, -1, :]   # bottom row ← top strip last col
-                            csq[:, 0, :] = right_strip[0, :, :]   # left col ← right strip row 0
-                        elif ci == 2:
-                            # Bottom-right: top edge from bottom strip's right end,
-                            # left edge from right strip's bottom end.
-                            csq[0, :, :] = bot_strip[:, -1, :]    # top row ← bot strip last col
-                            csq[:, 0, :] = right_strip[-1, :, :]  # left col ← right strip last row
-                        else:
-                            # Bottom-left: top edge from bottom strip's left end,
-                            # right edge from left strip's bottom end.
-                            csq[0, :, :] = bot_strip[:, 0, :]     # top row ← bot strip col 0
-                            csq[:, -1, :] = left_strip[-1, :, :]  # right col ← left strip last row
-
-                        # Fill the inner quadrant with the oklab midpoint.
-                        c_rgb: list[float] = [
-                            max(0.0, min(255.0, rm * 255.0)),
-                            max(0.0, min(255.0, gm * 255.0)),
-                            max(0.0, min(255.0, bm * 255.0)),
-                        ]
-                        half: int = BORDER_PX // 2
-                        if ci == 0:
-                            csq[half:, half:, :] = c_rgb
-                        elif ci == 1:
-                            csq[half:, :half, :] = c_rgb
-                        elif ci == 2:
-                            csq[:half, :half, :] = c_rgb
-                        else:
-                            csq[:half, half:, :] = c_rgb
-
-                        # 1D seam blurs then 2D finish.
-                        csq = gaussian_filter1d(csq, sigma=_blur_sigma, axis=0)
-                        csq = gaussian_filter1d(csq, sigma=_blur_sigma, axis=1)
-                        csq = gaussian_filter(csq, sigma=(_blur_sigma, _blur_sigma, 0))
-                        _blit_add(csq, corner_xy[ci][0], corner_xy[ci][1])
+                    _blit_add(top_strip, 0, 0)
+                    _blit_add(bot_strip, 0, BORDER_PX + cap_h)
+                    _blit_add(left_strip, 0, 0)
+                    _blit_add(right_strip, BORDER_PX + cap_w, 0)
 
             # Composite the live video frame as the "TV".
             frame_arr: np.ndarray = np.frombuffer(
