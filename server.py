@@ -277,6 +277,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_home", requires_auth=False),
     _Route("GET", ("api", "home", "photos"),
            "_handle_get_home_photos", requires_auth=False),
+    _Route("GET", ("api", "home", "lights"),
+           "_handle_get_home_lights", requires_auth=False),
     _Route("GET", ("photos", "{filename}"),
            "_handle_get_photo", requires_auth=False),
 
@@ -4865,6 +4867,88 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 if ext.lower() in IMAGE_EXTS:
                     photos.append(entry)
         self._send_json(200, {"photos": photos})
+
+    def _handle_get_home_lights(self) -> None:
+        """GET /api/home/lights — auth-free light status for dashboard.
+
+        Returns power state and current effect for every configured
+        group, plus active schedule entries.  Designed for the
+        display-only ``/home`` dashboard so it can show bedroom
+        light state without requiring an auth token.
+
+        Response::
+
+            {
+              "groups": {
+                "bedroom": {
+                  "power": true,
+                  "effect": "aurora",
+                  "members": 2
+                }
+              },
+              "active_schedules": [
+                {
+                  "name": "bedroom night aurora",
+                  "group": "bedroom",
+                  "effect": "aurora"
+                }
+              ]
+            }
+        """
+        devices: list[dict[str, Any]] = (
+            self.device_manager.devices_as_list()
+        )
+
+        # Extract group summaries.
+        groups: dict[str, dict[str, Any]] = {}
+        for d in devices:
+            if d.get("is_group"):
+                label: str = d.get("label", "")
+                groups[label] = {
+                    "power": d.get("power", False),
+                    "effect": d.get("current_effect"),
+                    "members": len(d.get("member_ips", [])),
+                }
+
+        # Active schedule entries.
+        config: dict[str, Any] = self.config
+        specs: list[dict[str, Any]] = config.get("schedule", [])
+        active_schedules: list[dict[str, Any]] = []
+
+        if specs:
+            lat: float = config.get("location", {}).get("latitude", 0.0)
+            lon: float = config.get("location", {}).get("longitude", 0.0)
+            now: datetime = datetime.now(timezone.utc).astimezone()
+            utc_offset: timedelta = now.utcoffset()
+            today: date = now.date()
+            sun: SunTimes = sun_times(lat, lon, today, utc_offset)
+
+            for spec in specs:
+                if not spec.get("enabled", True):
+                    continue
+                if not _entry_runs_on_day(spec, today):
+                    continue
+                start_dt: Optional[datetime] = _parse_time_spec(
+                    spec["start"], sun, today, utc_offset,
+                )
+                stop_dt: Optional[datetime] = _parse_time_spec(
+                    spec["stop"], sun, today, utc_offset,
+                )
+                if start_dt is None or stop_dt is None:
+                    continue
+                if stop_dt <= start_dt:
+                    stop_dt += timedelta(days=1)
+                if start_dt <= now < stop_dt:
+                    active_schedules.append({
+                        "name": spec.get("name", ""),
+                        "group": spec.get("group", ""),
+                        "effect": spec.get("effect", ""),
+                    })
+
+        self._send_json(200, {
+            "groups": groups,
+            "active_schedules": active_schedules,
+        })
 
     def _handle_get_photo(self, filename: str) -> None:
         """GET /photos/{filename} — serve a photo from static/photos/.

@@ -94,7 +94,8 @@ body {
 
 .clock-time {
     font-family: var(--font-clock);
-    font-size: clamp(4rem, 12vw, 9rem);
+    /* Across-room readable: ~6-8 inches on a 24" monitor. */
+    font-size: clamp(5rem, 14vw, 12rem);
     font-weight: 200;
     letter-spacing: 0.04em;
     color: var(--clock-color);
@@ -109,7 +110,7 @@ body {
 }
 
 .clock-date {
-    font-size: clamp(1rem, 2.5vw, 1.5rem);
+    font-size: clamp(1.2rem, 3vw, 2rem);
     font-weight: 300;
     color: var(--date-color);
     margin-top: 10px;
@@ -122,8 +123,9 @@ body {
 /* ------------------------------------------------------------------ */
 .sensor-grid {
     display: grid;
-    gap: var(--gap);
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    /* Always 3 columns with a small gap between squares. */
+    gap: 12px;
+    grid-template-columns: repeat(3, 1fr);
     width: 100%;
 }
 
@@ -132,28 +134,34 @@ body {
 /* ------------------------------------------------------------------ */
 .sensor-card {
     background: var(--card-bg);
-    border: 1px solid var(--card-border);
+    border: 2px solid black;
     border-radius: var(--card-radius);
-    padding: 28px 32px;
+    padding: 24px;
     box-shadow: var(--card-shadow);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    /* Square card. */
+    aspect-ratio: 1;
+    /* Center content vertically within the square. */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
 }
 
 .sensor-label {
-    font-size: 0.85rem;
+    font-size: clamp(1rem, 2vw, 1.6rem);
     font-weight: 600;
     letter-spacing: 0.10em;
     text-transform: uppercase;
     color: var(--label-color);
-    margin-bottom: 20px;
+    margin-bottom: 12px;
 }
 
-/* Main temperature reading — big and warm. */
+/* Main temperature reading — big and warm, across-room readable. */
 .reading-temp {
     font-family: var(--font-clock);
-    font-size: clamp(2.5rem, 6vw, 4rem);
+    font-size: clamp(3rem, 8vw, 5.5rem);
     font-weight: 300;
     color: var(--temp-color);
     line-height: 1;
@@ -175,7 +183,7 @@ body {
 
 .reading-humid {
     font-family: var(--font-clock);
-    font-size: 1.4rem;
+    font-size: clamp(1.6rem, 3.5vw, 2.8rem);
     font-weight: 400;
     color: var(--humid-color);
 }
@@ -192,16 +200,16 @@ body {
 .motion-indicator {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 0.85rem;
+    gap: 10px;
+    font-size: clamp(1rem, 2vw, 1.6rem);
     color: var(--motion-off);
     transition: color 0.4s ease;
 }
 .motion-indicator.active { color: var(--motion-on); }
 
 .motion-dot {
-    width: 10px;
-    height: 10px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
     background: var(--motion-off);
     transition: background 0.4s ease, box-shadow 0.4s ease;
@@ -219,9 +227,9 @@ body {
 
 /* Staleness warning. */
 .reading-stale {
-    font-size: 0.75rem;
+    font-size: clamp(0.8rem, 1.5vw, 1.1rem);
     color: var(--stale-color);
-    margin-top: 12px;
+    margin-top: 8px;
     opacity: 0;
     transition: opacity 0.4s ease;
 }
@@ -229,10 +237,36 @@ body {
 
 /* Last-update timestamp. */
 .reading-updated {
-    font-size: 0.7rem;
+    font-size: clamp(0.7rem, 1.2vw, 1rem);
     color: var(--label-color);
     opacity: 0.6;
-    margin-top: 12px;
+    margin-top: 8px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Light status card                                                   */
+/* ------------------------------------------------------------------ */
+.light-power {
+    font-family: var(--font-clock);
+    font-size: clamp(3rem, 8vw, 5.5rem);
+    font-weight: 300;
+    line-height: 1;
+    margin-bottom: 8px;
+}
+.light-power.on  { color: var(--motion-on); }
+.light-power.off { color: var(--motion-off); }
+
+.light-effect {
+    font-size: clamp(1.2rem, 2.5vw, 2rem);
+    color: var(--text-color);
+    opacity: 0.7;
+    margin-bottom: 4px;
+}
+
+.light-schedule {
+    font-size: clamp(0.9rem, 1.5vw, 1.2rem);
+    color: var(--label-color);
+    opacity: 0.6;
 }
 
 /* ------------------------------------------------------------------ */
@@ -273,15 +307,15 @@ body {
 /* ------------------------------------------------------------------ */
 @media (max-width: 600px) {
     body { padding: 20px 16px 16px; }
-    .clock-section { margin-bottom: 24px; }
-    .sensor-card { padding: 20px 24px; }
-    .sensor-grid { gap: 16px; }
+    .clock-section { margin-bottom: 16px; }
+    .sensor-card { padding: 16px; }
+    .sensor-grid { gap: 8px; }
 }
 
 @media (max-height: 700px) {
-    .clock-section { margin-bottom: 20px; }
-    .clock-time { font-size: clamp(3rem, 10vw, 6rem); }
-    .sensor-card { padding: 20px 24px; }
+    .clock-section { margin-bottom: 16px; }
+    .clock-time { font-size: clamp(3rem, 10vw, 7rem); }
+    .sensor-card { padding: 16px; }
 }
 </style>
 </head>
@@ -310,7 +344,7 @@ body {
 /* Display-only dashboard: clock, sensors, photos.                    */
 /* No controls, no buttons — pure ambient information.                */
 /*                                                                    */
-/* __version__ = "1.1.0"                                              */
+/* __version__ = "2.0.0"                                              */
 /* ================================================================== */
 
 (function () {
@@ -492,7 +526,9 @@ body {
                 });
 
                 /* Remove cards for sensors that disappeared. */
-                var existingCards = sensorGrid.querySelectorAll(".sensor-card");
+                var existingCards = sensorGrid.querySelectorAll(
+                    '[id^="sensor-"]'
+                );
                 existingCards.forEach(function (el) {
                     var id = el.id.replace("sensor-", "");
                     if (labels.indexOf(id) === -1) {
@@ -507,6 +543,95 @@ body {
 
     pollSensors();
     setInterval(pollSensors, SENSOR_POLL_MS);
+
+    /* -------------------------------------------------------------- */
+    /* Light status cards                                             */
+    /* -------------------------------------------------------------- */
+
+    /** Build or update a light status card for a group. */
+    function renderLightCard(groupName, info, activeSchedules) {
+        var cardId = "light-" + groupName;
+        var card = document.getElementById(cardId);
+        var isNew = !card;
+
+        if (isNew) {
+            card = document.createElement("div");
+            card.className = "sensor-card";
+            card.id = cardId;
+            card.innerHTML =
+                '<div class="sensor-label"></div>' +
+                '<div class="light-power"></div>' +
+                '<div class="light-effect"></div>' +
+                '<div class="light-schedule"></div>';
+        }
+
+        card.querySelector(".sensor-label").textContent = groupName;
+
+        var powerEl = card.querySelector(".light-power");
+        var isOn = info.power;
+        powerEl.textContent = isOn ? "ON" : "OFF";
+        powerEl.className = "light-power " + (isOn ? "on" : "off");
+
+        /* Current effect. */
+        var effectEl = card.querySelector(".light-effect");
+        if (info.effect) {
+            effectEl.textContent = info.effect.replace(/_/g, " ");
+        } else {
+            effectEl.textContent = isOn ? "idle" : "";
+        }
+
+        /* Active schedule entry name for this group. */
+        var schedEl = card.querySelector(".light-schedule");
+        var sched = null;
+        for (var i = 0; i < activeSchedules.length; i++) {
+            if (activeSchedules[i].group === groupName) {
+                sched = activeSchedules[i];
+                break;
+            }
+        }
+        schedEl.textContent = sched ? sched.name : "";
+
+        if (isNew) {
+            sensorGrid.appendChild(card);
+        }
+    }
+
+    /** Fetch light status and update cards. */
+    function pollLights() {
+        fetch("/api/home/lights")
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.error) return;
+                var groups = data.groups || {};
+                var active = data.active_schedules || [];
+                var names = Object.keys(groups);
+                names.forEach(function (name) {
+                    renderLightCard(name, groups[name], active);
+                });
+
+                /* Remove light cards for groups that vanished. */
+                var existingLights = sensorGrid.querySelectorAll(
+                    '[id^="light-"]'
+                );
+                existingLights.forEach(function (el) {
+                    var gn = el.id.replace("light-", "");
+                    if (names.indexOf(gn) === -1) {
+                        el.remove();
+                    }
+                });
+
+                /* Hide "waiting" message if we have any cards. */
+                if (names.length > 0 || sensorGrid.querySelector(".sensor-card")) {
+                    noDataEl.style.display = "none";
+                }
+            })
+            .catch(function () {
+                /* Network hiccup — leave display as-is. */
+            });
+    }
+
+    pollLights();
+    setInterval(pollLights, SENSOR_POLL_MS);
 
     /* -------------------------------------------------------------- */
     /* Photo slideshow                                                */
