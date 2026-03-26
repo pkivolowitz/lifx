@@ -84,8 +84,9 @@ BLACK: HSBK = (0, 0, 0, KELVIN_DEFAULT)
 DEFAULT_RR: float = 15.0
 
 # Minimum brightness during the breathing pulse (fraction of max).
-# Near-black at the bottom of the breath for dramatic contrast.
-BREATHE_MIN_FRACTION: float = 0.05
+# Full black at the bottom of the breath — the Luna's heavy diffuser
+# smears brightness, so anything above zero looks lit.
+BREATHE_MIN_FRACTION: float = 0.0
 
 # Maximum brightness for normal and warning states.
 BREATHE_MAX_BRIGHTNESS: int = HSBK_MAX
