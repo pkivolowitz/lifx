@@ -718,14 +718,12 @@ class HapSession:
         )
 
     async def _read_pairing(self) -> bytes:
-        """Read TLV response from the Pair Setup characteristic.
+        """Read raw TLV response from the Pair Setup characteristic.
 
-        HAP-BLE responses larger than the GATT MTU are fragmented
-        across multiple reads.  The first read returns the header
-        (with declared body length); subsequent reads return
-        continuation fragments until the full body is assembled.
+        Pair-setup responses are raw TLV (not HAP PDU wrapped),
+        potentially fragmented across multiple GATT reads.
         """
-        return await self._read_fragmented(CHAR_PAIR_SETUP, "pair-setup")
+        return await self._read_raw_tlv(CHAR_PAIR_SETUP, "pair-setup")
 
     async def _write_verify(self, tlv_data: bytes) -> None:
         """Write TLV data to the Pair Verify characteristic via HAP PDU."""
@@ -738,8 +736,56 @@ class HapSession:
         )
 
     async def _read_verify(self) -> bytes:
-        """Read TLV response from the Pair Verify characteristic."""
-        return await self._read_fragmented(CHAR_PAIR_VERIFY, "pair-verify")
+        """Read raw TLV response from the Pair Verify characteristic."""
+        return await self._read_raw_tlv(CHAR_PAIR_VERIFY, "pair-verify")
+
+    async def _read_raw_tlv(
+        self, char_uuid: str, context: str
+    ) -> bytes:
+        """Read raw TLV from a characteristic, assembling fragments.
+
+        Pair-setup and pair-verify responses are raw TLV written to the
+        characteristic value — no HAP PDU wrapper.  Large responses
+        (e.g., SRP public key = 384 bytes) are fragmented across
+        multiple GATT reads.
+
+        Args:
+            char_uuid: GATT characteristic UUID to read from.
+            context: Human-readable label for error messages.
+
+        Returns:
+            Complete TLV bytes.
+        """
+        # First read.
+        raw: bytes = await self._gatt.read_characteristic(char_uuid)
+        logger.info(
+            "%s first read: %d bytes, first 16 hex: %s",
+            context, len(raw), raw[:16].hex(),
+        )
+
+        body: bytearray = bytearray(raw)
+        MAX_FRAGMENT_READS: int = 200
+        reads: int = 0
+
+        # Keep reading until we get repeated data (characteristic value
+        # doesn't change) or an empty read.
+        while reads < MAX_FRAGMENT_READS:
+            frag: bytes = await self._gatt.read_characteristic(char_uuid)
+            if not frag:
+                break
+            # If we get the same bytes back, the characteristic hasn't
+            # been updated — we've read all fragments.
+            if bytes(frag) == bytes(raw):
+                break
+            body.extend(frag)
+            reads += 1
+            raw = frag  # Track last fragment for repeat detection.
+
+        logger.info(
+            "%s assembled %d bytes from %d read(s)",
+            context, len(body), reads + 1,
+        )
+        return bytes(body)
 
     async def _read_fragmented(
         self, char_uuid: str, context: str
