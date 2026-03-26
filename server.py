@@ -1059,6 +1059,15 @@ class DeviceManager:
                     )
         else:
             em.power_off(duration_ms=DEFAULT_FADE_MS)
+
+        # Update the power state cache so the app and dashboard reflect
+        # the new state immediately — without waiting for the next
+        # keepalive UDP query cycle.
+        self._power_states[ip] = on
+        if isinstance(em, VirtualMultizoneEmitter):
+            for member in em.get_emitter_list():
+                self._power_states[member.emitter_id] = on
+
         return {"ip": ip, "power": "on" if on else "off"}
 
     def set_brightness(self, ip: str, brightness: int) -> dict[str, Any]:

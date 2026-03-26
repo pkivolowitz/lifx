@@ -55,7 +55,7 @@ DEFAULT_BRIGHTNESS: int = 70
 
 # Minimum seconds between repeated "lights on" commands to avoid
 # hammering the bulbs while motion is sustained.
-DEBOUNCE_SECONDS: float = 10.0
+DEBOUNCE_SECONDS: float = 2.0
 
 
 # ---------------------------------------------------------------------------
