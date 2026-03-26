@@ -4,8 +4,10 @@ Continuously listens for BLE advertisements from a specific device
 and reports RSSI signal strength on every received advertisement.
 Tracks gap timing to identify when a device drops off.
 
-Safe to run alongside the glowup-ble-sensor daemon — passive scanning
-does not open GATT connections or interfere with existing sessions.
+**Requires the glowup-ble-sensor daemon to be stopped first.**
+The daemon holds a persistent GATT connection and most BLE devices
+stop advertising while connected.  Stop the daemon, run this tool,
+then restart the daemon when done.
 
 Usage::
 
@@ -336,7 +338,7 @@ def main() -> None:
     """CLI entry point for the BLE signal meter."""
     parser = argparse.ArgumentParser(
         description="BLE signal meter — passive RSSI monitor for diagnostics. "
-        "Safe to run alongside the glowup-ble-sensor daemon.",
+        "Stop glowup-ble-sensor first (sudo systemctl stop glowup-ble-sensor).",
     )
     parser.add_argument(
         "--label", "-l",
