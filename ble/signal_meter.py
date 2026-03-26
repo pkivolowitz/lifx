@@ -38,10 +38,10 @@ logger: logging.Logger = logging.getLogger("glowup.ble.signal_meter")
 # Constants
 # ---------------------------------------------------------------------------
 
-# RSSI range for the visual bar.  -90 dBm is the noise floor,
-# -30 dBm is essentially touching the antenna.
-RSSI_FLOOR: int = -90
-RSSI_CEIL: int = -30
+# RSSI range for the visual bar.  Typical BLE indoor range is
+# -90 (barely detectable) to -50 (strong nearby signal).
+RSSI_FLOOR: int = -95
+RSSI_CEIL: int = -50
 
 # Width of the visual signal bar in characters.
 BAR_WIDTH: int = 20
@@ -207,6 +207,32 @@ def _format_duration(seconds: float) -> str:
 # Scanner core
 # ---------------------------------------------------------------------------
 
+def _print_summary(label: str, stats: SignalStats, lost_threshold: float) -> None:
+    """Print final signal statistics.
+
+    Called from atexit so it runs even when the process is killed by
+    SIGHUP (SSH disconnect) or SIGTERM.
+
+    Args:
+        label: Device label for the header.
+        stats: Accumulated signal statistics.
+        lost_threshold: Threshold used for lost-event detection.
+    """
+    try:
+        print(flush=True)
+        print(f"--- {label} signal summary ---")
+        print(f"Duration:     {_format_duration(stats.duration)}")
+        print(f"Seen:         {stats.count} advertisements")
+        if stats.count:
+            print(f"RSSI:         min={stats.rssi_min}  max={stats.rssi_max}  avg={stats.rssi_avg:.0f}")
+        if stats.count > 1:
+            print(f"Gap:          min={stats.gap_min:.1f}s  max={stats.gap_max:.1f}s  avg={stats.gap_avg:.1f}s")
+        print(f"Lost events:  {stats.lost_count} (>{lost_threshold}s without advertisement)")
+        sys.stdout.flush()
+    except Exception:
+        pass  # stdout may already be closed on SIGHUP
+
+
 async def run_signal_meter(
     address: str,
     label: str,
@@ -216,7 +242,8 @@ async def run_signal_meter(
 
     Scans indefinitely for advertisements from the given address.
     Prints one line per received advertisement.  Prints a summary
-    on cancellation (Ctrl+C).
+    on exit via atexit (works over SSH where SIGHUP kills the process
+    before finally blocks run).
 
     Args:
         address: BLE MAC address to monitor.
@@ -226,6 +253,8 @@ async def run_signal_meter(
     Raises:
         ImportError: If bleak is not installed.
     """
+    import atexit
+
     try:
         from bleak import BleakScanner
     except ImportError:
@@ -234,6 +263,10 @@ async def run_signal_meter(
         )
 
     stats: SignalStats = SignalStats(lost_threshold)
+    # Register summary as atexit handler so it fires on any exit path
+    # including SIGHUP (SSH disconnect), SIGTERM, and SIGINT.
+    atexit.register(_print_summary, label, stats, lost_threshold)
+
     # Normalize address for comparison (BlueZ uses uppercase colons).
     target: str = address.upper()
 
@@ -261,24 +294,12 @@ async def run_signal_meter(
     await scanner.start()
 
     try:
-        # Run until cancelled.
         while True:
             await asyncio.sleep(1.0)
     except asyncio.CancelledError:
         pass
     finally:
         await scanner.stop()
-
-        # Print summary.
-        print()
-        print(f"--- {label} signal summary ---")
-        print(f"Duration:     {_format_duration(stats.duration)}")
-        print(f"Seen:         {stats.count} advertisements")
-        if stats.count:
-            print(f"RSSI:         min={stats.rssi_min}  max={stats.rssi_max}  avg={stats.rssi_avg:.0f}")
-        if stats.count > 1:
-            print(f"Gap:          min={stats.gap_min:.1f}s  max={stats.gap_max:.1f}s  avg={stats.gap_avg:.1f}s")
-        print(f"Lost events:  {stats.lost_count} (>{lost_threshold}s without advertisement)")
 
 
 # ---------------------------------------------------------------------------
@@ -373,18 +394,28 @@ def main() -> None:
 
     address, label = _resolve_address(args.label, args.address, args.config)
 
+    import signal as signal_mod
+
+    # Convert SIGHUP (SSH disconnect) to SystemExit so atexit handlers
+    # fire and the summary prints before the process dies.
+    def _hup_handler(signum: int, frame) -> None:
+        """Convert SIGHUP to SystemExit for clean atexit."""
+        raise SystemExit(0)
+
+    signal_mod.signal(signal_mod.SIGHUP, _hup_handler)
+
     loop = asyncio.new_event_loop()
     task = loop.create_task(
         run_signal_meter(address, label, args.lost_threshold)
     )
 
     def _shutdown() -> None:
-        """Cancel the meter task on SIGINT for clean summary."""
+        """Cancel the meter task on SIGINT/SIGTERM for clean summary."""
         task.cancel()
 
     try:
-        loop.add_signal_handler(2, _shutdown)   # SIGINT
-        loop.add_signal_handler(15, _shutdown)  # SIGTERM
+        loop.add_signal_handler(signal_mod.SIGINT, _shutdown)
+        loop.add_signal_handler(signal_mod.SIGTERM, _shutdown)
     except NotImplementedError:
         pass  # Windows — KeyboardInterrupt will handle it.
 
