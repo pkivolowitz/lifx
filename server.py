@@ -403,12 +403,12 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("DELETE", ("api", "groups", "{name}"),
            "_handle_delete_group",
            unquote_params=("name",)),
-    # BLE sensor data.
+    # BLE sensor data — no auth, read-only ambient data for displays.
     _Route("GET", ("api", "ble", "sensors"),
-           "_handle_get_ble_sensors"),
+           "_handle_get_ble_sensors", requires_auth=False),
     _Route("GET", ("api", "ble", "sensors", "{label}"),
            "_handle_get_ble_sensor_detail",
-           unquote_params=("label",)),
+           unquote_params=("label",), requires_auth=False),
 )
 
 # Pre-built index: (method, segment_count) → list of candidate routes.

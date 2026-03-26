@@ -6,32 +6,33 @@
 <title>GlowUp Home</title>
 <style>
 /* ------------------------------------------------------------------ */
-/* Design tokens                                                      */
+/* Design tokens — warm, cheerful, light palette                      */
 /* ------------------------------------------------------------------ */
 :root {
-    /* Background gradient — deep navy to charcoal. */
-    --bg-from:       #080818;
-    --bg-to:         #0f1628;
+    /* Background — soft warm cream with a hint of peach. */
+    --bg-from:       #fdf6ee;
+    --bg-to:         #fce8d5;
 
     /* Clock. */
-    --clock-color:   #f0e6d3;
-    --date-color:    #a0a0b8;
+    --clock-color:   #3d3029;
+    --date-color:    #8a7262;
 
-    /* Sensor card glass. */
-    --card-bg:       rgba(255, 255, 255, 0.04);
-    --card-border:   rgba(255, 255, 255, 0.08);
-    --card-hover:    rgba(255, 255, 255, 0.07);
+    /* Sensor card. */
+    --card-bg:       rgba(255, 255, 255, 0.7);
+    --card-border:   rgba(210, 180, 150, 0.3);
+    --card-shadow:   0 4px 24px rgba(180, 140, 100, 0.12);
 
     /* Readings. */
-    --temp-color:    #f4a261;
-    --humid-color:   #48cae4;
-    --motion-on:     #06d6a0;
-    --motion-off:    #3a3a4a;
-    --label-color:   #8888a0;
-    --stale-color:   #ff6b6b;
+    --temp-color:    #d4622a;
+    --humid-color:   #2a8fbf;
+    --motion-on:     #3daa6d;
+    --motion-off:    #c4b8ad;
+    --label-color:   #9a8878;
+    --stale-color:   #c44;
+    --text-color:    #4a3f36;
 
     /* Photo overlay. */
-    --photo-opacity: 0.12;
+    --photo-opacity: 0.15;
 
     /* Typography — system fonts, no external deps. */
     --font-clock:    "SF Mono", "Menlo", "Consolas", monospace;
@@ -40,7 +41,7 @@
 
     /* Layout. */
     --max-width:     1400px;
-    --card-radius:   20px;
+    --card-radius:   24px;
     --gap:           24px;
 }
 
@@ -51,9 +52,9 @@
 
 html, body {
     height: 100%;
-    overflow: hidden;          /* no scrollbars — kiosk display */
+    overflow: hidden;
     font-family: var(--font-body);
-    color: #e0e0e8;
+    color: var(--text-color);
     background: linear-gradient(160deg, var(--bg-from), var(--bg-to));
 }
 
@@ -76,7 +77,7 @@ body {
     background-size: cover;
     background-position: center;
     transition: opacity 2s ease;
-    filter: blur(2px) saturate(0.6);
+    filter: blur(4px) saturate(0.8);
 }
 .photo-bg.hidden { opacity: 0; }
 
@@ -88,7 +89,7 @@ body {
 /* ------------------------------------------------------------------ */
 .clock-section {
     text-align: center;
-    margin-bottom: 40px;
+    margin-bottom: 48px;
 }
 
 .clock-time {
@@ -98,13 +99,11 @@ body {
     letter-spacing: 0.04em;
     color: var(--clock-color);
     line-height: 1;
-    /* Subtle warm glow behind the digits. */
-    text-shadow: 0 0 60px rgba(244, 162, 97, 0.15);
 }
 
 .clock-seconds {
     font-size: 0.4em;
-    opacity: 0.4;
+    opacity: 0.35;
     vertical-align: super;
     margin-left: 4px;
 }
@@ -113,7 +112,7 @@ body {
     font-size: clamp(1rem, 2.5vw, 1.5rem);
     font-weight: 300;
     color: var(--date-color);
-    margin-top: 8px;
+    margin-top: 10px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
@@ -124,7 +123,6 @@ body {
 .sensor-grid {
     display: grid;
     gap: var(--gap);
-    /* Auto-fit: cards are at least 280px, stretch to fill. */
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     width: 100%;
 }
@@ -137,15 +135,16 @@ body {
     border: 1px solid var(--card-border);
     border-radius: var(--card-radius);
     padding: 28px 32px;
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-    transition: background 0.3s ease, transform 0.3s ease;
+    box-shadow: var(--card-shadow);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
 .sensor-label {
     font-size: 0.85rem;
-    font-weight: 500;
-    letter-spacing: 0.12em;
+    font-weight: 600;
+    letter-spacing: 0.10em;
     text-transform: uppercase;
     color: var(--label-color);
     margin-bottom: 20px;
@@ -155,14 +154,14 @@ body {
 .reading-temp {
     font-family: var(--font-clock);
     font-size: clamp(2.5rem, 6vw, 4rem);
-    font-weight: 200;
+    font-weight: 300;
     color: var(--temp-color);
     line-height: 1;
     margin-bottom: 4px;
 }
 .reading-temp .unit {
     font-size: 0.5em;
-    opacity: 0.6;
+    opacity: 0.5;
     vertical-align: super;
 }
 
@@ -177,12 +176,16 @@ body {
 .reading-humid {
     font-family: var(--font-clock);
     font-size: 1.4rem;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--humid-color);
+}
+.reading-humid .icon {
+    font-size: 0.85em;
+    margin-right: 4px;
 }
 .reading-humid .unit {
     font-size: 0.75em;
-    opacity: 0.6;
+    opacity: 0.5;
 }
 
 /* Motion indicator — pulsing dot. */
@@ -205,16 +208,16 @@ body {
 }
 .motion-indicator.active .motion-dot {
     background: var(--motion-on);
-    box-shadow: 0 0 12px var(--motion-on), 0 0 24px rgba(6, 214, 160, 0.3);
+    box-shadow: 0 0 10px rgba(61, 170, 109, 0.4), 0 0 20px rgba(61, 170, 109, 0.2);
     animation: pulse 2s ease-in-out infinite;
 }
 
 @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 12px var(--motion-on), 0 0 24px rgba(6, 214, 160, 0.3); }
-    50%      { box-shadow: 0 0 18px var(--motion-on), 0 0 36px rgba(6, 214, 160, 0.5); }
+    0%, 100% { box-shadow: 0 0 10px rgba(61, 170, 109, 0.4), 0 0 20px rgba(61, 170, 109, 0.2); }
+    50%      { box-shadow: 0 0 16px rgba(61, 170, 109, 0.6), 0 0 32px rgba(61, 170, 109, 0.3); }
 }
 
-/* Staleness warning — sensor hasn't updated recently. */
+/* Staleness warning. */
 .reading-stale {
     font-size: 0.75rem;
     color: var(--stale-color);
@@ -224,24 +227,23 @@ body {
 }
 .reading-stale.visible { opacity: 1; }
 
-/* Last-update timestamp — subtle. */
+/* Last-update timestamp. */
 .reading-updated {
     font-size: 0.7rem;
     color: var(--label-color);
-    opacity: 0.5;
+    opacity: 0.6;
     margin-top: 12px;
 }
 
 /* ------------------------------------------------------------------ */
-/* Photo card — if photos are available, show a rotating card.        */
+/* Photo card                                                         */
 /* ------------------------------------------------------------------ */
 .photo-card {
     background: var(--card-bg);
     border: 1px solid var(--card-border);
     border-radius: var(--card-radius);
     overflow: hidden;
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
+    box-shadow: var(--card-shadow);
     position: relative;
     min-height: 200px;
 }
@@ -263,7 +265,7 @@ body {
     color: var(--label-color);
     font-size: 1.1rem;
     padding: 60px 20px;
-    opacity: 0.6;
+    grid-column: 1 / -1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -276,7 +278,6 @@ body {
     .sensor-grid { gap: 16px; }
 }
 
-/* Landscape tablet / kiosk — tighten vertical. */
 @media (max-height: 700px) {
     .clock-section { margin-bottom: 20px; }
     .clock-time { font-size: clamp(3rem, 10vw, 6rem); }
@@ -309,7 +310,7 @@ body {
 /* Display-only dashboard: clock, sensors, photos.                    */
 /* No controls, no buttons — pure ambient information.                */
 /*                                                                    */
-/* __version__ = "1.0.0"                                              */
+/* __version__ = "1.1.0"                                              */
 /* ================================================================== */
 
 (function () {
@@ -331,7 +332,6 @@ body {
     /* How often to refresh the photo list (ms). */
     const PHOTO_LIST_REFRESH_MS = 300000;
 
-    /* Day and month names for the date display. */
     const DAYS = [
         "Sunday", "Monday", "Tuesday", "Wednesday",
         "Thursday", "Friday", "Saturday"
@@ -347,7 +347,7 @@ body {
 
     let photos = [];
     let photoIndex = 0;
-    let activePhotoBg = "A";   /* which bg element is visible */
+    let activePhotoBg = "A";
 
     /* -------------------------------------------------------------- */
     /* Clock                                                          */
@@ -377,7 +377,6 @@ body {
         clockDateEl.textContent = day + ", " + month + " " + date + ", " + year;
     }
 
-    /* Update clock every second. */
     updateClock();
     setInterval(updateClock, 1000);
 
@@ -388,27 +387,19 @@ body {
     const sensorGrid = document.getElementById("sensorGrid");
     const noDataEl = document.getElementById("noData");
 
-    /**
-     * Convert Celsius to Fahrenheit.
-     * GlowUp stores temperatures in Celsius from HAP-BLE reads.
-     */
+    /** Convert Celsius to Fahrenheit. */
     function cToF(c) {
         return (c * 9 / 5) + 32;
     }
 
-    /**
-     * Format a sensor label for display.
-     * "onvis_motion" → "Onvis Motion"
-     */
+    /** Format a sensor label for display. */
     function formatLabel(label) {
         return label
             .replace(/_/g, " ")
             .replace(/\b\w/g, function (c) { return c.toUpperCase(); });
     }
 
-    /**
-     * Build or update the sensor card for a given label.
-     */
+    /** Build or update the sensor card for a given label. */
     function renderSensorCard(label, data) {
         let card = document.getElementById("sensor-" + label);
         const isNew = !card;
@@ -431,10 +422,9 @@ body {
                 '<div class="reading-updated"></div>';
         }
 
-        /* Label. */
         card.querySelector(".sensor-label").textContent = formatLabel(label);
 
-        /* Temperature — show in Fahrenheit for US locale. */
+        /* Temperature in Fahrenheit. */
         const tempEl = card.querySelector(".reading-temp");
         if (data.temperature != null) {
             const f = cToF(data.temperature);
@@ -472,7 +462,6 @@ body {
                 staleEl.classList.remove("visible");
             }
 
-            /* Last-update timestamp. */
             const updatedEl = card.querySelector(".reading-updated");
             const dt = new Date(data.last_update * 1000);
             updatedEl.textContent = "Updated " + dt.toLocaleTimeString();
@@ -483,13 +472,14 @@ body {
         }
     }
 
-    /**
-     * Fetch sensor data and update all cards.
-     */
+    /** Fetch sensor data and update all cards. */
     function pollSensors() {
         fetch("/api/ble/sensors")
             .then(function (r) { return r.json(); })
             .then(function (sensors) {
+                /* Ignore auth errors from old server versions. */
+                if (sensors.error) return;
+
                 const labels = Object.keys(sensors);
                 if (labels.length === 0) {
                     noDataEl.style.display = "";
@@ -511,7 +501,7 @@ body {
                 });
             })
             .catch(function () {
-                /* Network hiccup — leave display as-is, try again next cycle. */
+                /* Network hiccup — leave display as-is. */
             });
     }
 
@@ -525,16 +515,12 @@ body {
     const photoBgA = document.getElementById("photoBgA");
     const photoBgB = document.getElementById("photoBgB");
 
-    /**
-     * Fetch available photos from the server.
-     */
     function loadPhotoList() {
         fetch("/api/home/photos")
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 if (data.photos && data.photos.length > 0) {
                     photos = data.photos;
-                    /* Shuffle for variety. */
                     for (var i = photos.length - 1; i > 0; i--) {
                         var j = Math.floor(Math.random() * (i + 1));
                         var tmp = photos[i];
@@ -544,19 +530,15 @@ body {
                     showNextPhoto();
                 }
             })
-            .catch(function () { /* no photos — that's fine */ });
+            .catch(function () { /* no photos */ });
     }
 
-    /**
-     * Crossfade to the next photo.
-     */
     function showNextPhoto() {
         if (photos.length === 0) return;
 
         var url = "/photos/" + encodeURIComponent(photos[photoIndex]);
         photoIndex = (photoIndex + 1) % photos.length;
 
-        /* Alternate between the two background elements for crossfade. */
         var incoming, outgoing;
         if (activePhotoBg === "A") {
             incoming = photoBgB;
@@ -568,7 +550,6 @@ body {
             activePhotoBg = "A";
         }
 
-        /* Preload the image before showing. */
         var img = new Image();
         img.onload = function () {
             incoming.style.backgroundImage = 'url("' + url + '")';
@@ -580,7 +561,6 @@ body {
 
     loadPhotoList();
     setInterval(showNextPhoto, PHOTO_ROTATE_MS);
-    /* Refresh photo list periodically in case new photos are added. */
     setInterval(loadPhotoList, PHOTO_LIST_REFRESH_MS);
 
 })();
