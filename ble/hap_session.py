@@ -700,14 +700,14 @@ class HapSession:
         )
 
     async def _read_pairing(self) -> bytes:
-        """Read TLV response from the Pair Setup characteristic."""
-        raw: bytes = await self._gatt.read_characteristic(CHAR_PAIR_SETUP)
-        resp: HapResponse = parse_response(raw)
-        if not resp.ok:
-            raise HapError(
-                f"Pair-setup read failed: {resp.status_description}"
-            )
-        return resp.body or b""
+        """Read TLV response from the Pair Setup characteristic.
+
+        HAP-BLE responses larger than the GATT MTU are fragmented
+        across multiple reads.  The first read returns the header
+        (with declared body length); subsequent reads return
+        continuation fragments until the full body is assembled.
+        """
+        return await self._read_fragmented(CHAR_PAIR_SETUP, "pair-setup")
 
     async def _write_verify(self, tlv_data: bytes) -> None:
         """Write TLV data to the Pair Verify characteristic via HAP PDU."""
@@ -721,13 +721,77 @@ class HapSession:
 
     async def _read_verify(self) -> bytes:
         """Read TLV response from the Pair Verify characteristic."""
-        raw: bytes = await self._gatt.read_characteristic(CHAR_PAIR_VERIFY)
-        resp: HapResponse = parse_response(raw)
-        if not resp.ok:
+        return await self._read_fragmented(CHAR_PAIR_VERIFY, "pair-verify")
+
+    async def _read_fragmented(
+        self, char_uuid: str, context: str
+    ) -> bytes:
+        """Read a potentially fragmented HAP-BLE response.
+
+        The first GATT read returns the response header (control, TID,
+        status, length) plus as many body bytes as fit in the MTU.
+        If the declared body length exceeds what was received,
+        additional GATT reads fetch continuation fragments.
+
+        Args:
+            char_uuid: GATT characteristic UUID to read from.
+            context: Human-readable label for error messages.
+
+        Returns:
+            The TLV body from the assembled response.
+        """
+        import struct
+
+        # First read: header + partial body.
+        raw: bytes = await self._gatt.read_characteristic(char_uuid)
+
+        # Minimum response: control(1) + TID(1) + status(2) = 4 bytes.
+        HEADER_LEN: int = 4
+        if len(raw) < HEADER_LEN:
             raise HapError(
-                f"Pair-verify read failed: {resp.status_description}"
+                f"{context} response too short: {len(raw)} bytes"
             )
-        return resp.body or b""
+
+        status: int = struct.unpack_from("<H", raw, 2)[0]
+        if status != 0:
+            from .hap_constants import STATUS_DESCRIPTIONS
+            desc: str = STATUS_DESCRIPTIONS.get(status, f"0x{status:04X}")
+            raise HapError(f"{context} failed: {desc}")
+
+        # If no body length field, return empty.
+        if len(raw) <= HEADER_LEN:
+            return b""
+
+        # Parse declared body length.
+        if len(raw) < HEADER_LEN + 2:
+            raise HapError(
+                f"{context} response missing body length field"
+            )
+        body_len: int = struct.unpack_from("<H", raw, HEADER_LEN)[0]
+        body_start: int = HEADER_LEN + 2
+
+        # Accumulate body fragments.
+        body: bytearray = bytearray(raw[body_start:])
+
+        # Maximum reads to prevent infinite loops on broken devices.
+        MAX_FRAGMENT_READS: int = 100
+
+        reads: int = 0
+        while len(body) < body_len and reads < MAX_FRAGMENT_READS:
+            frag: bytes = await self._gatt.read_characteristic(char_uuid)
+            if not frag:
+                break
+            # Continuation fragments are pure body data (no header).
+            body.extend(frag)
+            reads += 1
+
+        if len(body) < body_len:
+            logger.warning(
+                "%s response incomplete: expected %d bytes, got %d",
+                context, body_len, len(body),
+            )
+
+        return bytes(body[:body_len])
 
     # ------------------------------------------------------------------
     # Internal: PDU encryption/decryption
