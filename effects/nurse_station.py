@@ -269,7 +269,8 @@ class NurseStation(Effect):
             logger.error("paho-mqtt not installed — nurse_station disabled")
             return
 
-        client = mqtt.Client()
+        # paho-mqtt v2 requires CallbackAPIVersion.
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         client.on_connect = self._on_connect
         client.on_message = self._on_message
 
@@ -310,7 +311,8 @@ class NurseStation(Effect):
     # ---- MQTT callbacks ---------------------------------------------------
 
     def _on_connect(self, client: Any, userdata: Any,
-                    flags: Any, rc: int) -> None:
+                    flags: Any, rc: int,
+                    properties: Any = None) -> None:
         """Subscribe to Retro-Med topics on connect.
 
         Args:
@@ -318,13 +320,14 @@ class NurseStation(Effect):
             userdata: User data (unused).
             flags: Connection flags dict.
             rc: Connection result code (0 = success).
+            properties: MQTT v5 properties (unused, required by paho v2).
         """
-        if rc == 0:
-            client.subscribe(TOPIC_TELEMETRY)
-            client.subscribe(TOPIC_STATUS)
-            logger.info("Subscribed to %s and %s", TOPIC_TELEMETRY, TOPIC_STATUS)
-        else:
+        if rc != 0:
             logger.warning("MQTT connect failed (rc=%d)", rc)
+            return
+        client.subscribe(TOPIC_TELEMETRY)
+        client.subscribe(TOPIC_STATUS)
+        logger.info("Subscribed to %s and %s", TOPIC_TELEMETRY, TOPIC_STATUS)
 
     def _on_message(self, client: Any, userdata: Any, msg: Any) -> None:
         """Route incoming MQTT messages to telemetry or status handlers.
