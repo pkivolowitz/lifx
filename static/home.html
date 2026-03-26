@@ -604,24 +604,10 @@ body {
                 if (data.error) return;
                 var groups = data.groups || {};
                 var active = data.active_schedules || [];
-                var names = Object.keys(groups);
-                names.forEach(function (name) {
-                    renderLightCard(name, groups[name], active);
-                });
 
-                /* Remove light cards for groups that vanished. */
-                var existingLights = sensorGrid.querySelectorAll(
-                    '[id^="light-"]'
-                );
-                existingLights.forEach(function (el) {
-                    var gn = el.id.replace("light-", "");
-                    if (names.indexOf(gn) === -1) {
-                        el.remove();
-                    }
-                });
-
-                /* Hide "waiting" message if we have any cards. */
-                if (names.length > 0 || sensorGrid.querySelector(".sensor-card")) {
+                /* Only show the bedroom group. */
+                if (groups["bedroom"]) {
+                    renderLightCard("bedroom", groups["bedroom"], active);
                     noDataEl.style.display = "none";
                 }
             })
