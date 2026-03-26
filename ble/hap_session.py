@@ -296,9 +296,10 @@ class HapSession:
 
         for service in client.services:
             for char in service.characteristics:
-                if char.uuid == char_uuid:
+                # bleak returns lowercase UUIDs; HAP constants are uppercase.
+                if char.uuid.upper() == char_uuid.upper():
                     for desc in char.descriptors:
-                        if desc.uuid == desc_uuid:
+                        if desc.uuid.lower() == desc_uuid.lower():
                             val: bytearray = await client.read_gatt_descriptor(
                                 desc.handle
                             )
