@@ -59,8 +59,9 @@ DEFAULT_BROKER: str = "10.0.0.48"
 # Default MQTT port.
 DEFAULT_MQTT_PORT: int = 1883
 
-# Seconds between sensor polls.
-POLL_INTERVAL: float = 3.0
+# Seconds between motion polls.  Keep short for responsiveness.
+# Temperature/humidity are read every 30s regardless of this value.
+POLL_INTERVAL: float = 1.0
 
 # Seconds between reconnection attempts.
 RECONNECT_DELAY: float = 5.0
@@ -245,7 +246,9 @@ class HapEncryptedSession:
 
         # Write encrypted PDU to the characteristic.
         await self._client.write_gatt_char(char_uuid, ct, response=True)
-        await asyncio.sleep(1.0)
+        # Short wait for accessory to process — 200ms is enough for
+        # the ONVIS SMS2.  The original 1s added unnecessary latency.
+        await asyncio.sleep(0.2)
 
         # Read encrypted response.
         resp: bytes = bytes(await self._client.read_gatt_char(char_uuid))
@@ -540,53 +543,72 @@ async def monitor_device(
         }))
 
         # Poll loop.
+        #
+        # Motion is read every cycle for responsiveness.
+        # Temperature and humidity change slowly — read them every
+        # ENV_READ_INTERVAL seconds to avoid wasting BLE bandwidth.
         last_values: dict[str, bytes] = {}
         last_status: float = time.time()
+        last_env_read: float = 0.0
+        ENV_READ_INTERVAL: float = 30.0  # seconds between temp/humidity reads
+
+        # Separate motion IIDs from environmental IIDs.
+        motion_iids: dict[str, int] = {
+            u: i for u, i in iids.items()
+            if SENSOR_NAMES.get(u) == "motion"
+        }
+        env_iids: dict[str, int] = {
+            u: i for u, i in iids.items()
+            if SENSOR_NAMES.get(u) in ("temperature", "humidity")
+        }
 
         while session.connected:
-            for uuid, iid in iids.items():
-                name: str = SENSOR_NAMES[uuid]
+            # Always read motion — this is the latency-critical path.
+            for uuid, iid in motion_iids.items():
                 try:
                     val: Optional[bytes] = await session.read_characteristic(
                         uuid, iid
                     )
                 except Exception as exc:
-                    logger.warning("%s read error: %s", name, exc)
+                    logger.warning("motion read error: %s", exc)
                     break
 
-                if val is None:
-                    continue
-
-                # Publish on change.
-                if val != last_values.get(uuid):
+                if val is not None and val != last_values.get(uuid):
                     last_values[uuid] = val
-                    if name == "motion":
-                        payload: str = str(val[0]) if val else "0"
-                        publisher.publish(label, "motion", payload)
-                        logger.info(
-                            "%s motion=%s", label, payload
+                    payload: str = str(val[0]) if val else "0"
+                    publisher.publish(label, "motion", payload)
+                    logger.info("%s motion=%s", label, payload)
+
+            # Read temperature/humidity less frequently.
+            now: float = time.time()
+            if now - last_env_read >= ENV_READ_INTERVAL:
+                last_env_read = now
+                for uuid, iid in env_iids.items():
+                    name: str = SENSOR_NAMES[uuid]
+                    try:
+                        val = await session.read_characteristic(uuid, iid)
+                    except Exception as exc:
+                        logger.warning("%s read error: %s", name, exc)
+                        break
+
+                    if val is None or val == last_values.get(uuid):
+                        continue
+                    last_values[uuid] = val
+
+                    if name == "temperature" and len(val) == 4:
+                        temp: float = struct.unpack("<f", val)[0]
+                        publisher.publish(
+                            label, "temperature", f"{temp:.1f}"
                         )
-                    elif name == "temperature":
-                        if len(val) == 4:
-                            temp: float = struct.unpack("<f", val)[0]
-                            publisher.publish(
-                                label, "temperature", f"{temp:.1f}"
-                            )
-                            logger.info(
-                                "%s temp=%.1f°C", label, temp
-                            )
-                    elif name == "humidity":
-                        if len(val) == 4:
-                            hum: float = struct.unpack("<f", val)[0]
-                            publisher.publish(
-                                label, "humidity", f"{hum:.1f}"
-                            )
-                            logger.info(
-                                "%s humidity=%.1f%%", label, hum
-                            )
+                        logger.info("%s temp=%.1f°C", label, temp)
+                    elif name == "humidity" and len(val) == 4:
+                        hum: float = struct.unpack("<f", val)[0]
+                        publisher.publish(
+                            label, "humidity", f"{hum:.1f}"
+                        )
+                        logger.info("%s humidity=%.1f%%", label, hum)
 
             # Periodic status.
-            now: float = time.time()
             if now - last_status >= STATUS_INTERVAL:
                 publisher.publish(label, "status", json.dumps({
                     "state": "monitoring",
