@@ -300,12 +300,30 @@ class HapSession:
                 if char.uuid.upper() == char_uuid.upper():
                     for desc in char.descriptors:
                         if desc.uuid.lower() == desc_uuid.lower():
-                            val: bytearray = await client.read_gatt_descriptor(
-                                desc.handle
-                            )
-                            iid: int = int.from_bytes(val, byteorder="little")
-                            return iid
-        logger.warning("IID descriptor not found for %s", char_uuid)
+                            try:
+                                val: bytearray = (
+                                    await client.read_gatt_descriptor(
+                                        desc.handle
+                                    )
+                                )
+                                iid: int = int.from_bytes(
+                                    val, byteorder="little"
+                                )
+                                return iid
+                            except Exception as exc:
+                                logger.warning(
+                                    "IID descriptor read failed for %s: "
+                                    "%s — using GATT handle as IID",
+                                    char_uuid, exc,
+                                )
+                                return char.handle
+                    # No IID descriptor — use GATT handle.
+                    logger.warning(
+                        "No IID descriptor for %s — using handle %d",
+                        char_uuid, char.handle,
+                    )
+                    return char.handle
+        logger.warning("Characteristic %s not found", char_uuid)
         return 0
 
     @property
