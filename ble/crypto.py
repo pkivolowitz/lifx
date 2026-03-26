@@ -118,6 +118,7 @@ def _build_nonce(counter: int) -> bytes:
     """Construct a 12-byte HAP nonce from a 64-bit counter.
 
     Format: 4 zero bytes || 8-byte little-endian counter.
+    Used for post-pair-verify encrypted session PDUs.
 
     Args:
         counter: Message sequence number (0, 1, 2, ...).
@@ -126,6 +127,26 @@ def _build_nonce(counter: int) -> bytes:
         12-byte nonce.
     """
     return _NONCE_PAD + struct.pack("<Q", counter)
+
+
+def build_pairing_nonce(label: bytes) -> bytes:
+    """Construct a 12-byte nonce for pair-setup/verify messages.
+
+    Format: 4 zero bytes || 8-byte label (e.g., b"PS-Msg05").
+
+    CRITICAL: the 4 zero bytes come FIRST, then the label.  Getting
+    this backwards (label first) was a bug that caused M5/M6 auth
+    failures during initial development.  Verified correct against
+    homekit_python's chacha20_aead_encrypt which uses
+    ``nonce = constant + iv`` where constant = 4 zero bytes.
+
+    Args:
+        label: 8-byte message label (e.g., ``b"PS-Msg05"``).
+
+    Returns:
+        12-byte nonce.
+    """
+    return _NONCE_PAD + label
 
 
 def encrypt(
@@ -206,7 +227,7 @@ def derive_pair_setup_encrypt_key(srp_session_key: bytes) -> bytes:
     return hkdf_sha512(
         ikm=srp_session_key,
         salt=b"Pair-Setup-Encrypt-Salt",
-        info=b"Pair-Setup-Encrypt-Info\x00",
+        info=b"Pair-Setup-Encrypt-Info",
         length=CHACHA_KEY_LEN,
     )
 
@@ -226,7 +247,7 @@ def derive_pair_setup_controller_sign_key(srp_session_key: bytes) -> bytes:
     return hkdf_sha512(
         ikm=srp_session_key,
         salt=b"Pair-Setup-Controller-Sign-Salt",
-        info=b"Pair-Setup-Controller-Sign-Info\x00",
+        info=b"Pair-Setup-Controller-Sign-Info",
         length=CHACHA_KEY_LEN,
     )
 
@@ -243,7 +264,7 @@ def derive_pair_setup_accessory_sign_key(srp_session_key: bytes) -> bytes:
     return hkdf_sha512(
         ikm=srp_session_key,
         salt=b"Pair-Setup-Accessory-Sign-Salt",
-        info=b"Pair-Setup-Accessory-Sign-Info\x00",
+        info=b"Pair-Setup-Accessory-Sign-Info",
         length=CHACHA_KEY_LEN,
     )
 
@@ -262,7 +283,7 @@ def derive_pair_verify_encrypt_key(shared_secret: bytes) -> bytes:
     return hkdf_sha512(
         ikm=shared_secret,
         salt=b"Pair-Verify-Encrypt-Salt",
-        info=b"Pair-Verify-Encrypt-Info\x00",
+        info=b"Pair-Verify-Encrypt-Info",
         length=CHACHA_KEY_LEN,
     )
 
@@ -283,13 +304,13 @@ def derive_session_keys(shared_secret: bytes) -> tuple[bytes, bytes]:
     c2a: bytes = hkdf_sha512(
         ikm=shared_secret,
         salt=b"Control-Salt",
-        info=b"Control-Read-Encryption-Key\x00",
+        info=b"Control-Read-Encryption-Key",
         length=CHACHA_KEY_LEN,
     )
     a2c: bytes = hkdf_sha512(
         ikm=shared_secret,
         salt=b"Control-Salt",
-        info=b"Control-Write-Encryption-Key\x00",
+        info=b"Control-Write-Encryption-Key",
         length=CHACHA_KEY_LEN,
     )
     return c2a, a2c

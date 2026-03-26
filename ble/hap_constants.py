@@ -115,22 +115,36 @@ ERROR_DESCRIPTIONS: dict[int, str] = {
 
 # ---------------------------------------------------------------------------
 # HAP-BLE PDU opcodes (Table 7-8)
+#
+# CRITICAL: verified against homekit_python HapBleOpCodes and live
+# ONVIS SMS2 testing 2026-03-25.  The original values in this file
+# were wrong (0x00 was CHAR_READ, 0x01 was CHAR_WRITE).  The correct
+# mapping — confirmed by successful pair-setup — is below.
 # ---------------------------------------------------------------------------
 
-# Read a characteristic value.
-OPCODE_CHAR_READ: int = 0x00
+# Characteristic signature read (returns characteristic metadata).
+OPCODE_CHAR_SIGNATURE_READ: int = 0x01
 
 # Write a characteristic value.
-OPCODE_CHAR_WRITE: int = 0x01
+OPCODE_CHAR_WRITE: int = 0x02
+
+# Read a characteristic value.
+OPCODE_CHAR_READ: int = 0x03
+
+# Timed write (write with TTL).
+OPCODE_CHAR_TIMED_WRITE: int = 0x04
+
+# Execute write (commit a timed write).
+OPCODE_CHAR_EXEC_WRITE: int = 0x05
+
+# Service signature read (discovery of service characteristics).
+OPCODE_SERVICE_SIGNATURE_READ: int = 0x06
 
 # Subscribe to characteristic notifications (events).
-OPCODE_CHAR_SUBSCRIBE: int = 0x03
+OPCODE_CHAR_SUBSCRIBE: int = 0x07
 
 # Unsubscribe from notifications.
-OPCODE_CHAR_UNSUBSCRIBE: int = 0x04
-
-# Service signature read (discovery of characteristics).
-OPCODE_SERVICE_SIGNATURE_READ: int = 0x05
+OPCODE_CHAR_UNSUBSCRIBE: int = 0x08
 
 # ---------------------------------------------------------------------------
 # HAP-BLE PDU status codes (Table 7-9)
