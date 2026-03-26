@@ -53,6 +53,9 @@ Endpoints::
     GET  /api/diagnostics/now_playing    Currently playing effects (from DB)
     GET  /api/diagnostics/history        Recent effect history (from DB)
     GET  /dashboard                      Web dashboard (HTML)
+    GET  /home                           Sensor display dashboard (HTML)
+    GET  /api/home/photos                List available photos for home display
+    GET  /photos/{filename}              Serve a photo from static/photos/
 Usage::
 
     python3 server.py server.json
@@ -270,6 +273,12 @@ _ROUTES: tuple[_Route, ...] = (
     # -- Pre-auth routes -----------------------------------------------------
     _Route("GET", ("dashboard",),
            "_handle_get_dashboard", requires_auth=False),
+    _Route("GET", ("home",),
+           "_handle_get_home", requires_auth=False),
+    _Route("GET", ("api", "home", "photos"),
+           "_handle_get_home_photos", requires_auth=False),
+    _Route("GET", ("photos", "{filename}"),
+           "_handle_get_photo", requires_auth=False),
 
     # -- GET: static ---------------------------------------------------------
     _Route("GET", ("api", "status"),
@@ -4809,6 +4818,91 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
         except FileNotFoundError:
             self._send_json(404, {"error": "Dashboard page not found"})
+
+    def _handle_get_home(self) -> None:
+        """GET /home — serve the sensor display dashboard.
+
+        Reads ``static/home.html`` from the server's directory
+        and returns it as ``text/html``.  Display-only page showing
+        time, sensor readings, and photos.
+        """
+        home_path: str = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "static", "home.html",
+        )
+        try:
+            with open(home_path, "r") as f:
+                html: str = f.read()
+            body: bytes = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self._send_json(404, {"error": "Home display page not found"})
+
+    def _handle_get_home_photos(self) -> None:
+        """GET /api/home/photos — list photos available for the home display.
+
+        Scans ``static/photos/`` for image files and returns their
+        filenames as a JSON array.  Returns an empty list if the
+        directory does not exist.
+        """
+        # Allowed image extensions.
+        IMAGE_EXTS: set[str] = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+        photos_dir: str = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "static", "photos",
+        )
+        photos: list[str] = []
+        if os.path.isdir(photos_dir):
+            for entry in sorted(os.listdir(photos_dir)):
+                _, ext = os.path.splitext(entry)
+                if ext.lower() in IMAGE_EXTS:
+                    photos.append(entry)
+        self._send_json(200, {"photos": photos})
+
+    def _handle_get_photo(self, filename: str) -> None:
+        """GET /photos/{filename} — serve a photo from static/photos/.
+
+        Validates the filename to prevent directory traversal,
+        then serves the image with appropriate content type.
+        """
+        # Content types by extension.
+        CONTENT_TYPES: dict[str, str] = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png", ".gif": "image/gif",
+            ".webp": "image/webp",
+        }
+        # Reject any path traversal attempts.
+        if "/" in filename or "\\" in filename or ".." in filename:
+            self._send_json(400, {"error": "Invalid filename"})
+            return
+        _, ext = os.path.splitext(filename)
+        ctype: str = CONTENT_TYPES.get(ext.lower(), "")
+        if not ctype:
+            self._send_json(400, {"error": "Unsupported image type"})
+            return
+        photo_path: str = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "static", "photos", filename,
+        )
+        try:
+            with open(photo_path, "rb") as f:
+                data: bytes = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            # Cache photos for 5 minutes — they change rarely.
+            self.send_header("Cache-Control", "public, max-age=300")
+            self.end_headers()
+            self.wfile.write(data)
+        except FileNotFoundError:
+            self._send_json(404, {"error": f"Photo not found: {filename}"})
 
     def _save_config_field(self, key: str, value: Any) -> None:
         """Persist a single config field to the config file.

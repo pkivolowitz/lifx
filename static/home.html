@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlowUp Home</title>
+<style>
+/* ------------------------------------------------------------------ */
+/* Design tokens                                                      */
+/* ------------------------------------------------------------------ */
+:root {
+    /* Background gradient — deep navy to charcoal. */
+    --bg-from:       #080818;
+    --bg-to:         #0f1628;
+
+    /* Clock. */
+    --clock-color:   #f0e6d3;
+    --date-color:    #a0a0b8;
+
+    /* Sensor card glass. */
+    --card-bg:       rgba(255, 255, 255, 0.04);
+    --card-border:   rgba(255, 255, 255, 0.08);
+    --card-hover:    rgba(255, 255, 255, 0.07);
+
+    /* Readings. */
+    --temp-color:    #f4a261;
+    --humid-color:   #48cae4;
+    --motion-on:     #06d6a0;
+    --motion-off:    #3a3a4a;
+    --label-color:   #8888a0;
+    --stale-color:   #ff6b6b;
+
+    /* Photo overlay. */
+    --photo-opacity: 0.12;
+
+    /* Typography — system fonts, no external deps. */
+    --font-clock:    "SF Mono", "Menlo", "Consolas", monospace;
+    --font-body:     -apple-system, BlinkMacSystemFont, "Segoe UI",
+                     Helvetica, Arial, sans-serif;
+
+    /* Layout. */
+    --max-width:     1400px;
+    --card-radius:   20px;
+    --gap:           24px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Reset & base                                                       */
+/* ------------------------------------------------------------------ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+    height: 100%;
+    overflow: hidden;          /* no scrollbars — kiosk display */
+    font-family: var(--font-body);
+    color: #e0e0e8;
+    background: linear-gradient(160deg, var(--bg-from), var(--bg-to));
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 24px 24px;
+    position: relative;
+}
+
+/* ------------------------------------------------------------------ */
+/* Photo background — crossfade slideshow                             */
+/* ------------------------------------------------------------------ */
+.photo-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    opacity: var(--photo-opacity);
+    background-size: cover;
+    background-position: center;
+    transition: opacity 2s ease;
+    filter: blur(2px) saturate(0.6);
+}
+.photo-bg.hidden { opacity: 0; }
+
+/* Everything else sits above the photo. */
+.content { position: relative; z-index: 1; width: 100%; max-width: var(--max-width); }
+
+/* ------------------------------------------------------------------ */
+/* Clock                                                              */
+/* ------------------------------------------------------------------ */
+.clock-section {
+    text-align: center;
+    margin-bottom: 40px;
+}
+
+.clock-time {
+    font-family: var(--font-clock);
+    font-size: clamp(4rem, 12vw, 9rem);
+    font-weight: 200;
+    letter-spacing: 0.04em;
+    color: var(--clock-color);
+    line-height: 1;
+    /* Subtle warm glow behind the digits. */
+    text-shadow: 0 0 60px rgba(244, 162, 97, 0.15);
+}
+
+.clock-seconds {
+    font-size: 0.4em;
+    opacity: 0.4;
+    vertical-align: super;
+    margin-left: 4px;
+}
+
+.clock-date {
+    font-size: clamp(1rem, 2.5vw, 1.5rem);
+    font-weight: 300;
+    color: var(--date-color);
+    margin-top: 8px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sensor grid                                                        */
+/* ------------------------------------------------------------------ */
+.sensor-grid {
+    display: grid;
+    gap: var(--gap);
+    /* Auto-fit: cards are at least 280px, stretch to fill. */
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    width: 100%;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sensor card                                                        */
+/* ------------------------------------------------------------------ */
+.sensor-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--card-radius);
+    padding: 28px 32px;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    transition: background 0.3s ease, transform 0.3s ease;
+}
+
+.sensor-label {
+    font-size: 0.85rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--label-color);
+    margin-bottom: 20px;
+}
+
+/* Main temperature reading — big and warm. */
+.reading-temp {
+    font-family: var(--font-clock);
+    font-size: clamp(2.5rem, 6vw, 4rem);
+    font-weight: 200;
+    color: var(--temp-color);
+    line-height: 1;
+    margin-bottom: 4px;
+}
+.reading-temp .unit {
+    font-size: 0.5em;
+    opacity: 0.6;
+    vertical-align: super;
+}
+
+/* Secondary readings row. */
+.reading-row {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    margin-top: 16px;
+}
+
+.reading-humid {
+    font-family: var(--font-clock);
+    font-size: 1.4rem;
+    font-weight: 300;
+    color: var(--humid-color);
+}
+.reading-humid .unit {
+    font-size: 0.75em;
+    opacity: 0.6;
+}
+
+/* Motion indicator — pulsing dot. */
+.motion-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--motion-off);
+    transition: color 0.4s ease;
+}
+.motion-indicator.active { color: var(--motion-on); }
+
+.motion-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--motion-off);
+    transition: background 0.4s ease, box-shadow 0.4s ease;
+}
+.motion-indicator.active .motion-dot {
+    background: var(--motion-on);
+    box-shadow: 0 0 12px var(--motion-on), 0 0 24px rgba(6, 214, 160, 0.3);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { box-shadow: 0 0 12px var(--motion-on), 0 0 24px rgba(6, 214, 160, 0.3); }
+    50%      { box-shadow: 0 0 18px var(--motion-on), 0 0 36px rgba(6, 214, 160, 0.5); }
+}
+
+/* Staleness warning — sensor hasn't updated recently. */
+.reading-stale {
+    font-size: 0.75rem;
+    color: var(--stale-color);
+    margin-top: 12px;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+}
+.reading-stale.visible { opacity: 1; }
+
+/* Last-update timestamp — subtle. */
+.reading-updated {
+    font-size: 0.7rem;
+    color: var(--label-color);
+    opacity: 0.5;
+    margin-top: 12px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Photo card — if photos are available, show a rotating card.        */
+/* ------------------------------------------------------------------ */
+.photo-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--card-radius);
+    overflow: hidden;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    position: relative;
+    min-height: 200px;
+}
+
+.photo-card img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: opacity 2s ease;
+}
+.photo-card img.fading { opacity: 0; }
+
+/* ------------------------------------------------------------------ */
+/* No-data state                                                      */
+/* ------------------------------------------------------------------ */
+.no-data {
+    text-align: center;
+    color: var(--label-color);
+    font-size: 1.1rem;
+    padding: 60px 20px;
+    opacity: 0.6;
+}
+
+/* ------------------------------------------------------------------ */
+/* Responsive tweaks                                                  */
+/* ------------------------------------------------------------------ */
+@media (max-width: 600px) {
+    body { padding: 20px 16px 16px; }
+    .clock-section { margin-bottom: 24px; }
+    .sensor-card { padding: 20px 24px; }
+    .sensor-grid { gap: 16px; }
+}
+
+/* Landscape tablet / kiosk — tighten vertical. */
+@media (max-height: 700px) {
+    .clock-section { margin-bottom: 20px; }
+    .clock-time { font-size: clamp(3rem, 10vw, 6rem); }
+    .sensor-card { padding: 20px 24px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Photo background layer — two elements for crossfade. -->
+<div class="photo-bg hidden" id="photoBgA"></div>
+<div class="photo-bg hidden" id="photoBgB"></div>
+
+<div class="content">
+    <!-- Clock. -->
+    <div class="clock-section">
+        <div class="clock-time" id="clockTime"></div>
+        <div class="clock-date" id="clockDate"></div>
+    </div>
+
+    <!-- Sensor cards — populated dynamically. -->
+    <div class="sensor-grid" id="sensorGrid">
+        <div class="no-data" id="noData">Waiting for sensor data&hellip;</div>
+    </div>
+</div>
+
+<script>
+/* ================================================================== */
+/* GlowUp Home Display                                                */
+/* Display-only dashboard: clock, sensors, photos.                    */
+/* No controls, no buttons — pure ambient information.                */
+/*                                                                    */
+/* __version__ = "1.0.0"                                              */
+/* ================================================================== */
+
+(function () {
+    "use strict";
+
+    /* -------------------------------------------------------------- */
+    /* Constants                                                      */
+    /* -------------------------------------------------------------- */
+
+    /* How often to poll sensor data (ms). */
+    const SENSOR_POLL_MS = 5000;
+
+    /* Seconds before a sensor reading is considered stale. */
+    const STALE_THRESHOLD_S = 120;
+
+    /* Photo rotation interval (ms). */
+    const PHOTO_ROTATE_MS = 30000;
+
+    /* How often to refresh the photo list (ms). */
+    const PHOTO_LIST_REFRESH_MS = 300000;
+
+    /* Day and month names for the date display. */
+    const DAYS = [
+        "Sunday", "Monday", "Tuesday", "Wednesday",
+        "Thursday", "Friday", "Saturday"
+    ];
+    const MONTHS = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ];
+
+    /* -------------------------------------------------------------- */
+    /* State                                                          */
+    /* -------------------------------------------------------------- */
+
+    let photos = [];
+    let photoIndex = 0;
+    let activePhotoBg = "A";   /* which bg element is visible */
+
+    /* -------------------------------------------------------------- */
+    /* Clock                                                          */
+    /* -------------------------------------------------------------- */
+
+    const clockTimeEl = document.getElementById("clockTime");
+    const clockDateEl = document.getElementById("clockDate");
+
+    function updateClock() {
+        const now = new Date();
+        let h = now.getHours();
+        const m = String(now.getMinutes()).padStart(2, "0");
+        const s = String(now.getSeconds()).padStart(2, "0");
+
+        /* 12-hour format. */
+        const ampm = h >= 12 ? "PM" : "AM";
+        h = h % 12 || 12;
+
+        clockTimeEl.innerHTML =
+            h + ":" + m +
+            '<span class="clock-seconds">' + s + " " + ampm + "</span>";
+
+        const day = DAYS[now.getDay()];
+        const month = MONTHS[now.getMonth()];
+        const date = now.getDate();
+        const year = now.getFullYear();
+        clockDateEl.textContent = day + ", " + month + " " + date + ", " + year;
+    }
+
+    /* Update clock every second. */
+    updateClock();
+    setInterval(updateClock, 1000);
+
+    /* -------------------------------------------------------------- */
+    /* Sensor cards                                                   */
+    /* -------------------------------------------------------------- */
+
+    const sensorGrid = document.getElementById("sensorGrid");
+    const noDataEl = document.getElementById("noData");
+
+    /**
+     * Convert Celsius to Fahrenheit.
+     * GlowUp stores temperatures in Celsius from HAP-BLE reads.
+     */
+    function cToF(c) {
+        return (c * 9 / 5) + 32;
+    }
+
+    /**
+     * Format a sensor label for display.
+     * "onvis_motion" → "Onvis Motion"
+     */
+    function formatLabel(label) {
+        return label
+            .replace(/_/g, " ")
+            .replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+    }
+
+    /**
+     * Build or update the sensor card for a given label.
+     */
+    function renderSensorCard(label, data) {
+        let card = document.getElementById("sensor-" + label);
+        const isNew = !card;
+
+        if (isNew) {
+            card = document.createElement("div");
+            card.className = "sensor-card";
+            card.id = "sensor-" + label;
+            card.innerHTML =
+                '<div class="sensor-label"></div>' +
+                '<div class="reading-temp"></div>' +
+                '<div class="reading-row">' +
+                '  <div class="reading-humid"></div>' +
+                '  <div class="motion-indicator">' +
+                '    <div class="motion-dot"></div>' +
+                '    <span class="motion-text"></span>' +
+                '  </div>' +
+                "</div>" +
+                '<div class="reading-stale"></div>' +
+                '<div class="reading-updated"></div>';
+        }
+
+        /* Label. */
+        card.querySelector(".sensor-label").textContent = formatLabel(label);
+
+        /* Temperature — show in Fahrenheit for US locale. */
+        const tempEl = card.querySelector(".reading-temp");
+        if (data.temperature != null) {
+            const f = cToF(data.temperature);
+            tempEl.innerHTML =
+                f.toFixed(1) + '<span class="unit">&deg;F</span>';
+        } else {
+            tempEl.innerHTML = '&mdash;<span class="unit">&deg;F</span>';
+        }
+
+        /* Humidity. */
+        const humidEl = card.querySelector(".reading-humid");
+        if (data.humidity != null) {
+            humidEl.innerHTML =
+                data.humidity.toFixed(0) + '<span class="unit">%</span>';
+        } else {
+            humidEl.innerHTML = '&mdash;<span class="unit">%</span>';
+        }
+
+        /* Motion. */
+        const motionEl = card.querySelector(".motion-indicator");
+        const motionText = card.querySelector(".motion-text");
+        const motionActive = data.motion === 1;
+        motionEl.classList.toggle("active", motionActive);
+        motionText.textContent = motionActive ? "Motion" : "Clear";
+
+        /* Staleness check. */
+        const staleEl = card.querySelector(".reading-stale");
+        if (data.last_update) {
+            const age = Date.now() / 1000 - data.last_update;
+            if (age > STALE_THRESHOLD_S) {
+                const mins = Math.floor(age / 60);
+                staleEl.textContent = "No update for " + mins + " min";
+                staleEl.classList.add("visible");
+            } else {
+                staleEl.classList.remove("visible");
+            }
+
+            /* Last-update timestamp. */
+            const updatedEl = card.querySelector(".reading-updated");
+            const dt = new Date(data.last_update * 1000);
+            updatedEl.textContent = "Updated " + dt.toLocaleTimeString();
+        }
+
+        if (isNew) {
+            sensorGrid.appendChild(card);
+        }
+    }
+
+    /**
+     * Fetch sensor data and update all cards.
+     */
+    function pollSensors() {
+        fetch("/api/ble/sensors")
+            .then(function (r) { return r.json(); })
+            .then(function (sensors) {
+                const labels = Object.keys(sensors);
+                if (labels.length === 0) {
+                    noDataEl.style.display = "";
+                    return;
+                }
+                noDataEl.style.display = "none";
+
+                labels.forEach(function (label) {
+                    renderSensorCard(label, sensors[label]);
+                });
+
+                /* Remove cards for sensors that disappeared. */
+                var existingCards = sensorGrid.querySelectorAll(".sensor-card");
+                existingCards.forEach(function (el) {
+                    var id = el.id.replace("sensor-", "");
+                    if (labels.indexOf(id) === -1) {
+                        el.remove();
+                    }
+                });
+            })
+            .catch(function () {
+                /* Network hiccup — leave display as-is, try again next cycle. */
+            });
+    }
+
+    pollSensors();
+    setInterval(pollSensors, SENSOR_POLL_MS);
+
+    /* -------------------------------------------------------------- */
+    /* Photo slideshow                                                */
+    /* -------------------------------------------------------------- */
+
+    const photoBgA = document.getElementById("photoBgA");
+    const photoBgB = document.getElementById("photoBgB");
+
+    /**
+     * Fetch available photos from the server.
+     */
+    function loadPhotoList() {
+        fetch("/api/home/photos")
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.photos && data.photos.length > 0) {
+                    photos = data.photos;
+                    /* Shuffle for variety. */
+                    for (var i = photos.length - 1; i > 0; i--) {
+                        var j = Math.floor(Math.random() * (i + 1));
+                        var tmp = photos[i];
+                        photos[i] = photos[j];
+                        photos[j] = tmp;
+                    }
+                    showNextPhoto();
+                }
+            })
+            .catch(function () { /* no photos — that's fine */ });
+    }
+
+    /**
+     * Crossfade to the next photo.
+     */
+    function showNextPhoto() {
+        if (photos.length === 0) return;
+
+        var url = "/photos/" + encodeURIComponent(photos[photoIndex]);
+        photoIndex = (photoIndex + 1) % photos.length;
+
+        /* Alternate between the two background elements for crossfade. */
+        var incoming, outgoing;
+        if (activePhotoBg === "A") {
+            incoming = photoBgB;
+            outgoing = photoBgA;
+            activePhotoBg = "B";
+        } else {
+            incoming = photoBgA;
+            outgoing = photoBgB;
+            activePhotoBg = "A";
+        }
+
+        /* Preload the image before showing. */
+        var img = new Image();
+        img.onload = function () {
+            incoming.style.backgroundImage = 'url("' + url + '")';
+            incoming.classList.remove("hidden");
+            outgoing.classList.add("hidden");
+        };
+        img.src = url;
+    }
+
+    loadPhotoList();
+    setInterval(showNextPhoto, PHOTO_ROTATE_MS);
+    /* Refresh photo list periodically in case new photos are added. */
+    setInterval(loadPhotoList, PHOTO_LIST_REFRESH_MS);
+
+})();
+</script>
+</body>
+</html>
