@@ -244,32 +244,6 @@ body {
 }
 
 /* ------------------------------------------------------------------ */
-/* Light status card                                                   */
-/* ------------------------------------------------------------------ */
-.light-power {
-    font-family: var(--font-clock);
-    font-size: clamp(3rem, 8vw, 5.5rem);
-    font-weight: 300;
-    line-height: 1;
-    margin-bottom: 8px;
-}
-.light-power.on  { color: var(--motion-on); }
-.light-power.off { color: var(--motion-off); }
-
-.light-effect {
-    font-size: clamp(1.2rem, 2.5vw, 2rem);
-    color: var(--text-color);
-    opacity: 0.7;
-    margin-bottom: 4px;
-}
-
-.light-schedule {
-    font-size: clamp(0.9rem, 1.5vw, 1.2rem);
-    color: var(--label-color);
-    opacity: 0.6;
-}
-
-/* ------------------------------------------------------------------ */
 /* Photo card                                                         */
 /* ------------------------------------------------------------------ */
 .photo-card {
@@ -543,81 +517,6 @@ body {
 
     pollSensors();
     setInterval(pollSensors, SENSOR_POLL_MS);
-
-    /* -------------------------------------------------------------- */
-    /* Light status cards                                             */
-    /* -------------------------------------------------------------- */
-
-    /** Build or update a light status card for a group. */
-    function renderLightCard(groupName, info, activeSchedules) {
-        var cardId = "light-" + groupName;
-        var card = document.getElementById(cardId);
-        var isNew = !card;
-
-        if (isNew) {
-            card = document.createElement("div");
-            card.className = "sensor-card";
-            card.id = cardId;
-            card.innerHTML =
-                '<div class="sensor-label"></div>' +
-                '<div class="light-power"></div>' +
-                '<div class="light-effect"></div>' +
-                '<div class="light-schedule"></div>';
-        }
-
-        card.querySelector(".sensor-label").textContent = groupName;
-
-        var powerEl = card.querySelector(".light-power");
-        var isOn = info.power;
-        powerEl.textContent = isOn ? "ON" : "OFF";
-        powerEl.className = "light-power " + (isOn ? "on" : "off");
-
-        /* Current effect. */
-        var effectEl = card.querySelector(".light-effect");
-        if (info.effect) {
-            effectEl.textContent = info.effect.replace(/_/g, " ");
-        } else {
-            effectEl.textContent = isOn ? "idle" : "";
-        }
-
-        /* Active schedule entry name for this group. */
-        var schedEl = card.querySelector(".light-schedule");
-        var sched = null;
-        for (var i = 0; i < activeSchedules.length; i++) {
-            if (activeSchedules[i].group === groupName) {
-                sched = activeSchedules[i];
-                break;
-            }
-        }
-        schedEl.textContent = sched ? sched.name : "";
-
-        if (isNew) {
-            sensorGrid.appendChild(card);
-        }
-    }
-
-    /** Fetch light status and update cards. */
-    function pollLights() {
-        fetch("/api/home/lights")
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                if (data.error) return;
-                var groups = data.groups || {};
-                var active = data.active_schedules || [];
-
-                /* Only show the bedroom group. */
-                if (groups["bedroom"]) {
-                    renderLightCard("bedroom", groups["bedroom"], active);
-                    noDataEl.style.display = "none";
-                }
-            })
-            .catch(function () {
-                /* Network hiccup — leave display as-is. */
-            });
-    }
-
-    pollLights();
-    setInterval(pollLights, SENSOR_POLL_MS);
 
     /* -------------------------------------------------------------- */
     /* Photo slideshow                                                */
