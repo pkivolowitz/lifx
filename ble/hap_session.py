@@ -62,6 +62,7 @@ from .hap_constants import (
     TLV_STATE,
 )
 from .hap_pdu import (
+    HAP_PARAM_VALUE,
     HapResponse,
     TidAllocator,
     build_read_request,
@@ -708,10 +709,19 @@ class HapSession:
     # ------------------------------------------------------------------
 
     async def _write_pairing(self, tlv_data: bytes) -> None:
-        """Write TLV data to the Pair Setup characteristic via HAP PDU."""
+        """Write TLV data to the Pair Setup characteristic via HAP PDU.
+
+        The PDU body wraps the pairing TLV inside HAP_PARAM_VALUE
+        (type 0x01) — required by HAP-BLE for all characteristic
+        value writes.
+        """
+        # Wrap the pairing TLV in HAP_PARAM_VALUE.
+        wrapped_body: bytes = tlv.encode([
+            (HAP_PARAM_VALUE, tlv_data),
+        ])
         tid: int = self._tid.allocate()
         pdu: bytes = build_write_request(
-            tid=tid, iid=self._iid_pair_setup, body=tlv_data
+            tid=tid, iid=self._iid_pair_setup, body=wrapped_body
         )
         await self._gatt.write_characteristic(
             CHAR_PAIR_SETUP, pdu, response=True
@@ -727,9 +737,12 @@ class HapSession:
 
     async def _write_verify(self, tlv_data: bytes) -> None:
         """Write TLV data to the Pair Verify characteristic via HAP PDU."""
+        wrapped_body: bytes = tlv.encode([
+            (HAP_PARAM_VALUE, tlv_data),
+        ])
         tid: int = self._tid.allocate()
         pdu: bytes = build_write_request(
-            tid=tid, iid=self._iid_pair_verify, body=tlv_data
+            tid=tid, iid=self._iid_pair_verify, body=wrapped_body
         )
         await self._gatt.write_characteristic(
             CHAR_PAIR_VERIFY, pdu, response=True
@@ -829,7 +842,22 @@ class HapSession:
             "first TLV bytes: %s",
             context, len(body), reads + 1, body[:16].hex(),
         )
-        return bytes(body)
+
+        # If the response body is wrapped in HAP_PARAM_VALUE, unwrap it.
+        result: bytes = bytes(body)
+        try:
+            decoded: list[tuple[int, bytes]] = tlv.decode(result)
+            for tlv_type, tlv_val in decoded:
+                if tlv_type == HAP_PARAM_VALUE:
+                    logger.info(
+                        "%s unwrapped HAP_PARAM_VALUE: %d bytes",
+                        context, len(tlv_val),
+                    )
+                    return tlv_val
+        except ValueError:
+            pass  # Not valid TLV — return as-is.
+
+        return result
 
     async def _read_fragmented(
         self, char_uuid: str, context: str
