@@ -54,7 +54,9 @@ GRID_SIZE: int = GRID_WIDTH * GRID_HEIGHT  # 35 protocol slots
 
 # Assignable columns (full 5-row height).  Columns 0 and 6 are partial
 # (dead corners at rows 0 and 4) so we skip them.
-ASSIGNABLE_COLUMNS: list[int] = [1, 2, 3, 4, 5]
+# Spread evenly across the oval for visual separation — the Luna's
+# heavy diffuser bleeds adjacent columns together.
+ASSIGNABLE_COLUMNS: list[int] = [1, 3, 5, 2, 4]
 
 # Maximum simultaneous patients (one per assignable column).
 MAX_PATIENTS: int = len(ASSIGNABLE_COLUMNS)
