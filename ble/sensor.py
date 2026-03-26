@@ -246,20 +246,25 @@ class HapEncryptedSession:
 
         # Write encrypted PDU to the characteristic.
         await self._client.write_gatt_char(char_uuid, ct, response=True)
-        # Short wait for accessory to process — 200ms is enough for
-        # the ONVIS SMS2.  The original 1s added unnecessary latency.
-        await asyncio.sleep(0.2)
+        # Wait for accessory to process.  500ms balances latency vs
+        # reliability — 200ms caused ATT 0x0E errors on the ONVIS
+        # when polled rapidly.
+        await asyncio.sleep(0.5)
 
         # Read encrypted response.
         resp: bytes = bytes(await self._client.read_gatt_char(char_uuid))
 
-        # Decrypt entire response.
+        # Decrypt entire response.  If decryption fails (nonce
+        # desync, corrupt data), increment the counter anyway — the
+        # accessory already incremented its counter when it sent
+        # the response, so we must stay in sync even on failure.
         try:
             dec: bytes = ChaCha20Poly1305(self._a2c_key).decrypt(
                 _enc_nonce(self._a2c_ctr), resp, b""
             )
             self._a2c_ctr += 1
         except Exception as exc:
+            self._a2c_ctr += 1  # Stay in sync.
             logger.warning("Decrypt failed for IID=%d: %s", iid, exc)
             return None
 
