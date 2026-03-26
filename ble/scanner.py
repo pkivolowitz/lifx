@@ -197,16 +197,14 @@ async def connect_and_wrap(
         bleak.exc.BleakError: On connection failure.
     """
     try:
-        from bleak import BleakClient
+        from bleak import BleakClient, BleakScanner
     except ImportError:
         raise ImportError(
             "BLE connection requires bleak: pip install bleak"
         )
 
     # HAP-BLE accessories can be aggressive about disconnecting during
-    # GATT service discovery.  Retry with exponential backoff.  On the
-    # second attempt, bleak uses its cached service table (if the first
-    # attempt got far enough to populate it), making discovery instant.
+    # GATT service discovery.  Retry with exponential backoff.
     MAX_CONNECT_ATTEMPTS: int = 3
     RETRY_DELAY: float = 2.0
 
@@ -214,7 +212,23 @@ async def connect_and_wrap(
 
     for attempt in range(1, MAX_CONNECT_ATTEMPTS + 1):
         try:
-            client = BleakClient(address, timeout=timeout)
+            # BlueZ requires the device to be in its cache before
+            # connecting.  A quick scan ensures BlueZ sees the device,
+            # especially after bluetoothctl remove or a cold start.
+            PRESCAN_SECONDS: float = 5.0
+            logger.info(
+                "Scanning for %s before connect (attempt %d/%d)...",
+                address, attempt, MAX_CONNECT_ATTEMPTS,
+            )
+            device = await BleakScanner.find_device_by_address(
+                address, timeout=PRESCAN_SECONDS,
+            )
+            if device is None:
+                raise Exception(
+                    f"Device {address} not found during pre-connect scan"
+                )
+
+            client = BleakClient(device, timeout=timeout)
             await client.connect()
             logger.info(
                 "Connected to %s (attempt %d/%d)",
