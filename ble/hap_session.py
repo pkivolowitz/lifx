@@ -239,6 +239,74 @@ class HapSession:
         self._tid: TidAllocator = TidAllocator()
         self._session: Optional[EncryptedSession] = None
 
+        # HAP-BLE characteristic instance IDs.  Discovered at runtime
+        # by reading the IID descriptor on each characteristic.
+        # These are needed for HAP PDU framing (every request includes
+        # the target characteristic's IID).
+        self._iid_pair_setup: int = 0
+        self._iid_pair_verify: int = 0
+        self._iids_discovered: bool = False
+
+    async def discover_iids(self) -> None:
+        """Discover HAP characteristic instance IDs from GATT descriptors.
+
+        HAP-BLE uses a custom descriptor (dc46f0fe-81d2-4616-b5d9-6abdd796939a)
+        on each characteristic to declare its instance ID.  These IIDs are
+        required in HAP PDU framing.
+
+        Must be called before pair_setup() or pair_verify().
+        """
+        # The IID descriptor UUID used by HAP-BLE accessories.
+        IID_DESCRIPTOR_UUID: str = "dc46f0fe-81d2-4616-b5d9-6abdd796939a"
+
+        try:
+            iids: dict[str, int] = await self._gatt.read_iid_descriptors(
+                CHAR_PAIR_SETUP, CHAR_PAIR_VERIFY,
+                iid_descriptor_uuid=IID_DESCRIPTOR_UUID,
+            )
+            self._iid_pair_setup = iids.get(CHAR_PAIR_SETUP, 0)
+            self._iid_pair_verify = iids.get(CHAR_PAIR_VERIFY, 0)
+        except (AttributeError, NotImplementedError):
+            # Fallback: read descriptors manually via the GATT client.
+            self._iid_pair_setup = await self._read_iid(
+                CHAR_PAIR_SETUP, IID_DESCRIPTOR_UUID
+            )
+            self._iid_pair_verify = await self._read_iid(
+                CHAR_PAIR_VERIFY, IID_DESCRIPTOR_UUID
+            )
+
+        self._iids_discovered = True
+        logger.info(
+            "HAP IIDs discovered: pair_setup=0x%04X, pair_verify=0x%04X",
+            self._iid_pair_setup, self._iid_pair_verify,
+        )
+
+    async def _read_iid(self, char_uuid: str, desc_uuid: str) -> int:
+        """Read a single characteristic's IID from its descriptor.
+
+        Falls back to reading all descriptors via the GATT client's
+        underlying bleak handle access.
+        """
+        # This requires direct bleak access — the GattClient protocol
+        # doesn't have descriptor support.  Access the underlying client.
+        client = getattr(self._gatt, "_client", None)
+        if client is None:
+            logger.warning("Cannot read IID descriptors — no bleak client")
+            return 0
+
+        for service in client.services:
+            for char in service.characteristics:
+                if char.uuid == char_uuid:
+                    for desc in char.descriptors:
+                        if desc.uuid == desc_uuid:
+                            val: bytearray = await client.read_gatt_descriptor(
+                                desc.handle
+                            )
+                            iid: int = int.from_bytes(val, byteorder="little")
+                            return iid
+        logger.warning("IID descriptor not found for %s", char_uuid)
+        return 0
+
     @property
     def is_encrypted(self) -> bool:
         """True if pair-verify has succeeded and an encrypted session is active."""
@@ -270,6 +338,10 @@ class HapSession:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import (
             Ed25519PrivateKey,
         )
+
+        # Discover characteristic IIDs before any PDU I/O.
+        if not self._iids_discovered:
+            await self.discover_iids()
 
         logger.info("Pair-setup: starting SRP exchange")
 
@@ -419,6 +491,10 @@ class HapSession:
         )
 
         logger.info("Pair-verify: starting Curve25519 exchange")
+
+        # Discover characteristic IIDs before any PDU I/O.
+        if not self._iids_discovered:
+            await self.discover_iids()
 
         # Generate ephemeral Curve25519 key pair for this session.
         ephemeral_sk = X25519PrivateKey.generate()
@@ -605,27 +681,52 @@ class HapSession:
 
     # ------------------------------------------------------------------
     # Internal: GATT I/O for pairing characteristics
+    #
+    # HAP-BLE requires ALL characteristic access to go through HAP PDU
+    # framing — even pair-setup/verify.  Each write is a HAP request
+    # PDU (opcode + TID + IID + body), and each read returns a HAP
+    # response PDU (TID + status + body).
     # ------------------------------------------------------------------
 
     async def _write_pairing(self, tlv_data: bytes) -> None:
-        """Write TLV data to the Pair Setup characteristic."""
+        """Write TLV data to the Pair Setup characteristic via HAP PDU."""
+        tid: int = self._tid.allocate()
+        pdu: bytes = build_write_request(
+            tid=tid, iid=self._iid_pair_setup, body=tlv_data
+        )
         await self._gatt.write_characteristic(
-            CHAR_PAIR_SETUP, tlv_data, response=True
+            CHAR_PAIR_SETUP, pdu, response=True
         )
 
     async def _read_pairing(self) -> bytes:
-        """Read TLV data from the Pair Setup characteristic."""
-        return await self._gatt.read_characteristic(CHAR_PAIR_SETUP)
+        """Read TLV response from the Pair Setup characteristic."""
+        raw: bytes = await self._gatt.read_characteristic(CHAR_PAIR_SETUP)
+        resp: HapResponse = parse_response(raw)
+        if not resp.ok:
+            raise HapError(
+                f"Pair-setup read failed: {resp.status_description}"
+            )
+        return resp.body or b""
 
     async def _write_verify(self, tlv_data: bytes) -> None:
-        """Write TLV data to the Pair Verify characteristic."""
+        """Write TLV data to the Pair Verify characteristic via HAP PDU."""
+        tid: int = self._tid.allocate()
+        pdu: bytes = build_write_request(
+            tid=tid, iid=self._iid_pair_verify, body=tlv_data
+        )
         await self._gatt.write_characteristic(
-            CHAR_PAIR_VERIFY, tlv_data, response=True
+            CHAR_PAIR_VERIFY, pdu, response=True
         )
 
     async def _read_verify(self) -> bytes:
-        """Read TLV data from the Pair Verify characteristic."""
-        return await self._gatt.read_characteristic(CHAR_PAIR_VERIFY)
+        """Read TLV response from the Pair Verify characteristic."""
+        raw: bytes = await self._gatt.read_characteristic(CHAR_PAIR_VERIFY)
+        resp: HapResponse = parse_response(raw)
+        if not resp.ok:
+            raise HapError(
+                f"Pair-verify read failed: {resp.status_description}"
+            )
+        return resp.body or b""
 
     # ------------------------------------------------------------------
     # Internal: PDU encryption/decryption
