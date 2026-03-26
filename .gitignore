@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .claude/
 server.json
+ble_pairing.json
 .DS_Store
 xcuserdata/
 appstore/
