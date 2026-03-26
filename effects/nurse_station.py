@@ -77,7 +77,7 @@ COLOR_WARNING: tuple[int, int] = (hue_to_u16(50.0), HSBK_MAX)
 # Red: hue 0°, full sat, full brightness.
 COLOR_CRITICAL: tuple[int, int] = (hue_to_u16(0.0), HSBK_MAX)
 # Dim blue for offline: hue 220°, full sat, low brightness.
-COLOR_OFFLINE: HSBK = (hue_to_u16(220.0), HSBK_MAX, int(HSBK_MAX * 0.15), KELVIN_DEFAULT)
+COLOR_OFFLINE: HSBK = (hue_to_u16(220.0), HSBK_MAX, int(HSBK_MAX * 0.05), KELVIN_DEFAULT)
 
 # Black — unassigned zones and dead corners.
 BLACK: HSBK = (0, 0, 0, KELVIN_DEFAULT)
@@ -91,10 +91,11 @@ DEFAULT_RR: float = 15.0
 BREATHE_MIN_FRACTION: float = 0.0
 
 # Maximum brightness for normal and warning states.
-BREATHE_MAX_BRIGHTNESS: int = HSBK_MAX
+# Luna LEDs are absurdly bright — keep well below max.
+BREATHE_MAX_BRIGHTNESS: int = int(HSBK_MAX * 0.25)
 
 # Brightness for solid critical (no pulse).
-CRITICAL_BRIGHTNESS: int = HSBK_MAX
+CRITICAL_BRIGHTNESS: int = int(HSBK_MAX * 0.35)
 
 # MQTT topic patterns for Retro-Med.
 TOPIC_TELEMETRY: str = "aeye/+/telemetry"
