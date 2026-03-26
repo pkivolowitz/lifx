@@ -32,9 +32,14 @@ sudo apt-get install -y -qq \
     bluetooth \
     bluez
 
-# ---- Python dependencies -------------------------------------------
-echo "Installing Python BLE packages..."
-sudo pip3 install --break-system-packages \
+# ---- Python venv ----------------------------------------------------
+echo "Creating Python venv..."
+VENV="/home/a/venv"
+if [ ! -d "$VENV" ]; then
+    python3 -m venv "$VENV"
+fi
+echo "Installing Python BLE packages into venv..."
+"$VENV/bin/pip" install \
     bleak \
     cryptography \
     paho-mqtt
