@@ -66,11 +66,11 @@ GRID_SIZE: int = GRID_WIDTH * GRID_HEIGHT  # 35 protocol slots
 #   _  .  .  .  .  .  _
 #
 PATIENT_COLUMNS: list[list[int]] = [
-    [0, 1],     # Patient 1: left edge pair
-    [3],        # Patient 2: center solo
-    [5, 6],     # Patient 3: right edge pair
-    [2],        # Patient 4: left gutter (overflow)
-    [4],        # Patient 5: right gutter (overflow)
+    [0],        # Patient 1: far left edge
+    [3],        # Patient 2: center
+    [6],        # Patient 3: far right edge
+    [1],        # Patient 4: overflow
+    [5],        # Patient 5: overflow
 ]
 
 # Maximum simultaneous patients.
