@@ -203,21 +203,34 @@ async def connect_and_wrap(
             "BLE connection requires bleak: pip install bleak"
         )
 
-    from .hap_constants import SERVICE_PAIRING, SERVICE_PROTOCOL_INFO
+    # HAP-BLE accessories can be aggressive about disconnecting during
+    # GATT service discovery.  Retry with exponential backoff.  On the
+    # second attempt, bleak uses its cached service table (if the first
+    # attempt got far enough to populate it), making discovery instant.
+    MAX_CONNECT_ATTEMPTS: int = 3
+    RETRY_DELAY: float = 2.0
 
-    # Request only HAP service UUIDs to speed up GATT discovery.
-    # HAP-BLE accessories aggressively disconnect controllers that
-    # take too long during service enumeration.
-    hap_services: list[str] = [SERVICE_PAIRING, SERVICE_PROTOCOL_INFO]
+    last_error: Optional[Exception] = None
 
-    client = BleakClient(
-        address,
-        timeout=timeout,
-        services=hap_services,
-    )
-    await client.connect()
-    logger.info("Connected to %s", address)
-    return BleakGattClient(client)
+    for attempt in range(1, MAX_CONNECT_ATTEMPTS + 1):
+        try:
+            client = BleakClient(address, timeout=timeout)
+            await client.connect()
+            logger.info(
+                "Connected to %s (attempt %d/%d)",
+                address, attempt, MAX_CONNECT_ATTEMPTS,
+            )
+            return BleakGattClient(client)
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Connection attempt %d/%d to %s failed: %s",
+                attempt, MAX_CONNECT_ATTEMPTS, address, exc,
+            )
+            if attempt < MAX_CONNECT_ATTEMPTS:
+                await asyncio.sleep(RETRY_DELAY * attempt)
+
+    raise last_error  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
