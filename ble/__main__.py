@@ -181,7 +181,9 @@ def main() -> None:
     )
     p_signal.set_defaults(func=cmd_signal)
 
-    args = parser.parse_args()
+    # parse_known_args so delegating subcommands (sensor, signal)
+    # can forward their own flags to the downstream CLI.
+    args, _remaining = parser.parse_known_args()
 
     if args.verbose:
         logging.basicConfig(
