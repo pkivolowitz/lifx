@@ -5,10 +5,12 @@ Dispatches to sub-commands:
     python3 -m ble discover       — Scan for HAP-BLE accessories
     python3 -m ble pair <label>   — Pair with an accessory
     python3 -m ble sensor         — Run the sensor daemon
+    python3 -m ble signal         — Passive RSSI signal meter
 
 Each sub-command can also be run directly:
 
     python3 -m ble.sensor         — Same as ``python3 -m ble sensor``
+    python3 -m ble.signal_meter   — Same as ``python3 -m ble signal``
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
@@ -105,6 +107,14 @@ def cmd_sensor(args: argparse.Namespace) -> None:
     main()
 
 
+def cmd_signal(args: argparse.Namespace) -> None:
+    """Run the passive BLE signal meter."""
+    # Delegate to the signal_meter module's CLI.
+    sys.argv = ["ble.signal_meter"] + sys.argv[2:]
+    from .signal_meter import main
+    main()
+
+
 def main() -> None:
     """Main CLI dispatcher."""
     parser = argparse.ArgumentParser(
@@ -163,6 +173,13 @@ def main() -> None:
         help="Run the BLE sensor daemon",
     )
     p_sensor.set_defaults(func=cmd_sensor)
+
+    # --- signal ---
+    p_signal = subparsers.add_parser(
+        "signal",
+        help="Passive RSSI signal meter (safe alongside daemon)",
+    )
+    p_signal.set_defaults(func=cmd_signal)
 
     args = parser.parse_args()
 
