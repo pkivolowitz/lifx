@@ -1,0 +1,36 @@
+# GlowUp BLE Sensor Daemon
+#
+# Monitors paired HomeKit BLE accessories (motion sensors, contact
+# sensors, etc.) and publishes events to MQTT for the GlowUp server
+# to act on.
+#
+# Install:
+#   sudo cp glowup-ble-sensor.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable glowup-ble-sensor
+#   sudo systemctl start glowup-ble-sensor
+#
+# Requires:
+#   - Bluetooth powered on (sudo rfkill unblock bluetooth)
+#   - ble_pairing.json with paired device(s)
+#   - MQTT broker running (mosquitto on the Pi)
+#   - bleak, cryptography, paho-mqtt pip packages
+
+[Unit]
+Description=GlowUp BLE Sensor Daemon
+After=bluetooth.target mosquitto.service network-online.target
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/pi/lifx
+ExecStartPre=/usr/bin/rfkill unblock bluetooth
+ExecStart=/usr/bin/python3 -m ble.sensor --config /home/pi/lifx/ble_pairing.json --broker localhost --poll-interval 3
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

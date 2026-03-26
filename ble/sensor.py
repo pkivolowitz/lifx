@@ -87,11 +87,15 @@ HAP_VALUE: int = 0x01
 HAP_RETURN_RESP: int = 0x09
 
 # Sensor names for logging and MQTT topics.
+# All standard HomeKit sensor characteristic UUIDs we recognize.
+# New device types (EVE contact sensors, etc.) can be added here.
 SENSOR_NAMES: dict[str, str] = {
     CHAR_MOTION: "motion",
-    CHAR_OCCUPANCY: "motion",
+    CHAR_OCCUPANCY: "motion",      # ONVIS uses 0x22, EVE may use 0x71.
     CHAR_TEMPERATURE: "temperature",
     CHAR_HUMIDITY: "humidity",
+    # EVE contact sensor (if present).
+    # "000000d0-0000-1000-8000-0026bb765291": "contact",
 }
 
 
@@ -603,13 +607,45 @@ async def monitor_device(
     }))
 
 
+async def _monitor_with_reconnect(
+    label: str,
+    address: str,
+    pairing: dict,
+    publisher: MqttPublisher,
+    poll_interval: float,
+) -> None:
+    """Monitor a single device with auto-reconnect.
+
+    Runs forever (until cancelled), reconnecting with exponential
+    backoff when the BLE connection drops.
+    """
+    delay: float = RECONNECT_DELAY
+    while True:
+        try:
+            await monitor_device(
+                label, address, pairing, publisher, poll_interval
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("%s: error — %s", label, exc, exc_info=True)
+
+        logger.info("Reconnecting to %s in %.0fs...", label, delay)
+        await asyncio.sleep(delay)
+        delay = min(delay * 1.5, MAX_RECONNECT_DELAY)
+
+
 async def run_daemon(
     config_path: str = "ble_pairing.json",
     broker: str = DEFAULT_BROKER,
     mqtt_port: int = DEFAULT_MQTT_PORT,
     poll_interval: float = POLL_INTERVAL,
 ) -> None:
-    """Run the BLE sensor daemon with auto-reconnect."""
+    """Run the BLE sensor daemon with concurrent multi-device support.
+
+    Each paired device gets its own monitor task with independent
+    reconnect logic.  All tasks run concurrently via asyncio.gather.
+    """
     with open(config_path) as f:
         pairing: dict = json.load(f)
 
@@ -625,26 +661,27 @@ async def run_daemon(
     publisher = MqttPublisher(broker=broker, port=mqtt_port)
     publisher.connect()
 
+    logger.info(
+        "BLE sensor daemon starting — %d device(s): %s",
+        len(paired), ", ".join(paired),
+    )
+
+    # Launch one monitor task per device — they run concurrently.
+    tasks: list[asyncio.Task] = []
+    for label in paired:
+        address: str = pairing["devices"][label]["address"]
+        task: asyncio.Task = asyncio.create_task(
+            _monitor_with_reconnect(
+                label, address, pairing, publisher, poll_interval
+            ),
+            name=f"ble-{label}",
+        )
+        tasks.append(task)
+
     try:
-        for label in paired:
-            address: str = pairing["devices"][label]["address"]
-            delay: float = RECONNECT_DELAY
-
-            while True:
-                try:
-                    await monitor_device(
-                        label, address, pairing, publisher, poll_interval
-                    )
-                except Exception as exc:
-                    logger.error(
-                        "%s: error — %s", label, exc, exc_info=True
-                    )
-
-                logger.info(
-                    "Reconnecting to %s in %.0fs...", label, delay
-                )
-                await asyncio.sleep(delay)
-                delay = min(delay * 1.5, MAX_RECONNECT_DELAY)
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        pass
     finally:
         publisher.disconnect()
 
