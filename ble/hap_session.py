@@ -742,48 +742,92 @@ class HapSession:
     async def _read_raw_tlv(
         self, char_uuid: str, context: str
     ) -> bytes:
-        """Read raw TLV from a characteristic, assembling fragments.
+        """Read a pairing response, assembling fragments.
 
-        Pair-setup and pair-verify responses are raw TLV written to the
-        characteristic value — no HAP PDU wrapper.  Large responses
-        (e.g., SRP public key = 384 bytes) are fragmented across
-        multiple GATT reads.
+        The ONVIS SMS2 returns pair-setup/verify responses as a HAP PDU
+        with a 2-byte header (control + TID) followed by TLV body data.
+        Large responses are fragmented: the first read contains the
+        header + initial body bytes, continuation reads contain only
+        body data.
+
+        The response format appears to be:
+            Control(1) + TID(1) + TLV body (variable, fragmented)
+
+        No separate status or body-length fields for pairing responses.
 
         Args:
             char_uuid: GATT characteristic UUID to read from.
             context: Human-readable label for error messages.
 
         Returns:
-            Complete TLV bytes.
+            Complete TLV bytes (header stripped).
         """
-        # First read.
+        import struct
+
+        # First read: PDU header + start of TLV body.
         raw: bytes = await self._gatt.read_characteristic(char_uuid)
         logger.info(
-            "%s first read: %d bytes, first 16 hex: %s",
-            context, len(raw), raw[:16].hex(),
+            "%s first read: %d bytes, hex: %s",
+            context, len(raw), raw.hex(),
         )
 
-        body: bytearray = bytearray(raw)
+        if len(raw) < 2:
+            raise HapError(f"{context} response too short: {len(raw)} bytes")
+
+        # Check for HAP PDU header: control byte with response bit set.
+        has_pdu_header: bool = bool(raw[0] & 0x02)
+
+        if has_pdu_header:
+            # Strip 2-byte PDU header (control + TID).
+            # Then check if bytes [2:4] look like a 2-byte status +
+            # 2-byte body length (standard HAP PDU), or if they're
+            # already TLV data.
+            #
+            # Standard HAP: control(1) + TID(1) + status(2) + len(2) + body
+            # Pairing variant: control(1) + TID(1) + body (TLV directly)
+            #
+            # Detect by checking if bytes[2] is a valid TLV pairing type.
+            PAIRING_TLV_TYPES: set[int] = {0x00, 0x01, 0x02, 0x03, 0x04,
+                                            0x05, 0x06, 0x07, 0x09, 0x0A,
+                                            0x13, 0xFF}
+            if len(raw) > 2 and raw[2] in PAIRING_TLV_TYPES:
+                # Byte 2 is a TLV type → no status/length fields.
+                body_start: int = 2
+            elif len(raw) >= 6:
+                # Standard PDU: status(2) + body_length(2).
+                status: int = struct.unpack_from("<H", raw, 2)[0]
+                if status != 0:
+                    raise HapError(
+                        f"{context} PDU status error: 0x{status:04X}"
+                    )
+                body_start = 6
+            else:
+                body_start = 2
+        else:
+            # No PDU header — entire read is TLV.
+            body_start = 0
+
+        body: bytearray = bytearray(raw[body_start:])
+        first_frag: bytes = raw  # For repeat detection.
         MAX_FRAGMENT_READS: int = 200
         reads: int = 0
 
-        # Keep reading until we get repeated data (characteristic value
-        # doesn't change) or an empty read.
+        # Read continuation fragments.  Stop when we get repeated data
+        # (the characteristic value hasn't changed) or an empty read.
         while reads < MAX_FRAGMENT_READS:
             frag: bytes = await self._gatt.read_characteristic(char_uuid)
             if not frag:
                 break
-            # If we get the same bytes back, the characteristic hasn't
-            # been updated — we've read all fragments.
-            if bytes(frag) == bytes(raw):
+            if bytes(frag) == bytes(first_frag):
+                # Same data as first read — no new fragment.
                 break
             body.extend(frag)
             reads += 1
-            raw = frag  # Track last fragment for repeat detection.
 
         logger.info(
-            "%s assembled %d bytes from %d read(s)",
-            context, len(body), reads + 1,
+            "%s assembled %d TLV bytes from %d read(s), "
+            "first TLV bytes: %s",
+            context, len(body), reads + 1, body[:16].hex(),
         )
         return bytes(body)
 
