@@ -5438,6 +5438,7 @@ def main() -> None:
     # accepting connections while we query each device.
     # MQTT bridge reference — set by _background_startup if configured.
     mqtt_bridge: Optional[MqttBridge] = None
+    ble_trigger_mgr: Optional[BleTriggerManager] = None
     # MediaManager reference — set by _background_startup if configured.
     media_mgr: Optional[MediaManager] = None
     # Orchestrator reference — set by _background_startup if configured.
@@ -5456,7 +5457,7 @@ def main() -> None:
         5. Populate DeviceManager and load devices.
         6. Start scheduler, MQTT, orchestrator, media pipeline.
         """
-        nonlocal mqtt_bridge, media_mgr, orch, keepalive
+        nonlocal mqtt_bridge, media_mgr, orch, keepalive, ble_trigger_mgr
 
         try:
             # -- Step 1: Start the ARP-based bulb keepalive daemon --------
@@ -5585,13 +5586,12 @@ def main() -> None:
 
             # Start BLE trigger manager if configured.
             ble_trigger_cfg: dict = config.get("ble_triggers", {})
-            ble_trigger_mgr: Optional[BleTriggerManager] = None
             if ble_trigger_cfg and _MQTT_AVAILABLE:
                 mqtt_cfg = config.get("mqtt", {})
                 ble_trigger_mgr = BleTriggerManager(
                     config=ble_trigger_cfg,
                     device_manager=dm,
-                    broker=net.broker,
+                    broker=mqtt_cfg.get("broker", "localhost"),
                     port=mqtt_cfg.get("port", 1883),
                 )
                 ble_trigger_mgr.start()
