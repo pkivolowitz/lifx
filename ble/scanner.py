@@ -203,7 +203,18 @@ async def connect_and_wrap(
             "BLE connection requires bleak: pip install bleak"
         )
 
-    client = BleakClient(address, timeout=timeout)
+    from .hap_constants import SERVICE_PAIRING, SERVICE_PROTOCOL_INFO
+
+    # Request only HAP service UUIDs to speed up GATT discovery.
+    # HAP-BLE accessories aggressively disconnect controllers that
+    # take too long during service enumeration.
+    hap_services: list[str] = [SERVICE_PAIRING, SERVICE_PROTOCOL_INFO]
+
+    client = BleakClient(
+        address,
+        timeout=timeout,
+        services=hap_services,
+    )
     await client.connect()
     logger.info("Connected to %s", address)
     return BleakGattClient(client)
