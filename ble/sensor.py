@@ -1,34 +1,28 @@
-"""BLE sensor daemon — standalone motion/event publisher for GlowUp.
+"""BLE sensor daemon — encrypted HAP-BLE reads published to MQTT.
 
-Runs on any Pi near BLE accessories.  Connects to paired HAP-BLE
-devices, subscribes to characteristic notifications, and publishes
-events to the MQTT signal bus for the GlowUp server to act on.
+Standalone daemon for Raspberry Pi.  Connects to paired HomeKit BLE
+accessories, runs pair-verify to establish an encrypted session, and
+polls sensor characteristics (motion, temperature, humidity).
 
-Designed for the distributed SOE architecture: one or more sensor Pis
-each cover a BLE zone, all publishing to the same MQTT broker.  The
-central GlowUp server subscribes and triggers group actions.
+Events are published to MQTT for the GlowUp server to act on.
+The server subscribes and triggers group actions (lights on/off,
+brightness changes) based on the ``ble_triggers`` configuration.
+
+Architecture (distributed):
+    Pi near sensor → BLE → encrypted HAP reads → MQTT publish
+    GlowUp server  → MQTT subscribe → trigger group actions
 
 MQTT topics::
 
-    glowup/ble/{label}/motion     — "1" or "0"
-    glowup/ble/{label}/temperature — float Celsius
-    glowup/ble/{label}/humidity    — float percentage
-    glowup/ble/{label}/battery     — int 0–100
-    glowup/ble/{label}/status      — JSON status/health
+    glowup/ble/{label}/motion       — "1" or "0"
+    glowup/ble/{label}/temperature  — float Celsius
+    glowup/ble/{label}/humidity     — float percentage
+    glowup/ble/{label}/status       — JSON health/status
 
 Usage::
 
     python3 -m ble.sensor
-    python3 -m ble.sensor --registry /path/to/ble_pairing.json
-    python3 -m ble.sensor --broker 10.0.0.48
-
-The daemon:
-    1. Loads the registry (paired devices).
-    2. Connects to each paired device via BLE.
-    3. Runs pair-verify to establish encrypted sessions.
-    4. Subscribes to occupancy/motion characteristics.
-    5. Publishes events to MQTT.
-    6. Reconnects on disconnect (BLE connections are fragile).
+    python3 -m ble.sensor --config /path/to/ble_pairing.json
 
 Press Ctrl+C to stop.
 """
@@ -36,12 +30,14 @@ Press Ctrl+C to stop.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "0.1"
+__version__ = "2.0"
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
+import math
 import signal
 import struct
 import sys
@@ -54,28 +50,377 @@ logger: logging.Logger = logging.getLogger("glowup.ble.sensor")
 # Constants
 # ---------------------------------------------------------------------------
 
-# MQTT topic prefix for all BLE sensor events.
-MQTT_TOPIC_PREFIX: str = "glowup/ble"
+# MQTT topic prefix.
+MQTT_PREFIX: str = "glowup/ble"
 
-# Default MQTT broker (Pi, same as GlowUp server).
+# Default MQTT broker (Pi — same as GlowUp server).
 DEFAULT_BROKER: str = "10.0.0.48"
 
 # Default MQTT port.
 DEFAULT_MQTT_PORT: int = 1883
 
-# Seconds between reconnection attempts after BLE disconnect.
+# Seconds between sensor polls.
+POLL_INTERVAL: float = 3.0
+
+# Seconds between reconnection attempts.
 RECONNECT_DELAY: float = 5.0
 
-# Maximum reconnection delay (exponential backoff cap).
+# Maximum reconnect backoff.
 MAX_RECONNECT_DELAY: float = 60.0
 
-# Seconds between health/status publishes.
+# Seconds between status publishes.
 STATUS_INTERVAL: float = 60.0
 
-# Motion timeout: seconds of no motion events before publishing
-# motion=0.  ONVIS sensors have their own internal timeout (typically
-# 30s–120s) but this provides a fallback.
-DEFAULT_MOTION_TIMEOUT: float = 120.0
+# HAP characteristic UUIDs (Apple base).
+CHAR_MOTION: str = "00000022-0000-1000-8000-0026bb765291"
+CHAR_OCCUPANCY: str = "00000071-0000-1000-8000-0026bb765291"
+CHAR_TEMPERATURE: str = "00000011-0000-1000-8000-0026bb765291"
+CHAR_HUMIDITY: str = "00000010-0000-1000-8000-0026bb765291"
+
+# HAP-BLE constants.
+PAIR_VERIFY_UUID: str = "0000004e-0000-1000-8000-0026bb765291"
+PAIR_VERIFY_IID: int = 0x0023
+IID_DESC_UUID: str = "dc46f0fe-81d2-4616-b5d9-6abdd796939a"
+OP_WRITE: int = 0x02
+OP_READ: int = 0x03
+HAP_VALUE: int = 0x01
+HAP_RETURN_RESP: int = 0x09
+
+# Sensor names for logging and MQTT topics.
+SENSOR_NAMES: dict[str, str] = {
+    CHAR_MOTION: "motion",
+    CHAR_OCCUPANCY: "motion",
+    CHAR_TEMPERATURE: "temperature",
+    CHAR_HUMIDITY: "humidity",
+}
+
+
+# ---------------------------------------------------------------------------
+# TLV helpers (self-contained — no imports from ble.tlv for standalone use)
+# ---------------------------------------------------------------------------
+
+def _tlv_enc(pairs: list[tuple[int, bytes]]) -> bytes:
+    """TLV8 encode."""
+    b: bytearray = bytearray()
+    for t, v in pairs:
+        o, r = 0, len(v)
+        if r == 0:
+            b.append(t)
+            b.append(0)
+        while r > 0:
+            c: int = min(r, 255)
+            b.append(t)
+            b.append(c)
+            b.extend(v[o : o + c])
+            o += c
+            r -= c
+    return bytes(b)
+
+
+def _tlv_dec(data: bytes) -> dict[int, bytes]:
+    """TLV8 decode to dict (merges fragments)."""
+    items: list[tuple[int, bytes]] = []
+    pos: int = 0
+    while pos < len(data) - 1:
+        t: int = data[pos]
+        l: int = data[pos + 1]
+        pos += 2
+        v: bytes = data[pos : pos + l]
+        pos += l
+        if items and items[-1][0] == t:
+            items[-1] = (t, items[-1][1] + v)
+        else:
+            items.append((t, bytes(v)))
+    return dict(items)
+
+
+# ---------------------------------------------------------------------------
+# HKDF + nonce helpers
+# ---------------------------------------------------------------------------
+
+def _hkdf(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
+    """HKDF-SHA-512."""
+    try:
+        import hkdf as hkdf_lib
+        return hkdf_lib.Hkdf(salt, ikm, hashlib.sha512).expand(info, length)
+    except ImportError:
+        # Fallback to our own implementation.
+        import hmac as hm
+        if not salt:
+            salt = b"\x00" * 64
+        prk: bytes = hm.new(salt, ikm, hashlib.sha512).digest()
+        okm: bytes = b""
+        prev: bytes = b""
+        ctr: int = 1
+        while len(okm) < length:
+            prev = hm.new(
+                prk, prev + info + bytes([ctr]), hashlib.sha512
+            ).digest()
+            okm += prev
+            ctr += 1
+        return okm[:length]
+
+
+def _enc_nonce(counter: int) -> bytes:
+    """12-byte nonce from counter: 4 zero bytes + 8-byte LE counter."""
+    return b"\x00\x00\x00\x00" + struct.pack("<Q", counter)
+
+
+def _pv_nonce(label: bytes) -> bytes:
+    """12-byte nonce for pair-verify: 4 zero bytes + label."""
+    return b"\x00\x00\x00\x00" + label
+
+
+# ---------------------------------------------------------------------------
+# HAP-BLE encrypted session
+# ---------------------------------------------------------------------------
+
+class HapEncryptedSession:
+    """Manages an encrypted HAP-BLE session after pair-verify.
+
+    Provides encrypted characteristic reads using the session keys
+    derived from the pair-verify shared secret.
+
+    Attributes:
+        connected: Whether the BLE connection is active.
+    """
+
+    def __init__(self, client, c2a_key: bytes, a2c_key: bytes) -> None:
+        """Initialize with a connected BleakClient and session keys.
+
+        Args:
+            client: Connected bleak.BleakClient.
+            c2a_key: Controller-to-accessory encryption key (32 bytes).
+            a2c_key: Accessory-to-controller decryption key (32 bytes).
+        """
+        self._client = client
+        self._c2a_key: bytes = c2a_key
+        self._a2c_key: bytes = a2c_key
+        self._c2a_ctr: int = 0
+        self._a2c_ctr: int = 0
+        self._tid: int = 1
+
+    def _next_tid(self) -> int:
+        """Allocate next transaction ID."""
+        t: int = self._tid
+        self._tid = (t + 1) % 256
+        return t
+
+    @property
+    def connected(self) -> bool:
+        """True if the BLE connection is active."""
+        return self._client.is_connected
+
+    async def read_characteristic(
+        self, char_uuid: str, iid: int
+    ) -> Optional[bytes]:
+        """Read a characteristic value via encrypted HAP PDU.
+
+        The entire PDU (header) is encrypted before writing.
+        The response is fully encrypted and must be decrypted.
+
+        Args:
+            char_uuid: GATT characteristic UUID.
+            iid: HAP instance ID.
+
+        Returns:
+            Raw value bytes, or None on failure.
+        """
+        from cryptography.hazmat.primitives.ciphers.aead import (
+            ChaCha20Poly1305,
+        )
+
+        tid: int = self._next_tid()
+
+        # Build 5-byte read PDU and encrypt the ENTIRE thing.
+        plaintext: bytes = struct.pack("<BBBH", 0x00, OP_READ, tid, iid)
+        ct: bytes = ChaCha20Poly1305(self._c2a_key).encrypt(
+            _enc_nonce(self._c2a_ctr), plaintext, b""
+        )
+        self._c2a_ctr += 1
+
+        # Write encrypted PDU to the characteristic.
+        await self._client.write_gatt_char(char_uuid, ct, response=True)
+        await asyncio.sleep(1.0)
+
+        # Read encrypted response.
+        resp: bytes = bytes(await self._client.read_gatt_char(char_uuid))
+
+        # Decrypt entire response.
+        try:
+            dec: bytes = ChaCha20Poly1305(self._a2c_key).decrypt(
+                _enc_nonce(self._a2c_ctr), resp, b""
+            )
+            self._a2c_ctr += 1
+        except Exception as exc:
+            logger.warning("Decrypt failed for IID=%d: %s", iid, exc)
+            return None
+
+        # Parse: control(1) + TID(1) + status(1) + [body_len(2) + body]
+        if len(dec) < 3:
+            return None
+        status: int = dec[2]
+        if status != 0:
+            logger.warning("HAP read IID=%d status=%d", iid, status)
+            return None
+        if len(dec) < 5:
+            return b""
+
+        body_len: int = struct.unpack_from("<H", dec, 3)[0]
+        body: bytes = dec[5 : 5 + body_len]
+        body_tlv: dict[int, bytes] = _tlv_dec(body) if body else {}
+        return body_tlv.get(HAP_VALUE, body)
+
+
+# ---------------------------------------------------------------------------
+# Pair-verify helper
+# ---------------------------------------------------------------------------
+
+async def pair_verify(
+    client, ltsk: bytes, acc_ltpk: bytes
+) -> Optional[HapEncryptedSession]:
+    """Run pair-verify and return an encrypted session.
+
+    Args:
+        client: Connected bleak.BleakClient.
+        ltsk: Controller Ed25519 private key (32 bytes).
+        acc_ltpk: Accessory Ed25519 public key (32 bytes).
+
+    Returns:
+        :class:`HapEncryptedSession` on success, None on failure.
+    """
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+        Ed25519PublicKey,
+    )
+    from cryptography.hazmat.primitives.asymmetric.x25519 import (
+        X25519PrivateKey,
+        X25519PublicKey,
+    )
+    from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+
+    tid_ctr: list[int] = [1]
+
+    def nt() -> int:
+        t: int = tid_ctr[0]
+        tid_ctr[0] = (t + 1) % 256
+        return t
+
+    try:
+        # M1: send ephemeral public key.
+        esk = X25519PrivateKey.generate()
+        epk: bytes = esk.public_key().public_bytes_raw()
+
+        m1: bytes = _tlv_enc([(0x06, b"\x01"), (0x03, epk)])
+        body: bytes = _tlv_enc([(HAP_RETURN_RESP, b"\x01"), (HAP_VALUE, m1)])
+        pdu: bytes = struct.pack(
+            "<BBBHH", 0x00, OP_WRITE, nt(), PAIR_VERIFY_IID, len(body)
+        ) + body
+        await client.write_gatt_char(PAIR_VERIFY_UUID, pdu, response=True)
+        await asyncio.sleep(2)
+
+        # Read M2 response.
+        r: bytearray = bytearray(await client.read_gatt_char(PAIR_VERIFY_UUID))
+        if len(r) >= 5:
+            exp: int = struct.unpack_from("<H", r, 3)[0]
+            for _ in range(30):
+                if len(r) - 5 >= exp:
+                    break
+                await asyncio.sleep(0.3)
+                r.extend(await client.read_gatt_char(PAIR_VERIFY_UUID))
+
+        m2: dict[int, bytes] = _tlv_dec(_tlv_dec(bytes(r[5:]))[HAP_VALUE])
+        if 0x07 in m2:
+            logger.error("Pair-verify M2 error: %s", m2[0x07].hex())
+            return None
+
+        # Compute shared secret and derive verify key.
+        shared: bytes = esk.exchange(
+            X25519PublicKey.from_public_bytes(m2[0x03])
+        )
+        vk: bytes = _hkdf(
+            shared, b"Pair-Verify-Encrypt-Salt", b"Pair-Verify-Encrypt-Info"
+        )
+
+        # Decrypt and verify M2 sub-TLV.
+        m2_dec: bytes = ChaCha20Poly1305(vk).decrypt(
+            _pv_nonce(b"PV-Msg02"), m2[0x05], b""
+        )
+        m2_sub: dict[int, bytes] = _tlv_dec(m2_dec)
+        acc_info: bytes = m2[0x03] + m2_sub[0x01] + epk
+        Ed25519PublicKey.from_public_bytes(acc_ltpk).verify(
+            m2_sub[0x0A], acc_info
+        )
+
+        # M3: send controller proof.
+        ctrl_info: bytes = epk + b"GlowUp" + m2[0x03]
+        ctrl_sig: bytes = Ed25519PrivateKey.from_private_bytes(ltsk).sign(
+            ctrl_info
+        )
+        sub: bytes = _tlv_enc([(0x01, b"GlowUp"), (0x0A, ctrl_sig)])
+        enc_sub: bytes = ChaCha20Poly1305(vk).encrypt(
+            _pv_nonce(b"PV-Msg03"), sub, b""
+        )
+        m3: bytes = _tlv_enc([(0x06, b"\x03"), (0x05, enc_sub)])
+        body3: bytes = _tlv_enc(
+            [(HAP_RETURN_RESP, b"\x01"), (HAP_VALUE, m3)]
+        )
+        pdu3: bytes = struct.pack(
+            "<BBBHH", 0x00, OP_WRITE, nt(), PAIR_VERIFY_IID, len(body3)
+        ) + body3
+        await client.write_gatt_char(
+            PAIR_VERIFY_UUID, pdu3, response=True
+        )
+        await asyncio.sleep(1)
+        await client.read_gatt_char(PAIR_VERIFY_UUID)  # M4 ack
+
+        # Derive session keys.
+        c2a: bytes = _hkdf(
+            shared, b"Control-Salt", b"Control-Write-Encryption-Key"
+        )
+        a2c: bytes = _hkdf(
+            shared, b"Control-Salt", b"Control-Read-Encryption-Key"
+        )
+
+        logger.info("Pair-verify complete — encrypted session established")
+        return HapEncryptedSession(client, c2a, a2c)
+
+    except Exception as exc:
+        logger.error("Pair-verify failed: %s", exc, exc_info=True)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# IID discovery
+# ---------------------------------------------------------------------------
+
+async def discover_sensor_iids(
+    client,
+) -> dict[str, int]:
+    """Discover IIDs for sensor characteristics.
+
+    Returns:
+        Dict mapping characteristic UUID to IID.
+    """
+    result: dict[str, int] = {}
+    for svc in client.services:
+        for ch in svc.characteristics:
+            if ch.uuid in SENSOR_NAMES:
+                iid: int = ch.handle  # fallback
+                for desc in ch.descriptors:
+                    if IID_DESC_UUID in desc.uuid.lower():
+                        try:
+                            val: bytearray = (
+                                await client.read_gatt_descriptor(desc.handle)
+                            )
+                            iid = int.from_bytes(val, "little")
+                        except Exception:
+                            pass
+                result[ch.uuid] = iid
+                logger.info(
+                    "  %s: IID=%d", SENSOR_NAMES[ch.uuid], iid
+                )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -83,372 +428,225 @@ DEFAULT_MOTION_TIMEOUT: float = 120.0
 # ---------------------------------------------------------------------------
 
 class MqttPublisher:
-    """Publishes BLE sensor events to the MQTT signal bus.
-
-    Wraps paho-mqtt with auto-reconnect.  If MQTT is unavailable,
-    events are logged but not lost — the sensor keeps running.
-    """
+    """Publishes BLE sensor events to MQTT."""
 
     def __init__(
         self,
         broker: str = DEFAULT_BROKER,
         port: int = DEFAULT_MQTT_PORT,
-        client_id: Optional[str] = None,
     ) -> None:
-        """Initialize the MQTT publisher.
-
-        Args:
-            broker: MQTT broker hostname or IP.
-            port: MQTT broker port.
-            client_id: MQTT client ID (auto-generated if None).
-        """
         self._broker: str = broker
         self._port: int = port
-        self._client_id: str = client_id or f"glowup-ble-{int(time.time())}"
         self._client: Any = None
         self._connected: bool = False
 
     def connect(self) -> None:
-        """Connect to the MQTT broker.
-
-        Raises:
-            ImportError: If paho-mqtt is not installed.
-        """
+        """Connect to MQTT broker."""
         try:
             import paho.mqtt.client as mqtt
         except ImportError:
-            raise ImportError(
-                "BLE sensor MQTT publishing requires paho-mqtt: "
-                "pip install paho-mqtt"
-            )
+            raise ImportError("pip install paho-mqtt")
 
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION2,
-            client_id=self._client_id,
+            client_id=f"glowup-ble-{int(time.time())}",
         )
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.connect_async(self._broker, self._port)
         self._client.loop_start()
-        logger.info(
-            "MQTT connecting to %s:%d as %s",
-            self._broker, self._port, self._client_id,
-        )
 
-    def _on_connect(self, client, userdata, flags, rc, properties=None) -> None:
-        """MQTT connect callback."""
+    def _on_connect(self, client, userdata, flags, rc, properties=None):
         if rc == 0:
             self._connected = True
             logger.info("MQTT connected to %s:%d", self._broker, self._port)
-        else:
-            logger.warning("MQTT connection failed: rc=%d", rc)
 
-    def _on_disconnect(self, client, userdata, flags, rc, properties=None) -> None:
-        """MQTT disconnect callback."""
+    def _on_disconnect(self, client, userdata, flags, rc, properties=None):
         self._connected = False
         if rc != 0:
-            logger.warning(
-                "MQTT unexpected disconnect (rc=%d), will auto-reconnect", rc
-            )
+            logger.warning("MQTT disconnected (rc=%d), will reconnect", rc)
 
     def publish(self, label: str, subtopic: str, payload: str) -> None:
-        """Publish an event to MQTT.
-
-        Args:
-            label: Device label (e.g., ``"hallway_motion"``).
-            subtopic: Event type (e.g., ``"motion"``, ``"temperature"``).
-            payload: String payload.
-        """
-        topic: str = f"{MQTT_TOPIC_PREFIX}/{label}/{subtopic}"
+        """Publish an event."""
+        topic: str = f"{MQTT_PREFIX}/{label}/{subtopic}"
         if self._client and self._connected:
             self._client.publish(topic, payload, qos=1, retain=True)
-            logger.debug("Published %s = %s", topic, payload)
         else:
-            logger.warning(
-                "MQTT not connected — dropping %s = %s", topic, payload
-            )
-
-    def publish_status(self, label: str, status: dict) -> None:
-        """Publish a JSON status message.
-
-        Args:
-            label: Device label.
-            status: Status dict to serialize.
-        """
-        self.publish(label, "status", json.dumps(status))
+            logger.debug("MQTT not connected — dropping %s", topic)
 
     def disconnect(self) -> None:
-        """Disconnect from the MQTT broker."""
+        """Disconnect."""
         if self._client:
             self._client.loop_stop()
             self._client.disconnect()
-            logger.info("MQTT disconnected")
 
 
 # ---------------------------------------------------------------------------
-# Device monitor
+# Main sensor loop
 # ---------------------------------------------------------------------------
 
-class DeviceMonitor:
-    """Manages the BLE connection and event subscription for one device.
+async def monitor_device(
+    label: str,
+    address: str,
+    pairing: dict,
+    publisher: MqttPublisher,
+    poll_interval: float = POLL_INTERVAL,
+) -> None:
+    """Connect, verify, and poll a single device.
 
-    Handles connect → pair-verify → subscribe → reconnect lifecycle.
-
-    Attributes:
-        label: Device label.
-        address: BLE address.
-        connected: Whether the BLE connection is active.
+    Runs until the BLE connection drops, then returns (caller retries).
     """
+    try:
+        from bleak import BleakClient, BleakScanner
+    except ImportError:
+        raise ImportError("pip install bleak")
 
-    def __init__(
-        self,
-        label: str,
-        address: str,
-        registry_path: str,
-        publisher: MqttPublisher,
-        motion_timeout: float = DEFAULT_MOTION_TIMEOUT,
-    ) -> None:
-        """Initialize the device monitor.
+    logger.info("Scanning for %s (%s)...", label, address)
+    ble_dev = await BleakScanner.find_device_by_address(address, timeout=15)
+    if ble_dev is None:
+        logger.warning("%s not found", label)
+        return
 
-        Args:
-            label: Human-readable device label.
-            address: BLE address to connect to.
-            registry_path: Path to ble_pairing.json (for keys).
-            publisher: MQTT publisher for events.
-            motion_timeout: Seconds before publishing motion=0 after
-                last motion event.
-        """
-        self.label: str = label
-        self.address: str = address
-        self._registry_path: str = registry_path
-        self._publisher: MqttPublisher = publisher
-        self._motion_timeout: float = motion_timeout
-        self._connected: bool = False
-        self._last_motion_time: float = 0.0
-        self._motion_active: bool = False
-        self._running: bool = False
+    async with BleakClient(ble_dev, timeout=30) as client:
+        logger.info("Connected to %s", label)
 
-    async def run(self) -> None:
-        """Main loop: connect, subscribe, reconnect on failure.
+        # Pair-verify.
+        ctrl_ltsk: bytes = bytes.fromhex(pairing["controller"]["ltsk"])
+        acc_ltpk: bytes = bytes.fromhex(
+            pairing["devices"][label]["accessory_ltpk"]
+        )
+        session: Optional[HapEncryptedSession] = await pair_verify(
+            client, ctrl_ltsk, acc_ltpk
+        )
+        if session is None:
+            logger.error("Pair-verify failed for %s", label)
+            return
 
-        Runs until :meth:`stop` is called.  Reconnects with
-        exponential backoff on BLE disconnection.
-        """
-        from .registry import BleRegistry
-        from .scanner import connect_and_wrap
-        from .hap_session import HapSession, HapError
+        # Discover sensor IIDs.
+        iids: dict[str, int] = await discover_sensor_iids(client)
+        if not iids:
+            logger.error("No sensor characteristics found for %s", label)
+            return
 
-        self._running = True
-        delay: float = RECONNECT_DELAY
+        publisher.publish(label, "status", json.dumps({
+            "state": "monitoring",
+            "address": address,
+            "sensors": list(SENSOR_NAMES[u] for u in iids),
+            "timestamp": time.time(),
+        }))
 
-        while self._running:
-            try:
-                logger.info(
-                    "Connecting to %s (%s)...", self.label, self.address
-                )
+        # Poll loop.
+        last_values: dict[str, bytes] = {}
+        last_status: float = time.time()
 
-                # Load fresh keys each attempt (registry may be updated).
-                registry = BleRegistry(self._registry_path)
-                keys = registry.get_pairing_keys(self.label)
-                if keys is None:
-                    logger.error(
-                        "No pairing keys for %s — run pair-setup first",
-                        self.label,
+        while session.connected:
+            for uuid, iid in iids.items():
+                name: str = SENSOR_NAMES[uuid]
+                try:
+                    val: Optional[bytes] = await session.read_characteristic(
+                        uuid, iid
                     )
-                    await asyncio.sleep(MAX_RECONNECT_DELAY)
+                except Exception as exc:
+                    logger.warning("%s read error: %s", name, exc)
+                    break
+
+                if val is None:
                     continue
 
-                # Connect BLE.
-                gatt = await connect_and_wrap(self.address)
-                self._connected = True
-                delay = RECONNECT_DELAY  # Reset backoff on success.
+                # Publish on change.
+                if val != last_values.get(uuid):
+                    last_values[uuid] = val
+                    if name == "motion":
+                        payload: str = str(val[0]) if val else "0"
+                        publisher.publish(label, "motion", payload)
+                        logger.info(
+                            "%s motion=%s", label, payload
+                        )
+                    elif name == "temperature":
+                        if len(val) == 4:
+                            temp: float = struct.unpack("<f", val)[0]
+                            publisher.publish(
+                                label, "temperature", f"{temp:.1f}"
+                            )
+                            logger.info(
+                                "%s temp=%.1f°C", label, temp
+                            )
+                    elif name == "humidity":
+                        if len(val) == 4:
+                            hum: float = struct.unpack("<f", val)[0]
+                            publisher.publish(
+                                label, "humidity", f"{hum:.1f}"
+                            )
+                            logger.info(
+                                "%s humidity=%.1f%%", label, hum
+                            )
 
-                # Pair-verify (establish encrypted session).
-                session = HapSession(gatt)
-                await session.pair_verify(keys)
-
-                self._publisher.publish_status(self.label, {
-                    "state": "connected",
-                    "address": self.address,
-                    "timestamp": time.time(),
-                })
-
-                # Subscribe to occupancy/motion notifications.
-                # IIDs are discovered during the HAP service enumeration,
-                # but for ONVIS sensors the occupancy characteristic is
-                # typically at a known IID.  We'll discover dynamically
-                # in a future iteration.
-                #
-                # For now, we poll the characteristic periodically as a
-                # fallback if subscriptions aren't supported.
-                await self._monitor_loop(session, gatt)
-
-            except ImportError as exc:
-                logger.error("Missing dependency: %s", exc)
-                self._running = False
-                break
-
-            except HapError as exc:
-                logger.error("HAP protocol error for %s: %s", self.label, exc)
-
-            except Exception as exc:
-                logger.error(
-                    "BLE error for %s: %s", self.label, exc,
-                    exc_info=True,
-                )
-
-            finally:
-                self._connected = False
-                self._publisher.publish_status(self.label, {
-                    "state": "disconnected",
-                    "address": self.address,
-                    "timestamp": time.time(),
-                })
-
-            if self._running:
-                logger.info(
-                    "Reconnecting to %s in %.0fs...", self.label, delay
-                )
-                await asyncio.sleep(delay)
-                # Exponential backoff capped at MAX_RECONNECT_DELAY.
-                delay = min(delay * 2, MAX_RECONNECT_DELAY)
-
-    async def _monitor_loop(self, session, gatt) -> None:
-        """Run the event monitoring loop until disconnect.
-
-        Publishes motion events and handles the motion timeout.
-
-        Args:
-            session: Active encrypted HapSession.
-            gatt: Connected BleakGattClient.
-        """
-        # TODO: Discover characteristic IIDs dynamically via service
-        # signature reads.  For now this is a polling fallback that
-        # reads the occupancy characteristic periodically.
-        #
-        # The real implementation will subscribe to notifications
-        # once we've mapped the ONVIS's characteristic IIDs.
-
-        last_status_time: float = time.time()
-
-        while self._running and gatt.is_connected:
+            # Periodic status.
             now: float = time.time()
-
-            # Check motion timeout.
-            if self._motion_active:
-                elapsed: float = now - self._last_motion_time
-                if elapsed >= self._motion_timeout:
-                    self._motion_active = False
-                    self._publisher.publish(self.label, "motion", "0")
-                    logger.info("%s: motion timeout — cleared", self.label)
-
-            # Periodic status publish.
-            if now - last_status_time >= STATUS_INTERVAL:
-                self._publisher.publish_status(self.label, {
+            if now - last_status >= STATUS_INTERVAL:
+                publisher.publish(label, "status", json.dumps({
                     "state": "monitoring",
-                    "motion_active": self._motion_active,
-                    "last_motion": self._last_motion_time,
+                    "last_values": {
+                        SENSOR_NAMES[u]: v.hex()
+                        for u, v in last_values.items()
+                    },
                     "timestamp": now,
-                })
-                last_status_time = now
+                }))
+                last_status = now
 
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(poll_interval)
 
-    def on_motion_event(self, detected: bool) -> None:
-        """Handle a motion event from characteristic notification.
-
-        Called by the HAP subscription callback when the occupancy
-        characteristic changes.
-
-        Args:
-            detected: True if motion detected, False if cleared.
-        """
-        now: float = time.time()
-
-        if detected:
-            self._last_motion_time = now
-            if not self._motion_active:
-                self._motion_active = True
-                self._publisher.publish(self.label, "motion", "1")
-                logger.info("%s: motion DETECTED", self.label)
-            else:
-                # Motion still active — update timestamp, don't re-publish.
-                logger.debug("%s: motion sustained", self.label)
-        else:
-            self._motion_active = False
-            self._publisher.publish(self.label, "motion", "0")
-            logger.info("%s: motion CLEARED", self.label)
-
-    def stop(self) -> None:
-        """Signal the monitor to stop."""
-        self._running = False
+    logger.warning("%s: BLE disconnected", label)
+    publisher.publish(label, "status", json.dumps({
+        "state": "disconnected",
+        "timestamp": time.time(),
+    }))
 
 
-# ---------------------------------------------------------------------------
-# Daemon entry point
-# ---------------------------------------------------------------------------
-
-async def run_sensor_daemon(
-    registry_path: str = "ble_pairing.json",
+async def run_daemon(
+    config_path: str = "ble_pairing.json",
     broker: str = DEFAULT_BROKER,
     mqtt_port: int = DEFAULT_MQTT_PORT,
-    motion_timeout: float = DEFAULT_MOTION_TIMEOUT,
+    poll_interval: float = POLL_INTERVAL,
 ) -> None:
-    """Run the BLE sensor daemon.
+    """Run the BLE sensor daemon with auto-reconnect."""
+    with open(config_path) as f:
+        pairing: dict = json.load(f)
 
-    Loads paired devices from the registry and monitors them all
-    concurrently.
-
-    Args:
-        registry_path: Path to ble_pairing.json.
-        broker: MQTT broker hostname/IP.
-        mqtt_port: MQTT broker port.
-        motion_timeout: Seconds before motion-cleared timeout.
-    """
-    from .registry import BleRegistry
-
-    registry = BleRegistry(registry_path)
-    paired_devices = registry.get_paired_devices()
-
-    if not paired_devices:
-        logger.error(
-            "No paired BLE devices in %s — pair a device first",
-            registry_path,
-        )
+    paired: list[str] = [
+        label
+        for label, dev in pairing.get("devices", {}).items()
+        if dev.get("paired")
+    ]
+    if not paired:
+        logger.error("No paired devices in %s", config_path)
         return
 
     publisher = MqttPublisher(broker=broker, port=mqtt_port)
     publisher.connect()
 
-    monitors: list[DeviceMonitor] = []
-    tasks: list[asyncio.Task] = []
-
-    for device in paired_devices:
-        monitor = DeviceMonitor(
-            label=device.label,
-            address=device.address,
-            registry_path=registry_path,
-            publisher=publisher,
-            motion_timeout=motion_timeout,
-        )
-        monitors.append(monitor)
-        tasks.append(asyncio.create_task(monitor.run()))
-
-    logger.info(
-        "BLE sensor daemon started — monitoring %d device(s)",
-        len(monitors),
-    )
-
-    # Run until interrupted.
     try:
-        await asyncio.gather(*tasks)
-    except asyncio.CancelledError:
-        pass
+        for label in paired:
+            address: str = pairing["devices"][label]["address"]
+            delay: float = RECONNECT_DELAY
+
+            while True:
+                try:
+                    await monitor_device(
+                        label, address, pairing, publisher, poll_interval
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "%s: error — %s", label, exc, exc_info=True
+                    )
+
+                logger.info(
+                    "Reconnecting to %s in %.0fs...", label, delay
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 1.5, MAX_RECONNECT_DELAY)
     finally:
-        for monitor in monitors:
-            monitor.stop()
         publisher.disconnect()
-        logger.info("BLE sensor daemon stopped")
 
 
 # ---------------------------------------------------------------------------
@@ -456,40 +654,36 @@ async def run_sensor_daemon(
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """CLI entry point for the BLE sensor daemon."""
+    """CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="GlowUp BLE sensor daemon — monitors HAP-BLE "
-        "accessories and publishes events to MQTT.",
+        description="GlowUp BLE sensor daemon",
     )
     parser.add_argument(
-        "--registry",
+        "--config",
         default="ble_pairing.json",
-        help="Path to ble_pairing.json (default: ./ble_pairing.json)",
+        help="Path to ble_pairing.json",
     )
     parser.add_argument(
         "--broker",
         default=DEFAULT_BROKER,
-        help=f"MQTT broker address (default: {DEFAULT_BROKER})",
+        help=f"MQTT broker (default: {DEFAULT_BROKER})",
     )
     parser.add_argument(
         "--port",
         type=int,
         default=DEFAULT_MQTT_PORT,
-        help=f"MQTT broker port (default: {DEFAULT_MQTT_PORT})",
+        help=f"MQTT port (default: {DEFAULT_MQTT_PORT})",
     )
     parser.add_argument(
-        "--motion-timeout",
+        "--poll-interval",
         type=float,
-        default=DEFAULT_MOTION_TIMEOUT,
-        help=(
-            f"Seconds before motion-cleared timeout "
-            f"(default: {DEFAULT_MOTION_TIMEOUT})"
-        ),
+        default=POLL_INTERVAL,
+        help=f"Seconds between polls (default: {POLL_INTERVAL})",
     )
     parser.add_argument(
         "--verbose", "-v",
         action="store_true",
-        help="Enable debug logging",
+        help="Debug logging",
     )
     args = parser.parse_args()
 
@@ -498,11 +692,10 @@ def main() -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    # Graceful shutdown on SIGINT/SIGTERM.
     loop = asyncio.new_event_loop()
 
-    def _shutdown(sig: int, frame) -> None:
-        logger.info("Received signal %d — shutting down", sig)
+    def _shutdown(sig, frame):
+        logger.info("Shutting down (signal %d)", sig)
         for task in asyncio.all_tasks(loop):
             task.cancel()
 
@@ -511,13 +704,15 @@ def main() -> None:
 
     try:
         loop.run_until_complete(
-            run_sensor_daemon(
-                registry_path=args.registry,
+            run_daemon(
+                config_path=args.config,
                 broker=args.broker,
                 mqtt_port=args.port,
-                motion_timeout=args.motion_timeout,
+                poll_interval=args.poll_interval,
             )
         )
+    except asyncio.CancelledError:
+        pass
     finally:
         loop.close()
 

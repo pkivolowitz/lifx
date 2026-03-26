@@ -93,6 +93,7 @@ from emitters.lifx import LifxEmitter
 from emitters.virtual import VirtualMultizoneEmitter
 from engine import Controller
 from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
+from ble_trigger import BleTriggerManager, sensor_data as ble_sensor_data
 from media import MediaManager, SignalBus
 from media.source import AudioStreamServer
 from solar import SunTimes, sun_times
@@ -393,6 +394,12 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("DELETE", ("api", "groups", "{name}"),
            "_handle_delete_group",
            unquote_params=("name",)),
+    # BLE sensor data.
+    _Route("GET", ("api", "ble", "sensors"),
+           "_handle_get_ble_sensors"),
+    _Route("GET", ("api", "ble", "sensors", "{label}"),
+           "_handle_get_ble_sensor_detail",
+           unquote_params=("label",)),
 )
 
 # Pre-built index: (method, segment_count) → list of candidate routes.
@@ -2754,6 +2761,28 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 f"this group: {', '.join(orphaned)}"
             )
         self._send_json(200, response)
+
+    # ------------------------------------------------------------------
+    # BLE sensor endpoints
+    # ------------------------------------------------------------------
+
+    def _handle_get_ble_sensors(self) -> None:
+        """GET /api/ble/sensors — all BLE sensor readings.
+
+        Returns current motion, temperature, humidity, and status
+        for all configured BLE sensors.
+        """
+        self._send_json(200, ble_sensor_data.get_all())
+
+    def _handle_get_ble_sensor_detail(self, label: str) -> None:
+        """GET /api/ble/sensors/{label} — single sensor readings."""
+        data: dict = ble_sensor_data.get(label)
+        if not data:
+            self._send_json(404, {"error": f"No data for '{label}'"})
+            return
+        self._send_json(200, data)
+
+    # ------------------------------------------------------------------
 
     def _handle_get_schedule(self) -> None:
         """GET /api/schedule — schedule entries with resolved times.
@@ -5554,6 +5583,19 @@ def main() -> None:
                     )
                     mqtt_bridge.start()
 
+            # Start BLE trigger manager if configured.
+            ble_trigger_cfg: dict = config.get("ble_triggers", {})
+            ble_trigger_mgr: Optional[BleTriggerManager] = None
+            if ble_trigger_cfg and _MQTT_AVAILABLE:
+                mqtt_cfg = config.get("mqtt", {})
+                ble_trigger_mgr = BleTriggerManager(
+                    config=ble_trigger_cfg,
+                    device_manager=dm,
+                    broker=net.broker,
+                    port=mqtt_cfg.get("port", 1883),
+                )
+                ble_trigger_mgr.start()
+
             # Start the distributed orchestrator if configured.
             if config.get("distributed") and _HAS_DISTRIBUTED:
                 if mqtt_bridge is not None and mqtt_bridge._client is not None:
@@ -5612,6 +5654,8 @@ def main() -> None:
             media_mgr.shutdown()
         if orch is not None:
             orch.stop()
+        if ble_trigger_mgr is not None:
+            ble_trigger_mgr.stop()
         if mqtt_bridge is not None:
             mqtt_bridge.stop()
         if keepalive is not None:
