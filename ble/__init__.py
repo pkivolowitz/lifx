@@ -27,3 +27,4 @@ Protocol references:
 
 __version__ = "0.1"
 # BLE protocol verified 2026-03-25
+# SSH push test
