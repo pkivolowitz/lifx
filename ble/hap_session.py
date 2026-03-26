@@ -742,21 +742,56 @@ class HapSession:
         """
         import struct
 
-        # First read: header + partial body.
+        # First read: could be HAP PDU response or raw TLV depending
+        # on the accessory implementation.
         raw: bytes = await self._gatt.read_characteristic(char_uuid)
 
-        # Minimum response: control(1) + TID(1) + status(2) = 4 bytes.
-        HEADER_LEN: int = 4
-        if len(raw) < HEADER_LEN:
-            raise HapError(
-                f"{context} response too short: {len(raw)} bytes"
-            )
+        logger.debug(
+            "%s first read: %d bytes, hex=%s",
+            context, len(raw), raw[:32].hex(),
+        )
 
-        status: int = struct.unpack_from("<H", raw, 2)[0]
-        if status != 0:
-            from .hap_constants import STATUS_DESCRIPTIONS
-            desc: str = STATUS_DESCRIPTIONS.get(status, f"0x{status:04X}")
-            raise HapError(f"{context} failed: {desc}")
+        # Detect whether the response is HAP PDU or raw TLV.
+        # HAP PDU response starts with control byte (bit 1 set = response)
+        # followed by TID and 2-byte status.
+        # Raw TLV starts with a TLV type byte (0x00–0x13 for HAP types).
+        #
+        # Heuristic: if byte 0 has bit 1 set (0x02), it's a PDU response.
+        # Otherwise, treat as raw TLV and return after fragment assembly.
+        is_pdu_response: bool = len(raw) >= 4 and bool(raw[0] & 0x02)
+
+        if is_pdu_response:
+            # HAP PDU response: control(1) + TID(1) + status(2) = 4 bytes.
+            HEADER_LEN: int = 4
+            status: int = struct.unpack_from("<H", raw, 2)[0]
+            if status != 0:
+                from .hap_constants import STATUS_DESCRIPTIONS
+                desc: str = STATUS_DESCRIPTIONS.get(
+                    status, f"0x{status:04X}"
+                )
+                raise HapError(f"{context} failed: {desc}")
+        else:
+            # Raw TLV response — no PDU header.  The entire read is
+            # TLV data (possibly fragmented across multiple reads).
+            logger.debug("%s response is raw TLV (no PDU header)", context)
+            body: bytearray = bytearray(raw)
+            MAX_FRAGMENT_READS: int = 100
+            reads: int = 0
+            # Keep reading until we get no more data or a short read
+            # (indicating the last fragment).
+            prev_len: int = len(raw)
+            while reads < MAX_FRAGMENT_READS:
+                frag: bytes = await self._gatt.read_characteristic(char_uuid)
+                if not frag or frag == raw[:len(frag)]:
+                    # No new data or repeated data — done.
+                    break
+                body.extend(frag)
+                reads += 1
+                if len(frag) < prev_len:
+                    # Short read = last fragment.
+                    break
+                prev_len = len(frag)
+            return bytes(body)
 
         # If no body length field, return empty.
         if len(raw) <= HEADER_LEN:
