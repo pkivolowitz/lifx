@@ -52,14 +52,29 @@ GRID_WIDTH: int = 7
 GRID_HEIGHT: int = 5
 GRID_SIZE: int = GRID_WIDTH * GRID_HEIGHT  # 35 protocol slots
 
-# Assignable columns (full 5-row height).  Columns 0 and 6 are partial
-# (dead corners at rows 0 and 4) so we skip them.
-# Spread evenly across the oval for visual separation — the Luna's
-# heavy diffuser bleeds adjacent columns together.
-ASSIGNABLE_COLUMNS: list[int] = [1, 3, 5, 2, 4]
+# Patient column groups — each patient paints multiple columns to
+# maximize spread across the Luna's heavily-diffused oval.  The
+# partial edge columns (0 and 6) have dead corners at rows 0 and 4
+# but rows 1-3 light up, adding width to the outer patients.
+# Dark gutter columns (2 and 4) separate the three groups.
+#
+# Layout:
+#   _  .  .  .  .  .  _     _ = dead corner
+#   P1 P1 .  P2 .  P3 P3    P = patient column group
+#   P1 P1 .  P2 .  P3 P3    . = dark gutter
+#   P1 P1 .  P2 .  P3 P3
+#   _  .  .  .  .  .  _
+#
+PATIENT_COLUMNS: list[list[int]] = [
+    [0, 1],     # Patient 1: left edge pair
+    [3],        # Patient 2: center solo
+    [5, 6],     # Patient 3: right edge pair
+    [2],        # Patient 4: left gutter (overflow)
+    [4],        # Patient 5: right gutter (overflow)
+]
 
-# Maximum simultaneous patients (one per assignable column).
-MAX_PATIENTS: int = len(ASSIGNABLE_COLUMNS)
+# Maximum simultaneous patients.
+MAX_PATIENTS: int = len(PATIENT_COLUMNS)
 
 # Two pi — one full sine cycle.
 TWO_PI: float = 2.0 * math.pi
@@ -141,20 +156,20 @@ class _PatientState:
     Attributes:
         device_id: Stable Retro-Med device identifier.
         description: Human-readable device name (from birth cert).
-        column: Assigned Luna column index (0-6) or -1 if unassigned.
+        columns: List of Luna column indices to paint, or empty if unassigned.
         severity: Worst-case severity across all vitals.
         rr: Current respiratory rate (breaths/min) or None.
         last_seen: Monotonic timestamp of last telemetry.
         online: True if the device has not sent a death certificate.
     """
 
-    __slots__ = ("device_id", "description", "column", "severity",
+    __slots__ = ("device_id", "description", "columns", "severity",
                  "rr", "last_seen", "online")
 
     def __init__(self, device_id: str) -> None:
         self.device_id: str = device_id
         self.description: str = ""
-        self.column: int = -1
+        self.columns: list[int] = []
         self.severity: int = SEVERITY_NORMAL
         self.rr: Optional[float] = None
         self.last_seen: float = time.monotonic()
@@ -375,12 +390,12 @@ class NurseStation(Effect):
         if patient is not None:
             return patient
         patient = _PatientState(device_id)
-        # Assign next available column.
+        # Assign next available column group.
         if self._next_col_idx < MAX_PATIENTS:
-            patient.column = ASSIGNABLE_COLUMNS[self._next_col_idx]
+            patient.columns = PATIENT_COLUMNS[self._next_col_idx]
             self._next_col_idx += 1
             logger.info(
-                "Assigned %s to column %d", device_id, patient.column,
+                "Assigned %s to columns %s", device_id, patient.columns,
             )
         else:
             logger.warning(
@@ -460,18 +475,18 @@ class NurseStation(Effect):
 
         with self._lock:
             for patient in self._patients.values():
-                col: int = patient.column
-                if col < 0:
-                    # No column assigned (overflow).
+                if not patient.columns:
+                    # No columns assigned (overflow).
                     continue
 
                 color: HSBK = self._patient_color(patient, t, now)
 
-                # Paint the entire column (all 5 rows).
-                for row in range(GRID_HEIGHT):
-                    zone_idx: int = row * GRID_WIDTH + col
-                    if zone_idx < len(frame):
-                        frame[zone_idx] = color
+                # Paint all columns in this patient's group.
+                for col in patient.columns:
+                    for row in range(GRID_HEIGHT):
+                        zone_idx: int = row * GRID_WIDTH + col
+                        if zone_idx < len(frame):
+                            frame[zone_idx] = color
 
         # Truncate or pad to requested zone_count.
         return frame[:zone_count]
