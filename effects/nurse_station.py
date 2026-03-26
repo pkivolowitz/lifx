@@ -84,10 +84,11 @@ BLACK: HSBK = (0, 0, 0, KELVIN_DEFAULT)
 DEFAULT_RR: float = 15.0
 
 # Minimum brightness during the breathing pulse (fraction of max).
-BREATHE_MIN_FRACTION: float = 0.15
+# Near-black at the bottom of the breath for dramatic contrast.
+BREATHE_MIN_FRACTION: float = 0.05
 
 # Maximum brightness for normal and warning states.
-BREATHE_MAX_BRIGHTNESS: int = int(HSBK_MAX * 0.75)
+BREATHE_MAX_BRIGHTNESS: int = HSBK_MAX
 
 # Brightness for solid critical (no pulse).
 CRITICAL_BRIGHTNESS: int = HSBK_MAX
