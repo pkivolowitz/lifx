@@ -425,8 +425,11 @@ class Engine:
                             expanded.extend([c] * zpb)
                         # Trim or pad to exact zone count.
                         colors = expanded[:em.zone_count]
+                        # Pad to exact zone count.  Guard against empty
+                        # list — effect returned [] or zone_count is 0.
+                        _pad: tuple = colors[-1] if colors else (0, 0, 0, KELVIN_DEFAULT)
                         while len(colors) < em.zone_count:
-                            colors.append(colors[-1] if colors else (0, 0, 0, 3500))
+                            colors.append(_pad)
                     frame[id(em)] = colors
                 except Exception:
                     import traceback as _tb
