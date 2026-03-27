@@ -39,6 +39,12 @@
     --font-body:     -apple-system, BlinkMacSystemFont, "Segoe UI",
                      Helvetica, Arial, sans-serif;
 
+    /* Locks. */
+    --lock-locked:   #3daa6d;
+    --lock-unlocked: #c44;
+    --lock-unknown:  #c4b8ad;
+    --lock-size:     clamp(64px, 12vw, 110px);
+
     /* Layout. */
     --max-width:     1400px;
     --card-radius:   24px;
@@ -286,6 +292,89 @@ body {
 }
 
 /* ------------------------------------------------------------------ */
+/* Locks card                                                         */
+/* ------------------------------------------------------------------ */
+.locks-card {
+    background: var(--card-bg);
+    border: 2px solid black;
+    border-radius: var(--card-radius);
+    padding: 24px 32px;
+    box-shadow: var(--card-shadow);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    text-align: center;
+    margin-bottom: 24px;
+    /* Hidden until data arrives. */
+    display: none;
+}
+
+.locks-title {
+    font-size: clamp(1rem, 2vw, 1.4rem);
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--label-color);
+    margin-bottom: 16px;
+}
+
+.locks-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: clamp(16px, 4vw, 40px);
+    flex-wrap: wrap;
+}
+
+.lock-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.lock-circle {
+    width: var(--lock-size);
+    height: var(--lock-size);
+    border-radius: 50%;
+    border: 3px solid var(--lock-unknown);
+    background: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-clock);
+    font-size: clamp(1.2rem, 3.5vw, 2.2rem);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--lock-unknown);
+    transition: background 0.4s ease, border-color 0.4s ease,
+                color 0.4s ease, box-shadow 0.4s ease;
+}
+
+/* Locked = filled green circle, white text. */
+.lock-circle.locked {
+    background: var(--lock-locked);
+    border-color: var(--lock-locked);
+    color: #fff;
+    box-shadow: 0 0 12px rgba(61, 170, 109, 0.3);
+}
+
+/* Unlocked = hollow red circle, red text. */
+.lock-circle.unlocked {
+    background: transparent;
+    border-color: var(--lock-unlocked);
+    color: var(--lock-unlocked);
+    box-shadow: 0 0 12px rgba(204, 68, 68, 0.25);
+}
+
+.lock-name {
+    font-size: clamp(0.65rem, 1.2vw, 0.9rem);
+    font-weight: 400;
+    color: var(--label-color);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+/* ------------------------------------------------------------------ */
 /* Responsive tweaks                                                  */
 /* ------------------------------------------------------------------ */
 @media (max-width: 600px) {
@@ -313,6 +402,12 @@ body {
     <div class="clock-section">
         <div class="clock-time" id="clockTime"></div>
         <div class="clock-date" id="clockDate"></div>
+    </div>
+
+    <!-- Lock status — populated dynamically. -->
+    <div class="locks-card" id="locksCard">
+        <div class="locks-title">Locks</div>
+        <div class="locks-row" id="locksRow"></div>
     </div>
 
     <!-- Sensor cards — populated dynamically. -->
@@ -538,6 +633,60 @@ body {
 
     pollSensors();
     setInterval(pollSensors, SENSOR_POLL_MS);
+
+    /* -------------------------------------------------------------- */
+    /* Locks                                                          */
+    /* -------------------------------------------------------------- */
+
+    const locksCard = document.getElementById("locksCard");
+    const locksRow = document.getElementById("locksRow");
+
+    /** Render lock circles from API data. */
+    function renderLocks(locks) {
+        /* locks is an array: [{abbr: "FD", name: "Front Door", locked: true}, ...] */
+        if (!locks || locks.length === 0) {
+            locksCard.style.display = "none";
+            return;
+        }
+        locksCard.style.display = "";
+        locksRow.innerHTML = "";
+
+        locks.forEach(function (lock) {
+            var item = document.createElement("div");
+            item.className = "lock-item";
+
+            var circle = document.createElement("div");
+            circle.className = "lock-circle";
+            if (lock.locked === true) {
+                circle.classList.add("locked");
+            } else if (lock.locked === false) {
+                circle.classList.add("unlocked");
+            }
+            /* else: unknown state — gray default. */
+            circle.textContent = lock.abbr || "?";
+
+            var name = document.createElement("div");
+            name.className = "lock-name";
+            name.textContent = lock.name || "";
+
+            item.appendChild(circle);
+            item.appendChild(name);
+            locksRow.appendChild(item);
+        });
+    }
+
+    function pollLocks() {
+        fetch("/api/home/locks")
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.error) return;
+                renderLocks(data.locks || []);
+            })
+            .catch(function () { /* leave as-is */ });
+    }
+
+    pollLocks();
+    setInterval(pollLocks, SENSOR_POLL_MS);
 
     /* -------------------------------------------------------------- */
     /* Photo slideshow                                                */

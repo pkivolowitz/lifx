@@ -286,6 +286,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_home_photos", requires_auth=False),
     _Route("GET", ("api", "home", "lights"),
            "_handle_get_home_lights", requires_auth=False),
+    _Route("GET", ("api", "home", "locks"),
+           "_handle_get_home_locks", requires_auth=False),
     _Route("GET", ("photos", "{filename}"),
            "_handle_get_photo", requires_auth=False),
 
@@ -5308,6 +5310,50 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             "groups": groups,
             "active_schedules": active_schedules,
         })
+
+    def _handle_get_home_locks(self) -> None:
+        """GET /api/home/locks — lock state for the home display.
+
+        Returns an array of lock objects for the /home dashboard.
+        Each lock has an abbreviation (2-letter code for the circle),
+        a display name, and a boolean locked state.
+
+        The data comes from the server config's ``locks`` section.
+        When a Vivint (or other) integration is active, it updates
+        lock state in real time.  Without an integration, the config
+        provides static initial state.
+
+        Response::
+
+            {
+              "locks": [
+                {"abbr": "FD", "name": "Front Door", "locked": true},
+                {"abbr": "BD", "name": "Back Door", "locked": true},
+                {"abbr": "SD", "name": "Side Door", "locked": false}
+              ]
+            }
+        """
+        # Read lock config.  The server config can define locks as:
+        #   "locks": [
+        #     {"abbr": "FD", "name": "Front Door"},
+        #     {"abbr": "BD", "name": "Back Door"},
+        #     {"abbr": "SD", "name": "Side Door"}
+        #   ]
+        # Live state is merged from the lock_state registry (populated
+        # by Vivint poller, MQTT, or any other integration).
+        lock_defs: list[dict[str, Any]] = self.config.get("locks", [])
+        lock_state: dict[str, bool] = getattr(
+            self.server, "_lock_state", {},
+        )
+        locks: list[dict[str, Any]] = []
+        for lock in lock_defs:
+            abbr: str = lock.get("abbr", "?")
+            locks.append({
+                "abbr": abbr,
+                "name": lock.get("name", abbr),
+                "locked": lock_state.get(abbr),
+            })
+        self._send_json(200, {"locks": locks})
 
     def _handle_get_photo(self, filename: str) -> None:
         """GET /photos/{filename} — serve a photo from static/photos/.
