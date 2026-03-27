@@ -19,9 +19,10 @@ python3 glowup.py discover [--timeout SECONDS] [--ip ADDRESS] [--json]
 
 | Option      | Default | Description                                    |
 |-------------|---------|------------------------------------------------|
-| `--timeout` | 3.0     | How long to listen for responses (s)           |
+| `--timeout` | 5.0     | How long to listen for responses (s)           |
 | `--ip`      | *(none)* | Query a specific device IP instead of broadcast |
 | `--json`    | off     | Also print results as JSON                     |
+| `--local`   | off     | Force direct UDP instead of server routing     |
 
 Output is a formatted table showing each device's label, product type,
 group, IP address, MAC address, and zone count.
@@ -213,7 +214,7 @@ python3 glowup.py record <effect> [--duration N] [--format gif|mp4|webm] [--outp
 | `--height`     | 80      | Output height in pixels                               |
 | `--format`     | gif     | Output format: `gif`, `mp4`, or `webm`               |
 | `--output`     | *(auto)* | Output file path (default: `<effect>.<format>`)      |
-| `--lerp`       | lab     | Color interpolation: `lab` or `hsb`                  |
+| `--lerp`       | oklab   | Color interpolation: `oklab` (best), `lab` (classic CIELAB), `hsb` (cheap) |
 | `--author`     | *(none)* | Author name for the metadata sidecar                 |
 | `--title`      | *(none)* | Title / description for the metadata sidecar         |
 | `--media-url`  | *(auto)* | Relative URL for gallery use (defaults to filename)  |

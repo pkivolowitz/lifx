@@ -14,7 +14,7 @@ by Perry Kivolowitz, the sole Human Author.
 
 ## Highlights
 
-- **26 effects** — aurora, fireworks, Newton's Cradle, cellular automata, waving flags (199 countries), plasma, sonar, and more
+- **33 effects** — aurora, fireworks, Newton's Cradle, cellular automata, waving flags (199 countries), plasma, sonar, and more
 - **Virtual multizone** — stitch any devices into one animation surface; removes the 3-string hardware limit
 - **MIDI pipeline** — parse and replay MIDI files through synth + synchronized LIFX lights; multi-station broadcasting with runtime station switching
 - **N-body visualizer** — WebGL particle simulation driven by MIDI events, rendered in the browser
@@ -26,7 +26,7 @@ by Perry Kivolowitz, the sole Human Author.
 
 ```bash
 python3 glowup.py discover                        # find devices
-python3 glowup.py effects                         # list all 26 effects
+python3 glowup.py effects                         # list all 33 effects
 python3 glowup.py play aurora --ip <device-ip>    # run an effect
 python3 glowup.py play cylon --sim-only --zones 36  # preview without hardware
 python3 glowup.py record aurora --duration 8      # render to GIF
@@ -58,7 +58,7 @@ The **[User Manual](MANUAL.md)** is organized as a progressive
 disclosure tree — start with pretty lights, add complexity only
 when you need it:
 
-- **Core** — CLI, 26 effects, simulator, troubleshooting
+- **Core** — CLI, 33 effects, simulator, troubleshooting
 - **Server** — REST API, scheduling, systemd/launchd
 - **Remote Access** — iOS app, Cloudflare Tunnel, Home Assistant, Node-RED
 - **Database** — PostgreSQL diagnostics, dashboard
@@ -84,7 +84,7 @@ change, but a large body of work underneath:
 - **Server route table** — 315 lines of if-elif URL routing replaced
   with a declarative 39-route table. Adding an API endpoint is one
   line.
-- **194 regression tests** gated by a pre-commit hook. Includes
+- **780+ tests** gated by a pre-commit hook. Includes
   use-case-level pipeline tests, distributed agent tests, MIDI/audio
   fixture validation, and FFT frequency detection.
 - **Tech debt audit** — bare-except handlers replaced with logged

@@ -112,26 +112,134 @@ All endpoints require a bearer token in the `Authorization` header:
 Authorization: Bearer your-secret-token-here
 ```
 
+#### Core
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/status` | Server readiness and version |
 | `GET` | `/api/devices` | List all configured devices |
 | `GET` | `/api/effects` | List effects with parameter metadata and device affinity |
-| `GET` | `/api/devices/{ip}/status` | Current effect name, params, FPS |
-| `GET` | `/api/devices/{ip}/colors` | Snapshot of zone HSBK values |
-| `GET` | `/api/devices/{ip}/colors/stream` | SSE stream of zone colors at 4 Hz |
-| `POST` | `/api/devices/{ip}/play` | Start an effect (body: `{"effect":"name","params":{...}}`) |
-| `POST` | `/api/devices/{ip}/stop` | Stop current effect (fade to black) |
-| `POST` | `/api/devices/{ip}/resume` | Clear phone override, resume schedule |
-| `POST` | `/api/devices/{ip}/power` | Power on/off (body: `{"on": true}`) |
+
+#### Device Control
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/devices/{id}/status` | Current effect name, params, FPS, override state |
+| `GET` | `/api/devices/{id}/colors` | Snapshot of zone HSBK values |
+| `GET` | `/api/devices/{id}/colors/stream` | SSE stream of zone colors at 4 Hz |
+| `POST` | `/api/devices/{id}/play` | Start an effect (body: `{"effect":"name","params":{...}}`) |
+| `POST` | `/api/devices/{id}/stop` | Stop current effect (fade to black) |
+| `POST` | `/api/devices/{id}/resume` | Clear phone override, resume schedule |
+| `POST` | `/api/devices/{id}/power` | Power on/off (body: `{"on": true}`) |
+| `POST` | `/api/devices/{id}/brightness` | Set brightness (body: `{"brightness": 0-100}`) |
+| `POST` | `/api/devices/{id}/identify` | Pulse brightness to locate device |
+| `POST` | `/api/devices/{id}/reintrospect` | Re-query device geometry (zone count, tile chain) |
+| `POST` | `/api/devices/{id}/nickname` | Set custom display name (body: `{"nickname":"..."}`) |
+| `POST` | `/api/devices/{id}/reset` | Deep-reset device hardware |
+
+#### Groups
+
+| Method | Path | Description |
+|--------|------|-------------|
 | `GET` | `/api/groups` | Device groups from config |
+| `POST` | `/api/groups` | Create a new group (body: `{"name":"...","members":[...]}`) |
+| `PUT` | `/api/groups/{name}` | Update a group |
+| `DELETE` | `/api/groups/{name}` | Delete a group |
+
+#### Scheduling
+
+| Method | Path | Description |
+|--------|------|-------------|
 | `GET` | `/api/schedule` | Schedule entries with resolved times |
+| `POST` | `/api/schedule` | Create a new schedule entry |
+| `PUT` | `/api/schedule/{index}` | Update a schedule entry |
+| `DELETE` | `/api/schedule/{index}` | Delete a schedule entry |
 | `POST` | `/api/schedule/{index}/enabled` | Enable or disable a schedule entry |
+
+#### Effect Defaults
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/effects/{name}/defaults` | Save tuned parameters as defaults |
+
+#### Device Registry
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/registry` | List registered devices with live status |
+| `POST` | `/api/registry/device` | Add or update a device (body: `{"mac":"...","label":"..."}`) |
+| `POST` | `/api/registry/push-label` | Write one label to bulb firmware |
+| `POST` | `/api/registry/push-labels` | Write all labels to bulb firmware |
+| `DELETE` | `/api/registry/device/{mac}` | Remove device from registry |
+
+#### BLE Sensors
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/ble/sensors` | List all BLE sensor readings |
+| `GET` | `/api/ble/sensors/{label}` | Single sensor details |
+| `PUT` | `/api/ble/sensors/{label}/location` | Set sensor display location |
+
+#### Automations
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/automations` | List automations with status |
+| `POST` | `/api/automations` | Create a new automation |
+| `PUT` | `/api/automations/{index}` | Update an automation |
+| `DELETE` | `/api/automations/{index}` | Delete an automation |
+| `POST` | `/api/automations/{index}/enabled` | Enable or disable an automation |
+
+#### Media Pipeline
+
+| Method | Path | Description |
+|--------|------|-------------|
 | `GET` | `/api/media/sources` | List media sources with status (see [Media Pipeline](20-media-pipeline.md)) |
 | `GET` | `/api/media/signals` | List available signal names |
+| `GET` | `/api/media/stream/{source}` | Raw PCM audio stream (chunked) |
 | `POST` | `/api/media/sources/{name}/start` | Manually start a media source |
 | `POST` | `/api/media/sources/{name}/stop` | Manually stop a media source |
 | `POST` | `/api/media/signals/ingest` | Write signals from external source |
+
+#### Diagnostics & Discovery
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/diagnostics/now_playing` | Effects currently playing |
+| `GET` | `/api/diagnostics/history` | Recent effect events (last 50) |
+| `GET` | `/api/discovered_bulbs` | Bulbs found via ARP keepalive |
+| `GET` | `/api/command/discover` | Discovered LIFX devices (query: `?ip=...`) |
+| `POST` | `/api/command/identify` | Pulse any device by IP to locate it |
+| `DELETE` | `/api/command/identify/{ip}` | Cancel a running identify pulse |
+| `GET` | `/api/command/identify/cancel-all` | Cancel all active identify pulses |
+
+#### Server Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/server/rediscover` | Re-resolve groups and reload devices |
+| `POST` | `/api/server/power-off-all` | Emergency bulk power-off all devices |
+
+#### Distributed / Fleet
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/fleet` | Distributed fleet status |
+| `POST` | `/api/assign` | Issue work assignment to compute node |
+| `POST` | `/api/assign/{node}/cancel/{id}` | Cancel work assignment |
+| `GET` | `/api/calibrate/time_sync` | Server monotonic time for clock offset estimation |
+| `POST` | `/api/calibrate/start/{device}` | Start device calibration |
+| `POST` | `/api/calibrate/result/{device}` | Apply measured delay |
+
+#### Dashboards (no auth required)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/dashboard` | Web dashboard |
+| `GET` | `/home` | Sensor display dashboard |
+| `GET` | `/api/home/lights` | Light status for home display |
+| `GET` | `/api/home/photos` | Photos for home display |
+| `GET` | `/photos/{filename}` | Serve photo from static/photos/ |
 
 **Examples:**
 
@@ -166,13 +274,13 @@ proxies (e.g. Cloudflare Tunnel) during restart.
 Clients should query `GET /api/status` on connect:
 
 ```json
-{"status": "loading", "ready": false, "version": "1.8"}
+{"status": "loading", "ready": false, "version": "2.0"}
 ```
 
 Once device loading completes the response changes to:
 
 ```json
-{"status": "ready", "ready": true, "version": "1.8"}
+{"status": "ready", "ready": true, "version": "2.0"}
 ```
 
 While `ready` is `false`, other endpoints work normally but return empty

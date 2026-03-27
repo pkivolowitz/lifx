@@ -103,9 +103,9 @@ The emitter exposes the same properties the engine expects (`zone_count`,
 (`on_open`, `on_emit`, `on_close`).  See the
 [Emitter Developer Guide](22-emitter-dev-guide.md) for details.
 
-### VirtualMultizoneDevice
+### VirtualMultizoneEmitter
 
-The `VirtualMultizoneDevice` class in `emitters/virtual.py` wraps any
+The `VirtualMultizoneEmitter` class in `emitters/virtual.py` wraps any
 combination of LIFX emitters into a single virtual multizone device.
 Multizone devices contribute all their physical zones; single bulbs
 contribute one zone each.
@@ -113,7 +113,7 @@ contribute one zone each.
 ```python
 from transport import LifxDevice
 from emitters.lifx import LifxEmitter
-from emitters.virtual import VirtualMultizoneDevice
+from emitters.virtual import VirtualMultizoneEmitter
 
 # Connect devices of any type
 string_light = LifxDevice("192.0.2.62")  # 108-zone multizone
@@ -126,7 +126,7 @@ for dev in [string_light, white_bulb_1, color_bulb_1]:
 # Wrap them as emitters — total zone count = 108 + 1 + 1 = 110
 emitters = [LifxEmitter.from_device(d)
             for d in [string_light, white_bulb_1, color_bulb_1]]
-vdev = VirtualMultizoneDevice(emitters)
+vdev = VirtualMultizoneEmitter(emitters)
 print(vdev.zone_count)  # 110
 
 # Use exactly like a regular emitter

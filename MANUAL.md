@@ -40,7 +40,7 @@ box and some bulbs.
 
 **You need:** Python 3.10+, LIFX devices on your LAN.
 
-**You get:** 21 built-in effects, live simulator preview, CLI
+**You get:** 33 built-in effects, live simulator preview, CLI
 control, video recording of effects.
 
 | Section | Description |
@@ -49,7 +49,7 @@ control, video recording of effects.
 | [Requirements](docs/02-requirements.md) | Hardware, software, and network prerequisites |
 | [Quick Start](docs/03-quick-start.md) | Get running in 60 seconds |
 | [CLI Reference](docs/04-cli-reference.md) | discover, effects, identify, play, record, replay |
-| [Built-in Effects](docs/06-effects.md) | All 21 public effects with parameter tables |
+| [Built-in Effects](docs/06-effects.md) | All 33 public effects with parameter tables |
 | [Live Simulator](docs/08-simulator.md) | tkinter preview window (--sim, --sim-only) |
 | [Troubleshooting](docs/14-troubleshooting.md) | Common issues and fixes |
 
@@ -222,7 +222,7 @@ gallery publishing.
 |---------|-------------|
 | [Effect Developer Guide](docs/07-effect-dev-guide.md) | Architecture, base class, Param system, HSBK, examples |
 | [Engine and Controller API](docs/09-engine-api.md) | Programmatic API, VirtualMultizoneDevice |
-| [Testing](docs/10-testing.md) | Test modules, 250+ tests, how to run |
+| [Testing](docs/10-testing.md) | Test modules, 780+ tests, how to run |
 | [Test Interpretation Guide](TEST_GUIDE.md) | What the high-level tests prove, failure modes, triage reference (developer-level) |
 | [Effect Gallery](docs/13-gallery.md) | GitHub Pages gallery with animated GIF previews |
 | [SOE Pipeline](docs/21-soe-pipeline.md) | Architecture and extension points |

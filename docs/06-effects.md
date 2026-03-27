@@ -21,24 +21,27 @@ listings so users see relevant effects first.
 |--------|----------|
 | `aurora` | strip |
 | `binclock` | strip |
-| `bloom` | bulb |
 | `breathe` | all |
-| `crossfade` | strip |
 | `cylon` | bulb, strip |
 | `double_slit` | strip |
 | `embers` | strip |
 | `fireworks` | strip |
 | `flag` | strip |
 | `jacobs_ladder` | strip |
+| `matrix_rain` | matrix |
 | `morse` | all |
 | `newtons_cradle` | strip |
+| `nurse_station` | matrix |
+| `off` | all |
+| `on` | all |
 | `pendulum_wave` | strip |
 | `plasma` | strip |
 | `plasma2d` | matrix |
-| `primary_cycle` | all |
 | `ripple` | strip |
+| `ripple2d` | matrix |
 | `rule30` | strip |
 | `rule_trio` | strip |
+| `screen_light` | all |
 | `sine` | strip |
 | `sonar` | strip |
 | `soundlevel` | all |
@@ -49,8 +52,18 @@ listings so users see relevant effects first.
 | `twinkle` | all |
 | `wave` | strip |
 | `waveform` | strip |
-| `zone_map` | strip |
+
+Hidden diagnostic effects (names starting with `_`) are omitted from the
+iOS app by default.  Use the "Show Hidden" toggle to reveal them.
+
+| Effect | Affinity |
+|--------|----------|
+| `_bloom` | bulb |
+| `_crossfade` | strip |
 | `_grid_map` | matrix |
+| `_polychrome_test` | strip |
+| `_primary_cycle` | all |
+| `_zone_map` | strip |
 
 ---
 
@@ -102,6 +115,8 @@ string. Adjacent segments swing in opposite directions.
 | `sat1`       | 100     | 0–100      | Color 1 saturation percent                     |
 | `sat2`       | 100     | 0–100      | Color 2 saturation percent                     |
 | `brightness` | 100     | 0–100      | Overall brightness percent                     |
+| `zones_per_bulb` | 1   | 1–16       | Zones per physical bulb (3 for string lights)  |
+| `drift`      | 0.0     | -360.0–360.0 | Spatial drift in degrees per second (0 = standing wave) |
 | `kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin                    |
 
 ### twinkle
@@ -673,6 +688,7 @@ Temperature maps to a physically motivated ember gradient:
 | `--cooling`    | 0.98    | 0.80–0.999 | Cooling factor per step (lower = faster fade) |
 | `--turbulence` | 0.08    | 0.0–0.3    | Random per-cell flicker amplitude |
 | `--brightness` | 100     | 0–100      | Overall brightness percent |
+| `--zones-per-bulb` | 1  | 1–16       | Zones per physical bulb (3 for string lights) |
 | `--kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin |
 
 #### Examples
@@ -740,6 +756,7 @@ Each arc has several layers of intensity variation:
 | `--gap`        | 4       | 2–12       | Base gap between electrodes in bulbs |
 | `--reverse`    | 0       | 0–1        | Drift direction: 0 = forward, 1 = reverse |
 | `--brightness` | 100     | 0–100      | Overall brightness percent |
+| `--zones-per-bulb` | 1  | 1–16       | Zones per physical bulb (3 for string lights) |
 | `--kelvin`     | 3500    | 1500–9000  | Color temperature in Kelvin |
 
 #### Examples
@@ -1068,18 +1085,18 @@ python3 glowup.py play plasma --ip <device-ip> --zpb 3 --speed 5 --tendril-rate 
 
 ---
 
-## Audio-Reactive Effects
+## Audio / Media-Reactive Effects
 
-The following effects require the media pipeline (microphone or
-audio source).  See [Media Pipeline](20-media-pipeline.md) for
+The following effects require the media pipeline (microphone, camera,
+or screen capture).  See [Media Pipeline](20-media-pipeline.md) for
 setup instructions.
 
 | Effect | Description |
 |--------|-------------|
+| `screen_light` | Screen-reactive ambient lighting — color-samples the display |
 | `soundlevel` | VU meter — brightness tracks audio RMS level |
-| `waveform` | Oscilloscope — maps the audio waveform to zones |
 | `spectrum2d` | 2D frequency spectrum — requires terminal matrix emitter |
-| `plasma2d` | 2D plasma — requires terminal matrix emitter |
+| `waveform` | Oscilloscope — maps the audio waveform to zones |
 
 ## Distributed Pipeline Effects
 
@@ -1090,10 +1107,25 @@ worker agents).  See [SOE Pipeline](21-soe-pipeline.md) for setup.
 |--------|-------------|
 | `theremin` | Maps hand-distance sensor data to a continuous tone |
 
-## Diagnostic Effects (Hidden)
+## Matrix Effects
 
-Hidden effects (names starting with `_`) are omitted from the iOS app
-by default.  Use the "Show Hidden" toggle to reveal them.
+The following effects are designed for 2D matrix devices (Luna, Tile).
+
+| Effect | Description |
+|--------|-------------|
+| `matrix_rain` | Falling green digital rain (The Matrix) |
+| `nurse_station` | Patient census on Luna — color-coded vitals via MQTT |
+| `plasma2d` | 2D plasma — sine-wave interference color field |
+| `ripple2d` | Interfering concentric ripples on a 2D grid |
+
+## Transient Effects
+
+These effects execute once and exit (not continuous animations).
+
+| Effect | Description |
+|--------|-------------|
+| `off` | Power off — turn lights off |
+| `on` | Static color — set lights to a named color at a given brightness |
 
 ### _grid_map
 

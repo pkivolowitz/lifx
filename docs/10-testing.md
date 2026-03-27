@@ -19,23 +19,49 @@ python3 -m unittest test_effects -v
 
 ### Test Modules
 
+**780+ test methods** across 33 test files.  The table below lists every
+module; run `python3 -m pytest test_*.py tests/ -v` for the full count.
+
 | Module | Tests | What it covers |
 |--------|------:|----------------|
-| `test_effects.py` | 73 | Every registered effect × {1, 3, 36, 108} zones — frame length, HSBK range (0–65535 for H/S/B, 1500–9000 K), 50-frame stability for stateful effects, registry sanity |
-| `test_schedule.py` | 28 | `_parse_time_spec` (fixed times, symbolic solar times, offsets), `_validate_days`, `_days_display`, `_resolve_entries` (overnight wraparound, group filtering), `_find_active_entry` |
-| `test_config.py` | 22 | `_load_config` validation: auth tokens (missing, default, empty, non-string), ports (zero, negative, >65535, string), groups (missing, empty), schedule entries (missing fields, unknown groups, invalid days), MQTT section (bad port, empty prefix, negative interval), file errors |
-| `test_override.py` | 18 | DeviceManager override logic: basic set/clear, group-level overrides, individual member overrides within groups (`is_overridden_or_member`), override entry tracking, clear-and-resume |
-| `test_solar.py` | 12 | `sun_times()` for Mobile AL, NYC, Tromso (polar night + midnight sun), Quito (equator): event ordering, day length, timezone awareness, noon always present, latitude validation |
-| `test_virtual_multizone.py` | 6 | `VirtualMultizoneDevice` zone mapping and dispatch: multizone + color + mono mix, batched `set_zones()`, `set_color` broadcast, two-strip independent batching, all-singles regression |
-| `test_multizone_products.py` | varies | LIFX product database: product IDs, zone counts, multizone detection |
+| `test_effects.py` | 160 | Every registered effect × {1, 3, 36, 108} zones — frame length, HSBK range, 50-frame stability |
+| `test_use_cases.py` | 17 | End-to-end Controller/Engine/Emitter pipeline integration |
+| `test_effect_contracts.py` | 6 | Effect render contract enforcement (170 subtests) |
+| `test_schedule.py` | 47 | Time parsing, symbolic solar times, overnight wraparound, day filtering |
+| `test_schedule_unification.py` | 17 | Unified schedule config for server and scheduler |
+| `test_config.py` | 28 | Server config validation: auth, ports, groups, MQTT, file errors |
+| `test_override.py` | 19 | DeviceManager override logic: group-level, member-level, clear-and-resume |
+| `test_solar.py` | 11 | Solar calculations for multiple latitudes (polar, equatorial, mid-latitude) |
+| `test_virtual_multizone.py` | 8 | VirtualMultizoneEmitter zone mapping and dispatch |
+| `test_multizone_products.py` | 7 | LIFX product database validation against official registry |
+| `test_routing.py` | 22 | Declarative URL route table consistency and pattern matching |
+| `test_rest_integration.py` | 66 | REST API integration with real HTTP server (security, validation, CRUD) |
+| `test_audit_critical.py` | 52 | Regression tests for critical audit fixes (C1–C17) |
+| `test_audit_medium.py` | 25 | Regression tests for medium-severity audit fixes (M1–M35) |
+| `test_audit_regressions.py` | 66 | Tech debt audit regressions (HSBK, signals, MQTT, logging) |
+| `test_fuzz.py` | 42 | Fuzz testing: random bytes to parsers, validators, and param system |
+| `test_concurrency.py` | 11 | Thread safety under contention (overrides, config, registry) |
+| `test_affinity.py` | 12 | Effect device affinity metadata validation |
+| `test_distributed.py` | 62 | Distributed SOE pipeline, MIDI parsing, audio extraction |
+| `test_fft.py` | 22 | Dual-path FFT with numpy and pure-Python fallback |
+| `test_media.py` | 38 | SignalBus and AudioExtractor pipeline operations |
+| `test_audio_out.py` | 30 | AudioOutEmitter registration, parameters, mute, lifecycle |
+| `test_protocol.py` | 20 | Distributed protocol UDP wire format pack/unpack |
+| `test_transport_adapter.py` | 8 | UDP transport loopback and SignalValue interface |
+| `test_udp_channel.py` | 11 | UDP sender/receiver loopback frame validation |
+| `test_luna_hardware.py` | 23 | Hardware validation for LIFX Luna 700-series matrix (requires device) |
+| `tests/test_diagnostics.py` | 13 | PostgreSQL diagnostics subsystem |
+| `tests/test_environment.py` | 3 | System-level environment sanity checks |
+| `tests/test_midi_parser.py` | 36 | MIDI file parser (header, events, edge cases) |
+| `tests/test_midi_pipeline.py` | 37 | MIDI sensor, emitter, and light bridge components |
 
-### VirtualMultizoneDevice Tests (Detail)
+### VirtualMultizoneEmitter Tests (Detail)
 
 The tests in `test_virtual_multizone.py` use `MockDevice` objects that
 record all method calls for assertion.  To add new tests, follow the same
 pattern: create `MockDevice` instances with the desired `zone_count`,
 `is_multizone`, and `is_polychrome` values, build a
-`VirtualMultizoneDevice`, call methods, and assert against the recorded
+`VirtualMultizoneEmitter`, call methods, and assert against the recorded
 calls.
 
 ### Effect Rendering Tests (Detail)
