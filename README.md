@@ -2,27 +2,40 @@
   <img src="docs/assets/logo.jpg" alt="GlowUp" width="200">
 </p>
 
-# GLOWUP — LIFX Effect Engine
+# GLOWUP
 
-A modular effect engine for LIFX devices.  Replace the phone app with
-a CLI and server that run autonomously from a Raspberry Pi, Mac, or
-any Linux box.
+**Sensor-driven automation platform for LIFX devices.**
+
+GlowUp replaces fragile phone apps and cloud services with a
+self-hosted platform that discovers devices, reacts to sensors,
+runs on a schedule, and stays out of your way.  It scales from
+"pretty lights on the porch" to a multi-machine distributed
+system with BLE sensors, audio analysis, MIDI playback, and a
+REST API — all from one codebase, with zero mandatory
+dependencies beyond Python 3.10.
 
 This project utilizes AI assistance (Claude 4.6) for boilerplate and
 logic expansion. All architectural decisions and code integration are
 by Perry Kivolowitz, the sole Human Author.
 
+## At a Glance
+
+| | |
+|-|-|
+| **33 effects** | Aurora, fireworks, Newton's Cradle, cellular automata, 199 country flags, plasma, sonar, audio spectrum, and more |
+| **Sensor pipeline** | BLE motion/temperature sensors, microphone FFT, screen capture, MIDI events — all feed the same SOE (Sensor-Operator-Emitter) architecture |
+| **50+ REST endpoints** | Device control, group CRUD, scheduling, automations, BLE sensors, diagnostics, device registry |
+| **Self-healing discovery** | ARP-based keepalive + label-based identity.  Devices survive DHCP changes, router swaps, and power cycles without config edits |
+| **780+ tests** | Audit, fuzz, concurrency, REST integration, effect contracts — gated by pre-commit hook |
+| **Zero required packages** | Core is pure stdlib.  Every optional dependency (ffmpeg, paho-mqtt, bleak, etc.) is guarded and documented |
+
 ## What Do You Want to Do?
 
-**Start here.**  Pick what sounds like you and follow that path.
-Everything else is optional.
+Pick what sounds like you.  Everything else is optional.
 
-### I just want pretty lights
+### Pretty lights from the command line
 
-No server, no network services.  Just a Mac or Linux box and LIFX
-bulbs on your LAN.
-
-**You need:** Python 3.10+
+**You need:** Python 3.10+ and LIFX bulbs on your LAN.
 
 ```bash
 python3 glowup.py discover                          # find devices
@@ -30,109 +43,87 @@ python3 glowup.py play aurora --ip <device-ip>      # run an effect
 python3 glowup.py play cylon --sim-only --zones 36  # preview without hardware
 ```
 
-33 built-in effects: aurora, fireworks, Newton's Cradle, cellular
-automata, waving flags (199 countries), plasma, sonar, and more.
 See the **[Effect Gallery](https://pkivolowitz.github.io/lifx/)**
-for animated previews.
+for animated previews of all 33 effects.
 
-### I want music-reactive lighting
+### Music-reactive lighting
 
-Speak, play music, clap — the lights react in real time.
+Speak, play music, clap — the lights respond in real time.  The
+CLI auto-starts your microphone via ffmpeg with no configuration.
 
-**You need:** Python 3.10+ and ffmpeg
+**You need:** + ffmpeg
 
 ```bash
 python3 glowup.py play spectrum2d --ip <device-ip>
-python3 glowup.py play soundlevel --ip <device-ip>
 python3 glowup.py play waveform --ip <device-ip>
+python3 glowup.py play soundlevel --ip <device-ip>
 ```
 
-The CLI auto-captures your local microphone via ffmpeg.  Use
-`--audio-device :N` to pick a specific input (list devices with
-`ffmpeg -f avfoundation -list_devices true -i ""`).
+### 2D matrix effects (Luna, Tiles, Candle, Ceiling)
 
-### I want 2D matrix effects on my Luna / Tiles
+Full pixel-grid rendering with auto-detected tile geometry.
 
-Matrix devices (Luna, Tile, Candle, Ceiling) get full 2D rendering.
-The CLI auto-detects tile geometry and injects the correct
-width/height.
-
-**You need:** Python 3.10+ and a matrix device
+**You need:** + a matrix device
 
 ```bash
-python3 glowup.py play plasma2d --ip <luna-ip>       # 2D plasma field
-python3 glowup.py play matrix_rain --ip <luna-ip>     # falling digital rain
-python3 glowup.py play ripple2d --ip <luna-ip>        # concentric ripples
-python3 glowup.py play spectrum2d --ip <luna-ip>      # audio spectrum (+ ffmpeg)
+python3 glowup.py play plasma2d --ip <luna-ip>
+python3 glowup.py play matrix_rain --ip <luna-ip>
+python3 glowup.py play ripple2d --ip <luna-ip>
+python3 glowup.py play spectrum2d --ip <luna-ip>      # + ffmpeg for audio
 ```
 
-### I want BLE sensor-driven automation
+### BLE sensor-driven automation
 
-ONVIS SMS2 motion/temperature/humidity sensors trigger effects
-and automations via Bluetooth Low Energy.
+Bluetooth Low Energy sensors (ONVIS SMS2) publish motion,
+temperature, and humidity to the automation engine via MQTT.
+Trigger effects, power devices, and log events based on
+occupancy and environmental state.
 
-**You need:** Python 3.10+, bleak, cryptography
+**You need:** + bleak, cryptography
 
 ```bash
 pip install bleak cryptography
 python3 -m ble.sensor --label "Hallway"
 ```
 
-Publishes motion, temperature, and humidity to MQTT.  The server's
-automation engine can trigger effects, power devices, and log events
-based on sensor state.  See [Requirements](docs/02-requirements.md)
-for the full BLE setup.
+### Always-on server with scheduling
 
-### I want an always-on server with scheduling
+Headless daemon with time-based scheduling (sunrise, sunset),
+REST API, SSE live updates, iOS app, device registry, group
+management, diagnostics dashboard.
 
-A headless daemon on a Pi (or any box) runs effects on a schedule,
-exposes a REST API, and serves an iOS app.
-
-**You need:** Python 3.10+ (no extra packages for the server itself)
+**You need:** *(no extra packages)*
 
 ```bash
 python3 server.py server.json
 ```
 
-50+ REST endpoints, time-based scheduling with symbolic times
-(sunrise, sunset), SSE live updates, device registry, group CRUD,
-automations, diagnostics dashboard.  See the
-**[User Manual](docs/MANUAL.md)** for full documentation.
+### Virtual multizone — stitch devices into one surface
 
-### I want stitch devices into one animation surface
+Any combination of string lights, bulbs, Neons, and beams
+becomes a single animation canvas.  Effects span all devices
+as one strip.
 
-Any combination of string lights, bulbs, Neons, and beams becomes a
-single virtual multizone strip.  Effects animate across all devices
-as one canvas.
-
-**You need:** Server (above) or a local config file
+**You need:** server or local config file
 
 ```bash
-python3 glowup.py play cylon --group office
-python3 glowup.py play aurora --group porch --config schedule.json
+python3 glowup.py play aurora --group porch
 ```
 
-### I want MIDI-synchronized lighting
+### MIDI-synchronized lighting
 
-Parse and replay MIDI files through speakers and synchronized lights.
-Multiple stations, runtime switching.
+MIDI files play through speakers and synchronized lights on the
+same MQTT event bus.  Multiple stations, runtime switching.
 
-**You need:** paho-mqtt, MQTT broker, FluidSynth + SoundFont (for audio)
+**You need:** + paho-mqtt, mosquitto, FluidSynth
 
 ```bash
-# Terminal 1 — audio
 python3 -m emitters.midi_out --backend fluidsynth --soundfont gm.sf2
-
-# Terminal 2 — lights
 python3 -m distributed.midi_light_bridge --ip 192.0.2.23 192.0.2.34
-
-# Terminal 3 — play
 python3 glowup.py replay --file song.mid
 ```
 
-### I want to write my own effects
-
-**You need:** Python 3.10+, and the **[Effect Developer Guide](docs/07-effect-dev-guide.md)**
+### Write your own effects
 
 ```python
 class MyEffect(Effect):
@@ -143,20 +134,35 @@ class MyEffect(Effect):
         ...
 ```
 
-Register it, and it's immediately available in the CLI, server, iOS
-app, and scheduler.
+Register it, and it's immediately available in the CLI, server,
+iOS app, and scheduler.  See the **[Effect Developer Guide](docs/07-effect-dev-guide.md)**.
+
+## Architecture
+
+```
+Sensors ──► Operators ──► Emitters
+  BLE          FFT          LIFX multizone
+  Mic          Beat         LIFX single
+  Screen       Threshold    LIFX matrix (tiles)
+  MIDI         Blend        MIDI synth
+  Camera       Delay        Audio speakers
+                            WebGL (browser)
+```
+
+The SOE pipeline decouples input from output.  Any sensor can
+drive any effect on any emitter.  New sensors and emitters plug
+in without touching the core.
 
 ## Documentation
 
 The **[User Manual](docs/MANUAL.md)** is organized as a progressive
-disclosure tree — start with pretty lights, add complexity only
-when you need it:
+disclosure tree:
 
 - **Core** — CLI, 33 effects, simulator, troubleshooting
 - **Server** — REST API, scheduling, systemd/launchd
 - **Remote Access** — iOS app, Cloudflare Tunnel, Home Assistant, Node-RED
 - **Database** — PostgreSQL diagnostics, dashboard
-- **Distributed** — MQTT, SOE pipeline, audio/MIDI pipelines, N-body visualizer
+- **Distributed** — MQTT, SOE pipeline, audio/MIDI pipelines
 - **Developer** — effects, sensors, operators, emitters
 
 <p align="center">
@@ -165,10 +171,8 @@ when you need it:
 
 ## Requirements
 
-Full details: **[Requirements](docs/02-requirements.md)**
-
-The core requires **only Python 3.10+ and LIFX bulbs**.  Everything
-else is opt-in:
+The core requires **only Python 3.10+ and LIFX bulbs**.
+Everything else is opt-in:
 
 | Feature | Additional packages |
 |---------|-------------------|
@@ -182,11 +186,13 @@ else is opt-in:
 | Database / dashboard | psycopg2 |
 | Vision / camera | opencv-python |
 
+Full details: **[Requirements](docs/02-requirements.md)**
+
 ## Caveat
 
-I have tested with string lights, Neon, Luna (matrix), and monochrome
-bulbs.  Please report problems — I don't own every LIFX product.
-Fixes for other devices are welcome.
+Tested with LIFX string lights, Neon, Luna (700-series matrix),
+and monochrome bulbs.  Please report problems — I don't own
+every LIFX product.  Fixes for other devices are welcome.
 
 ## License
 
@@ -194,4 +200,4 @@ MIT
 
 ## Appreciation
 
-> If you find this software useful, please consider donating to a local foodbank. Even a can of soup makes a difference.
+> If you find this software useful, please consider donating to a local food pantry.  Even a single can of soup makes someone in your neighborhood's day a little easier.
