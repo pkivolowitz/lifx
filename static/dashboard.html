@@ -475,6 +475,11 @@
       <button class="btn-add-schedule" onclick="openNewScheduleModal()">+</button>
       <div id="schedule"><div class="error">Loading...</div></div>
     </div>
+    <div class="card">
+      <h2 style="display:inline;">Automations</h2>
+      <button class="btn-add-schedule" onclick="openNewAutomationModal()">+</button>
+      <div id="automations"><div class="error">Loading...</div></div>
+    </div>
   </div>
 
   <div class="grid">
@@ -537,6 +542,70 @@
     <div class="modal-buttons">
       <button class="btn-cancel" onclick="closeGroupModal()">Cancel</button>
       <button class="btn-save" onclick="saveGroup()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="auto-modal">
+  <div class="modal">
+    <h3 id="auto-modal-title">New Automation</h3>
+    <input type="hidden" id="auto-idx" value="-1">
+    <label>Name</label>
+    <input type="text" id="auto-name" placeholder="Living room motion">
+    <label>Sensor Label</label>
+    <input type="text" id="auto-sensor-label" placeholder="onvis_motion">
+    <label>Characteristic</label>
+    <select id="auto-characteristic">
+      <option value="motion">motion</option>
+      <option value="temperature">temperature</option>
+      <option value="humidity">humidity</option>
+    </select>
+    <label>Trigger Condition</label>
+    <div style="display:flex;gap:8px;">
+      <select id="auto-trigger-cond" style="width:40%;">
+        <option value="eq">equals</option>
+        <option value="gt">greater than</option>
+        <option value="lt">less than</option>
+        <option value="gte">greater or equal</option>
+        <option value="lte">less or equal</option>
+      </select>
+      <input type="number" id="auto-trigger-val" style="width:60%;" placeholder="1" value="1">
+    </div>
+    <label>Target Group</label>
+    <select id="auto-group"></select>
+    <label>Effect</label>
+    <select id="auto-effect"></select>
+    <label>Effect Params (JSON)</label>
+    <input type="text" id="auto-params" placeholder='{"brightness": 70}'>
+    <label>Off Trigger</label>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <select id="auto-off-type" style="width:40%;" onchange="toggleAutoOffFields()">
+        <option value="watchdog">Watchdog (timeout)</option>
+        <option value="condition">Sensor condition</option>
+      </select>
+      <input type="number" id="auto-off-minutes" style="width:60%;" placeholder="30" value="30">
+    </div>
+    <div id="auto-off-condition-row" style="display:none;margin-top:8px;">
+      <div style="display:flex;gap:8px;">
+        <select id="auto-off-cond" style="width:40%;">
+          <option value="eq">equals</option>
+          <option value="lt">less than</option>
+        </select>
+        <input type="number" id="auto-off-val" style="width:60%;" placeholder="0">
+      </div>
+    </div>
+    <label>Off Effect</label>
+    <select id="auto-off-effect"></select>
+    <label>Schedule Conflict</label>
+    <select id="auto-conflict">
+      <option value="defer">Defer (schedule wins)</option>
+      <option value="override">Override (automation wins)</option>
+      <option value="coexist">Coexist (last write wins)</option>
+    </select>
+    <div class="modal-error" id="auto-error"></div>
+    <div class="modal-buttons">
+      <button class="btn-cancel" onclick="closeAutomationModal()">Cancel</button>
+      <button class="btn-save" onclick="saveAutomation()">Save</button>
     </div>
   </div>
 </div>
@@ -614,14 +683,15 @@ async function refresh() {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
-    const [devices, schedule, discovered, configGroups] = await Promise.all([
+    const [devices, schedule, discovered, configGroups, automationsResp] = await Promise.all([
       api('/api/devices'),
       api('/api/schedule'),
       api('/api/discovered_bulbs'),
       api('/api/groups'),
+      api('/api/automations'),
     ]);
 
-    const results = [devices, schedule, discovered, configGroups];
+    const results = [devices, schedule, discovered, configGroups, automationsResp];
 
     // Any 401 → back to login.
     if (results.some(r => r && r._authFailed)) {
@@ -776,6 +846,51 @@ async function refresh() {
                       onclick="toggleScheduleEnabled(${e.index}, ${!e.enabled})">${e.enabled ? 'ON' : 'OFF'}</button>
               <button class="btn-delete"
                       onclick="confirmDeleteSchedule(this, ${e.index}, '${esc(e.name).replace(/'/g, "\\'")}')">&times;</button>
+            </div>
+            <div class="schedule-status">
+              ${badge}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Automations.
+    const autoEntries = (automationsResp && automationsResp.automations) || [];
+    const aEl = document.getElementById('automations');
+    if (autoEntries.length === 0) {
+      aEl.innerHTML = '<div class="device-idle" style="padding:8px 0;">No automations configured</div>';
+    } else {
+      aEl.innerHTML = autoEntries.map(a => {
+        const badge = a.active
+          ? '<span class="badge badge-active">ACTIVE</span>'
+          : a.enabled
+            ? '<span class="badge badge-stopped">WAITING</span>'
+            : '<span class="badge badge-disabled">OFF</span>';
+        const sensor = (a.sensor && a.sensor.label) || '?';
+        const char = (a.sensor && a.sensor.characteristic) || '?';
+        const group = (a.action && a.action.group) || '?';
+        const effect = (a.action && a.action.effect) || '?';
+        const offType = (a.off_trigger && a.off_trigger.type) || 'watchdog';
+        const offMin = (a.off_trigger && a.off_trigger.minutes) || 30;
+        const offInfo = offType === 'watchdog' ? offMin + 'm timeout' : 'condition';
+        const adata = JSON.stringify(a).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+        return `
+          <div class="schedule-row">
+            <div class="schedule-info">
+              <span class="schedule-name">${esc(a.name)}</span>
+              <div style="margin-top:4px;">
+                <span class="schedule-effect">${esc(effect)}</span>
+                <span class="schedule-group">${esc(group)}</span>
+                <span class="schedule-time">${esc(sensor)} (${esc(char)}) &middot; ${esc(offInfo)}</span>
+              </div>
+            </div>
+            <div class="schedule-actions">
+              <button class="btn-edit" data-entry="${adata}" onclick="openAutomationModal(JSON.parse(this.dataset.entry))">Edit</button>
+              <button class="btn-toggle ${a.enabled ? 'is-enabled' : 'is-disabled'}"
+                      onclick="toggleAutomationEnabled(${a.index}, ${!a.enabled})">${a.enabled ? 'ON' : 'OFF'}</button>
+              <button class="btn-delete"
+                      onclick="confirmDeleteAutomation(this, ${a.index}, '${esc(a.name).replace(/'/g, "\\'")}')">&times;</button>
             </div>
             <div class="schedule-status">
               ${badge}
@@ -1458,8 +1573,185 @@ async function saveScheduleEntry() {
 
 // Close modal on Escape key.
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeScheduleModal();
+  if (e.key === 'Escape') { closeScheduleModal(); closeAutomationModal(); }
 });
+
+// ---- Automation modal (create + edit) ----
+
+let _autoModalIsCreate = false;
+
+function toggleAutoOffFields() {
+  const offType = document.getElementById('auto-off-type').value;
+  document.getElementById('auto-off-minutes').style.display = offType === 'watchdog' ? '' : 'none';
+  document.getElementById('auto-off-condition-row').style.display = offType === 'condition' ? '' : 'none';
+}
+
+async function openNewAutomationModal() {
+  await _loadDropdownCaches();
+  _autoModalIsCreate = true;
+  document.getElementById('auto-modal-title').textContent = 'New Automation';
+  document.getElementById('auto-idx').value = '-1';
+  document.getElementById('auto-name').value = '';
+  document.getElementById('auto-sensor-label').value = '';
+  document.getElementById('auto-characteristic').value = 'motion';
+  document.getElementById('auto-trigger-cond').value = 'eq';
+  document.getElementById('auto-trigger-val').value = '1';
+  _populateSelect('auto-group', _cachedGroups);
+  _populateSelect('auto-effect', _cachedEffects);
+  _populateSelect('auto-off-effect', _cachedEffects, 'off');
+  document.getElementById('auto-params').value = '{"brightness": 70}';
+  document.getElementById('auto-off-type').value = 'watchdog';
+  document.getElementById('auto-off-minutes').value = '30';
+  document.getElementById('auto-conflict').value = 'defer';
+  toggleAutoOffFields();
+  document.getElementById('auto-error').style.display = 'none';
+  document.getElementById('auto-modal').classList.add('active');
+  stopPolling();
+}
+
+async function openAutomationModal(entry) {
+  await _loadDropdownCaches();
+  _autoModalIsCreate = false;
+  document.getElementById('auto-modal-title').textContent = 'Edit Automation';
+  document.getElementById('auto-idx').value = entry.index;
+  document.getElementById('auto-name').value = entry.name || '';
+  document.getElementById('auto-sensor-label').value = (entry.sensor && entry.sensor.label) || '';
+  document.getElementById('auto-characteristic').value = (entry.sensor && entry.sensor.characteristic) || 'motion';
+  document.getElementById('auto-trigger-cond').value = (entry.trigger && entry.trigger.condition) || 'eq';
+  document.getElementById('auto-trigger-val').value = (entry.trigger && entry.trigger.value) || '';
+  _populateSelect('auto-group', _cachedGroups, (entry.action && entry.action.group) || '');
+  _populateSelect('auto-effect', _cachedEffects, (entry.action && entry.action.effect) || 'on');
+  _populateSelect('auto-off-effect', _cachedEffects, (entry.off_action && entry.off_action.effect) || 'off');
+  document.getElementById('auto-params').value = (entry.action && entry.action.params) ? JSON.stringify(entry.action.params) : '';
+  document.getElementById('auto-off-type').value = (entry.off_trigger && entry.off_trigger.type) || 'watchdog';
+  document.getElementById('auto-off-minutes').value = (entry.off_trigger && entry.off_trigger.minutes) || '30';
+  document.getElementById('auto-off-cond').value = (entry.off_trigger && entry.off_trigger.condition) || 'eq';
+  document.getElementById('auto-off-val').value = (entry.off_trigger && entry.off_trigger.value) || '';
+  document.getElementById('auto-conflict').value = entry.schedule_conflict || 'defer';
+  toggleAutoOffFields();
+  document.getElementById('auto-error').style.display = 'none';
+  document.getElementById('auto-modal').classList.add('active');
+  stopPolling();
+}
+
+function _populateSelect(id, options, selected) {
+  const sel = document.getElementById(id);
+  sel.innerHTML = options.map(o =>
+    `<option value="${esc(o)}" ${o === selected ? 'selected' : ''}>${esc(o)}</option>`
+  ).join('');
+}
+
+function closeAutomationModal() {
+  document.getElementById('auto-modal').classList.remove('active');
+  startPolling(POLL_INTERVAL_MS);
+}
+
+async function saveAutomation() {
+  const errEl = document.getElementById('auto-error');
+  errEl.style.display = 'none';
+
+  const idx = parseInt(document.getElementById('auto-idx').value, 10);
+  const name = document.getElementById('auto-name').value.trim();
+  const sensorLabel = document.getElementById('auto-sensor-label').value.trim();
+  const characteristic = document.getElementById('auto-characteristic').value;
+  const trigCond = document.getElementById('auto-trigger-cond').value;
+  const trigVal = parseFloat(document.getElementById('auto-trigger-val').value);
+  const group = document.getElementById('auto-group').value;
+  const effect = document.getElementById('auto-effect').value;
+  const paramsRaw = document.getElementById('auto-params').value.trim();
+  const offType = document.getElementById('auto-off-type').value;
+  const offMinutes = parseFloat(document.getElementById('auto-off-minutes').value);
+  const offEffect = document.getElementById('auto-off-effect').value;
+  const conflict = document.getElementById('auto-conflict').value;
+
+  const errs = [];
+  if (!name) errs.push('Name is required');
+  if (!sensorLabel) errs.push('Sensor label is required');
+  if (!group) errs.push('Group is required');
+  if (!effect) errs.push('Effect is required');
+  if (isNaN(trigVal)) errs.push('Trigger value must be a number');
+
+  let params = {};
+  if (paramsRaw) {
+    try {
+      params = JSON.parse(paramsRaw);
+      if (typeof params !== 'object' || Array.isArray(params)) errs.push('Params must be a JSON object');
+    } catch (e) { errs.push('Invalid JSON: ' + e.message); }
+  }
+
+  if (errs.length) {
+    errEl.textContent = errs.join('. ');
+    errEl.style.display = 'block';
+    return;
+  }
+
+  const body = {
+    name,
+    sensor: { type: 'ble', label: sensorLabel, characteristic },
+    trigger: { condition: trigCond, value: Number.isInteger(trigVal) ? trigVal : trigVal },
+    action: { group, effect, params },
+    off_trigger: offType === 'watchdog'
+      ? { type: 'watchdog', minutes: offMinutes }
+      : { type: 'condition', condition: document.getElementById('auto-off-cond').value,
+          value: parseFloat(document.getElementById('auto-off-val').value) },
+    off_action: { effect: offEffect, params: {} },
+    schedule_conflict: conflict,
+  };
+
+  const isCreate = _autoModalIsCreate;
+  const url = isCreate ? BASE + '/api/automations' : BASE + '/api/automations/' + idx;
+  const method = isCreate ? 'POST' : 'PUT';
+
+  try {
+    const resp = await fetch(url, {
+      method, headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { errEl.textContent = data.error || 'Server error'; errEl.style.display = 'block'; return; }
+    closeAutomationModal();
+    refresh();
+  } catch (e) { errEl.textContent = 'Network error: ' + e.message; errEl.style.display = 'block'; }
+}
+
+async function toggleAutomationEnabled(index, enabled) {
+  try {
+    await fetch(BASE + '/api/automations/' + index + '/enabled', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    refresh();
+  } catch (e) { console.error('Toggle automation failed:', e); }
+}
+
+function confirmDeleteAutomation(btn, index, name) {
+  const row = btn.closest('.schedule-row');
+  row._originalHTML = row.innerHTML;
+  row.innerHTML = `
+    <div class="schedule-confirm-delete">
+      <span class="confirm-msg">Delete <strong>${esc(name)}</strong>?</span>
+      <div class="confirm-buttons">
+        <button class="btn-confirm-cancel" onclick="cancelDeleteAutomation(this)">Cancel</button>
+        <button class="btn-confirm-delete" onclick="executeDeleteAutomation(${index})">Delete</button>
+      </div>
+    </div>`;
+}
+
+function cancelDeleteAutomation(btn) {
+  const row = btn.closest('.schedule-row');
+  if (row._originalHTML) row.innerHTML = row._originalHTML;
+}
+
+async function executeDeleteAutomation(index) {
+  try {
+    const resp = await fetch(BASE + '/api/automations/' + index, {
+      method: 'DELETE', headers: { 'Authorization': 'Bearer ' + TOKEN },
+    });
+    if (!resp.ok) { console.error('Delete automation failed:', resp.status); return; }
+    refresh();
+  } catch (e) { console.error('Delete automation request failed:', e); }
+}
 </script>
 </body>
 </html>
