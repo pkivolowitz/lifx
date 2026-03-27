@@ -176,10 +176,11 @@ body {
     -webkit-backdrop-filter: blur(12px);
     /* Square card. */
     aspect-ratio: 1;
-    /* Center content vertically within the square. */
+    /* Top-align so titles sit at the same height across cards. */
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
+    padding-top: clamp(20px, 4vw, 40px);
     overflow: hidden;
 }
 
@@ -323,20 +324,13 @@ body {
 /* Locks card                                                         */
 /* ------------------------------------------------------------------ */
 .locks-card {
-    background: var(--card-bg);
-    border: 2px solid black;
-    border-radius: var(--card-radius);
-    padding: 24px;
-    box-shadow: var(--card-shadow);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     text-align: center;
-    /* Square card — same as sensor cards. */
-    aspect-ratio: 1;
+}
+/* Lock circles fill the space below the title. */
+.locks-card .locks-row {
+    flex: 1;
     display: flex;
-    flex-direction: column;
-    justify-content: center;
-    overflow: hidden;
+    align-items: center;
 }
 
 .locks-title {
