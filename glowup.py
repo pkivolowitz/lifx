@@ -45,6 +45,7 @@ from engine import Controller
 from effects import (
     get_registry, get_effect_names, create_effect,
     HSBK, HSBK_MAX, KELVIN_DEFAULT, ALL_DEVICE_TYPES,
+    MediaEffect,
 )
 from colorspace import set_lerp_method
 from network_config import net
@@ -2500,7 +2501,63 @@ def cmd_play(args: argparse.Namespace) -> None:
                                   transition_ms=getattr(args, 'transition', None),
                                   fps_explicit=fps_explicit,
                                   zones_per_bulb=getattr(args, 'zpb', 3))
-    ctrl.play(effect_name, **effect_params)
+
+    # --- Auto-start local microphone for media effects ----------------------
+    # Media effects (spectrum2d, soundlevel, waveform, etc.) read audio
+    # signals from a SignalBus.  When running from the CLI without a
+    # server, the bus is empty and the effect renders silence.  Detect
+    # this and bootstrap a local mic capture via ffmpeg so the effect
+    # actually responds to sound.
+    _local_media_mgr: Optional[Any] = None
+    _local_signal_bus: Optional[Any] = None
+    if issubclass(effect_cls, MediaEffect):
+        try:
+            from media import MediaManager
+
+            # Determine the source name the effect will read from.
+            # Default is whatever the effect's 'source' param resolves to.
+            _mic_source_name: str = effect_params.get(
+                "source",
+                getattr(effect_cls, "source", None)
+                and effect_cls.source.default
+                or "mic",
+            )
+
+            _mic_config: dict[str, Any] = {
+                "media_sources": {
+                    _mic_source_name: {
+                        "type": "mic",
+                        "extractors": {
+                            "audio": {
+                                "bands": 8,
+                            },
+                        },
+                    },
+                },
+            }
+            _local_media_mgr = MediaManager()
+            _local_media_mgr.configure(_mic_config)
+            _local_media_mgr.acquire(_mic_source_name)
+            _local_signal_bus = _local_media_mgr.bus
+            _print(
+                f"Local microphone started "
+                f"(source '{_mic_source_name}').",
+                flush=True,
+            )
+        except Exception as exc:
+            _print(
+                f"WARNING: Could not start local microphone: {exc}\n"
+                f"  The '{effect_name}' effect will render without "
+                f"audio input.\n"
+                f"  For audio-reactive effects, run through the server "
+                f"with a configured media source,\n"
+                f"  or ensure ffmpeg is installed.",
+                file=sys.stderr,
+            )
+            _local_media_mgr = None
+            _local_signal_bus = None
+
+    ctrl.play(effect_name, signal_bus=_local_signal_bus, **effect_params)
 
     status: dict = ctrl.get_status()
     _print(f"\nPlaying '{effect_name}' at {status['fps']} fps")
@@ -2558,6 +2615,13 @@ def cmd_play(args: argparse.Namespace) -> None:
     else:
         ctrl.stop(fade_ms=DEFAULT_FADE_MS)
         em.power_off(duration_ms=DEFAULT_FADE_MS)
+    # Shut down local media manager if one was started.
+    if _local_media_mgr is not None:
+        try:
+            _local_media_mgr.shutdown()
+        except Exception:
+            pass
+
     em.close()
     _print("Done.")
 
