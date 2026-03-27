@@ -620,9 +620,6 @@ class AutomationManager:
                     i, _AutomationState(),
                 )
 
-                # Record that we heard from this sensor (for watchdog).
-                state.last_trigger = time.time()
-
                 # Parse payload to the appropriate type for comparison.
                 trigger: dict = auto.get("trigger", {})
                 try:
@@ -637,6 +634,11 @@ class AutomationManager:
                 matched: bool = _evaluate_condition(
                     condition, threshold, value,
                 )
+
+                if matched:
+                    # Reset watchdog timer on every matching event —
+                    # e.g., each motion=1 pushes the off-timeout forward.
+                    state.last_trigger = time.time()
 
                 if matched and not state.active:
                     self._fire_action(i, auto, state)
