@@ -2423,6 +2423,26 @@ def cmd_play(args: argparse.Namespace) -> None:
         else:
             em.power_off(duration_ms=0)
 
+    # --- Transient effects: one-shot action, then sleep -----------------------
+    # Transient effects (on, off) do their work in execute() and then
+    # the process sleeps until SIGTERM.  No Controller, no Engine, no
+    # render loop, zero CPU.  The scheduler manages subprocess lifetime
+    # identically to continuous effects.
+    if getattr(effect_cls, "is_transient", False) and not sim_only:
+        effect = create_effect(effect_name, **effect_params)
+        effect.execute(em)
+
+        if not args.quiet:
+            _print(f"'{effect_name}' applied.  Waiting for signal...")
+
+        stop_requested: threading.Event = threading.Event()
+        _install_stop_signal(stop_requested)
+        stop_requested.wait()
+
+        em.close()
+        _print("Done.")
+        return
+
     # --- Optional simulator window (--sim or --sim-only) ----------------------
     sim = None
     if getattr(args, "sim", False) or sim_only:

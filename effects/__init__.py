@@ -198,6 +198,13 @@ class Effect(metaclass=EffectMeta):
 
     * :meth:`render` — produce one animation frame.
 
+    Subclasses **may** set:
+
+    * ``is_transient: bool = True`` — marks the effect as a one-shot
+      command (e.g., "on" or "off").  Transient effects execute a
+      single action via :meth:`execute` and then the play command
+      sleeps until SIGTERM — no render loop, no Engine threads.
+
     Parameters are declared as class-level :class:`Param` instances.
     At runtime they become regular attributes with their current values.
     """
@@ -205,6 +212,7 @@ class Effect(metaclass=EffectMeta):
     name: Optional[str] = None
     description: str = ""
     affinity: frozenset[str] = ALL_DEVICE_TYPES
+    is_transient: bool = False
 
     def __init__(self, **overrides: Any) -> None:
         """Initialize with default params, applying any *overrides*.
@@ -232,6 +240,27 @@ class Effect(metaclass=EffectMeta):
 
         Returns:
             A list of *zone_count* HSBK tuples.
+
+        Raises:
+            NotImplementedError: If the subclass has not overridden this.
+        """
+        raise NotImplementedError
+
+    def execute(self, emitter: Any) -> None:
+        """Perform a one-shot action on the emitter (transient effects only).
+
+        Transient effects override this instead of (or in addition to)
+        :meth:`render`.  The play command calls ``execute`` once, then
+        sleeps until SIGTERM — no render loop is started.
+
+        The default implementation raises :class:`NotImplementedError`
+        so that non-transient effects that accidentally set
+        ``is_transient = True`` fail loudly.
+
+        Args:
+            emitter: The :class:`~emitters.lifx.LifxEmitter` (or any
+                     emitter with ``send_color`` / ``power_on`` /
+                     ``power_off`` methods).
 
         Raises:
             NotImplementedError: If the subclass has not overridden this.

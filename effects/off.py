@@ -1,21 +1,19 @@
-"""Off effect — power off devices.
+"""Off effect — power off devices (transient builtin).
 
-A schedule-friendly effect that powers off the target device and holds
-it dark.  Sets ``wants_power_on = False`` so that the play command
-sends a power-off instead of power-on at startup, avoiding a visible
-flash between schedule entries.
+A one-shot effect: the play command sends ``power_off`` (via the
+``wants_power_on = False`` flag), then sleeps until SIGTERM.  No
+render loop, no Engine threads.
 
-The render method produces black frames as a safety net — if any frame
-leaks to the wire while the device is still responding, it will be
-invisible.
+The ``render()`` method is retained for simulator/preview compatibility
+but is never called in production.
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
-from typing import Optional
+from typing import Any, Optional
 
 from . import (
     Effect, HSBK,
@@ -31,22 +29,32 @@ _BLACK: HSBK = (0, 0, 0, KELVIN_DEFAULT)
 
 
 class Off(Effect):
-    """Power off the device.
+    """Power off the device (transient builtin).
 
-    Instructs the play command to send a power-off instead of power-on,
-    then renders black frames until the scheduler kills the subprocess.
+    Sets ``wants_power_on = False`` so the play command sends
+    ``power_off`` at startup.  The ``execute`` method is a no-op
+    because the power-off is the entire action.
     """
 
     name: str = "off"
     description: str = "Power off — turn lights off"
+    is_transient: bool = True
 
-    # Tell the play command to power off instead of on.  Without this,
-    # play would send power_on(0) and the device would flash briefly
-    # at its last color before the first black frame arrives.
+    # Tell the play command to power off instead of on.
     wants_power_on: bool = False
 
+    def execute(self, emitter: Any) -> None:
+        """No-op — power_off was already sent by the play command.
+
+        Args:
+            emitter: A :class:`~emitters.lifx.LifxEmitter` instance
+                     (unused).
+        """
+        # Power-off is handled by cmd_play checking wants_power_on.
+        # Nothing additional to do here.
+
     def render(self, t: float, zone_count: int) -> list[HSBK]:
-        """Produce black frames as a safety net.
+        """Produce black frames (simulator/preview fallback only).
 
         Args:
             t:          Seconds elapsed (unused).
