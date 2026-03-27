@@ -298,12 +298,17 @@ body {
     background: var(--card-bg);
     border: 2px solid black;
     border-radius: var(--card-radius);
-    padding: 24px 32px;
+    padding: 24px;
     box-shadow: var(--card-shadow);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     text-align: center;
-    margin-bottom: 24px;
+    /* Square card — same as sensor cards. */
+    aspect-ratio: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
 }
 
 .locks-title {
@@ -402,14 +407,13 @@ body {
         <div class="clock-date" id="clockDate"></div>
     </div>
 
-    <!-- Lock status — populated dynamically. -->
-    <div class="locks-card" id="locksCard">
-        <div class="locks-title">Locks</div>
-        <div class="locks-row" id="locksRow"></div>
-    </div>
-
-    <!-- Sensor cards — populated dynamically. -->
+    <!-- Status cards — populated dynamically. -->
     <div class="sensor-grid" id="sensorGrid">
+        <!-- Lock card — always first in the grid. -->
+        <div class="locks-card sensor-card" id="locksCard">
+            <div class="locks-title">Locks</div>
+            <div class="locks-row" id="locksRow"></div>
+        </div>
         <div class="no-data" id="noData">Waiting for sensor data&hellip;</div>
     </div>
 </div>
