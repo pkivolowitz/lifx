@@ -109,6 +109,10 @@ class MatrixRain(Effect):
         w: int = int(self.width)
         h: int = int(self.height)
         total: int = w * h
+        # Guard: on_start() initializes state.  If render() is called
+        # before on_start() (e.g., in tests), return black.
+        if not hasattr(self, "_last_t"):
+            return [(0, 0, 0, KELVIN_DEFAULT)] * total
         dt: float = t - self._last_t
         self._last_t = t
 

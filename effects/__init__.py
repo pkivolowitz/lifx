@@ -134,7 +134,10 @@ class Param:
             # rather than crashing the effect engine.
             try:
                 value = type(self.default)(value)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OverflowError):
+                value = self.default
+            # NaN defeats comparison operators — fall back to default.
+            if isinstance(value, float) and value != value:
                 value = self.default
             if self.min is not None and value < self.min:
                 value = self.min

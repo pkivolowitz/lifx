@@ -231,8 +231,11 @@ def validate_automation(
     if not entry.get("name"):
         errors.append("Missing 'name'")
 
-    # Sensor validation.
-    sensor: dict = entry.get("sensor", {})
+    # Sensor validation.  Coerce to dict — garbage types (int, str, list)
+    # from malformed input must not crash the validator.
+    sensor = entry.get("sensor", {})
+    if not isinstance(sensor, dict):
+        sensor = {}
     if not sensor.get("label"):
         errors.append("Missing sensor.label")
     if sensor.get("characteristic") not in VALID_CHARACTERISTICS:
@@ -241,7 +244,9 @@ def validate_automation(
         )
 
     # Trigger validation.
-    trigger: dict = entry.get("trigger", {})
+    trigger = entry.get("trigger", {})
+    if not isinstance(trigger, dict):
+        trigger = {}
     if trigger.get("condition") not in _CONDITION_OPS:
         errors.append(
             f"Invalid trigger.condition: {trigger.get('condition')!r}"
@@ -250,7 +255,9 @@ def validate_automation(
         errors.append("Missing trigger.value")
 
     # Action validation.
-    action: dict = entry.get("action", {})
+    action = entry.get("action", {})
+    if not isinstance(action, dict):
+        action = {}
     group_name: str = action.get("group", "")
     if group_name and group_name not in known_groups:
         errors.append(f"Unknown group: {group_name!r}")
@@ -266,7 +273,9 @@ def validate_automation(
         errors.append("Missing action.effect")
 
     # Off-trigger validation.
-    off_trigger: dict = entry.get("off_trigger", {})
+    off_trigger = entry.get("off_trigger", {})
+    if not isinstance(off_trigger, dict):
+        off_trigger = {}
     off_type: str = off_trigger.get("type", "watchdog")
     if off_type == "watchdog":
         minutes = off_trigger.get("minutes", DEFAULT_WATCHDOG_MINUTES)
@@ -282,7 +291,9 @@ def validate_automation(
         errors.append(f"Invalid off_trigger.type: {off_type!r}")
 
     # Off-action validation (optional — defaults to stop/power-off).
-    off_action: dict = entry.get("off_action", {})
+    off_action = entry.get("off_action", {})
+    if not isinstance(off_action, dict):
+        off_action = {}
     off_effect: str = off_action.get("effect", "off")
     if off_effect and off_effect not in known_effects:
         errors.append(f"Unknown off_action effect: {off_effect!r}")
@@ -291,9 +302,14 @@ def validate_automation(
             f"Audio/media effects not allowed in off_action: {off_effect!r}"
         )
 
-    # Schedule conflict policy.
-    policy: str = entry.get("schedule_conflict", "defer")
-    if policy not in VALID_CONFLICT_POLICIES:
+    # Schedule conflict policy.  Coerce to string — unhashable types
+    # (list, dict) crash the `in` operator on a set.
+    policy = entry.get("schedule_conflict", "defer")
+    try:
+        is_valid: bool = policy in VALID_CONFLICT_POLICIES
+    except TypeError:
+        is_valid = False
+    if not is_valid:
         errors.append(f"Invalid schedule_conflict: {policy!r}")
 
     return errors

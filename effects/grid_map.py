@@ -181,6 +181,10 @@ class GridMap(Effect):
         w: int = int(self.width)
         h: int = int(self.height)
         total: int = w * h
+        # Guard: on_start() builds _steps.  If render() is called
+        # before on_start() (e.g., in tests), return black.
+        if not hasattr(self, "_steps") or not self._steps:
+            return [(0, 0, 0, KELVIN_DEFAULT)] * total
         num_steps: int = len(self._steps)
 
         # One extra step for the "all dark" pause at the end.
