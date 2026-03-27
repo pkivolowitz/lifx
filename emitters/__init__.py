@@ -598,14 +598,15 @@ class EmitterManager:
         """
         self._start_time = time.monotonic()
 
-        # Snapshot names under lock, open outside lock.
+        # Snapshot (name, slot) tuples under lock, open outside lock.
+        # Avoids TOCTOU race where slots could be removed between
+        # snapshot and access.
         with self._lock:
-            names: list[str] = list(self._slots.keys())
+            snapshot: list[tuple[str, _EmitterSlot]] = [
+                (n, s) for n, s in self._slots.items()
+            ]
 
-        for name in names:
-            slot: Optional[_EmitterSlot] = self._slots.get(name)
-            if slot is None:
-                continue
+        for name, slot in snapshot:
             try:
                 slot.emitter.on_open()
                 slot.emitter._is_open = True
@@ -691,13 +692,14 @@ class EmitterManager:
             self._periodic_thread = None
 
         # Flush then close each emitter (outside lock).
+        # Snapshot tuples to avoid TOCTOU re-lookup.
         with self._lock:
-            names: list[str] = list(self._slots.keys())
+            snapshot = [
+                (n, s) for n, s in self._slots.items()
+                if s.emitter._is_open
+            ]
 
-        for name in names:
-            slot: Optional[_EmitterSlot] = self._slots.get(name)
-            if slot is None or not slot.emitter._is_open:
-                continue
+        for name, slot in snapshot:
             try:
                 slot.emitter.on_flush()
             except Exception:

@@ -996,6 +996,9 @@ class DeviceManager:
             if ip not in self._emitters:
                 raise KeyError(f"Unknown device: {ip}")
             ctrl: Optional[Controller] = self._controllers.get(ip)
+            # Snapshot emitter under lock so the fallback path
+            # doesn't race with load_devices() replacing _emitters.
+            em_snapshot: Emitter = self._emitters[ip]
 
         overridden: bool = self.is_overridden(ip)
 
@@ -1005,14 +1008,13 @@ class DeviceManager:
             return result
 
         # No controller yet — return idle status from the emitter.
-        em: Emitter = self._emitters[ip]
         return {
             "running": False,
             "effect": None,
             "params": {},
             "fps": 0,
             "overridden": overridden,
-            "devices": [em.get_info()],
+            "devices": [em_snapshot.get_info()],
         }
 
     def set_power(self, ip: str, on: bool) -> dict[str, Any]:
@@ -1623,8 +1625,14 @@ class DeviceManager:
         """
         # First pass: build group membership and active-effect maps.
         # group_id → (effect_name, group_label, [member_ips])
+        # Snapshot emitters under lock to avoid RuntimeError from
+        # concurrent dict modification during iteration.
+        with self._lock:
+            emitter_snapshot: list[tuple[str, Any]] = list(
+                self._emitters.items()
+            )
         active_groups: dict[str, tuple[str, str, list[str]]] = {}
-        for dev_id, em in self._emitters.items():
+        for dev_id, em in emitter_snapshot:
             if not isinstance(em, VirtualMultizoneEmitter):
                 continue
             with self._lock:
@@ -1648,7 +1656,7 @@ class DeviceManager:
                 ip_to_group_effect[mip] = (eff, glabel)
 
         result: list[dict[str, Any]] = []
-        for dev_id, em in sorted(self._emitters.items()):
+        for dev_id, em in sorted(emitter_snapshot):
             with self._lock:
                 ctrl = self._controllers.get(dev_id)
             current_effect: Optional[str] = None

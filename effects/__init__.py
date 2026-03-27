@@ -129,8 +129,13 @@ class Param:
                 raise ValueError(f"Must be one of {self.choices}, got {value}")
             return value
         if isinstance(self.default, (int, float)):
-            # Coerce to the same numeric type as the default
-            value = type(self.default)(value)
+            # Coerce to the same numeric type as the default.
+            # Guard against garbage input — fall back to default
+            # rather than crashing the effect engine.
+            try:
+                value = type(self.default)(value)
+            except (ValueError, TypeError):
+                value = self.default
             if self.min is not None and value < self.min:
                 value = self.min
             if self.max is not None and value > self.max:
