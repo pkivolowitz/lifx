@@ -145,6 +145,29 @@ class VirtualMultizoneEmitter(Emitter):
         self._interval_min_s: float = float("inf")
         self._interval_max_s: float = 0.0
 
+    def rebuild_zone_map(self) -> int:
+        """Rebuild the zone map from current member zone counts.
+
+        Call this after a member device has been re-introspected (e.g.,
+        a string light reported a new zone count after being power-cycled).
+        The zone map is rebuilt in place from the same emitter list —
+        no new emitters are created.
+
+        Returns:
+            The new total zone count.
+        """
+        new_map: list[tuple[Emitter, int]] = []
+        for em in self._emitters:
+            zones: int = em.zone_count if em.zone_count else 1
+            if em.is_multizone:
+                for z in range(zones):
+                    new_map.append((em, z))
+            else:
+                new_map.append((em, SINGLE_ZONE_SENTINEL))
+        self._zone_map = new_map
+        self._zone_count = len(new_map)
+        return self._zone_count
+
     # --- SOE lifecycle -----------------------------------------------------
 
     def on_open(self) -> None:

@@ -318,8 +318,8 @@ class TestRouteCount(unittest.TestCase):
         """POST routes should match the expected count."""
         post_routes: list[_Route] = [r for r in _ROUTES if r.method == "POST"]
         self.assertEqual(
-            len(post_routes), 27,
-            f"Expected 27 POST routes, got {len(post_routes)}",
+            len(post_routes), 28,
+            f"Expected 28 POST routes, got {len(post_routes)}",
         )
 
     def test_put_route_count(self) -> None:

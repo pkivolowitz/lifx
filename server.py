@@ -353,6 +353,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_post_identify", device_param="id"),
     _Route("POST", ("api", "devices", "{id}", "resume"),
            "_handle_post_resume", device_param="id"),
+    _Route("POST", ("api", "devices", "{id}", "reintrospect"),
+           "_handle_post_reintrospect", device_param="id"),
     _Route("POST", ("api", "devices", "{id}", "reset"),
            "_handle_post_reset", device_param="id"),
     _Route("POST", ("api", "devices", "{id}", "nickname"),
@@ -841,6 +843,70 @@ class DeviceManager:
         """
         with self._lock:
             return self._emitters.get(device_id)
+
+    def reintrospect(self, ip: str) -> dict[str, Any]:
+        """Re-query a device's zone count and rebuild affected groups.
+
+        Sends a fresh zone-count query to the physical device, then
+        rebuilds the zone map of every VirtualMultizoneEmitter that
+        contains it.  Does not interrupt running effects — the next
+        render frame will use the new geometry.
+
+        Args:
+            ip: Device IP address.
+
+        Returns:
+            A summary dict with old/new zone counts and affected groups.
+
+        Raises:
+            KeyError: If the IP is not a loaded device.
+        """
+        with self._lock:
+            dev: Optional[LifxDevice] = self._devices.get(ip)
+        if dev is None:
+            raise KeyError(f"Unknown device: {ip}")
+
+        old_zones: Optional[int] = dev.zone_count
+
+        # Re-query the device outside the lock (UDP I/O).
+        if dev.is_matrix:
+            dev.query_device_chain()
+        elif dev.is_multizone:
+            dev.query_zone_count()
+        # Non-multizone devices are always 1 zone — nothing to re-query.
+
+        new_zones: Optional[int] = dev.zone_count
+        logging.info(
+            "Reintrospect %s (%s): %s → %s zones",
+            dev.label or "?", ip, old_zones, new_zones,
+        )
+
+        # Rebuild zone maps for any group containing this device.
+        rebuilt_groups: list[str] = []
+        with self._lock:
+            for eid, em in self._emitters.items():
+                if not isinstance(em, VirtualMultizoneEmitter):
+                    continue
+                # Check if this device's emitter is a member.
+                member_ips: list[str] = [
+                    m.emitter_id for m in em.get_emitter_list()
+                ]
+                if ip in member_ips:
+                    old_total: int = em.zone_count or 0
+                    new_total: int = em.rebuild_zone_map()
+                    rebuilt_groups.append(eid)
+                    logging.info(
+                        "  group '%s' zone map rebuilt: %d → %d zones",
+                        em.label, old_total, new_total,
+                    )
+
+        return {
+            "ip": ip,
+            "label": dev.label,
+            "old_zones": old_zones,
+            "new_zones": new_zones,
+            "rebuilt_groups": rebuilt_groups,
+        }
 
     def get_controller(self, ip: str) -> Optional[Controller]:
         """Look up an existing Controller by IP (does not create one).
@@ -3521,6 +3587,22 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             # set_power() already updates _power_states for the device
             # and all group members — no need to duplicate here.
             logging.info("API: power %s on %s", "on" if on else "off", ip)
+            self._send_json(200, result)
+        except KeyError:
+            self._send_json(404, {"error": "Device not found"})
+
+    def _handle_post_reintrospect(self, ip: str) -> None:
+        """POST /api/devices/{ip}/reintrospect — re-query device geometry.
+
+        Re-queries the device's zone count (multizone) or tile chain
+        (matrix) and rebuilds the zone map of any group that contains it.
+        Use this when a string light reports a wrong zone count after
+        power cycling or firmware glitch.
+
+        No request body required.
+        """
+        try:
+            result: dict[str, Any] = self.device_manager.reintrospect(ip)
             self._send_json(200, result)
         except KeyError:
             self._send_json(404, {"error": "Device not found"})
