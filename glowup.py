@@ -2537,13 +2537,20 @@ def cmd_play(args: argparse.Namespace) -> None:
                 or "mic",
             )
 
+            # Use the --audio-device flag if provided, otherwise let
+            # ffmpeg pick the OS default.
+            _audio_device: str = getattr(args, "audio_device", "") or ""
+
             _mic_config: dict[str, Any] = {
                 "media_sources": {
                     _mic_source_name: {
                         "type": "mic",
+                        "device": _audio_device,
                         "extractors": {
                             "audio": {
                                 "bands": 8,
+                                # Low smoothing for snappy real-time response.
+                                "smoothing": 0.1,
                             },
                         },
                     },
@@ -3271,6 +3278,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_play.add_argument(
         "--skip-calibration", action="store_true",
         help="Skip automatic audio sync calibration (debug only)",
+    )
+    p_play.add_argument(
+        "--audio-device", default=None, metavar="DEVICE",
+        help=(
+            "Audio input device for local mic capture (media effects). "
+            "macOS: ':0', ':1', etc.  Run "
+            "'ffmpeg -f avfoundation -list_devices true -i \"\"' "
+            "to list devices.  Default: OS default input."
+        ),
     )
     p_play.add_argument(
         "--screen", action="store_true",

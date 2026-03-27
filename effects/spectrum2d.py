@@ -29,7 +29,9 @@ from . import (
 # ---------------------------------------------------------------------------
 
 # Peak hold decay per frame (0.98 = slow decay, 0.90 = fast).
-PEAK_DECAY: float = 0.97
+# Per-frame peak decay.  At 20 FPS, 0.85 gives ~300ms half-life
+# (responsive), 0.97 gives ~1.5s (sluggish).
+PEAK_DECAY: float = 0.85
 
 # Minimum energy to show a peak indicator.
 PEAK_THRESHOLD: float = 0.05
