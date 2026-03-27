@@ -615,16 +615,30 @@ class AutomationManager:
 
     # --- Trigger evaluation -----------------------------------------------
 
+    # Action tags for deferred execution outside the lock.
+    _ACTION_NONE: int = 0
+    _ACTION_ON: int = 1
+    _ACTION_OFF: int = 2
+
     def _evaluate_automations(
         self, label: str, characteristic: str, raw_payload: str,
     ) -> None:
         """Check all automations against an incoming sensor value.
+
+        Evaluation is split into two phases to avoid holding the lock
+        during device I/O (UDP round-trips to bulbs):
+
+        - **Phase 1** (under lock): read config/state, decide what to do.
+        - **Phase 2** (no lock): execute the action.
 
         Args:
             label:          Sensor label.
             characteristic: Sensor characteristic (motion, temperature, etc.).
             raw_payload:    Raw MQTT payload string.
         """
+        # Phase 1 — decide under lock, no I/O.
+        pending: list[tuple[int, dict, _AutomationState, int]] = []
+
         with self._lock:
             for i, auto in enumerate(self.automations):
                 if not auto.get("enabled", True):
@@ -660,8 +674,9 @@ class AutomationManager:
                     # e.g., each motion=1 pushes the off-timeout forward.
                     state.last_trigger = time.time()
 
+                action: int = self._ACTION_NONE
                 if matched and not state.active:
-                    self._fire_action(i, auto, state)
+                    action = self._ACTION_ON
                 elif not matched and state.active:
                     # Check if the off_trigger is condition-based and
                     # this value satisfies the off condition.
@@ -670,7 +685,20 @@ class AutomationManager:
                         off_cond: str = off_trigger.get("condition", "eq")
                         off_val: Any = off_trigger.get("value")
                         if _evaluate_condition(off_cond, off_val, value):
-                            self._fire_off_action(i, auto, state)
+                            action = self._ACTION_OFF
+
+                if action != self._ACTION_NONE:
+                    # Snapshot — auto is a dict ref from the live list,
+                    # safe to use outside the lock because CRUD operations
+                    # replace list elements rather than mutating them.
+                    pending.append((i, auto, state, action))
+
+        # Phase 2 — execute outside lock (device I/O may block).
+        for i, auto, state, action in pending:
+            if action == self._ACTION_ON:
+                self._fire_action(i, auto, state)
+            elif action == self._ACTION_OFF:
+                self._fire_off_action(i, auto, state)
 
     def _parse_value(self, raw: str, reference: Any) -> Any:
         """Parse a raw MQTT payload to match the reference type.
@@ -838,11 +866,17 @@ class AutomationManager:
 
         Checks every 60 seconds whether any watchdog-type automation's
         last trigger event exceeds its configured timeout.
+
+        Like ``_evaluate_automations``, decision and execution are
+        split so the lock is never held during device I/O.
         """
         while self._running:
             time.sleep(WATCHDOG_CHECK_INTERVAL)
 
+            # Phase 1 — decide under lock, no I/O.
+            expired: list[tuple[int, dict, _AutomationState, float]] = []
             now: float = time.time()
+
             with self._lock:
                 for i, auto in enumerate(self.automations):
                     if not auto.get("enabled", True):
@@ -870,8 +904,12 @@ class AutomationManager:
                     elapsed: float = now - state.last_trigger
 
                     if elapsed >= timeout_sec:
-                        logger.info(
-                            "Watchdog '%s': no trigger for %.0f min",
-                            auto.get("name", "?"), elapsed / SECONDS_PER_MINUTE,
-                        )
-                        self._fire_off_action(i, auto, state)
+                        expired.append((i, auto, state, elapsed))
+
+            # Phase 2 — execute outside lock (device I/O may block).
+            for i, auto, state, elapsed in expired:
+                logger.info(
+                    "Watchdog '%s': no trigger for %.0f min",
+                    auto.get("name", "?"), elapsed / SECONDS_PER_MINUTE,
+                )
+                self._fire_off_action(i, auto, state)
