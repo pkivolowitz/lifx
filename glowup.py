@@ -1098,6 +1098,15 @@ def cmd_monitor(args: argparse.Namespace) -> None:
         dev.close()
         sys.exit(1)
 
+    # Validate Hz range — prevents division by zero and excessive polling.
+    if args.hz < MIN_MONITOR_POLL_HZ or args.hz > MAX_MONITOR_POLL_HZ:
+        _print(
+            f"ERROR: --hz must be between {MIN_MONITOR_POLL_HZ} "
+            f"and {MAX_MONITOR_POLL_HZ}",
+            file=sys.stderr,
+        )
+        dev.close()
+        sys.exit(1)
     poll_interval: float = 1.0 / args.hz
     _print(f"\nMonitoring at {args.hz:.1f} Hz (every {poll_interval:.2f}s)")
     _print("Press Ctrl+C or close the window to stop.\n")
@@ -2793,7 +2802,7 @@ def cmd_record(args: argparse.Namespace) -> None:
                 _print(f"  {pct}%...", end=" ", flush=True)
 
         proc.stdin.close()
-        proc.wait()
+        proc.wait(timeout=30)
         stderr_bytes: bytes = proc.stderr.read()
 
         if proc.returncode != 0:
@@ -2803,10 +2812,16 @@ def cmd_record(args: argparse.Namespace) -> None:
         _print(f"\n  Wrote {output}")
 
     except BrokenPipeError:
-        proc.wait()
+        proc.wait(timeout=10)
         stderr_bytes = proc.stderr.read()
         _print(f"\nERROR: ffmpeg pipe broke:\n{stderr_bytes.decode()}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        # Ensure ffmpeg process is cleaned up on any exception
+        # (KeyboardInterrupt, MemoryError, etc.).
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
 
     # --- Write JSON metadata sidecar -----------------------------------------
     all_params: Dict[str, Any] = effect.get_params()

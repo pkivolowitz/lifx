@@ -166,6 +166,11 @@ class SignalBus:
         """
         with self._lock:
             self._signals[name] = value
+        # Network publish is outside the lock intentionally — holding
+        # the lock during MQTT I/O would block all signal reads for the
+        # duration of the publish (tens of ms).  Local-before-remote
+        # ordering is acceptable; readers see the new value immediately
+        # while remote nodes get it after the publish completes.
         # Check transport routing (v1.1) first.
         transport_name: Optional[str] = self._signal_routes.get(name)
         if transport_name and transport_name in self._transports:

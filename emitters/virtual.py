@@ -260,9 +260,14 @@ class VirtualMultizoneEmitter(Emitter):
                 em_id: int = id(em)
                 if em_id not in multizone_batches:
                     # Pre-allocate the full zone list for this emitter.
+                    # Skip emitters with unknown zone count — they
+                    # haven't been queried yet.
+                    zc: int = em.zone_count or 0
+                    if zc == 0:
+                        continue
                     multizone_batches[em_id] = {
                         "em": em,
-                        "colors": [None] * (em.zone_count or 1),
+                        "colors": [None] * zc,
                     }
                 multizone_batches[em_id]["colors"][zone_idx] = colors[vz]
 

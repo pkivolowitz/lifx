@@ -204,6 +204,11 @@ def fft_magnitudes(samples: list[float],
     n: int = len(samples)
     if n == 0:
         return []
+    # Cap sample length to prevent memory exhaustion on malformed input.
+    # MAX_WINDOW (8192) is the largest sensible FFT for real-time audio.
+    if n > MAX_WINDOW:
+        samples = samples[:MAX_WINDOW]
+        n = MAX_WINDOW
 
     # Apply window.
     if window is None:

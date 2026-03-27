@@ -821,6 +821,11 @@ class AutomationManager:
                     )
                     if not state.active:
                         continue
+                    # Skip if sensor has never triggered — last_trigger
+                    # is 0.0 at init, which would produce a huge elapsed
+                    # value and fire the off-action spuriously.
+                    if state.last_trigger == 0.0:
+                        continue
 
                     timeout_min: float = off_trigger.get(
                         "minutes", DEFAULT_WATCHDOG_MINUTES,

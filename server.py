@@ -2037,7 +2037,8 @@ class SchedulerThread(threading.Thread):
         lon: float = self._config["location"]["longitude"]
 
         # Initial snapshot for the startup log line.
-        groups: dict[str, list[str]] = dict(self._dm._group_config)
+        with self._dm._lock:
+            groups: dict[str, list[str]] = dict(self._dm._group_config)
         specs: list[dict[str, Any]] = self._config.get("schedule", [])
 
         if not specs:
@@ -2062,8 +2063,9 @@ class SchedulerThread(threading.Thread):
 
             # Re-read groups and schedule entries each iteration so
             # runtime API changes (rename, create, delete) are picked
-            # up without restarting.
-            groups = dict(self._dm._group_config)
+            # up without restarting.  Snapshot under lock.
+            with self._dm._lock:
+                groups = dict(self._dm._group_config)
             specs = self._config.get("schedule", [])
 
             # Initialize tracking for newly-appeared groups and
@@ -2277,6 +2279,10 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     # DELETE /api/command/identify/{ip} sets the event to cancel early.
     _command_identifies: dict[str, threading.Event] = {}
     _command_identifies_lock: threading.Lock = threading.Lock()
+
+    # Guards config file read-modify-write in _save_config_field().
+    # Without this, concurrent saves on different keys clobber each other.
+    _config_save_lock: threading.Lock = threading.Lock()
 
     # Silence per-request logging from BaseHTTPRequestHandler.
     def log_message(self, format: str, *args: Any) -> None:
@@ -2678,8 +2684,10 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self.config["groups"] = all_groups
 
         # Update runtime group config so next scan cycle builds
-        # the VirtualMultizoneEmitter.
-        self.device_manager._group_config[name] = clean_members
+        # the VirtualMultizoneEmitter.  Lock to prevent race with
+        # scheduler thread reading _group_config concurrently.
+        with self.device_manager._lock:
+            self.device_manager._group_config[name] = clean_members
 
         logging.info(
             "API: group '%s' created with %d member(s): %s",
@@ -2741,9 +2749,10 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self._save_config_field("groups", updated)
         self.config["groups"] = updated
 
-        # Update runtime group config.
-        self.device_manager._group_config.pop(name, None)
-        self.device_manager._group_config[new_name] = clean_members
+        # Update runtime group config under lock.
+        with self.device_manager._lock:
+            self.device_manager._group_config.pop(name, None)
+            self.device_manager._group_config[new_name] = clean_members
 
         # Cascade rename into schedule entries that reference this group.
         renamed_count: int = 0
@@ -2788,8 +2797,9 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self._save_config_field("groups", updated)
         self.config["groups"] = updated
 
-        # Remove from runtime group config.
-        self.device_manager._group_config.pop(name, None)
+        # Remove from runtime group config under lock.
+        with self.device_manager._lock:
+            self.device_manager._group_config.pop(name, None)
 
         # Report any schedule entries that reference the deleted group.
         specs: list[dict[str, Any]] = self.config.get("schedule", [])
@@ -3270,15 +3280,16 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             signal_bus = self.media_manager.bus
 
         try:
-            # Track override so the scheduler knows to back off.
             active_entry: Optional[str] = self._get_active_entry_for_ip(ip)
-            self.device_manager.mark_override(ip, active_entry)
 
             status: dict[str, Any] = self.device_manager.play(
                 ip, effect_name, params,
                 bindings=bindings, signal_bus=signal_bus,
                 source=source,
             )
+            # Track override AFTER successful play — if play fails,
+            # the override must not persist (C15: override deadlock).
+            self.device_manager.mark_override(ip, active_entry)
             # Track the dynamic music source so stop can clean it up.
             if music_source_name:
                 self.device_manager._music_sources[ip] = music_source_name
@@ -3682,8 +3693,11 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         if days_raw:
             entry["days"] = days_raw
 
-        specs: list[dict[str, Any]] = self.config.get("schedule", [])
+        # Copy the list before mutating — the scheduler thread reads
+        # the live config concurrently.  Assign back atomically.
+        specs: list[dict[str, Any]] = list(self.config.get("schedule", []))
         specs.append(entry)
+        self.config["schedule"] = specs
         self._save_config_field("schedule", specs)
 
         new_index: int = len(specs) - 1
@@ -3715,12 +3729,13 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(400, {"error": "'enabled' must be a boolean"})
             return
 
-        specs: list[dict[str, Any]] = self.config.get("schedule", [])
+        specs: list[dict[str, Any]] = list(self.config.get("schedule", []))
         if index < 0 or index >= len(specs):
             self._send_json(404, {"error": "Schedule entry not found"})
             return
 
         specs[index]["enabled"] = enabled
+        self.config["schedule"] = specs
         self._save_config_field("schedule", specs)
 
         name: str = specs[index].get("name", f"entry_{index}")
@@ -3741,12 +3756,13 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         the schedule list, and persists the change.  Returns the name
         of the deleted entry for confirmation.
         """
-        specs: list[dict[str, Any]] = self.config.get("schedule", [])
+        specs: list[dict[str, Any]] = list(self.config.get("schedule", []))
         if index < 0 or index >= len(specs):
             self._send_json(404, {"error": "Schedule entry not found"})
             return
 
         removed: dict[str, Any] = specs.pop(index)
+        self.config["schedule"] = specs
         self._save_config_field("schedule", specs)
 
         name: str = removed.get("name", f"entry_{index}")
@@ -3776,7 +3792,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         if body is None:
             return
 
-        specs: list[dict[str, Any]] = self.config.get("schedule", [])
+        specs: list[dict[str, Any]] = list(self.config.get("schedule", []))
         if index < 0 or index >= len(specs):
             self._send_json(404, {"error": "Schedule entry not found"})
             return
@@ -3863,6 +3879,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         if days_raw:
             specs[index]["days"] = days_raw
 
+        self.config["schedule"] = specs
         self._save_config_field("schedule", specs)
 
         logging.info(
@@ -5186,38 +5203,45 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         Schedule entries are saved to the external schedule file if
         one is configured (``_schedule_path``).
 
+        Serialized by ``_config_save_lock`` so concurrent saves on
+        different keys do not clobber each other.
+
         Args:
             key:   Top-level config key to update.
             value: The new value.
         """
-        # Route schedule writes to the schedule file if it exists.
-        sched_path: Optional[str] = self.config.get("_schedule_path")
-        if key == "schedule" and sched_path:
+        with self._config_save_lock:
+            # Route schedule writes to the schedule file if it exists.
+            sched_path: Optional[str] = self.config.get("_schedule_path")
+            if key == "schedule" and sched_path:
+                try:
+                    with open(sched_path, "r") as f:
+                        sched_config: dict[str, Any] = json.load(f)
+                    sched_config["schedule"] = value
+                    with open(sched_path, "w") as f:
+                        json.dump(sched_config, f, indent=4)
+                        f.write("\n")
+                except Exception as exc:
+                    logging.warning(
+                        "Failed to save schedule to '%s': %s",
+                        sched_path, exc,
+                    )
+                return
+
+            config_path: Optional[str] = self.config_path
+            if config_path is None:
+                return
             try:
-                with open(sched_path, "r") as f:
-                    sched_config: dict[str, Any] = json.load(f)
-                sched_config["schedule"] = value
-                with open(sched_path, "w") as f:
-                    json.dump(sched_config, f, indent=4)
+                with open(config_path, "r") as f:
+                    config: dict[str, Any] = json.load(f)
+                config[key] = value
+                with open(config_path, "w") as f:
+                    json.dump(config, f, indent=4)
                     f.write("\n")
             except Exception as exc:
                 logging.warning(
-                    "Failed to save schedule to '%s': %s", sched_path, exc,
+                    "Failed to save config field '%s': %s", key, exc,
                 )
-            return
-
-        config_path: Optional[str] = self.config_path
-        if config_path is None:
-            return
-        try:
-            with open(config_path, "r") as f:
-                config: dict[str, Any] = json.load(f)
-            config[key] = value
-            with open(config_path, "w") as f:
-                json.dump(config, f, indent=4)
-                f.write("\n")
-        except Exception as exc:
-            logging.warning("Failed to save config field '%s': %s", key, exc)
 
     # -- Helpers ------------------------------------------------------------
 
