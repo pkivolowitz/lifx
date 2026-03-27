@@ -421,8 +421,17 @@ class MidiParser:
         running_status: int = 0
 
         while pos < len(data):
-            # Read delta time (variable-length quantity).
-            delta, pos = self._read_vlq(data, pos)
+            try:
+                # Read delta time (variable-length quantity).
+                delta, pos = self._read_vlq(data, pos)
+            except ValueError:
+                # Truncated or malformed VLQ — stop parsing this track
+                # gracefully rather than crashing on bad input.
+                logger.warning(
+                    "Malformed VLQ in track %d at offset %d, "
+                    "truncating", track_idx, pos,
+                )
+                break
             abs_tick += delta
 
             # Peek at the next byte to determine the event type.

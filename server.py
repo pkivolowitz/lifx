@@ -2900,8 +2900,10 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         body.setdefault("schedule_conflict", "defer")
         body.setdefault("off_action", {"effect": "off", "params": {}})
 
-        automations: list = self.config.setdefault("automations", [])
+        # Copy before mutating — automation manager reads concurrently.
+        automations: list = list(self.config.get("automations", []))
         automations.append(body)
+        self.config["automations"] = automations
         self._save_config_field("automations", automations)
 
         # Notify the manager to reload subscriptions.
@@ -2913,7 +2915,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_put_automation(self, index: int) -> None:
         """PUT /api/automations/{index} — update an automation."""
-        automations: list = self.config.get("automations", [])
+        automations: list = list(self.config.get("automations", []))
         if index < 0 or index >= len(automations):
             self._send_json(404, {"error": f"No automation at index {index}"})
             return
@@ -2943,6 +2945,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         body.setdefault("off_action", {"effect": "off", "params": {}})
 
         automations[index] = body
+        self.config["automations"] = automations
         self._save_config_field("automations", automations)
 
         mgr: Optional[AutomationManager] = self.automation_manager
@@ -2953,10 +2956,13 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_post_automation_enabled(self, index: int) -> None:
         """POST /api/automations/{index}/enabled — toggle automation."""
-        automations: list = self.config.get("automations", [])
+        automations: list = list(self.config.get("automations", []))
         if index < 0 or index >= len(automations):
             self._send_json(404, {"error": f"No automation at index {index}"})
             return
+
+        # Capture name now — index may be stale after body read.
+        auto_name: str = automations[index].get("name", "")
 
         body: Optional[dict[str, Any]] = self._read_json_body()
         if body is None:
@@ -2964,6 +2970,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         enabled: bool = bool(body.get("enabled", True))
         automations[index]["enabled"] = enabled
+        self.config["automations"] = automations
         self._save_config_field("automations", automations)
 
         mgr: Optional[AutomationManager] = self.automation_manager
@@ -2973,17 +2980,18 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self._send_json(200, {
             "index": index,
             "enabled": enabled,
-            "name": automations[index].get("name", ""),
+            "name": auto_name,
         })
 
     def _handle_delete_automation(self, index: int) -> None:
         """DELETE /api/automations/{index} — remove an automation."""
-        automations: list = self.config.get("automations", [])
+        automations: list = list(self.config.get("automations", []))
         if index < 0 or index >= len(automations):
             self._send_json(404, {"error": f"No automation at index {index}"})
             return
 
         removed: dict = automations.pop(index)
+        self.config["automations"] = automations
         self._save_config_field("automations", automations)
 
         mgr: Optional[AutomationManager] = self.automation_manager
@@ -3433,7 +3441,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                                 dev.set_power(True, duration_ms=DEFAULT_FADE_MS)
                             else:
                                 dev.set_power(False, duration_ms=DEFAULT_FADE_MS)
-                            self.device_manager._power_states[mip] = on
+                            with self.device_manager._lock:
+                                self.device_manager._power_states[mip] = on
                             succeeded += 1
                         finally:
                             dev.close()
@@ -3442,7 +3451,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                             "API: power %s failed for group member %s: %s",
                             "on" if on else "off", mip, exc,
                         )
-                self.device_manager._power_states[ip] = on
+                with self.device_manager._lock:
+                    self.device_manager._power_states[ip] = on
                 logging.info(
                     "API: power %s on group %s (%d/%d members)",
                     "on" if on else "off", group_name,
@@ -3456,12 +3466,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             result: dict[str, Any] = self.device_manager.set_power(ip, on)
-            # Track power state for device list API response.
-            # For groups, propagate to all member devices.
-            self.device_manager._power_states[ip] = on
-            if em is not None and isinstance(em, VirtualMultizoneEmitter):
-                for member in em.get_emitter_list():
-                    self.device_manager._power_states[member.emitter_id] = on
+            # set_power() already updates _power_states for the device
+            # and all group members — no need to duplicate here.
             logging.info("API: power %s on %s", "on" if on else "off", ip)
             self._send_json(200, result)
         except KeyError:
@@ -5222,9 +5228,9 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                         json.dump(sched_config, f, indent=4)
                         f.write("\n")
                 except Exception as exc:
-                    logging.warning(
-                        "Failed to save schedule to '%s': %s",
-                        sched_path, exc,
+                    logging.exception(
+                        "Failed to save schedule to '%s'",
+                        sched_path,
                     )
                 return
 
@@ -5240,7 +5246,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                     f.write("\n")
             except Exception as exc:
                 logging.warning(
-                    "Failed to save config field '%s': %s", key, exc,
+                    "Failed to save config field '%s': %s",
+                    key, exc, exc_info=True,
                 )
 
     # -- Helpers ------------------------------------------------------------

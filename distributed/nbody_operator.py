@@ -192,7 +192,16 @@ class NBodySimulation:
         xp = self._xp
 
         for i in range(count):
+            # Find a dead slot to recycle.  Skip alive particles to
+            # prevent overwriting active simulation state.
             slot: int = self._next_slot % self._max
+            attempts: int = 0
+            while self.alive[slot] and attempts < self._max:
+                self._next_slot += 1
+                slot = self._next_slot % self._max
+                attempts += 1
+            if attempts >= self._max:
+                break  # All slots occupied — drop the spawn.
             self._next_slot += 1
 
             self.positions[slot, 0] = x + xp.float32(

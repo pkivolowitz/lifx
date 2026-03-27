@@ -253,8 +253,11 @@ class Engine:
                 if em.zone_count:
                     effect.on_start(em.zone_count)
 
-        # Flush any stale pre-rendered frames from the pipeline.
+        # Flush any stale pre-rendered frames from the pipeline,
+        # including the audio delay buffer — old effect's frames must
+        # not leak into the new effect's output.
         self._flush_pipeline()
+        self._delay_buffer.clear()
 
         if not self.running:
             self.running = True
@@ -535,7 +538,8 @@ class Engine:
                                       duration_ms=transition_ms)
                     else:
                         h, s, b, k = em_colors[0]
-                        em.send_color(h, s, b, k, duration_ms=0)
+                        em.send_color(h, s, b, k,
+                                      duration_ms=transition_ms)
                 except Exception:
                     _log.warning(
                         "Send failed for emitter %s: %s",

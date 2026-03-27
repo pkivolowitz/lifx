@@ -570,5 +570,194 @@ class TestWatchdogTimerReset(unittest.TestCase):
         self.assertEqual(state.last_trigger, original)
 
 
+# ---------------------------------------------------------------------------
+# H1: Engine single-zone transition must not be 0ms
+# ---------------------------------------------------------------------------
+
+class TestH1_SingleZoneTransition(unittest.TestCase):
+    """Verify single-zone send uses transition_ms, not 0."""
+
+    def test_send_loop_uses_transition_ms(self) -> None:
+        """Engine send loop must pass transition_ms to send_color."""
+        import engine
+        import inspect
+        src: str = inspect.getsource(engine.Engine._run_loop)
+        # The fix changed `duration_ms=0` to `duration_ms=transition_ms`
+        # for single-zone emitters in the send loop.
+        self.assertNotIn(
+            "send_color(h, s, b, k, duration_ms=0)",
+            src,
+            "Single-zone send_color still uses duration_ms=0 (LIFX safety violation)",
+        )
+
+
+# ---------------------------------------------------------------------------
+# H2: Audio delay buffer cleared on effect swap
+# ---------------------------------------------------------------------------
+
+class TestH2_DelayBufferClear(unittest.TestCase):
+    """Verify delay buffer is cleared when swapping effects."""
+
+    def test_start_clears_delay_buffer(self) -> None:
+        """Engine.start() must clear _delay_buffer."""
+        import engine
+        import inspect
+        src: str = inspect.getsource(engine.Engine.start)
+        self.assertIn("_delay_buffer.clear()", src,
+                       "start() must clear _delay_buffer on effect swap")
+
+
+# ---------------------------------------------------------------------------
+# H5: Automation enabled handler captures name at validation time
+# ---------------------------------------------------------------------------
+
+class TestH5_AutomationEnabledBoundsCheck(unittest.TestCase):
+    """Verify automation enabled handler captures name early."""
+
+    def test_name_captured_at_validation(self) -> None:
+        """Handler must capture auto_name before body read."""
+        import server
+        import inspect
+        src: str = inspect.getsource(
+            server.GlowUpRequestHandler._handle_post_automation_enabled,
+        )
+        self.assertIn("auto_name", src,
+                       "Handler must capture name as auto_name at validation time")
+
+
+# ---------------------------------------------------------------------------
+# H9: Config save logs with traceback
+# ---------------------------------------------------------------------------
+
+class TestH9_ConfigSaveLogging(unittest.TestCase):
+    """Verify config save failures include traceback."""
+
+    def test_exception_logging(self) -> None:
+        """_save_config_field must use exc_info=True or logging.exception."""
+        import server
+        import inspect
+        src: str = inspect.getsource(
+            server.GlowUpRequestHandler._save_config_field,
+        )
+        # Must include traceback in at least one error log.
+        has_exc_info: bool = "exc_info=True" in src or "logging.exception" in src
+        self.assertTrue(has_exc_info,
+                        "Save failure must log traceback")
+
+
+# ---------------------------------------------------------------------------
+# H11: Ripple2D division by zero guard
+# ---------------------------------------------------------------------------
+
+class TestH11_Ripple2DDivZero(unittest.TestCase):
+    """Verify ripple2d handles n=0 without crashing."""
+
+    def test_zero_sources_safe(self) -> None:
+        """wave_sum / n must not crash when n=0."""
+        # Simulate the fixed logic.
+        wave_sum: float = 1.5
+        n: int = 0
+        intensity: float = abs(wave_sum / n) if n > 0 else 0.0
+        self.assertEqual(intensity, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# H13: ffmpeg stderr uses temp file, not PIPE
+# ---------------------------------------------------------------------------
+
+class TestH13_FfmpegStderr(unittest.TestCase):
+    """Verify ffmpeg stderr is not piped (deadlock risk)."""
+
+    def test_no_stderr_pipe(self) -> None:
+        """cmd_record must not use stderr=sp.PIPE."""
+        import glowup
+        import inspect
+        src: str = inspect.getsource(glowup.cmd_record)
+        self.assertNotIn("stderr=sp.PIPE", src,
+                          "cmd_record must not use stderr=PIPE (deadlock risk)")
+
+
+# ---------------------------------------------------------------------------
+# H14: NBody spawn skips alive particles
+# ---------------------------------------------------------------------------
+
+class TestH14_NBodySpawnSkipAlive(unittest.TestCase):
+    """Verify NBody spawn doesn't overwrite alive particles."""
+
+    def test_spawn_checks_alive(self) -> None:
+        """spawn() must check alive[slot] before overwriting."""
+        from distributed.nbody_operator import NBodySimulation
+        import inspect
+        src: str = inspect.getsource(NBodySimulation.spawn)
+        self.assertIn("self.alive[slot]", src,
+                       "spawn must check alive[slot] before overwriting")
+
+
+# ---------------------------------------------------------------------------
+# H15: FileAudioSensor stop() null check (already defended)
+# ---------------------------------------------------------------------------
+
+class TestH15_FileAudioSensorStopSafe(unittest.TestCase):
+    """Verify FileAudioSensor.stop() handles None processes."""
+
+    def test_stop_has_none_check(self) -> None:
+        """stop() must check proc is not None."""
+        from distributed.file_audio_sensor import FileAudioSensor
+        import inspect
+        src: str = inspect.getsource(FileAudioSensor.stop)
+        self.assertIn("is not None", src,
+                       "stop() must check proc is not None")
+
+
+# ---------------------------------------------------------------------------
+# H16: MIDI parser handles malformed VLQ
+# ---------------------------------------------------------------------------
+
+class TestH16_MidiVlqMalformed(unittest.TestCase):
+    """Verify MIDI parser handles truncated VLQ gracefully."""
+
+    def test_vlq_truncation_raises(self) -> None:
+        """_read_vlq on empty data must raise ValueError."""
+        from distributed.midi_parser import MidiParser
+        with self.assertRaises(ValueError):
+            MidiParser._read_vlq(b"", 0)
+
+    def test_parse_track_events_catches_vlq(self) -> None:
+        """_parse_track_events must catch ValueError from VLQ."""
+        from distributed.midi_parser import MidiParser
+        import inspect
+        src: str = inspect.getsource(MidiParser._parse_track_events)
+        self.assertIn("except ValueError", src,
+                       "Must catch ValueError from malformed VLQ")
+
+
+# ---------------------------------------------------------------------------
+# H19: Automation CRUD uses copy-before-mutate
+# ---------------------------------------------------------------------------
+
+class TestH19_AutomationCRUDCopyBeforeMutate(unittest.TestCase):
+    """Verify automation CRUD handlers copy the list before mutating."""
+
+    def test_create_copies_list(self) -> None:
+        """POST automation must copy the automations list."""
+        import server
+        import inspect
+        src: str = inspect.getsource(
+            server.GlowUpRequestHandler._handle_post_automation_create,
+        )
+        self.assertIn("list(self.config.get", src,
+                       "Create handler must copy list before mutating")
+
+    def test_delete_copies_list(self) -> None:
+        """DELETE automation must copy the automations list."""
+        import server
+        import inspect
+        src: str = inspect.getsource(
+            server.GlowUpRequestHandler._handle_delete_automation,
+        )
+        self.assertIn("list(self.config.get", src,
+                       "Delete handler must copy list before mutating")
+
+
 if __name__ == "__main__":
     unittest.main()

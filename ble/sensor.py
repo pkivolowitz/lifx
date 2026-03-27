@@ -479,12 +479,18 @@ class MqttPublisher:
             logger.warning("MQTT disconnected (rc=%d), will reconnect", rc)
 
     def publish(self, label: str, subtopic: str, payload: str) -> None:
-        """Publish an event."""
+        """Publish an event.
+
+        Uses try/except rather than checking the _connected flag to
+        avoid a TOCTOU race during broker reconnection.
+        """
         topic: str = f"{MQTT_PREFIX}/{label}/{subtopic}"
-        if self._client and self._connected:
+        if not self._client:
+            return
+        try:
             self._client.publish(topic, payload, qos=1, retain=True)
-        else:
-            logger.debug("MQTT not connected — dropping %s", topic)
+        except Exception:
+            logger.debug("MQTT publish failed — dropping %s", topic)
 
     def disconnect(self) -> None:
         """Disconnect."""

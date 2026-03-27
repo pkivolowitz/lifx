@@ -180,7 +180,7 @@ class Ripple2D(Effect):
 
                 # abs(sum/n): zero-crossings → black, both peaks → bright.
                 # Cube for non-linear contrast — crushes lows, punches highs.
-                intensity: float = abs(wave_sum / n)
+                intensity: float = abs(wave_sum / n) if n > 0 else 0.0
                 intensity = intensity * intensity * intensity
 
                 bri: int = int(bri_max * intensity)

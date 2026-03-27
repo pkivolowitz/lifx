@@ -480,9 +480,13 @@ class AutomationManager:
             for k in stale:
                 del self._states[k]
 
-        # Re-subscribe to topics.
-        if self._client and self._client.is_connected():
-            self._subscribe_all(self._client)
+        # Re-subscribe to topics.  If disconnected, _on_connect will
+        # re-subscribe when the connection is restored.
+        if self._client:
+            try:
+                self._subscribe_all(self._client)
+            except Exception:
+                logger.debug("Reload subscribe deferred — MQTT reconnecting")
 
         logger.info("Automation manager reloaded — %d automation(s)",
                      len(self.automations))

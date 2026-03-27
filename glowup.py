@@ -2779,8 +2779,13 @@ def cmd_record(args: argparse.Namespace) -> None:
     ffmpeg_cmd.append(output)
 
     # --- Render frames and pipe to ffmpeg ------------------------------------
+    # Redirect stderr to a temp file instead of PIPE to avoid deadlock.
+    # Large ffmpeg error output can fill the pipe buffer and block the
+    # process while we're writing to stdin.
+    import tempfile as _tmpmod
+    _stderr_file = _tmpmod.TemporaryFile(mode="w+b")
     proc = sp.Popen(ffmpeg_cmd, stdin=sp.PIPE, stdout=sp.DEVNULL,
-                    stderr=sp.PIPE)
+                    stderr=_stderr_file)
 
     realtime: bool = getattr(args, "realtime", False)
 
@@ -2803,7 +2808,8 @@ def cmd_record(args: argparse.Namespace) -> None:
 
         proc.stdin.close()
         proc.wait(timeout=30)
-        stderr_bytes: bytes = proc.stderr.read()
+        _stderr_file.seek(0)
+        stderr_bytes: bytes = _stderr_file.read()
 
         if proc.returncode != 0:
             _print(f"\nERROR: ffmpeg failed:\n{stderr_bytes.decode()}", file=sys.stderr)
@@ -2813,7 +2819,8 @@ def cmd_record(args: argparse.Namespace) -> None:
 
     except BrokenPipeError:
         proc.wait(timeout=10)
-        stderr_bytes = proc.stderr.read()
+        _stderr_file.seek(0)
+        stderr_bytes = _stderr_file.read()
         _print(f"\nERROR: ffmpeg pipe broke:\n{stderr_bytes.decode()}", file=sys.stderr)
         sys.exit(1)
     finally:
