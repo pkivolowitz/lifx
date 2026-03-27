@@ -10,11 +10,11 @@ use mock objects, temporary files, or pure math — no sockets are opened.
 ### Running the Full Suite
 
 ```bash
-# Run every test file at once (stop on first failure):
-for f in test_*.py; do python3 -m unittest "$f" || exit 1; done
+# Run the full suite via pytest (from project root):
+python3 -m pytest tests/ -v
 
 # Or run a specific module:
-python3 -m unittest test_effects -v
+python3 -m pytest tests/test_effects.py -v
 ```
 
 ### Test Modules

@@ -1,7 +1,7 @@
 # GLOWUP - LIFX Effect Engine — User Manual
 
 Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
-Licensed under the MIT License. See [LICENSE](LICENSE) for details.
+Licensed under the MIT License. See [LICENSE](../LICENSE) for details.
 
 This project utilizes AI assistance (Claude 4.6) for boilerplate and logic
 expansion. All final architectural decisions, algorithmic validation, and
@@ -45,13 +45,13 @@ control, video recording of effects.
 
 | Section | Description |
 |---------|-------------|
-| [Overview](docs/01-overview.md) | What GlowUp is, what it does |
-| [Requirements](docs/02-requirements.md) | Hardware, software, and network prerequisites |
-| [Quick Start](docs/03-quick-start.md) | Get running in 60 seconds |
-| [CLI Reference](docs/04-cli-reference.md) | discover, effects, identify, play, record, replay |
-| [Built-in Effects](docs/06-effects.md) | All 33 public effects with parameter tables |
-| [Live Simulator](docs/08-simulator.md) | tkinter preview window (--sim, --sim-only) |
-| [Troubleshooting](docs/14-troubleshooting.md) | Common issues and fixes |
+| [Overview](01-overview.md) | What GlowUp is, what it does |
+| [Requirements](02-requirements.md) | Hardware, software, and network prerequisites |
+| [Quick Start](03-quick-start.md) | Get running in 60 seconds |
+| [CLI Reference](04-cli-reference.md) | discover, effects, identify, play, record, replay |
+| [Built-in Effects](06-effects.md) | All 33 public effects with parameter tables |
+| [Live Simulator](08-simulator.md) | tkinter preview window (--sim, --sim-only) |
+| [Troubleshooting](14-troubleshooting.md) | Common issues and fixes |
 
 **What you're skipping:** Server, scheduling, remote access, iOS
 app, distributed pipelines, MIDI, database.  You can always add
@@ -74,9 +74,9 @@ updates.
 
 | Section | Description |
 |---------|-------------|
-| [Scheduler](docs/05-scheduler.md) | Daemon mode, config file, symbolic times, systemd |
-| [REST API Server](docs/11-rest-api.md) | server.py endpoints, auth, SSE, overrides, systemd |
-| [Server Routing & Safety](docs/25-server-routing-safety.md) | Auto-routing via server, emergency power-off, ARP keepalive |
+| [Scheduler](05-scheduler.md) | Daemon mode, config file, symbolic times, systemd |
+| [REST API Server](11-rest-api.md) | server.py endpoints, auth, SSE, overrides, systemd |
+| [Server Routing & Safety](25-server-routing-safety.md) | Auto-routing via server, emergency power-off, ARP keepalive |
 
 **Back:** [Core](#core) | **Next:** [Remote Access](#remote-access) | [Database](#database) | [Distributed](#distributed)
 
@@ -102,11 +102,11 @@ visual flows.
 
 | Section | Description |
 |---------|-------------|
-| [GlowUp iOS App](docs/12-ios-app.md) | Building, running, connectivity, app screens |
-| [Cloudflare Tunnel](docs/15-tunnel.md) | Secure remote access without port forwarding |
-| [Home Assistant](docs/16-home-assistant.md) | REST command integration with HA |
-| [macOS Remote Control](docs/17-macos-remote.md) | Shell scripts and .command files for Finder/Dock |
-| [Node-RED](docs/18-node-red.md) | Flow-based visual automation |
+| [GlowUp iOS App](12-ios-app.md) | Building, running, connectivity, app screens |
+| [Cloudflare Tunnel](15-tunnel.md) | Secure remote access without port forwarding |
+| [Home Assistant](16-home-assistant.md) | REST command integration with HA |
+| [macOS Remote Control](17-macos-remote.md) | Shell scripts and .command files for Finder/Dock |
+| [Node-RED](18-node-red.md) | Flow-based visual automation |
 
 **Back:** [Server](#server)
 
@@ -125,8 +125,8 @@ signal snapshots, live dashboard at `/dashboard`.
 
 | Section | Description |
 |---------|-------------|
-| [Troubleshooting — PostgreSQL](docs/14-troubleshooting.md#postgresql-setup) | Connection string, schema setup, psycopg2 install |
-| [Troubleshooting — Dashboard](docs/14-troubleshooting.md#dashboard) | Web dashboard at /dashboard, device inventory, effect history |
+| [Troubleshooting — PostgreSQL](14-troubleshooting.md#postgresql-setup) | Connection string, schema setup, psycopg2 install |
+| [Troubleshooting — Dashboard](14-troubleshooting.md#dashboard) | Web dashboard at /dashboard, device inventory, effect history |
 
 **Back:** [Server](#server)
 
@@ -146,8 +146,8 @@ transport (MQTT + UDP).
 
 | Section | Description |
 |---------|-------------|
-| [MQTT](docs/19-mqtt.md) | MQTT broker setup and signal bus |
-| [SOE Pipeline](docs/21-soe-pipeline.md) | Sensors → Operators → Emitters architecture |
+| [MQTT](19-mqtt.md) | MQTT broker setup and signal bus |
+| [SOE Pipeline](21-soe-pipeline.md) | Sensors → Operators → Emitters architecture |
 
 **Back:** [Server](#server) | **Next:** [Audio Pipeline](#audio-pipeline) | [MIDI Pipeline](#midi-pipeline)
 
@@ -163,7 +163,7 @@ a microphone.
 
 | Section | Description |
 |---------|-------------|
-| [Media Pipeline](docs/20-media-pipeline.md) | Mic → UDP → FFT → MQTT → lights |
+| [Media Pipeline](20-media-pipeline.md) | Mic → UDP → FFT → MQTT → lights |
 
 **Back:** [Distributed](#distributed)
 
@@ -180,7 +180,7 @@ file.
 
 | Section | Description |
 |---------|-------------|
-| [MIDI Pipeline](docs/23-midi-pipeline.md) | MIDI sensor, emitter, light bridge, multi-station |
+| [MIDI Pipeline](23-midi-pipeline.md) | MIDI sensor, emitter, light bridge, multi-station |
 
 **Back:** [Distributed](#distributed)
 
@@ -200,7 +200,7 @@ custom component.
 
 | Section | Description |
 |---------|-------------|
-| [Persistent Services](docs/24-persistent-services.md) | systemd and launchd patterns for every component |
+| [Persistent Services](24-persistent-services.md) | systemd and launchd patterns for every component |
 
 **Back:** [Core](#core)
 
@@ -220,13 +220,13 @@ gallery publishing.
 
 | Section | Description |
 |---------|-------------|
-| [Effect Developer Guide](docs/07-effect-dev-guide.md) | Architecture, base class, Param system, HSBK, examples |
-| [Engine and Controller API](docs/09-engine-api.md) | Programmatic API, VirtualMultizoneDevice |
-| [Testing](docs/10-testing.md) | Test modules, 780+ tests, how to run |
+| [Effect Developer Guide](07-effect-dev-guide.md) | Architecture, base class, Param system, HSBK, examples |
+| [Engine and Controller API](09-engine-api.md) | Programmatic API, VirtualMultizoneDevice |
+| [Testing](10-testing.md) | Test modules, 780+ tests, how to run |
 | [Test Interpretation Guide](TEST_GUIDE.md) | What the high-level tests prove, failure modes, triage reference (developer-level) |
-| [Effect Gallery](docs/13-gallery.md) | GitHub Pages gallery with animated GIF previews |
-| [SOE Pipeline](docs/21-soe-pipeline.md) | Architecture and extension points |
-| [Emitter Developer Guide](docs/22-emitter-dev-guide.md) | Emitter ABC, SynthBackend pattern, creating new emitters |
+| [Effect Gallery](13-gallery.md) | GitHub Pages gallery with animated GIF previews |
+| [SOE Pipeline](21-soe-pipeline.md) | Architecture and extension points |
+| [Emitter Developer Guide](22-emitter-dev-guide.md) | Emitter ABC, SynthBackend pattern, creating new emitters |
 
 **Back:** [Core](#core)
 
@@ -238,28 +238,28 @@ Every chapter in one flat list, for reference.
 
 | Section | Path |
 |---------|------|
-| [Overview](docs/01-overview.md) | Core |
-| [Requirements](docs/02-requirements.md) | Core |
-| [Quick Start](docs/03-quick-start.md) | Core |
-| [CLI Reference](docs/04-cli-reference.md) | Core |
-| [Scheduler](docs/05-scheduler.md) | Core → Server |
-| [Built-in Effects](docs/06-effects.md) | Core |
-| [Effect Developer Guide](docs/07-effect-dev-guide.md) | Core → Developer |
-| [Live Simulator](docs/08-simulator.md) | Core |
-| [Engine and Controller API](docs/09-engine-api.md) | Core → Developer |
-| [Testing](docs/10-testing.md) | Core → Developer |
-| [REST API Server](docs/11-rest-api.md) | Core → Server |
-| [GlowUp iOS App](docs/12-ios-app.md) | Core → Server → Remote Access |
-| [Effect Gallery](docs/13-gallery.md) | Core → Developer |
-| [Troubleshooting](docs/14-troubleshooting.md) | Core |
-| [Cloudflare Tunnel](docs/15-tunnel.md) | Core → Server → Remote Access |
-| [Home Assistant](docs/16-home-assistant.md) | Core → Server → Remote Access |
-| [macOS Remote Control](docs/17-macos-remote.md) | Core → Server → Remote Access |
-| [Node-RED](docs/18-node-red.md) | Core → Server → Remote Access |
-| [MQTT](docs/19-mqtt.md) | Core → Server → Distributed |
-| [Media Pipeline](docs/20-media-pipeline.md) | Core → Server → Distributed → Audio |
-| [SOE Pipeline](docs/21-soe-pipeline.md) | Core → Server → Distributed |
-| [Emitter Developer Guide](docs/22-emitter-dev-guide.md) | Core → Developer |
-| [MIDI Pipeline](docs/23-midi-pipeline.md) | Core → Server → Distributed → MIDI |
-| [Persistent Services](docs/24-persistent-services.md) | Core → any component |
-| [Server Routing & Safety](docs/25-server-routing-safety.md) | Core → Server |
+| [Overview](01-overview.md) | Core |
+| [Requirements](02-requirements.md) | Core |
+| [Quick Start](03-quick-start.md) | Core |
+| [CLI Reference](04-cli-reference.md) | Core |
+| [Scheduler](05-scheduler.md) | Core → Server |
+| [Built-in Effects](06-effects.md) | Core |
+| [Effect Developer Guide](07-effect-dev-guide.md) | Core → Developer |
+| [Live Simulator](08-simulator.md) | Core |
+| [Engine and Controller API](09-engine-api.md) | Core → Developer |
+| [Testing](10-testing.md) | Core → Developer |
+| [REST API Server](11-rest-api.md) | Core → Server |
+| [GlowUp iOS App](12-ios-app.md) | Core → Server → Remote Access |
+| [Effect Gallery](13-gallery.md) | Core → Developer |
+| [Troubleshooting](14-troubleshooting.md) | Core |
+| [Cloudflare Tunnel](15-tunnel.md) | Core → Server → Remote Access |
+| [Home Assistant](16-home-assistant.md) | Core → Server → Remote Access |
+| [macOS Remote Control](17-macos-remote.md) | Core → Server → Remote Access |
+| [Node-RED](18-node-red.md) | Core → Server → Remote Access |
+| [MQTT](19-mqtt.md) | Core → Server → Distributed |
+| [Media Pipeline](20-media-pipeline.md) | Core → Server → Distributed → Audio |
+| [SOE Pipeline](21-soe-pipeline.md) | Core → Server → Distributed |
+| [Emitter Developer Guide](22-emitter-dev-guide.md) | Core → Developer |
+| [MIDI Pipeline](23-midi-pipeline.md) | Core → Server → Distributed → MIDI |
+| [Persistent Services](24-persistent-services.md) | Core → any component |
+| [Server Routing & Safety](25-server-routing-safety.md) | Core → Server |

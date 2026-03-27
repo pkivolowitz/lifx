@@ -1,6 +1,6 @@
 # LIFX Effect Engine
 
-Modular effect engine for LIFX devices. See README.md for overview, MANUAL.md for full docs.
+Modular effect engine for LIFX devices. See README.md for overview, docs/MANUAL.md for full docs.
 
 ## Session Start
 Check for compaction context (read, internalize, delete if found):

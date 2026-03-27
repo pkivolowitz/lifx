@@ -297,7 +297,7 @@ class TestProductMapNoDuplicates(unittest.TestCase):
         import ast
 
         transport_path: str = os.path.join(
-            os.path.dirname(__file__), "transport.py",
+            os.path.dirname(__file__), "..", "transport.py",
         )
         with open(transport_path, "r") as f:
             source: str = f.read()
@@ -782,7 +782,7 @@ class TestCreateMqttClient(unittest.TestCase):
         """Theremin submodule source files must not contain _PAHO_V2."""
         for filename in ("display.py", "synth.py", "simulator.py"):
             filepath: str = os.path.join(
-                os.path.dirname(__file__), "theremin", filename,
+                os.path.dirname(__file__), "..", "theremin", filename,
             )
             with open(filepath, "r") as f:
                 source: str = f.read()

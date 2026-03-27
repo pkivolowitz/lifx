@@ -44,7 +44,7 @@ logging.getLogger("glowup.distributed.orchestrator").setLevel(logging.CRITICAL +
 # Fixture paths
 # ---------------------------------------------------------------------------
 
-FIXTURES_DIR: Path = Path(__file__).parent / "tests" / "fixtures"
+FIXTURES_DIR: Path = Path(__file__).parent / "fixtures"
 MIDI_FIXTURE: Path = FIXTURES_DIR / "test_scale.mid"
 WAV_FIXTURE: Path = FIXTURES_DIR / "test_440hz.wav"
 CHORD_FIXTURE: Path = FIXTURES_DIR / "test_c_major_chord.wav"

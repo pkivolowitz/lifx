@@ -127,5 +127,5 @@ multizone group named "porch" — two physical string lights (192.0.2.23
 and 192.0.2.62) combined into a single 144-zone animation surface.
 
 <p align="center">
-  <img src="multizone.PNG" alt="Virtual multizone group detail" width="300">
+  <img src="assets/multizone.PNG" alt="Virtual multizone group detail" width="300">
 </p>

@@ -194,7 +194,7 @@ python3 /home/pi/lifx/scheduler.py /etc/glowup/schedule.json
 5. **Install the systemd service**:
 
 ```bash
-sudo cp /home/pi/lifx/glowup-scheduler.service /etc/systemd/system/
+sudo cp /home/pi/lifx/deploy/glowup-scheduler.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable glowup-scheduler
 sudo systemctl start glowup-scheduler

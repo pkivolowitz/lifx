@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.jpg" alt="GlowUp" width="200">
+  <img src="docs/assets/logo.jpg" alt="GlowUp" width="200">
 </p>
 
 # GLOWUP — LIFX Effect Engine
@@ -97,7 +97,7 @@ python3 server.py server.json
 50+ REST endpoints, time-based scheduling with symbolic times
 (sunrise, sunset), SSE live updates, device registry, group CRUD,
 automations, diagnostics dashboard.  See the
-**[User Manual](MANUAL.md)** for full documentation.
+**[User Manual](docs/MANUAL.md)** for full documentation.
 
 ### I want stitch devices into one animation surface
 
@@ -148,7 +148,7 @@ app, and scheduler.
 
 ## Documentation
 
-The **[User Manual](MANUAL.md)** is organized as a progressive
+The **[User Manual](docs/MANUAL.md)** is organized as a progressive
 disclosure tree — start with pretty lights, add complexity only
 when you need it:
 
@@ -160,7 +160,7 @@ when you need it:
 - **Developer** — effects, sensors, operators, emitters
 
 <p align="center">
-  <img src="multizone.PNG" alt="Virtual multizone group in iOS app" width="300">
+  <img src="docs/assets/multizone.PNG" alt="Virtual multizone group in iOS app" width="300">
 </p>
 
 ## Requirements

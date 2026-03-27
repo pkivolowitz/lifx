@@ -58,7 +58,7 @@ The repo includes service files for the most common components:
 Copy and edit for your paths:
 
 ```bash
-sudo cp glowup-server.service /etc/systemd/system/
+sudo cp deploy/glowup-server.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable glowup-server
 sudo systemctl start glowup-server

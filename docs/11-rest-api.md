@@ -354,7 +354,7 @@ override state.
 ### Installing the Server as a systemd Service
 
 ```bash
-sudo cp glowup-server.service /etc/systemd/system/
+sudo cp deploy/glowup-server.service /etc/systemd/system/
 sudo cp server.json /etc/glowup/server.json
 sudo systemctl daemon-reload
 sudo systemctl enable glowup-server
@@ -427,7 +427,7 @@ made persistent using the same patterns.
 **Linux (systemd):**
 
 ```bash
-sudo cp glowup-agent.service /etc/systemd/system/
+sudo cp deploy/glowup-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable glowup-agent
 sudo systemctl start glowup-agent
