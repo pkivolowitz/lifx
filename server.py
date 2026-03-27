@@ -5390,8 +5390,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             sun: SunTimes = sun_times(lat, lon, today, utc_offset)
             # Night = before sunrise or after sunset.
             if sun.sunrise and sun.sunset:
-                now_time = now.time()
-                is_night = now_time < sun.sunrise or now_time >= sun.sunset
+                is_night = now < sun.sunrise or now >= sun.sunset
 
         # --- Check if room lights are off. ---
         lights_off: bool = True
