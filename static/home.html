@@ -149,10 +149,19 @@ body {
     overflow: hidden;
 }
 
-.sensor-label {
-    font-size: clamp(1rem, 2vw, 1.6rem);
+.sensor-location {
+    font-size: clamp(1.4rem, 3vw, 2.2rem);
     font-weight: 600;
     letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--text-color);
+    margin-bottom: 2px;
+}
+
+.sensor-label {
+    font-size: clamp(0.75rem, 1.4vw, 1.1rem);
+    font-weight: 400;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--label-color);
     margin-bottom: 12px;
@@ -417,6 +426,7 @@ body {
             card.className = "sensor-card";
             card.id = "sensor-" + label;
             card.innerHTML =
+                '<div class="sensor-location"></div>' +
                 '<div class="sensor-label"></div>' +
                 '<div class="reading-temp"></div>' +
                 '<div class="reading-row">' +
@@ -430,7 +440,18 @@ body {
                 '<div class="reading-updated"></div>';
         }
 
-        card.querySelector(".sensor-label").textContent = formatLabel(label);
+        /* Location is the primary label; sensor name is the subtitle. */
+        var locationEl = card.querySelector(".sensor-location");
+        var labelEl = card.querySelector(".sensor-label");
+        if (data.location) {
+            locationEl.textContent = data.location;
+            locationEl.style.display = "";
+            labelEl.textContent = formatLabel(label);
+        } else {
+            /* No location configured — promote sensor name to primary. */
+            locationEl.style.display = "none";
+            labelEl.textContent = formatLabel(label);
+        }
 
         /* Temperature in Fahrenheit. */
         const tempEl = card.querySelector(".reading-temp");

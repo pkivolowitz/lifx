@@ -172,6 +172,8 @@ class WorkAssignment:
     action: str = "start"
     emitter_type: Optional[str] = None
     emitter_config: dict[str, Any] = field(default_factory=dict)
+    # Optional UDP port for low-latency frame delivery to emitter nodes.
+    udp_port: Optional[int] = None
 
     @property
     def is_emitter_assignment(self) -> bool:

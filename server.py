@@ -418,6 +418,9 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("GET", ("api", "ble", "sensors", "{label}"),
            "_handle_get_ble_sensor_detail",
            unquote_params=("label",), requires_auth=False),
+    _Route("PUT", ("api", "ble", "sensors", "{label}", "location"),
+           "_handle_put_sensor_location",
+           unquote_params=("label",)),
     # Automations — sensor-driven light rules with full CRUD.
     _Route("GET", ("api", "automations"),
            "_handle_get_automations"),
@@ -431,6 +434,7 @@ _ROUTES: tuple[_Route, ...] = (
            param_types={"index": int}),
     _Route("DELETE", ("api", "automations", "{index}"),
            "_handle_delete_automation",
+           unquote_params=("index",),
            param_types={"index": int}),
 )
 
@@ -2835,9 +2839,19 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         """GET /api/ble/sensors — all BLE sensor readings.
 
         Returns current motion, temperature, humidity, and status
-        for all configured BLE sensors.
+        for all configured BLE sensors.  Each entry is enriched with
+        a ``location`` field from the ``sensor_locations`` config map
+        when one is set.
         """
-        self._send_json(200, ble_sensor_data.get_all())
+        locations: dict[str, str] = self.config.get(
+            "sensor_locations", {},
+        )
+        all_data: dict[str, dict] = ble_sensor_data.get_all()
+        for lbl, readings in all_data.items():
+            loc: str = locations.get(lbl, "")
+            if loc:
+                readings["location"] = loc
+        self._send_json(200, all_data)
 
     def _handle_get_ble_sensor_detail(self, label: str) -> None:
         """GET /api/ble/sensors/{label} — single sensor readings."""
@@ -2845,7 +2859,40 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         if not data:
             self._send_json(404, {"error": f"No data for '{label}'"})
             return
+        locations: dict[str, str] = self.config.get(
+            "sensor_locations", {},
+        )
+        loc: str = locations.get(label, "")
+        if loc:
+            data["location"] = loc
         self._send_json(200, data)
+
+    def _handle_put_sensor_location(self, label: str) -> None:
+        """PUT /api/ble/sensors/{label}/location — set display location.
+
+        Request body::
+
+            {"location": "Living Room"}
+
+        Persists to ``sensor_locations`` in server.json.  Pass an
+        empty string or ``null`` to clear.
+        """
+        body: Optional[dict] = self._read_json_body()
+        if body is None:
+            return
+        location: str = (body.get("location") or "").strip()
+
+        locations: dict[str, str] = dict(
+            self.config.get("sensor_locations", {}),
+        )
+        if location:
+            locations[label] = location
+        else:
+            locations.pop(label, None)
+
+        self.config["sensor_locations"] = locations
+        self._save_config_field("sensor_locations", locations)
+        self._send_json(200, {"label": label, "location": location or None})
 
     # ------------------------------------------------------------------
     # Automation endpoints
