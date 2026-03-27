@@ -816,7 +816,14 @@ class MicSource(MediaSource):
         system: str = platform.system()
         device: str = self._device
 
-        cmd: list[str] = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
+        cmd: list[str] = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            # Minimize ffmpeg startup and buffering latency.
+            "-probesize", "32",
+            "-analyzeduration", "0",
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+        ]
 
         if system == "Darwin":
             # macOS: AVFoundation — ":default" = default audio input.

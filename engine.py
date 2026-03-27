@@ -103,6 +103,10 @@ PIPELINE_HIGH_WATER: int = 10
 # rather than waking on every consumed frame.
 PIPELINE_LOW_WATER: int = 5
 
+# Pipeline size for audio-reactive / media effects.  Smaller buffer
+# trades smoothness for lower latency — at 20 FPS, 2 frames = ~100ms.
+PIPELINE_LOW_LATENCY: int = 2
+
 
 class Engine:
     """Low-level animation engine that runs in a background thread.
@@ -244,6 +248,16 @@ class Engine:
             # If this is a MediaEffect, give it direct bus access.
             if signal_bus is not None and hasattr(effect, '_signal_bus'):
                 effect._signal_bus = signal_bus
+            # When a signal bus is active (media/audio-reactive effects),
+            # shrink the pipeline to minimize latency.  The standard 10-frame
+            # buffer adds 500ms at 20 FPS — unacceptable for real-time audio.
+            # Two frames (~100ms) is enough to absorb scheduling jitter while
+            # keeping the response perceptually instantaneous.
+            if signal_bus is not None:
+                self._pipeline = queue.Queue(maxsize=PIPELINE_LOW_LATENCY)
+            else:
+                self._pipeline = queue.Queue(maxsize=PIPELINE_HIGH_WATER)
+
             # Increment generation so the send thread discards stale frames
             # pre-rendered by the old effect.
             self._effect_generation += 1
