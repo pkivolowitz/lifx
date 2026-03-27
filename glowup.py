@@ -2411,11 +2411,17 @@ def cmd_play(args: argparse.Namespace) -> None:
         zpb_val: int = getattr(args, "zpb", 1)
         effect_params["zones_per_bulb"] = zpb_val
 
-    # --- Ensure emitter is powered on before sending colors --------------------
+    # --- Power on (or off) before sending colors --------------------------------
+    # Effects can set ``wants_power_on = False`` (e.g., the "off" effect)
+    # to power the device off at startup instead of on, preventing a
+    # visible flash between schedule entries.
     # Skipped in sim-only mode: _NullEmitter methods are no-ops, but
     # being explicit avoids confusing log output about powering on.
     if not sim_only:
-        em.power_on(duration_ms=0)
+        if getattr(effect_cls, "wants_power_on", True):
+            em.power_on(duration_ms=0)
+        else:
+            em.power_off(duration_ms=0)
 
     # --- Optional simulator window (--sim or --sim-only) ----------------------
     sim = None
