@@ -611,8 +611,10 @@ class TestFrameCorrectness(UseCaseTest):
     # Effects known to require special setup (media bus, external input)
     # or that produce non-standard zone counts (2D grid effects).
     SKIP_EFFECTS: set[str] = {
-        "soundlevel", "spectrum2d", "theremin", "waveform",
-        "plasma2d",
+        "soundlevel", "theremin", "waveform",
+        # 2D matrix effects return a fixed width × height frame, not
+        # zone_count zones — excluded from the zone-count contract check.
+        "_grid_map", "matrix_rain", "plasma2d", "ripple2d", "spectrum2d",
     }
 
     def test_all_effects_produce_legal_hsbk(self) -> None:

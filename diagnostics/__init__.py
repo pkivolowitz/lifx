@@ -111,7 +111,9 @@ class DiagnosticsLogger:
             ``True`` if connected, ``False`` on failure.
         """
         try:
-            self._conn = psycopg2.connect(self.dsn)
+            # connect_timeout prevents hanging indefinitely when the DB host
+            # is unreachable (e.g. on dev machines without a live DB).
+            self._conn = psycopg2.connect(self.dsn, connect_timeout=5)
             self._conn.autocommit = True
             return True
         except Exception as exc:

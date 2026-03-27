@@ -21,6 +21,7 @@ from effects import (
     HSBK_MAX,
     KELVIN_MIN,
     KELVIN_MAX,
+    DEVICE_TYPE_MATRIX,
 )
 
 
@@ -53,21 +54,32 @@ def _validate_frame(
     zone_count: int,
     effect_name: str,
     t: float,
+    is_matrix: bool = False,
 ) -> None:
     """Assert that a rendered frame is valid HSBK data.
 
     Args:
         test:        The test case (for assertions).
         frame:       The list of HSBK tuples returned by render().
-        zone_count:  Expected number of zones.
+        zone_count:  Expected number of zones (ignored for matrix effects).
         effect_name: Effect name (for error messages).
         t:           Time value (for error messages).
+        is_matrix:   True for matrix effects, which return a fixed
+                     width × height frame rather than zone_count zones.
     """
-    test.assertEqual(
-        len(frame), zone_count,
-        f"{effect_name} at t={t}: expected {zone_count} zones, "
-        f"got {len(frame)}",
-    )
+    if is_matrix:
+        # Matrix effects ignore zone_count and return their own grid size.
+        # Verify non-empty but do not enforce exact zone count.
+        test.assertGreater(
+            len(frame), 0,
+            f"{effect_name} at t={t}: matrix effect returned empty frame",
+        )
+    else:
+        test.assertEqual(
+            len(frame), zone_count,
+            f"{effect_name} at t={t}: expected {zone_count} zones, "
+            f"got {len(frame)}",
+        )
     for i, hsbk in enumerate(frame):
         test.assertEqual(
             len(hsbk), 4,
@@ -167,10 +179,15 @@ def _make_render_test(
     """
     def test_method(self: unittest.TestCase) -> None:
         effect = create_effect(effect_name)
+        # Matrix effects return a fixed width × height frame regardless
+        # of zone_count — detect this upfront so _validate_frame can
+        # skip the exact-count assertion.
+        is_matrix: bool = DEVICE_TYPE_MATRIX in effect.affinity
         effect.on_start(zone_count)
         for t in TEST_TIMES:
             frame = effect.render(t, zone_count)
-            _validate_frame(self, frame, zone_count, effect_name, t)
+            _validate_frame(self, frame, zone_count, effect_name, t,
+                            is_matrix=is_matrix)
     test_method.__doc__ = (
         f"{effect_name} renders valid {zone_count}-zone frames"
     )
@@ -199,12 +216,17 @@ class TestEffectMultipleRenders(unittest.TestCase):
 
         for name in sorted(get_registry()):
             effect = create_effect(name)
+            # Matrix effects return a fixed grid size, not zone_count.
+            is_matrix: bool = DEVICE_TYPE_MATRIX in effect.affinity
             effect.on_start(zone_count)
             for i in range(frame_count):
                 t = i / fps
                 try:
                     frame = effect.render(t, zone_count)
-                    self.assertEqual(len(frame), zone_count)
+                    if is_matrix:
+                        self.assertGreater(len(frame), 0)
+                    else:
+                        self.assertEqual(len(frame), zone_count)
                 except Exception as exc:
                     self.fail(
                         f"{name} crashed at frame {i} (t={t:.3f}): "
