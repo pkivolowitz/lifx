@@ -744,9 +744,10 @@ async function refresh() {
     }
 
     // Determine which devices/groups are playing.
-    // Devices count as playing if they have a direct effect OR are
-    // in an active group effect.
-    const playing = physical.filter(d => d.current_effect || d.group_effect);
+    // Devices count as playing if they have a direct effect.
+    // Skip devices that are only playing via a group — the group row
+    // already represents them, showing each member is redundant.
+    const playing = physical.filter(d => d.current_effect && !d.group_effect);
     const playingGroups = groups.filter(g => g.current_effect);
 
     // Stats — count both physical and group playing.
