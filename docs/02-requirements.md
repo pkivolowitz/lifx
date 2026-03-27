@@ -53,6 +53,32 @@ survives reboots, see [Persistent Services](24-persistent-services.md).
 | cloudflared *(for tunnel)* | See [Cloudflare Tunnel](15-tunnel.md) |
 | Xcode *(for iOS app)* | App Store |
 
+### Audio Output (theremin, audio effects)
+
+| Requirement | Install |
+|-------------|---------|
+| sounddevice | `pip install sounddevice` |
+| numpy | `pip install numpy` |
+
+### BLE Sensors (ONVIS motion/temperature)
+
+| Requirement | Install |
+|-------------|---------|
+| bleak | `pip install bleak` |
+| cryptography | `pip install cryptography` |
+
+### Screen-Reactive Lighting (`screen_light` effect)
+
+| Requirement | Install |
+|-------------|---------|
+| pygame | `pip install pygame` |
+
+### Vision / Camera Media Source
+
+| Requirement | Install |
+|-------------|---------|
+| opencv | `pip install opencv-python` |
+
 ### MQTT / Distributed Framework
 
 | Requirement | Install |
@@ -69,6 +95,7 @@ survives reboots, see [Persistent Services](24-persistent-services.md).
 | FluidSynth *(for audio playback)* | macOS: `brew install fluid-synth` · Linux: `sudo apt install fluidsynth` |
 | pyfluidsynth *(for audio playback)* | `pip install pyfluidsynth` |
 | SoundFont (.sf2 file) | [FluidR3_GM_GS](https://archive.org/download/fluidr3-gm-gs/FluidR3_GM_GS.sf2) (144 MB, free) |
+| python-rtmidi *(alternative to FluidSynth)* | `pip install python-rtmidi` |
 | MIDI files (.mid) | User-supplied — search for "free MIDI files" |
 
 ### N-body Visualizer (WebGL particle display)
@@ -76,6 +103,8 @@ survives reboots, see [Persistent Services](24-persistent-services.md).
 | Requirement | Install |
 |-------------|---------|
 | numpy | `pip install numpy` |
+| cupy *(optional GPU acceleration)* | `pip install cupy` — falls back to numpy |
+| scipy *(optional audio filtering)* | `pip install scipy` — optional enhancement |
 | paho-mqtt | `pip install paho-mqtt` |
 | MQTT broker | See MQTT above |
 | A web browser | Any modern browser with WebGL |
