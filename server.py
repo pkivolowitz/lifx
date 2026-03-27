@@ -90,13 +90,20 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
-from effects import get_registry, create_effect, HSBK, HSBK_MAX, KELVIN_DEFAULT
+from effects import (
+    get_registry, create_effect, MediaEffect,
+    HSBK, HSBK_MAX, KELVIN_DEFAULT,
+)
 from emitters import Emitter
 from emitters.lifx import LifxEmitter
 from emitters.virtual import VirtualMultizoneEmitter
 from engine import Controller
 from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
-from ble_trigger import BleTriggerManager, sensor_data as ble_sensor_data
+from ble_trigger import BleTriggerManager, sensor_data as _legacy_sensor_data
+from automation import (
+    AutomationManager, sensor_data as ble_sensor_data,
+    validate_automation, migrate_ble_triggers,
+)
 from media import MediaManager, SignalBus
 from media.source import AudioStreamServer
 from solar import SunTimes, sun_times
@@ -411,6 +418,20 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("GET", ("api", "ble", "sensors", "{label}"),
            "_handle_get_ble_sensor_detail",
            unquote_params=("label",), requires_auth=False),
+    # Automations — sensor-driven light rules with full CRUD.
+    _Route("GET", ("api", "automations"),
+           "_handle_get_automations"),
+    _Route("POST", ("api", "automations"),
+           "_handle_post_automation_create"),
+    _Route("PUT", ("api", "automations", "{index}"),
+           "_handle_put_automation",
+           param_types={"index": int}),
+    _Route("POST", ("api", "automations", "{index}", "enabled"),
+           "_handle_post_automation_enabled",
+           param_types={"index": int}),
+    _Route("DELETE", ("api", "automations", "{index}"),
+           "_handle_delete_automation",
+           param_types={"index": int}),
 )
 
 # Pre-built index: (method, segment_count) → list of candidate routes.
@@ -2238,6 +2259,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     config: dict[str, Any] = {}
     config_path: Optional[str] = None
     media_manager: Optional[MediaManager] = None
+    automation_manager: Optional[AutomationManager] = None
     orchestrator: Optional[Any] = None
     keepalive: Optional[BulbKeepAlive] = None
     registry: Optional[DeviceRegistry] = None
@@ -2801,6 +2823,158 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(404, {"error": f"No data for '{label}'"})
             return
         self._send_json(200, data)
+
+    # ------------------------------------------------------------------
+    # Automation endpoints
+    # ------------------------------------------------------------------
+
+    def _handle_get_automations(self) -> None:
+        """GET /api/automations — list all automations with status."""
+        automations: list[dict[str, Any]] = list(
+            self.config.get("automations", []),
+        )
+        # Enrich with runtime status from the manager.
+        mgr: Optional[AutomationManager] = self.automation_manager
+        status_list: list[dict] = (
+            mgr.get_status() if mgr is not None else []
+        )
+        status_map: dict[int, dict] = {
+            s["index"]: s for s in status_list
+        }
+        result: list[dict[str, Any]] = []
+        for i, auto in enumerate(automations):
+            entry: dict[str, Any] = dict(auto)
+            entry["index"] = i
+            st: dict = status_map.get(i, {})
+            entry["active"] = st.get("active", False)
+            entry["last_triggered"] = st.get("last_triggered", 0)
+            result.append(entry)
+        self._send_json(200, {"automations": result})
+
+    def _handle_post_automation_create(self) -> None:
+        """POST /api/automations — create a new automation.
+
+        Request body matches the automation data model (see automation.py).
+        """
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        # Build validation context.
+        config_groups: dict = self.config.get("groups", {})
+        known_groups: set[str] = set(config_groups.keys())
+        registry: dict = get_registry()
+        known_effects: set[str] = set(registry.keys())
+        media_effects: set[str] = {
+            name for name, cls in registry.items()
+            if issubclass(cls, MediaEffect)
+        }
+
+        errors: list[str] = validate_automation(
+            body, known_groups, known_effects, media_effects,
+        )
+        if errors:
+            self._send_json(400, {"error": "; ".join(errors)})
+            return
+
+        # Default fields.
+        body.setdefault("enabled", True)
+        body.setdefault("schedule_conflict", "defer")
+        body.setdefault("off_action", {"effect": "off", "params": {}})
+
+        automations: list = self.config.setdefault("automations", [])
+        automations.append(body)
+        self._save_config_field("automations", automations)
+
+        # Notify the manager to reload subscriptions.
+        mgr: Optional[AutomationManager] = self.automation_manager
+        if mgr is not None:
+            mgr.reload()
+
+        self._send_json(201, {"index": len(automations) - 1, **body})
+
+    def _handle_put_automation(self, index: int) -> None:
+        """PUT /api/automations/{index} — update an automation."""
+        automations: list = self.config.get("automations", [])
+        if index < 0 or index >= len(automations):
+            self._send_json(404, {"error": f"No automation at index {index}"})
+            return
+
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        config_groups: dict = self.config.get("groups", {})
+        known_groups: set[str] = set(config_groups.keys())
+        registry: dict = get_registry()
+        known_effects: set[str] = set(registry.keys())
+        media_effects: set[str] = {
+            name for name, cls in registry.items()
+            if issubclass(cls, MediaEffect)
+        }
+
+        errors: list[str] = validate_automation(
+            body, known_groups, known_effects, media_effects,
+        )
+        if errors:
+            self._send_json(400, {"error": "; ".join(errors)})
+            return
+
+        body.setdefault("enabled", True)
+        body.setdefault("schedule_conflict", "defer")
+        body.setdefault("off_action", {"effect": "off", "params": {}})
+
+        automations[index] = body
+        self._save_config_field("automations", automations)
+
+        mgr: Optional[AutomationManager] = self.automation_manager
+        if mgr is not None:
+            mgr.reload()
+
+        self._send_json(200, {"index": index, **body})
+
+    def _handle_post_automation_enabled(self, index: int) -> None:
+        """POST /api/automations/{index}/enabled — toggle automation."""
+        automations: list = self.config.get("automations", [])
+        if index < 0 or index >= len(automations):
+            self._send_json(404, {"error": f"No automation at index {index}"})
+            return
+
+        body: Optional[dict[str, Any]] = self._read_json_body()
+        if body is None:
+            return
+
+        enabled: bool = bool(body.get("enabled", True))
+        automations[index]["enabled"] = enabled
+        self._save_config_field("automations", automations)
+
+        mgr: Optional[AutomationManager] = self.automation_manager
+        if mgr is not None:
+            mgr.reload()
+
+        self._send_json(200, {
+            "index": index,
+            "enabled": enabled,
+            "name": automations[index].get("name", ""),
+        })
+
+    def _handle_delete_automation(self, index: int) -> None:
+        """DELETE /api/automations/{index} — remove an automation."""
+        automations: list = self.config.get("automations", [])
+        if index < 0 or index >= len(automations):
+            self._send_json(404, {"error": f"No automation at index {index}"})
+            return
+
+        removed: dict = automations.pop(index)
+        self._save_config_field("automations", automations)
+
+        mgr: Optional[AutomationManager] = self.automation_manager
+        if mgr is not None:
+            mgr.reload()
+
+        self._send_json(200, {
+            "deleted": removed.get("name", f"index {index}"),
+        })
 
     # ------------------------------------------------------------------
 
@@ -5626,6 +5800,7 @@ def main() -> None:
     # MQTT bridge reference — set by _background_startup if configured.
     mqtt_bridge: Optional[MqttBridge] = None
     ble_trigger_mgr: Optional[BleTriggerManager] = None
+    automation_mgr: Optional[AutomationManager] = None
     # MediaManager reference — set by _background_startup if configured.
     media_mgr: Optional[MediaManager] = None
     # Orchestrator reference — set by _background_startup if configured.
@@ -5644,7 +5819,7 @@ def main() -> None:
         5. Populate DeviceManager and load devices.
         6. Start scheduler, MQTT, orchestrator, media pipeline.
         """
-        nonlocal mqtt_bridge, media_mgr, orch, keepalive, ble_trigger_mgr
+        nonlocal mqtt_bridge, media_mgr, orch, keepalive, ble_trigger_mgr, automation_mgr
 
         try:
             # -- Step 1: Start the ARP-based bulb keepalive daemon --------
@@ -5771,7 +5946,23 @@ def main() -> None:
                     )
                     mqtt_bridge.start()
 
-            # Start BLE trigger manager if configured.
+            # Auto-migrate ble_triggers → automations if needed.
+            if migrate_ble_triggers(config):
+                config_path_local: Optional[str] = GlowUpRequestHandler.config_path
+                if config_path_local:
+                    try:
+                        with open(config_path_local, "r") as f:
+                            disk_cfg: dict = json.load(f)
+                        disk_cfg["automations"] = config["automations"]
+                        with open(config_path_local, "w") as f:
+                            json.dump(disk_cfg, f, indent=4)
+                            f.write("\n")
+                        logging.info("Persisted migrated automations to %s",
+                                     config_path_local)
+                    except Exception as exc:
+                        logging.warning("Failed to persist migration: %s", exc)
+
+            # Start BLE trigger manager if configured (legacy path).
             ble_trigger_cfg: dict = config.get("ble_triggers", {})
             if ble_trigger_cfg and _MQTT_AVAILABLE:
                 mqtt_cfg = config.get("mqtt", {})
@@ -5782,6 +5973,18 @@ def main() -> None:
                     port=mqtt_cfg.get("port", 1883),
                 )
                 ble_trigger_mgr.start()
+
+            # Start automation manager if automations are configured.
+            if config.get("automations") and _MQTT_AVAILABLE:
+                mqtt_cfg = config.get("mqtt", {})
+                automation_mgr = AutomationManager(
+                    config=config,
+                    device_manager=dm,
+                    broker=mqtt_cfg.get("broker", "localhost"),
+                    port=mqtt_cfg.get("port", 1883),
+                )
+                automation_mgr.start()
+                GlowUpRequestHandler.automation_manager = automation_mgr
 
             # Start the distributed orchestrator if configured.
             if config.get("distributed") and _HAS_DISTRIBUTED:
@@ -5841,6 +6044,8 @@ def main() -> None:
             media_mgr.shutdown()
         if orch is not None:
             orch.stop()
+        if automation_mgr is not None:
+            automation_mgr.stop()
         if ble_trigger_mgr is not None:
             ble_trigger_mgr.stop()
         if mqtt_bridge is not None:
