@@ -143,6 +143,11 @@ RECONNECT_MULTIPLIER: float = 2.0
 # Maximum consecutive read failures before declaring source dead.
 MAX_READ_FAILURES: int = 5
 
+# Send timeout for audio stream clients (seconds).  Slow clients
+# that can't keep up are disconnected rather than stalling the
+# audio pipeline.  500ms is generous — a single chunk is ~100ms.
+STREAM_SEND_TIMEOUT: float = 0.5
+
 
 # ---------------------------------------------------------------------------
 # Extractor callback type
@@ -952,6 +957,9 @@ class AudioStreamServer:
                 client.setsockopt(
                     socket.IPPROTO_TCP, socket.TCP_NODELAY, 1,
                 )
+                # Bound sendall() so a slow client doesn't stall
+                # the extractor callback for the entire pipeline.
+                client.settimeout(STREAM_SEND_TIMEOUT)
                 with self._lock:
                     self._clients.append(client)
                 logger.info("Audio stream client connected from %s", addr)

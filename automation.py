@@ -659,6 +659,9 @@ class AutomationManager:
     def _parse_value(self, raw: str, reference: Any) -> Any:
         """Parse a raw MQTT payload to match the reference type.
 
+        Tries int first, then float, to avoid losing precision
+        when the reference is an int but the payload is "1.0".
+
         Args:
             raw:       Raw string payload.
             reference: The trigger value (determines target type).
@@ -666,9 +669,14 @@ class AutomationManager:
         Returns:
             Parsed value as int or float.
         """
+        stripped: str = raw.strip()
         if isinstance(reference, int):
-            return int(raw.strip())
-        return float(raw.strip())
+            try:
+                return int(stripped)
+            except ValueError:
+                # Payload like "1.0" — parse as float, then truncate.
+                return int(float(stripped))
+        return float(stripped)
 
     def _fire_action(
         self,
@@ -762,6 +770,9 @@ class AutomationManager:
                 )
             state.active = False
             state.last_off = time.time()
+            # Update last_action for debounce — prevents rapid
+            # on/off cycling when sensor values oscillate.
+            state.last_action = state.last_off
             logger.info(
                 "Automation '%s' off-action: %s → %s",
                 auto.get("name", "?"), effect, group,
@@ -788,14 +799,19 @@ class AutomationManager:
         try:
             # Import here to avoid circular imports at module level.
             from server import _find_active_entry
-            specs: list = self._config.get("schedule", [])
+        except ImportError:
+            logger.error("Cannot import _find_active_entry from server")
+            raise
+
+        try:
+            specs: list = list(self._config.get("schedule", []))
             loc: dict = self._config.get("location", {})
             lat: float = loc.get("latitude", 0.0)
             lon: float = loc.get("longitude", 0.0)
             now: datetime = datetime.now(timezone.utc).astimezone()
             active = _find_active_entry(specs, lat, lon, now, group_name)
             return active is not None
-        except (ImportError, Exception) as exc:
+        except Exception as exc:
             logger.debug("Schedule conflict check failed: %s", exc)
             return False
 

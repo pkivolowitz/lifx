@@ -588,8 +588,8 @@ def lerp_hsb(
         diff += (HSBK_MAX + 1)
     hue: int = int(hsbk1[0] + diff * blend) % (HSBK_MAX + 1)
 
-    sat: int = int(hsbk1[1] + (hsbk2[1] - hsbk1[1]) * blend)
-    bri: int = int(hsbk1[2] + (hsbk2[2] - hsbk1[2]) * blend)
+    sat: int = max(0, min(HSBK_MAX, int(hsbk1[1] + (hsbk2[1] - hsbk1[1]) * blend)))
+    bri: int = max(0, min(HSBK_MAX, int(hsbk1[2] + (hsbk2[2] - hsbk1[2]) * blend)))
 
     return (hue, sat, bri, hsbk1[3])
 

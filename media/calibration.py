@@ -25,6 +25,7 @@ __version__ = "1.0"
 
 import math
 import struct
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -193,7 +194,9 @@ class PulseDetector:
         self._window_samples: int = window_samples
         self._window_bytes: int = window_samples * BYTES_PER_SAMPLE
 
-        # Detection state.
+        # Detection state.  Protected by _lock since feed() and
+        # detections property may be called from different threads.
+        self._lock: threading.Lock = threading.Lock()
         self._detections: list[float] = []
         self._in_pulse: bool = False
         # Minimum silence between pulses to prevent double-triggering.
@@ -203,15 +206,19 @@ class PulseDetector:
     @property
     def detections(self) -> list[float]:
         """List of ``time.monotonic()`` timestamps for detected pulses."""
-        return list(self._detections)
+        with self._lock:
+            return list(self._detections)
 
     @property
     def detection_count(self) -> int:
         """Number of pulses detected so far."""
-        return len(self._detections)
+        with self._lock:
+            return len(self._detections)
 
     def feed(self, data: bytes) -> Optional[float]:
         """Feed raw PCM bytes and check for pulse detection.
+
+        Thread-safe — acquires the internal lock.
 
         Args:
             data: Raw 16-bit signed LE mono PCM bytes.
@@ -236,25 +243,27 @@ class PulseDetector:
             sum_sq += norm * norm
         rms: float = math.sqrt(sum_sq / n_samples)
 
-        self._samples_since_last += n_samples
+        with self._lock:
+            self._samples_since_last += n_samples
 
-        # State machine: silence → pulse transition.
-        if rms >= self._threshold:
-            if (not self._in_pulse
-                    and self._samples_since_last >= self._min_gap_samples):
-                # New pulse detected.
-                self._in_pulse = True
-                self._samples_since_last = 0
-                detect_time: float = time.monotonic()
-                self._detections.append(detect_time)
-                return detect_time
-        else:
-            self._in_pulse = False
+            # State machine: silence → pulse transition.
+            if rms >= self._threshold:
+                if (not self._in_pulse
+                        and self._samples_since_last >= self._min_gap_samples):
+                    # New pulse detected.
+                    self._in_pulse = True
+                    self._samples_since_last = 0
+                    detect_time: float = time.monotonic()
+                    self._detections.append(detect_time)
+                    return detect_time
+            else:
+                self._in_pulse = False
 
         return None
 
     def reset(self) -> None:
         """Clear all detection state."""
-        self._detections.clear()
-        self._in_pulse = False
-        self._samples_since_last = self._min_gap_samples
+        with self._lock:
+            self._detections.clear()
+            self._in_pulse = False
+            self._samples_since_last = self._min_gap_samples

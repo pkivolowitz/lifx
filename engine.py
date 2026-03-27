@@ -250,7 +250,7 @@ class Engine:
             # Notify the new effect of each emitter's zone count so it can
             # perform any one-time setup (e.g., pre-allocating buffers).
             for em in self.emitters:
-                if em.zone_count:
+                if em.zone_count is not None:
                     effect.on_start(em.zone_count)
 
         # Flush any stale pre-rendered frames from the pipeline,
@@ -335,7 +335,7 @@ class Engine:
         # transition from the render loop's non-zero duration.
         if fade_ms > 0:
             for em in self.emitters:
-                if em.zone_count:
+                if em.zone_count is not None:
                     if hasattr(em, 'is_matrix') and em.is_matrix:
                         off = [(0, 0, 0, KELVIN_DEFAULT)] * em.zone_count
                         em.send_tile_zones(off, duration_ms=0)

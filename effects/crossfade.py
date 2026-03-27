@@ -212,7 +212,7 @@ class Crossfade(Effect):
                 # Method A: HSB flat — all zones same blend, no stagger.
                 zone_blend: float = blend
                 hue: int = _lerp_hue(hue_from_u16, hue_to_u16_val, zone_blend)
-                bri: int = int(bri_from + (bri_to - bri_from) * zone_blend)
+                bri: int = max(0, min(HSBK_MAX, int(bri_from + (bri_to - bri_from) * zone_blend)))
                 colors.append((hue, sat_u16, bri, self.kelvin))
             else:
                 # Method B: Lab staggered — inner leads, outer trails.

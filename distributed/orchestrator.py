@@ -297,6 +297,9 @@ class Orchestrator:
             "udp_port_range", UDP_PORT_RANGE,
         )
         self._allocated_ports: set[int] = set()
+        # Tracks which port was allocated for each assignment so we can
+        # release ports when nodes go offline or assignments are cancelled.
+        self._assignment_ports: dict[str, int] = {}
 
         # Assignment counter for unique IDs.
         self._assignment_counter: int = 0
@@ -500,12 +503,16 @@ class Orchestrator:
             )
             return False
 
-        # Track the assignment.
+        # Track the assignment and its port allocation.
         with self._lock:
             if node_id in self._fleet:
                 self._fleet[node_id].assignments.append(
                     assignment.assignment_id,
                 )
+                if assignment.udp_port:
+                    self._assignment_ports[assignment.assignment_id] = (
+                        assignment.udp_port
+                    )
 
         what: str = (
             f"emitter:{assignment.emitter_type}"
@@ -546,11 +553,14 @@ class Orchestrator:
             )
             return False
 
-        # Remove from tracking.
+        # Remove from tracking and release any allocated port.
         with self._lock:
             node: Optional[_FleetNode] = self._fleet.get(node_id)
             if node and assignment_id in node.assignments:
                 node.assignments.remove(assignment_id)
+            port: int = self._assignment_ports.pop(assignment_id, 0)
+            if port:
+                self._allocated_ports.discard(port)
 
         logger.info(
             "Cancelled assignment '%s' on node '%s'",
@@ -690,7 +700,12 @@ class Orchestrator:
                 self._fleet[node_id].last_seen = time.monotonic()
 
                 if payload == STATUS_OFFLINE:
-                    # Clear assignments — node is gone.
+                    # Release ports allocated to the dead node's
+                    # assignments, then clear the assignment list.
+                    for aid in self._fleet[node_id].assignments:
+                        port = self._assignment_ports.pop(aid, 0)
+                        if port:
+                            self._allocated_ports.discard(port)
                     self._fleet[node_id].assignments.clear()
                     logger.warning("Node '%s' went offline", node_id)
                 else:

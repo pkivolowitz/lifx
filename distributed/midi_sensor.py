@@ -73,6 +73,16 @@ MQTT_QOS: int = 0
 # Progress reporting interval (events).
 PROGRESS_INTERVAL: int = 500
 
+# MQTT reconnection retry parameters.
+MQTT_CONNECT_RETRIES: int = 5
+"""Maximum connection attempts before giving up."""
+
+MQTT_RETRY_INITIAL: float = 1.0
+"""Initial retry delay in seconds."""
+
+MQTT_RETRY_MAX: float = 30.0
+"""Maximum retry delay (exponential backoff cap)."""
+
 
 # ---------------------------------------------------------------------------
 # MidiSensor
@@ -291,16 +301,26 @@ class MidiSensor:
             client_id=client_id,
         )
 
-        # Synchronous connect with timeout.
-        try:
-            self._client.connect(self._broker, self._port)
-            self._client.loop_start()
-            self._connected = True
-            logger.info("Connected to MQTT broker at %s:%d",
-                        self._broker, self._port)
-        except Exception as exc:
-            logger.error("MQTT connect failed: %s", exc)
-            self._connected = False
+        # Connect with exponential backoff retry.
+        delay: float = MQTT_RETRY_INITIAL
+        for attempt in range(1, MQTT_CONNECT_RETRIES + 1):
+            try:
+                self._client.connect(self._broker, self._port)
+                self._client.loop_start()
+                self._connected = True
+                logger.info("Connected to MQTT broker at %s:%d",
+                            self._broker, self._port)
+                return
+            except Exception as exc:
+                logger.warning(
+                    "MQTT connect attempt %d/%d failed: %s",
+                    attempt, MQTT_CONNECT_RETRIES, exc,
+                )
+                if attempt < MQTT_CONNECT_RETRIES:
+                    time.sleep(delay)
+                    delay = min(delay * 2, MQTT_RETRY_MAX)
+        logger.error("MQTT connect failed after %d attempts", MQTT_CONNECT_RETRIES)
+        self._connected = False
 
     def _disconnect_mqtt(self) -> None:
         """Disconnect from the MQTT broker."""

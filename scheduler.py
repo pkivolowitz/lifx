@@ -104,7 +104,9 @@ class GroupState:
     device IP in the group) and the name of the active schedule entry.
     """
 
-    procs: list[subprocess.Popen] = field(default_factory=list)
+    # IP → subprocess mapping.  Dict (not list) so that process-to-device
+    # identity survives IP list reordering or changes during operation.
+    procs: dict[str, subprocess.Popen] = field(default_factory=dict)
     current_entry_name: Optional[str] = None
 
 
@@ -321,7 +323,9 @@ def _resolve_entries(
             continue
 
         # Overnight entries: stop is before start → add a day to stop.
-        if stop <= start:
+        # Strict less-than: stop == start means a zero-duration entry
+        # (skip), not an overnight entry spanning 24 hours.
+        if stop < start:
             stop += timedelta(days=1)
 
         resolved.append((start, stop, spec))
@@ -352,18 +356,25 @@ def _find_active_entry(
     Returns:
         The matching spec dict, or ``None`` if no entry is active.
     """
-    utc_offset: timedelta = now.utcoffset()
     today: date = now.date()
     yesterday: date = today - timedelta(days=1)
 
+    # Compute UTC offset per date — DST transitions can change the
+    # offset between yesterday and today.
+    today_offset: timedelta = now.utcoffset()
+    # Build a datetime for yesterday in the same timezone to get
+    # yesterday's UTC offset (handles spring-forward / fall-back).
+    yesterday_dt: datetime = now - timedelta(days=1)
+    yesterday_offset: timedelta = yesterday_dt.utcoffset()
+
     # Resolve for today — handles entries starting today.
     today_resolved = _resolve_entries(
-        specs, lat, lon, today, utc_offset, group_filter=group_name,
+        specs, lat, lon, today, today_offset, group_filter=group_name,
     )
 
     # Resolve for yesterday — handles overnight entries from yesterday.
     yesterday_resolved = _resolve_entries(
-        specs, lat, lon, yesterday, utc_offset, group_filter=group_name,
+        specs, lat, lon, yesterday, yesterday_offset, group_filter=group_name,
     )
 
     # Check today's entries first (higher priority for same-day matches).
@@ -464,7 +475,7 @@ def _stop_group(state: GroupState) -> None:
     Args:
         state: The group's runtime state.
     """
-    for proc in state.procs:
+    for proc in state.procs.values():
         _stop_subprocess(proc)
     state.procs.clear()
     state.current_entry_name = None
@@ -499,7 +510,7 @@ def _start_group(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        state.procs.append(proc)
+        state.procs[ip] = proc
 
     state.current_entry_name = entry_name
 
@@ -523,15 +534,14 @@ def _restart_dead_procs(
     """
     entry_name: str = spec.get("name", "?")
 
-    for i, proc in enumerate(state.procs):
+    for ip, proc in list(state.procs.items()):
         if proc.poll() is not None:
-            ip: str = ips[i] if i < len(ips) else "?"
             logging.warning(
                 "Effect '%s' on %s exited (code %d), restarting",
                 entry_name, ip, proc.returncode,
             )
             cmd: list[str] = _build_command(spec, ip, main_script)
-            state.procs[i] = subprocess.Popen(
+            state.procs[ip] = subprocess.Popen(
                 cmd,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -1018,7 +1028,7 @@ def _main_loop(config: dict[str, Any]) -> None:
             elif active is not None and state.procs:
                 # Same entry still active — check for crashed subprocesses.
                 any_dead: bool = any(
-                    p.poll() is not None for p in state.procs
+                    p.poll() is not None for p in state.procs.values()
                 )
                 if any_dead:
                     _restart_dead_procs(state, active, ips, main_script)

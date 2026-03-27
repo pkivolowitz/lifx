@@ -1962,8 +1962,13 @@ def _find_active_entry(
 ) -> Optional[dict[str, Any]]:
     """Find the first schedule entry active for a group at time *now*.
 
+    When multiple entries overlap for the same group, config file order
+    determines priority — the first matching entry wins.  This is
+    deterministic and user-controllable: move higher-priority entries
+    earlier in the schedule list.
+
     Args:
-        specs:      Raw schedule entry dicts.
+        specs:      Raw schedule entry dicts (order = priority).
         lat:        Observer latitude in degrees.
         lon:        Observer longitude in degrees.
         now:        Current timezone-aware datetime.
@@ -3771,7 +3776,18 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self.config["schedule"] = specs
         self._save_config_field("schedule", specs)
 
+        # Clear any overrides that reference the deleted entry so
+        # the scheduler can resume managing those IPs rather than
+        # leaving stale overrides from a non-existent entry.
         name: str = removed.get("name", f"entry_{index}")
+        with self.device_manager._lock:
+            stale_ips: list[str] = [
+                ip for ip, entry in self.device_manager._overrides.items()
+                if entry == name
+            ]
+            for ip in stale_ips:
+                self.device_manager._overrides.pop(ip, None)
+
         logging.info("API: schedule entry deleted: '%s' (was index %d)", name, index)
         self._send_json(200, {"deleted": name, "former_index": index})
 

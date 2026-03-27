@@ -112,6 +112,12 @@ MIN_MONITOR_POLL_HZ: float = 0.5
 MAX_MONITOR_POLL_HZ: float = 20.0
 """Maximum polling rate for monitor mode."""
 
+MIN_ZOOM: int = 1
+"""Minimum simulator zoom factor."""
+
+MAX_ZOOM: int = 10
+"""Maximum simulator zoom factor."""
+
 # Replay subcommand defaults.
 DEFAULT_REPLAY_SPEED: float = 1.0
 """Replay speed multiplier.  1.0 = real-time, 0 = as fast as possible."""
@@ -367,7 +373,13 @@ def _load_group(config_path: str, group_name: str) -> list[str]:
         )
         sys.exit(1)
 
-    ips: list = groups[group_name]
+    ips = groups[group_name]
+    if not isinstance(ips, list):
+        _print(
+            f"ERROR: Group '{group_name}' has invalid format (expected list).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     if not ips:
         _print(f"ERROR: Group '{group_name}' is empty.", file=sys.stderr)
         sys.exit(1)
@@ -480,7 +492,13 @@ def _fetch_group_from_server(
         )
         sys.exit(1)
 
-    ips: list = groups[group_name]
+    ips = groups[group_name]
+    if not isinstance(ips, list):
+        _print(
+            f"ERROR: Group '{group_name}' has invalid format (expected list).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     if not ips:
         _print(
             f"ERROR: Group '{group_name}' is empty on server.",
@@ -1087,7 +1105,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     # --- Create simulator window ---------------------------------------------
     poly_map: list[bool] = _build_polychrome_map(dev)
     zpb: int = getattr(args, "zpb", 1)
-    zoom_val: int = getattr(args, "zoom", 1)
+    zoom_val: int = max(MIN_ZOOM, min(MAX_ZOOM, getattr(args, "zoom", 1)))
     sim = create_simulator(
         dev.zone_count or 1, f"Monitor: {dev.label or args.ip}",
         polychrome_map=poly_map, zones_per_bulb=zpb,
@@ -2043,7 +2061,7 @@ def _play_via_server(args: argparse.Namespace) -> None:
         set_lerp_method(lerp_method)
 
         # Create and start the simulator.
-        zoom_val: int = getattr(args, "zoom", 1)
+        zoom_val: int = max(MIN_ZOOM, min(MAX_ZOOM, getattr(args, "zoom", 1)))
         sim = create_simulator(
             zone_count, effect_name,
             polychrome_map=poly_map,
@@ -2457,7 +2475,7 @@ def cmd_play(args: argparse.Namespace) -> None:
     if getattr(args, "sim", False) or sim_only:
         poly_map: list[bool] = _build_polychrome_map(em)
         zpb: int = getattr(args, "zpb", 1)
-        zoom_val: int = getattr(args, "zoom", 1)
+        zoom_val: int = max(MIN_ZOOM, min(MAX_ZOOM, getattr(args, "zoom", 1)))
         sim = create_simulator(em.zone_count or 1, effect_name,
                                polychrome_map=poly_map,
                                zones_per_bulb=zpb,

@@ -1111,8 +1111,8 @@ class LifxDevice:
         for _attempt in range(retries):
             self._send(msg_type, payload, res=True)
             # Each attempt gets a fresh deadline so retries are genuine.
-            attempt_deadline = time.time() + timeout
-            while time.time() < attempt_deadline:
+            attempt_deadline = time.monotonic() + timeout
+            while time.monotonic() < attempt_deadline:
                 try:
                     data, (ip, _) = self.sock.recvfrom(MAX_UDP_PAYLOAD)
                     msg = _parse_message(data)
@@ -1192,8 +1192,8 @@ class LifxDevice:
         old_timeout: float = self.sock.gettimeout() or SOCKET_TIMEOUT
         try:
             self.sock.settimeout(SOCKET_TIMEOUT)
-            deadline: float = time.time() + SOCKET_TIMEOUT
-            while time.time() < deadline:
+            deadline: float = time.monotonic() + SOCKET_TIMEOUT
+            while time.monotonic() < deadline:
                 try:
                     data, _ = self.sock.recvfrom(MAX_UDP_PAYLOAD)
                     msg = _parse_message(data)
@@ -1310,9 +1310,9 @@ class LifxDevice:
         # Collect responses until we have all zones or time out.
         total_zones: Optional[int] = None
         zone_data: dict[int, tuple[int, int, int, int]] = {}
-        deadline: float = time.time() + SOCKET_TIMEOUT
+        deadline: float = time.monotonic() + SOCKET_TIMEOUT
 
-        while time.time() < deadline:
+        while time.monotonic() < deadline:
             try:
                 data, _ = self.sock.recvfrom(MAX_UDP_PAYLOAD)
             except socket.timeout:
@@ -2052,11 +2052,11 @@ def discover_devices(
         return []
 
     found: dict[str, tuple[str, bytes]] = {}  # mac_str -> (ip, mac_bytes)
-    deadline = time.time() + timeout
+    deadline = time.monotonic() + timeout
     next_send: float = 0  # Send immediately on first iteration
 
-    while time.time() < deadline:
-        now = time.time()
+    while time.monotonic() < deadline:
+        now = time.monotonic()
         # Re-broadcast periodically to catch devices that missed earlier packets
         if now >= next_send:
             try:

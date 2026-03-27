@@ -282,6 +282,7 @@ if _TK_AVAILABLE:
 
             self._queue: queue.Queue = queue.Queue()
             self._frame_times: list[float] = []
+            self._stopped: bool = False
 
             # --- Apply zoom to dimensions ------------------------------------
             z: int = self._zoom
@@ -407,7 +408,10 @@ if _TK_AVAILABLE:
             Args:
                 colors: List of HSBK tuples, one per zone.
             """
-            # Non-blocking put; queue is unbounded so this never raises.
+            # Non-blocking put; skip if mainloop already exited to
+            # prevent unbounded queue growth from lingering engine threads.
+            if self._stopped:
+                return
             self._queue.put(colors)
 
         def _poll_queue(self) -> None:
@@ -476,6 +480,7 @@ if _TK_AVAILABLE:
             Safe to call from any thread — uses ``root.after()`` to
             schedule the quit on the main thread.
             """
+            self._stopped = True
             try:
                 self._root.after(0, self._root.quit)
             except Exception:

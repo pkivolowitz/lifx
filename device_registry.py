@@ -99,6 +99,10 @@ class DeviceRegistry:
         self._devices: dict[str, dict[str, Any]] = {}   # MAC → entry
         self._label_to_mac: dict[str, str] = {}          # label → MAC
         self._lock: threading.Lock = threading.Lock()
+        # Serializes file I/O (load/save) to prevent concurrent
+        # read-modify-write races.  Separate from _lock so lookups
+        # don't block on disk I/O.
+        self._io_lock: threading.Lock = threading.Lock()
 
     # -- Loading -----------------------------------------------------------
 
@@ -129,59 +133,61 @@ class DeviceRegistry:
             )
             return False
 
-        with open(resolved, "r", encoding="utf-8") as fh:
-            raw: dict[str, Any] = json.load(fh)
+        # Serialize all file I/O to prevent concurrent load/save races.
+        with self._io_lock:
+            with open(resolved, "r", encoding="utf-8") as fh:
+                raw: dict[str, Any] = json.load(fh)
 
-        devices_raw: dict[str, Any] = raw.get("devices", {})
-        devices: dict[str, dict[str, Any]] = {}
-        label_to_mac: dict[str, str] = {}
+            devices_raw: dict[str, Any] = raw.get("devices", {})
+            devices: dict[str, dict[str, Any]] = {}
+            label_to_mac: dict[str, str] = {}
 
-        for mac_raw, entry in devices_raw.items():
-            mac: str = mac_raw.strip().lower()
+            for mac_raw, entry in devices_raw.items():
+                mac: str = mac_raw.strip().lower()
 
-            # Validate MAC format.
-            if not MAC_PATTERN.match(mac):
-                raise ValueError(
-                    f"Invalid MAC address in registry: {mac_raw!r}"
-                )
+                # Validate MAC format.
+                if not MAC_PATTERN.match(mac):
+                    raise ValueError(
+                        f"Invalid MAC address in registry: {mac_raw!r}"
+                    )
 
-            # Validate LIFX OUI.
-            if not mac.startswith(LIFX_OUI):
-                raise ValueError(
-                    f"MAC {mac} does not start with LIFX OUI ({LIFX_OUI})"
-                )
+                # Validate LIFX OUI.
+                if not mac.startswith(LIFX_OUI):
+                    raise ValueError(
+                        f"MAC {mac} does not start with LIFX OUI ({LIFX_OUI})"
+                    )
 
-            # Validate label.
-            label: str = entry.get("label", "").strip()
-            if not label:
-                raise ValueError(
-                    f"Device {mac} has no label in registry"
-                )
+                # Validate label.
+                label: str = entry.get("label", "").strip()
+                if not label:
+                    raise ValueError(
+                        f"Device {mac} has no label in registry"
+                    )
 
-            # Enforce LIFX firmware label byte limit.
-            label_bytes: int = len(label.encode("utf-8"))
-            if label_bytes > MAX_LABEL_BYTES:
-                raise ValueError(
-                    f"Label {label!r} for {mac} is {label_bytes} bytes "
-                    f"(max {MAX_LABEL_BYTES})"
-                )
+                # Enforce LIFX firmware label byte limit.
+                label_bytes: int = len(label.encode("utf-8"))
+                if label_bytes > MAX_LABEL_BYTES:
+                    raise ValueError(
+                        f"Label {label!r} for {mac} is {label_bytes} bytes "
+                        f"(max {MAX_LABEL_BYTES})"
+                    )
 
-            # Enforce label uniqueness.
-            label_lower: str = label.lower()
-            if label_lower in label_to_mac:
-                existing_mac: str = label_to_mac[label_lower]
-                raise ValueError(
-                    f"Duplicate label {label!r} for {mac} and "
-                    f"{existing_mac}"
-                )
+                # Enforce label uniqueness.
+                label_lower: str = label.lower()
+                if label_lower in label_to_mac:
+                    existing_mac: str = label_to_mac[label_lower]
+                    raise ValueError(
+                        f"Duplicate label {label!r} for {mac} and "
+                        f"{existing_mac}"
+                    )
 
-            devices[mac] = entry
-            devices[mac]["label"] = label  # normalized
-            label_to_mac[label_lower] = mac
+                devices[mac] = entry
+                devices[mac]["label"] = label  # normalized
+                label_to_mac[label_lower] = mac
 
-        with self._lock:
-            self._devices = devices
-            self._label_to_mac = label_to_mac
+            with self._lock:
+                self._devices = devices
+                self._label_to_mac = label_to_mac
 
         logger.info(
             "Loaded device registry: %d device(s) from %s",
@@ -317,21 +323,23 @@ class DeviceRegistry:
                 "No registry path — call load() first or pass a path"
             )
 
-        with self._lock:
-            data: dict[str, Any] = {
-                "_comment": (
-                    "MAC-based device identity.  Survives DHCP changes "
-                    "and git pulls.  Do not edit while server is running."
-                ),
-                "devices": dict(self._devices),
-            }
+        # Serialize all file I/O to prevent concurrent load/save races.
+        with self._io_lock:
+            with self._lock:
+                data: dict[str, Any] = {
+                    "_comment": (
+                        "MAC-based device identity.  Survives DHCP changes "
+                        "and git pulls.  Do not edit while server is running."
+                    ),
+                    "devices": dict(self._devices),
+                }
 
-        # Atomic write via temp file.
-        tmp: str = target + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=4, sort_keys=True)
-            fh.write("\n")
-        os.replace(tmp, target)
+            # Atomic write via temp file.
+            tmp: str = target + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=4, sort_keys=True)
+                fh.write("\n")
+            os.replace(tmp, target)
 
         logger.info("Saved device registry: %d device(s) to %s",
                      len(self._devices), target)

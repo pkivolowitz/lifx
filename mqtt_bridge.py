@@ -171,6 +171,9 @@ class MqttBridge:
         self._color_thread: Optional[threading.Thread] = None
 
         # Change-detection caches (JSON strings of last-published data).
+        # Protected by _cache_lock since publisher threads and
+        # _on_connect (which clears caches) can race.
+        self._cache_lock: threading.Lock = threading.Lock()
         self._last_states: dict[str, str] = {}
         self._last_devices: Optional[str] = None
 
@@ -269,6 +272,14 @@ class MqttBridge:
         """Disconnect from the broker and stop publisher threads."""
         self._stop_event.set()
 
+        # Join publisher threads BEFORE stopping the paho loop so
+        # in-flight publishes can complete rather than racing with
+        # loop_stop() tearing down the network layer.
+        if self._state_thread is not None:
+            self._state_thread.join(timeout=5.0)
+        if self._color_thread is not None:
+            self._color_thread.join(timeout=5.0)
+
         if self._client is not None:
             # Publish offline status before disconnecting.
             try:
@@ -282,11 +293,6 @@ class MqttBridge:
                 pass
             self._client.loop_stop()
             self._client.disconnect()
-
-        if self._state_thread is not None:
-            self._state_thread.join(timeout=5.0)
-        if self._color_thread is not None:
-            self._color_thread.join(timeout=5.0)
 
         logger.info("MQTT bridge stopped.")
 
@@ -327,8 +333,9 @@ class MqttBridge:
             )
 
             # Force a full state publish on reconnect by clearing caches.
-            self._last_states.clear()
-            self._last_devices = None
+            with self._cache_lock:
+                self._last_states.clear()
+                self._last_devices = None
         else:
             logger.error(
                 "MQTT connection refused: reason_code=%s", reason_code,
@@ -538,14 +545,15 @@ class MqttBridge:
         devices: list[dict[str, Any]] = self._dm.devices_as_list()
         payload: str = json.dumps(devices, separators=(",", ":"))
 
-        if payload != self._last_devices:
-            self._last_devices = payload
-            self._client.publish(
-                self._topic(TOPIC_DEVICES),
-                payload,
-                qos=QOS_AT_LEAST_ONCE,
-                retain=True,
-            )
+        with self._cache_lock:
+            if payload != self._last_devices:
+                self._last_devices = payload
+                self._client.publish(
+                    self._topic(TOPIC_DEVICES),
+                    payload,
+                    qos=QOS_AT_LEAST_ONCE,
+                    retain=True,
+                )
 
     def _publish_device_states(self) -> None:
         """Publish per-device state for any device whose state changed."""
@@ -565,14 +573,15 @@ class MqttBridge:
 
             payload: str = json.dumps(status, separators=(",", ":"))
 
-            if self._last_states.get(device_id) != payload:
-                self._last_states[device_id] = payload
-                self._client.publish(
-                    self._topic(TOPIC_DEVICE, device_id, TOPIC_STATE),
-                    payload,
-                    qos=QOS_AT_LEAST_ONCE,
-                    retain=True,
-                )
+            with self._cache_lock:
+                if self._last_states.get(device_id) != payload:
+                    self._last_states[device_id] = payload
+                    self._client.publish(
+                        self._topic(TOPIC_DEVICE, device_id, TOPIC_STATE),
+                        payload,
+                        qos=QOS_AT_LEAST_ONCE,
+                        retain=True,
+                    )
 
     # -- Color publishing ---------------------------------------------------
 

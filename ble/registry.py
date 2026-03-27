@@ -38,6 +38,7 @@ __version__ = "1.0"
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -99,6 +100,8 @@ class BleRegistry:
                 ``ble_pairing.json`` in the current directory.
         """
         self._path: Path = Path(path or DEFAULT_REGISTRY_PATH)
+        # Serializes file I/O to prevent concurrent load/save races.
+        self._io_lock: threading.Lock = threading.Lock()
         self._data: dict = self._load()
 
     def _load(self) -> dict:
@@ -120,16 +123,17 @@ class BleRegistry:
 
     def save(self) -> None:
         """Persist the registry to disk atomically."""
-        tmp_path: Path = self._path.with_suffix(".tmp")
-        try:
-            with open(tmp_path, "w") as f:
-                json.dump(self._data, f, indent=4)
-                f.write("\n")
-            tmp_path.replace(self._path)
-            logger.debug("BLE registry saved to %s", self._path)
-        except OSError as exc:
-            logger.error("Failed to save BLE registry: %s", exc)
-            raise
+        with self._io_lock:
+            tmp_path: Path = self._path.with_suffix(".tmp")
+            try:
+                with open(tmp_path, "w") as f:
+                    json.dump(self._data, f, indent=4)
+                    f.write("\n")
+                tmp_path.replace(self._path)
+                logger.debug("BLE registry saved to %s", self._path)
+            except OSError as exc:
+                logger.error("Failed to save BLE registry: %s", exc)
+                raise
 
     # --- Controller keys ---
 
