@@ -304,8 +304,6 @@ body {
     -webkit-backdrop-filter: blur(12px);
     text-align: center;
     margin-bottom: 24px;
-    /* Hidden until data arrives. */
-    display: none;
 }
 
 .locks-title {
@@ -645,10 +643,9 @@ body {
     function renderLocks(locks) {
         /* locks is an array: [{abbr: "FD", name: "Front Door", locked: true}, ...] */
         if (!locks || locks.length === 0) {
-            locksCard.style.display = "none";
+            locksRow.innerHTML = "";
             return;
         }
-        locksCard.style.display = "";
         locksRow.innerHTML = "";
 
         locks.forEach(function (lock) {
