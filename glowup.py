@@ -2439,6 +2439,20 @@ def cmd_play(args: argparse.Namespace) -> None:
         zpb_val: int = getattr(args, "zpb", 1)
         effect_params["zones_per_bulb"] = zpb_val
 
+    # --- Auto-inject matrix width/height for 2D effects -------------------------
+    # Matrix effects (plasma2d, spectrum2d, ripple2d, matrix_rain) render a
+    # width×height pixel grid.  When the user doesn't specify --width/--height,
+    # the defaults (78×22 for terminal viewers) produce far more pixels than
+    # a physical matrix device has (e.g., Luna is 7×5 = 35).  Auto-set them
+    # from the emitter's tile geometry so the effect matches the hardware.
+    mw: Optional[int] = getattr(em, "matrix_width", None)
+    mh: Optional[int] = getattr(em, "matrix_height", None)
+    if mw and mh:
+        if "width" in param_defs and "width" not in effect_params:
+            effect_params["width"] = mw
+        if "height" in param_defs and "height" not in effect_params:
+            effect_params["height"] = mh
+
     # --- Power on (or off) before sending colors --------------------------------
     # Effects can set ``wants_power_on = False`` (e.g., the "off" effect)
     # to power the device off at startup instead of on, preventing a
