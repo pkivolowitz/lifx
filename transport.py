@@ -193,7 +193,6 @@ MULTIZONE_PRODUCTS: set[int] = {
     31,             # LIFX Z
     32,             # LIFX Z
     38,             # LIFX Beam
-    125,            # LIFX Neon
     117,            # LIFX Z US
     118,            # LIFX Z Intl
     119,            # LIFX Beam US
@@ -214,7 +213,6 @@ MULTIZONE_PRODUCTS: set[int] = {
 
 #: Product IDs for Neon-class strips (firmware needs slow FPS + long transitions).
 NEON_PRODUCTS: set[int] = {
-    125,            # LIFX Neon
     141,            # LIFX Neon US
     142,            # LIFX Neon Intl
     161,            # LIFX Outdoor Neon US
@@ -289,7 +287,7 @@ PRODUCT_MAP: dict[int, str] = {
     113: "Mini WW US", 114: "Mini WW Intl", 115: "Mini White US",
     116: "Mini White Intl", 117: "GU10", 118: "GU10",
     119: "Color A19", 120: "Color BR30",
-    123: "String Light", 124: "String Light", 125: "Neon",
+    123: "String Light", 124: "String Light", 125: "White to Warm US",
     141: "Neon US", 142: "Neon Intl",
     143: "String Light US", 144: "String Light Intl",
     161: "Outdoor Neon US", 162: "Outdoor Neon Intl",

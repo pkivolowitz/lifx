@@ -53,8 +53,13 @@ logger: logging.Logger = logging.getLogger("glowup.ble.sensor")
 # MQTT topic prefix.
 MQTT_PREFIX: str = "glowup/ble"
 
-# Default MQTT broker (Pi — same as GlowUp server).
-DEFAULT_BROKER: str = "10.0.0.48"
+# Default MQTT broker — pulled from network_config (which reads
+# ~/.glowup/network.json or the GLOWUP_NETWORK env var).
+try:
+    from network_config import net as _net
+    DEFAULT_BROKER: str = _net.broker
+except Exception:
+    DEFAULT_BROKER: str = "localhost"
 
 # Default MQTT port.
 DEFAULT_MQTT_PORT: int = 1883

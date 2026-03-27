@@ -139,7 +139,7 @@ def test_is_multizone_true():
 
 def test_is_multizone_false():
     """is_multizone returns False for non-multizone product IDs."""
-    non_multizone = [1, 10, 27, 50, 123, 124, 125, 163, 164, 999]
+    non_multizone = [1, 10, 27, 50, 123, 124, 163, 164, 999]
     for pid in non_multizone:
         dev = _make_device(pid)
         assert dev.is_multizone is False, (

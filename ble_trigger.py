@@ -115,11 +115,18 @@ class BleTriggerManager:
         self,
         config: dict[str, Any],
         device_manager: Any,
-        broker: str = "10.0.0.48",
+        broker: str = "",
         port: int = 1883,
     ) -> None:
         self._config: dict[str, Any] = config
         self._dm: Any = device_manager
+        # Resolve broker: explicit arg > network_config > localhost.
+        if not broker:
+            try:
+                from network_config import net
+                broker = net.broker
+            except Exception:
+                broker = "localhost"
         self._broker: str = broker
         self._port: int = port
         self._client: Any = None

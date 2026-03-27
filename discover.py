@@ -315,7 +315,7 @@ PRODUCT_MAP: dict[int, str] = {
 
 #: Product IDs for multizone (1D strip) devices.
 MULTIZONE_PRODUCTS: set[int] = {
-    31, 32, 38, 117, 118, 119, 120, 125, 141, 142, 143, 144,
+    31, 32, 38, 117, 118, 119, 120, 141, 142, 143, 144,
     161, 162, 203, 204, 205, 206, 213, 214,
 }
 
