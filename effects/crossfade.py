@@ -178,14 +178,16 @@ class Crossfade(Effect):
         color_index: int = slot_index % TRANSITIONS_PER_METHOD
 
         # Announce method changes via macOS text-to-speech (non-blocking).
+        # Suppressed during unit tests to avoid garbled audio.
         if method != self._last_method:
             self._last_method = method
-            label: str = METHOD_LABELS[method]
-            subprocess.Popen(
-                ["say", label],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            if "unittest" not in sys.modules:
+                label: str = METHOD_LABELS[method]
+                subprocess.Popen(
+                    ["say", label],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
 
         # Source and destination indices.
         next_color_index: int = (color_index + 1) % len(TEST_HUES)

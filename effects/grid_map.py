@@ -148,13 +148,16 @@ class GridMap(Effect):
     def _speak(self, text: str) -> None:
         """Speak text via macOS ``say`` command (non-blocking).
 
-        Suppressed when hold time is below the speech threshold or
-        on non-macOS platforms.
+        Suppressed when hold time is below the speech threshold,
+        on non-macOS platforms, or during unit tests.
 
         Args:
             text: Words to speak aloud.
         """
         if not self._speak_enabled:
+            return
+        # Suppress speech during unit tests to avoid garbled audio.
+        if "unittest" in sys.modules:
             return
         try:
             subprocess.Popen(
