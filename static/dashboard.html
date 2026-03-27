@@ -400,6 +400,18 @@
   .btn-power:hover { background: var(--accent); color: #fff; }
   .btn-power.is-on { background: var(--green); color: #000; }
   .btn-power.is-off { background: var(--border); color: var(--dim); }
+  /* Reintrospect button — subtle, only on multizone/matrix devices. */
+  .btn-reintro {
+    background: var(--border);
+    color: var(--dim);
+    border: none;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .btn-reintro:hover { background: var(--accent); color: #fff; }
   .time-hint {
     font-size: 11px;
     color: var(--dim);
@@ -928,6 +940,9 @@ async function refresh() {
           : ((d.zones || 1) + ' zones');
         const powerOn = d.power !== false;
         const powerBtn = `<button class="btn-power ${powerOn ? 'is-on' : 'is-off'}" onclick="togglePower('${esc(d.ip).replace(/'/g, "\\'")}', ${powerOn})">${powerOn ? 'ON' : 'OFF'}</button>`;
+        const reintroBtn = (d.is_multizone || d.is_matrix)
+          ? `<button class="btn-reintro" onclick="reintrospect('${esc(d.ip).replace(/'/g, "\\'")}')" title="Re-query zone count">Recount</button>`
+          : '';
         return `
           <div class="device-row">
             <div>
@@ -936,6 +951,7 @@ async function refresh() {
               <div class="device-meta">${esc(d.product || '')} &middot; ${zoneMeta}</div>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
+              ${reintroBtn}
               ${powerBtn}
               ${badge}
             </div>
@@ -1072,6 +1088,27 @@ async function togglePower(deviceId, currentlyOn) {
     refresh();
   } catch (e) {
     console.error('Power toggle request failed:', e);
+  }
+}
+
+// ---- Reintrospect (re-query zone count) ----
+
+async function reintrospect(deviceId) {
+  try {
+    const resp = await fetch(BASE + '/api/devices/' + encodeURIComponent(deviceId) + '/reintrospect', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN },
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      console.error('Reintrospect failed:', err.error || resp.status);
+      return;
+    }
+    const result = await resp.json();
+    console.log('Reintrospect:', result);
+    refresh();
+  } catch (e) {
+    console.error('Reintrospect request failed:', e);
   }
 }
 
