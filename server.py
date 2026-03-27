@@ -288,6 +288,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_home_lights", requires_auth=False),
     _Route("GET", ("api", "home", "locks"),
            "_handle_get_home_locks", requires_auth=False),
+    _Route("GET", ("api", "home", "mode"),
+           "_handle_get_home_mode", requires_auth=False),
     _Route("GET", ("photos", "{filename}"),
            "_handle_get_photo", requires_auth=False),
 
@@ -5354,6 +5356,64 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 "locked": lock_state.get(abbr),
             })
         self._send_json(200, {"locks": locks})
+
+    def _handle_get_home_mode(self) -> None:
+        """GET /api/home/mode — display mode for the /home dashboard.
+
+        Returns ``{"dark": true}`` when the room lights are off and
+        it is nighttime (between sunset and sunrise), indicating
+        the dashboard should switch to a dark, low-brightness theme.
+
+        Configuration in server.json::
+
+            "home_display": {
+                "location": "Living Room",
+                "room_lights": ["Living Room"]
+            }
+
+        ``room_lights`` lists group names.  If ALL are powered off
+        and the current time is between sunset and sunrise, dark
+        mode is activated.
+        """
+        display_cfg: dict[str, Any] = self.config.get("home_display", {})
+        room_groups: list[str] = display_cfg.get("room_lights", [])
+
+        # --- Check if it's night (between sunset and sunrise). ---
+        is_night: bool = False
+        loc: dict[str, Any] = self.config.get("location", {})
+        lat: float = loc.get("latitude", 0.0)
+        lon: float = loc.get("longitude", 0.0)
+        if lat or lon:
+            now: datetime = datetime.now(timezone.utc).astimezone()
+            utc_offset: timedelta = now.utcoffset()
+            today: date = now.date()
+            sun: SunTimes = sun_times(lat, lon, today, utc_offset)
+            # Night = before sunrise or after sunset.
+            if sun.sunrise and sun.sunset:
+                now_time = now.time()
+                is_night = now_time < sun.sunrise or now_time >= sun.sunset
+
+        # --- Check if room lights are off. ---
+        lights_off: bool = True
+        if room_groups:
+            devices: list[dict[str, Any]] = (
+                self.device_manager.devices_as_list()
+            )
+            for d in devices:
+                if not d.get("is_group"):
+                    continue
+                label: str = d.get("label", "")
+                if label in room_groups and d.get("power"):
+                    lights_off = False
+                    break
+
+        dark: bool = is_night and lights_off
+        self._send_json(200, {
+            "dark": dark,
+            "is_night": is_night,
+            "lights_off": lights_off,
+            "location": display_cfg.get("location", ""),
+        })
 
     def _handle_get_photo(self, filename: str) -> None:
         """GET /photos/{filename} — serve a photo from static/photos/.

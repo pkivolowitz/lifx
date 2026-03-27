@@ -52,6 +52,34 @@
 }
 
 /* ------------------------------------------------------------------ */
+/* Dark mode — activated when room lights are off at night.           */
+/* ------------------------------------------------------------------ */
+body.dark-mode {
+    --bg-from:       #0a0a0c;
+    --bg-to:         #12111a;
+    --clock-color:   rgba(255, 255, 255, 0.6);
+    --date-color:    rgba(255, 255, 255, 0.25);
+    --card-bg:       rgba(255, 255, 255, 0.04);
+    --card-border:   rgba(255, 255, 255, 0.08);
+    --card-shadow:   none;
+    --temp-color:    #e07840;
+    --humid-color:   #4aa8d4;
+    --motion-on:     #4dcc80;
+    --motion-off:    rgba(255, 255, 255, 0.15);
+    --label-color:   rgba(255, 255, 255, 0.3);
+    --text-color:    rgba(255, 255, 255, 0.5);
+    --stale-color:   #e55;
+    --photo-opacity: 0.05;
+    --lock-locked:   #4dcc80;
+    --lock-unlocked: #e55;
+    --lock-unknown:  rgba(255, 255, 255, 0.15);
+}
+body.dark-mode .sensor-card,
+body.dark-mode .locks-card {
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* ------------------------------------------------------------------ */
 /* Reset & base                                                       */
 /* ------------------------------------------------------------------ */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -312,11 +340,12 @@ body {
 }
 
 .locks-title {
-    font-size: clamp(1rem, 2vw, 1.4rem);
+    /* Match .sensor-location styling (e.g., "Living Room"). */
+    font-size: clamp(1.4rem, 3vw, 2.2rem);
     font-weight: 600;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.10em;
     text-transform: uppercase;
-    color: var(--label-color);
+    color: var(--text-color);
     margin-bottom: 16px;
 }
 
@@ -493,6 +522,23 @@ body {
 
     updateClock();
     setInterval(updateClock, 1000);
+
+    /* -------------------------------------------------------------- */
+    /* Dark mode                                                      */
+    /* -------------------------------------------------------------- */
+
+    function pollMode() {
+        fetch("/api/home/mode")
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.error) return;
+                document.body.classList.toggle("dark-mode", !!data.dark);
+            })
+            .catch(function () { /* leave as-is */ });
+    }
+
+    pollMode();
+    setInterval(pollMode, SENSOR_POLL_MS);
 
     /* -------------------------------------------------------------- */
     /* Sensor cards                                                   */
