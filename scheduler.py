@@ -45,6 +45,12 @@ try:
 except ImportError:
     _HAS_RESOLUTION = False
 
+try:
+    from state_store import StateStore as _StateStore
+    _HAS_STATE_STORE: bool = True
+except ImportError:
+    _HAS_STATE_STORE = False
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -469,16 +475,26 @@ def _stop_subprocess(proc: subprocess.Popen) -> None:
         proc.wait()
 
 
-def _stop_group(state: GroupState) -> None:
+def _stop_group(
+    state: GroupState,
+    store: Optional["_StateStore"] = None,
+) -> None:
     """Stop all subprocesses for a device group.
 
     Args:
         state: The group's runtime state.
+        store: Optional state store — records devices as idle when provided.
     """
+    # Capture IPs before clearing procs so the state store update has them.
+    ips: list[str] = list(state.procs.keys())
     for proc in state.procs.values():
         _stop_subprocess(proc)
     state.procs.clear()
     state.current_entry_name = None
+
+    if store is not None:
+        for ip in ips:
+            store.upsert(ip=ip, power=False, effect=None, source="scheduler")
 
 
 def _start_group(
@@ -486,6 +502,7 @@ def _start_group(
     spec: dict[str, Any],
     ips: list[str],
     main_script: str,
+    store: Optional["_StateStore"] = None,
 ) -> None:
     """Start effect player subprocesses for all devices in a group.
 
@@ -496,8 +513,10 @@ def _start_group(
         spec:        The schedule entry dict to start.
         ips:         List of device IPs/hostnames in the group.
         main_script: Absolute path to ``glowup.py``.
+        store:       Optional state store — records ownership when provided.
     """
     entry_name: str = spec.get("name", "?")
+    effect_name: str = spec.get("effect", "")
 
     for ip in ips:
         cmd: list[str] = _build_command(spec, ip, main_script)
@@ -511,6 +530,14 @@ def _start_group(
             stderr=subprocess.DEVNULL,
         )
         state.procs[ip] = proc
+        if store is not None:
+            store.upsert(
+                ip=ip,
+                power=True,
+                effect=effect_name,
+                source="scheduler",
+                entry=entry_name,
+            )
 
     state.current_entry_name = entry_name
 
@@ -937,6 +964,20 @@ def _main_loop(config: dict[str, Any]) -> None:
     raw_groups: dict[str, list[str]] = _get_groups(config)
     specs: list[dict[str, Any]] = config["schedule"]
 
+    # Optional state store — records which effect is running on each device
+    # so the server dashboard can show scheduler-owned devices accurately.
+    # Path from config key 'state_db'; defaults to state.db alongside config.
+    store: Optional["_StateStore"] = None
+    if _HAS_STATE_STORE:
+        default_db: str = os.path.join(
+            os.path.dirname(os.path.abspath(
+                config.get("_config_path", "schedule.json")
+            )),
+            "state.db",
+        )
+        db_path: str = config.get("state_db", default_db)
+        store = _StateStore.open(db_path)
+
     # Resolve labels/MACs to IPs.  If resolution modules aren't
     # available, identifiers are assumed to be raw IPs (backward compat).
     groups, unresolved = _resolve_groups(raw_groups)
@@ -1014,10 +1055,10 @@ def _main_loop(config: dict[str, Any]) -> None:
                         "[%s] Stopping '%s'",
                         group_name, state.current_entry_name,
                     )
-                    _stop_group(state)
+                    _stop_group(state, store)
 
                 if active is not None:
-                    _start_group(state, active, ips, main_script)
+                    _start_group(state, active, ips, main_script, store)
                 else:
                     logging.info(
                         "[%s] No active schedule entry — lights off",
@@ -1045,7 +1086,7 @@ def _main_loop(config: dict[str, Any]) -> None:
                 "Shutting down — stopping group '%s' ('%s')",
                 group_name, state.current_entry_name,
             )
-            _stop_group(state)
+            _stop_group(state, store)
 
     logging.info("Scheduler stopped")
 
@@ -1093,6 +1134,9 @@ def main() -> None:
 
     try:
         config: dict[str, Any] = _load_config(args.config)
+        # Inject the config path so _main_loop can derive the default
+        # state.db path without needing a separate parameter.
+        config["_config_path"] = os.path.abspath(args.config)
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
         logging.error("Configuration error: %s", exc)
         sys.exit(1)

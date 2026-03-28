@@ -125,6 +125,15 @@ except ImportError:
     DiagnosticsLogger = None  # type: ignore[assignment,misc]
     _HAS_DIAGNOSTICS = False
 
+# SQLite state store — records which brain owns each bulb and why.
+# Degrades gracefully if the module is missing or the DB is unwritable.
+try:
+    from state_store import StateStore
+    _HAS_STATE_STORE: bool = True
+except ImportError:
+    StateStore = None  # type: ignore[assignment,misc]
+    _HAS_STATE_STORE = False
+
 # ARP-based bulb discovery and keepalive daemon.
 from bulb_keepalive import BulbKeepAlive
 
@@ -327,6 +336,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_diag_now_playing"),
     _Route("GET", ("api", "diagnostics", "history"),
            "_handle_get_diag_history"),
+    _Route("GET", ("api", "state"),
+           "_handle_get_state"),
     _Route("GET", ("api", "discovered_bulbs"),
            "_handle_get_discovered_bulbs"),
     _Route("GET", ("api", "registry"),
@@ -628,6 +639,14 @@ class DeviceManager:
             self._diag = DiagnosticsLogger.from_env()
             if self._diag is not None:
                 self._diag.close_stale_records()
+        # Optional state store — shared with scheduler.py via SQLite WAL.
+        # Records which brain (server vs scheduler) owns each bulb and why,
+        # so the dashboard is accurate even when the scheduler is running.
+        self._state: Optional[Any] = None
+        if _HAS_STATE_STORE:
+            db_path: str = os.path.join(config_dir, "state.db") \
+                if config_dir else "state.db"
+            self._state = StateStore.open(db_path)
 
     def query_power_state(self, ip: str) -> None:
         """Query a single device's power state and cache the result.
@@ -949,6 +968,7 @@ class DeviceManager:
         bindings: Optional[dict[str, Any]] = None,
         signal_bus: Optional[SignalBus] = None,
         source: Optional[str] = None,
+        entry: Optional[str] = None,
     ) -> dict[str, Any]:
         """Start an effect on a device.
 
@@ -964,6 +984,9 @@ class DeviceManager:
                          reading media signals during rendering.
             source:      Optional client name that started the effect
                          (e.g. "Conway", "Perry's iPhone").
+            entry:       Optional schedule entry name (set by the
+                         internal scheduler so the state store records
+                         which entry is driving this device).
 
         Returns:
             A status dict for the device.
@@ -1019,6 +1042,29 @@ class DeviceManager:
         result: dict[str, Any] = ctrl.get_status()
         result["overridden"] = self.is_overridden(ip)
         result["source"] = source
+        if self._state is not None:
+            src: str = source or "server"
+            # Groups: write a row per member IP so the dashboard shows
+            # individual bulbs, not a virtual "group:Name" pseudo-IP.
+            if em is not None and isinstance(em, VirtualMultizoneEmitter):
+                for member in em.get_emitter_list():
+                    m_label: Optional[str] = (
+                        member.get_info().get("label")
+                    )
+                    self._state.upsert(
+                        ip=member.emitter_id, label=m_label,
+                        power=True, effect=effect_name,
+                        source=src, entry=entry,
+                    )
+            else:
+                label: Optional[str] = (
+                    em.get_info().get("label") if em else None
+                )
+                self._state.upsert(
+                    ip=ip, label=label,
+                    power=True, effect=effect_name,
+                    source=src, entry=entry,
+                )
         return result
 
     def stop(self, ip: str) -> dict[str, Any]:
@@ -1050,6 +1096,28 @@ class DeviceManager:
         self._play_sources.pop(ip, None)
         if self._diag is not None:
             self._diag.log_stop(ip, stop_reason="user")
+        if self._state is not None:
+            # Groups: clear each member IP individually (mirrors play).
+            if em_stop is not None and isinstance(
+                em_stop, VirtualMultizoneEmitter,
+            ):
+                for member in em_stop.get_emitter_list():
+                    m_label: Optional[str] = (
+                        member.get_info().get("label")
+                    )
+                    self._state.upsert(
+                        ip=member.emitter_id, label=m_label,
+                        power=False, effect=None, source="server",
+                    )
+            else:
+                stop_label: Optional[str] = (
+                    em_stop.get_info().get("label")
+                    if em_stop else None
+                )
+                self._state.upsert(
+                    ip=ip, label=stop_label,
+                    power=False, effect=None, source="server",
+                )
         result: dict[str, Any] = ctrl.get_status()
         result["overridden"] = self.is_overridden(ip)
         return result
@@ -2259,6 +2327,7 @@ class SchedulerThread(threading.Thread):
                                     bindings=sched_bindings,
                                     signal_bus=sched_bus,
                                     source="scheduler",
+                                    entry=active_name,
                                 )
                             except (KeyError, ValueError, Exception) as exc:
                                 logging.warning(
@@ -2308,6 +2377,7 @@ class SchedulerThread(threading.Thread):
                                     bindings=restart_bindings,
                                     signal_bus=restart_bus,
                                     source="scheduler",
+                                    entry=active_name,
                                 )
                             except Exception as exc:
                                 logging.warning(
@@ -4561,6 +4631,19 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         except Exception as exc:
             logging.warning("Diagnostics query failed: %s", exc)
             self._send_json(200, [])
+
+    def _handle_get_state(self) -> None:
+        """GET /api/state — current ownership state of all known devices.
+
+        Returns records written by both server.py and scheduler.py, showing
+        which brain owns each device, what effect is running, and why.
+        Falls back to an empty list if the state store is unavailable.
+        """
+        store = self.device_manager._state
+        if store is None:
+            self._send_json(200, [])
+            return
+        self._send_json(200, store.get_all())
 
     def _handle_get_discovered_bulbs(self) -> None:
         """GET /api/discovered_bulbs — bulbs found via ARP keepalive.

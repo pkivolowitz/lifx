@@ -695,15 +695,16 @@ async function refresh() {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
-    const [devices, schedule, discovered, configGroups, automationsResp] = await Promise.all([
+    const [devices, schedule, discovered, configGroups, automationsResp, stateResp] = await Promise.all([
       api('/api/devices'),
       api('/api/schedule'),
       api('/api/discovered_bulbs'),
       api('/api/groups'),
       api('/api/automations'),
+      api('/api/state'),
     ]);
 
-    const results = [devices, schedule, discovered, configGroups, automationsResp];
+    const results = [devices, schedule, discovered, configGroups, automationsResp, stateResp];
 
     // Any 401 → back to login.
     if (results.some(r => r && r._authFailed)) {
@@ -728,6 +729,12 @@ async function refresh() {
 
     // Ensure normal poll rate after success.
     startPolling(POLL_INTERVAL_MS);
+
+    // State store: IP → {source, entry, effect, ...} for enriching
+    // the "Now Playing" section with schedule entry names.
+    const stateByIp = {};
+    const stateRows = Array.isArray(stateResp) ? stateResp : [];
+    stateRows.forEach(s => { stateByIp[s.ip] = s; });
 
     // Split devices into physical and groups.
     const devList = devices.devices || [];
@@ -789,6 +796,12 @@ async function refresh() {
       const viaBadge = d.group_effect && !d.current_effect
         ? ` <span class="badge badge-in-group">via ${esc(d.group_name)}</span>`
         : '';
+      // Schedule entry name from state store — shows which schedule
+      // entry is driving this device when source is "scheduler".
+      const st = stateByIp[d.ip];
+      const entryBadge = (st && st.entry)
+        ? ` <span class="badge badge-disabled">${esc(st.entry)}</span>`
+        : '';
       const zoneMeta = d.is_matrix
         ? (d.width + '\u00d7' + d.height + ' matrix')
         : ((d.zones || 1) + ' zones');
@@ -800,7 +813,7 @@ async function refresh() {
             <div class="device-meta">${esc(d.product || '')} &middot; ${zoneMeta}</div>
           </div>
           <div style="text-align:right;">
-            <span class="badge badge-playing">LIVE</span>${srcBadge}${viaBadge}
+            <span class="badge badge-playing">LIVE</span>${srcBadge}${entryBadge}${viaBadge}
           </div>
         </div>
       `;
@@ -811,6 +824,12 @@ async function refresh() {
       const srcBadge = g.source
         ? ` <span class="badge badge-overridden">${esc(g.source)}</span>`
         : '';
+      // Look up entry name from state store via any member IP.
+      const mIps = g.member_ips || [];
+      const mState = mIps.map(ip => stateByIp[ip]).find(s => s && s.entry);
+      const entryBadge = mState
+        ? ` <span class="badge badge-disabled">${esc(mState.entry)}</span>`
+        : '';
       return `
         <div class="device-row">
           <div>
@@ -819,7 +838,7 @@ async function refresh() {
             <div class="device-meta">${g.zones || 0} zones</div>
           </div>
           <div style="text-align:right;">
-            <span class="badge badge-playing">LIVE</span>${srcBadge}
+            <span class="badge badge-playing">LIVE</span>${srcBadge}${entryBadge}
           </div>
         </div>
       `;

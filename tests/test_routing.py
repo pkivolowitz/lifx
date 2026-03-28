@@ -312,8 +312,8 @@ class TestRouteCount(unittest.TestCase):
         """GET routes should match the expected count."""
         get_routes: list[_Route] = [r for r in _ROUTES if r.method == "GET"]
         self.assertEqual(
-            len(get_routes), 29,
-            f"Expected 29 GET routes, got {len(get_routes)}",
+            len(get_routes), 30,
+            f"Expected 30 GET routes, got {len(get_routes)}",
         )
 
     def test_post_route_count(self) -> None:
