@@ -1,0 +1,30 @@
+# Zigbee2MQTT configuration for GlowUp.
+#
+# Install at: /opt/zigbee2mqtt/data/configuration.yaml
+#
+# IMPORTANT: The SONOFF Zigbee 3.0 USB Dongle Plus with EFR32MG24 chip
+# uses the "ember" adapter, NOT "zstack" (which is for CC2652-based dongles).
+# Wrong adapter = silent failure.
+#
+# After first run, Zigbee2MQTT generates a network key.  Do NOT share or
+# commit the real configuration.yaml — it contains the Zigbee network key.
+
+homeassistant: false
+permit_join: false
+
+mqtt:
+  base_topic: zigbee2mqtt
+  server: mqtt://localhost:1883
+
+serial:
+  # Stable symlink created by udev rule (99-zigbee-dongle.rules).
+  port: /dev/ttyZigbee
+  adapter: ember
+
+frontend:
+  port: 8099
+
+advanced:
+  log_level: info
+  # GENERATE on first run — Zigbee2MQTT creates a random key.
+  network_key: GENERATE

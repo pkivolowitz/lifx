@@ -45,7 +45,15 @@ logger: logging.Logger = logging.getLogger("glowup.automation")
 # Constants
 # ---------------------------------------------------------------------------
 
-# MQTT topic prefix matching ble/sensor.py.
+# MQTT topic prefixes per sensor transport.  Automation sensor.type
+# selects which prefix to subscribe to.
+TRANSPORT_PREFIXES: dict[str, str] = {
+    "ble": "glowup/ble",
+    "zigbee": "glowup/zigbee",
+    "vivint": "glowup/vivint",
+}
+
+# Legacy prefix for backward compatibility.
 MQTT_PREFIX: str = "glowup/ble"
 
 # Minimum seconds between repeated trigger actions to avoid hammering
@@ -71,8 +79,11 @@ _CONDITION_OPS: dict[str, Callable] = {
 }
 
 # Valid sensor characteristics (MQTT subtopics).
+# Includes BLE and Zigbee device properties.
 VALID_CHARACTERISTICS: frozenset[str] = frozenset({
-    "motion", "temperature", "humidity",
+    "motion", "temperature", "humidity",       # BLE (existing)
+    "lock_state", "contact", "battery",        # Zigbee locks/contacts
+    "occupancy", "illuminance",                # Zigbee motion/light sensors
 })
 
 # Valid schedule-conflict policies.
@@ -88,11 +99,12 @@ _GROUP_PREFIX: str = "group:"
 # Sensor data store (carried over from ble_trigger.py)
 # ---------------------------------------------------------------------------
 
-class BleSensorData:
-    """Thread-safe store for the latest BLE sensor readings.
+class SensorData:
+    """Thread-safe store for the latest sensor readings (any transport).
 
     Available to REST endpoints for querying current values regardless
-    of whether any automations are configured.
+    of whether any automations are configured.  Holds data from BLE,
+    Zigbee, and Vivint sensors under a unified interface.
     """
 
     def __init__(self) -> None:
@@ -137,7 +149,10 @@ class BleSensorData:
 
 
 # Singleton sensor data store — imported by server REST handlers.
-sensor_data: BleSensorData = BleSensorData()
+sensor_data: SensorData = SensorData()
+
+# Backward-compatible alias for code that imports BleSensorData by name.
+BleSensorData = SensorData
 
 
 # ---------------------------------------------------------------------------
@@ -541,35 +556,53 @@ class AutomationManager:
     def _subscribe_all(self, client: Any) -> None:
         """Subscribe to MQTT topics for all configured automations.
 
+        Subscribes per-transport: each automation's sensor.type determines
+        the MQTT prefix (ble, zigbee, vivint).
+
         Args:
             client: The paho MQTT client.
         """
-        # Collect unique (label, characteristic) pairs.
-        seen: set[tuple[str, str]] = set()
+        # Collect unique (transport, label, characteristic) triples.
+        seen: set[tuple[str, str, str]] = set()
         for auto in self.automations:
             sensor: dict = auto.get("sensor", {})
+            transport: str = sensor.get("type", "ble")
             label: str = sensor.get("label", "")
             char: str = sensor.get("characteristic", "")
             if label and char:
-                seen.add((label, char))
+                seen.add((transport, label, char))
 
-        # Also subscribe to all sensor subtopics for the data store.
-        labels: set[str] = {label for label, _ in seen}
-        for label in labels:
-            for subtopic in ("motion", "temperature", "humidity", "status"):
-                topic: str = f"{MQTT_PREFIX}/{label}/{subtopic}"
+        # Subscribe per transport prefix.
+        # BLE subtopics include status; Zigbee/Vivint use the property name.
+        ble_subtopics: tuple[str, ...] = (
+            "motion", "temperature", "humidity", "status",
+        )
+        subscribed: int = 0
+        for transport, label, _ in seen:
+            prefix: str = TRANSPORT_PREFIXES.get(transport, MQTT_PREFIX)
+            if transport == "ble":
+                for subtopic in ble_subtopics:
+                    topic: str = f"{prefix}/{label}/{subtopic}"
+                    client.subscribe(topic)
+                    logger.debug("Subscribed to %s", topic)
+                    subscribed += 1
+            else:
+                # Zigbee and Vivint: subscribe to all properties from this device.
+                topic = f"{prefix}/{label}/+"
                 client.subscribe(topic)
                 logger.debug("Subscribed to %s", topic)
+                subscribed += 1
 
         logger.info(
-            "Subscribed to %d sensor label(s)", len(labels),
+            "Subscribed to %d topic(s) across %d sensor(s)",
+            subscribed, len(seen),
         )
 
     def _on_connect(
         self, client: Any, userdata: Any, flags: Any, rc: int,
         properties: Any = None,
     ) -> None:
-        """Subscribe to BLE sensor topics on connect.
+        """Subscribe to sensor topics (all transports) on connect.
 
         Args:
             client:     The paho MQTT client.
@@ -587,7 +620,10 @@ class AutomationManager:
     def _on_message(
         self, client: Any, userdata: Any, msg: Any,
     ) -> None:
-        """Handle incoming MQTT messages from BLE sensors.
+        """Handle incoming MQTT messages from sensors (any transport).
+
+        Topic format: ``glowup/{transport}/{label}/{characteristic}``
+        (4-part for all transports: ble, zigbee, vivint).
 
         Args:
             client:   The paho MQTT client.
@@ -598,11 +634,13 @@ class AutomationManager:
             parts: list[str] = msg.topic.split("/")
             if len(parts) != 4:
                 return
+            # parts: ["glowup", transport, label, characteristic]
+            transport: str = parts[1]
             label: str = parts[2]
             subtopic: str = parts[3]
             payload: str = msg.payload.decode("utf-8", errors="replace")
 
-            # Always update the sensor data store.
+            # Always update the sensor data store (transport-qualified key).
             if subtopic == "temperature":
                 sensor_data.update(label, "temperature", float(payload))
             elif subtopic == "humidity":
@@ -611,6 +649,16 @@ class AutomationManager:
                 sensor_data.update(label, "status", json.loads(payload))
             elif subtopic == "motion":
                 sensor_data.update(label, "motion", int(payload))
+            elif subtopic == "occupancy":
+                sensor_data.update(label, "occupancy", int(float(payload)))
+            elif subtopic == "lock_state":
+                sensor_data.update(label, "lock_state", int(float(payload)))
+            elif subtopic == "battery":
+                sensor_data.update(label, "battery", float(payload))
+            elif subtopic == "contact":
+                sensor_data.update(label, "contact", int(float(payload)))
+            elif subtopic == "illuminance":
+                sensor_data.update(label, "illuminance", float(payload))
 
             # Evaluate automations that match this sensor + characteristic.
             self._evaluate_automations(label, subtopic, payload)

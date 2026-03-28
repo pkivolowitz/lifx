@@ -104,6 +104,12 @@ deploy_pi() {
          && sudo systemctl restart glowup-ble-sensor \
          || true"
 
+    # Restart Zigbee2MQTT if installed and active.
+    ssh "$PI_HOST" \
+        "systemctl is-active --quiet zigbee2mqtt \
+         && sudo systemctl restart zigbee2mqtt \
+         || true"
+
     echo "==> pi: $(ssh "$PI_HOST" "cat '$PI_DEST/DEPLOYED'")"
     echo "==> pi: deploy complete"
 }

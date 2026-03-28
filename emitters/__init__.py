@@ -44,9 +44,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional, Union
 
-# Reuse the Param dataclass from effects — same declaration semantics,
-# same validate/clamp behavior.  No reason to duplicate it.
-from effects import Param
+# Param lives in param.py — shared by effects, emitters, and operators.
+from param import Param
 
 # ---------------------------------------------------------------------------
 # Constants

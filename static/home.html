@@ -392,6 +392,31 @@ body {
     box-shadow: 0 0 12px rgba(204, 68, 68, 0.25);
 }
 
+.lock-battery {
+    font-size: 0.7rem;
+    color: var(--label-color);
+    margin-top: 2px;
+}
+.lock-battery.low {
+    color: var(--lock-unlocked);
+}
+.occupancy-badge {
+    font-size: 0.8rem;
+    padding: 2px 10px;
+    border-radius: 12px;
+    display: inline-block;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+.occupancy-badge.home {
+    background: var(--lock-locked);
+    color: #fff;
+}
+.occupancy-badge.away {
+    background: var(--lock-unknown);
+    color: var(--label-color);
+}
+
 .lock-name {
     font-size: clamp(0.65rem, 1.2vw, 0.9rem);
     font-weight: 400;
@@ -435,6 +460,7 @@ body {
         <!-- Lock card — always first in the grid. -->
         <div class="locks-card sensor-card" id="locksCard">
             <div class="locks-title">Locks</div>
+            <div id="occupancyBadge" class="occupancy-badge" style="display:none"></div>
             <div class="locks-row" id="locksRow"></div>
         </div>
         <div class="no-data" id="noData">Waiting for sensor data&hellip;</div>
@@ -683,9 +709,11 @@ body {
     const locksCard = document.getElementById("locksCard");
     const locksRow = document.getElementById("locksRow");
 
-    /** Render lock circles from API data. */
+    var occupancyBadge = document.getElementById("occupancyBadge");
+
+    /** Render lock circles with battery from API data. */
     function renderLocks(locks) {
-        /* locks is an array: [{abbr: "FD", name: "Front Door", locked: true}, ...] */
+        /* locks: [{abbr, name, locked, battery}, ...] */
         if (!locks || locks.length === 0) {
             locksRow.innerHTML = "";
             return;
@@ -703,7 +731,6 @@ body {
             } else if (lock.locked === false) {
                 circle.classList.add("unlocked");
             }
-            /* else: unknown state — gray default. */
             circle.textContent = lock.abbr || "?";
 
             var name = document.createElement("div");
@@ -712,8 +739,29 @@ body {
 
             item.appendChild(circle);
             item.appendChild(name);
+
+            /* Battery indicator below name. */
+            if (lock.battery != null) {
+                var batt = document.createElement("div");
+                batt.className = "lock-battery";
+                if (lock.battery < 20) batt.classList.add("low");
+                batt.textContent = lock.battery + "%";
+                item.appendChild(batt);
+            }
+
             locksRow.appendChild(item);
         });
+    }
+
+    /** Update occupancy badge. */
+    function renderOccupancy(state) {
+        if (!state || state === "UNKNOWN") {
+            occupancyBadge.style.display = "none";
+            return;
+        }
+        occupancyBadge.style.display = "inline-block";
+        occupancyBadge.textContent = state;
+        occupancyBadge.className = "occupancy-badge " + state.toLowerCase();
     }
 
     function pollLocks() {
@@ -722,6 +770,7 @@ body {
             .then(function (data) {
                 if (data.error) return;
                 renderLocks(data.locks || []);
+                renderOccupancy(data.occupancy || "UNKNOWN");
             })
             .catch(function () { /* leave as-is */ });
     }

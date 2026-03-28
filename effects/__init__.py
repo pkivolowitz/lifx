@@ -33,10 +33,12 @@ Example::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "0.6"
+__version__ = "0.7"
 
-from dataclasses import dataclass
 from typing import Any, Optional, Union
+
+from operators import Operator
+from param import Param
 
 # ---------------------------------------------------------------------------
 # Constants — shared by all effects to eliminate magic numbers
@@ -87,63 +89,8 @@ ALL_DEVICE_TYPES: frozenset[str] = frozenset({
 _registry: dict[str, type["Effect"]] = {}
 
 
-@dataclass
-class Param:
-    """Declare a tunable effect parameter.
-
-    These declarations serve triple duty:
-
-    * **CLI** — auto-generates ``argparse`` arguments.
-    * **API** — provides metadata for a future phone app
-      (name, type, range, description).
-    * **Runtime** — stores the current value with validation.
-
-    Attributes:
-        default: The default value (also determines the parameter type).
-        min:     Minimum allowed value (numeric params only).
-        max:     Maximum allowed value (numeric params only).
-        description: Human-readable help text.
-        choices: If set, value must be one of these options.
-    """
-
-    default: Any
-    min: Optional[Any] = None
-    max: Optional[Any] = None
-    description: str = ""
-    choices: Optional[list] = None
-
-    def validate(self, value: Any) -> Any:
-        """Validate and clamp *value* to the declared range.
-
-        Args:
-            value: The raw value to validate.
-
-        Returns:
-            The validated (and possibly clamped) value.
-
-        Raises:
-            ValueError: If *value* is not in :attr:`choices`.
-        """
-        if self.choices is not None:
-            if value not in self.choices:
-                raise ValueError(f"Must be one of {self.choices}, got {value}")
-            return value
-        if isinstance(self.default, (int, float)):
-            # Coerce to the same numeric type as the default.
-            # Guard against garbage input — fall back to default
-            # rather than crashing the effect engine.
-            try:
-                value = type(self.default)(value)
-            except (ValueError, TypeError, OverflowError):
-                value = self.default
-            # NaN defeats comparison operators — fall back to default.
-            if isinstance(value, float) and value != value:
-                value = self.default
-            if self.min is not None and value < self.min:
-                value = self.min
-            if self.max is not None and value > self.max:
-                value = self.max
-        return value
+# Param is now in param.py (shared by effects, emitters, operators).
+# Re-exported here so ``from effects import Param`` continues to work.
 
 
 class EffectMeta(type):
@@ -186,8 +133,14 @@ class EffectMeta(type):
                 )
 
 
-class Effect(metaclass=EffectMeta):
-    """Base class for all effects.
+class Effect(Operator, metaclass=EffectMeta):
+    """Base class for all effects — specialized Operators that render HSBK.
+
+    Effects are operators that read inputs (time, signal bus data), transform
+    them through rendering math, and produce HSBK frames for emitters.  They
+    inherit from :class:`~operators.Operator` to participate in the unified
+    SOE pipeline while retaining their specialized rendering lifecycle managed
+    by the Engine.
 
     Subclasses **must** define:
 
@@ -215,7 +168,17 @@ class Effect(metaclass=EffectMeta):
 
     Parameters are declared as class-level :class:`Param` instances.
     At runtime they become regular attributes with their current values.
+
+    Note: Effects set ``operator_type = None`` so they are NOT registered
+    in the operator registry (they use the separate effect registry via
+    :class:`EffectMeta`).  Effects use ``tick_mode = "engine"`` so the
+    :class:`~operators.OperatorManager` skips them — the Engine drives
+    rendering at frame rate.
     """
+
+    # Operator ABC attributes — Effects do not register as operators.
+    operator_type = None
+    tick_mode: str = "engine"
 
     name: Optional[str] = None
     description: str = ""

@@ -1,0 +1,16 @@
+# udev rule for SONOFF Zigbee 3.0 USB Dongle Plus (EFR32MG24).
+#
+# Creates a stable /dev/ttyZigbee symlink regardless of USB enumeration
+# order.  Zigbee2MQTT's serial.port config references /dev/ttyZigbee
+# instead of /dev/ttyUSB0 (which can change if other USB devices are
+# plugged in).
+#
+# Install: sudo cp 99-zigbee-dongle.rules /etc/udev/rules.d/
+#          sudo udevadm control --reload-rules
+#          sudo udevadm trigger
+#
+# Vendor 1a86 / Product 55d4 = QinHeng Electronics CH343 (SONOFF MG24).
+# If your dongle uses a CP210x bridge instead, use:
+#   ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60"
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d4", SYMLINK+="ttyZigbee", MODE="0660", GROUP="dialout"

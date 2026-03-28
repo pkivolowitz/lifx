@@ -104,6 +104,10 @@ from automation import (
     AutomationManager, sensor_data as ble_sensor_data,
     validate_automation, migrate_ble_triggers,
 )
+from operators import OperatorManager
+from lock_manager import LockManager
+from zigbee_adapter import ZigbeeAdapter
+from vivint_adapter import VivintAdapter
 from media import MediaManager, SignalBus
 from media.source import AudioStreamServer
 from solar import SunTimes, sun_times
@@ -297,8 +301,12 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_home_lights", requires_auth=False),
     _Route("GET", ("api", "home", "locks"),
            "_handle_get_home_locks", requires_auth=False),
+    _Route("GET", ("api", "home", "occupancy"),
+           "_handle_get_home_occupancy", requires_auth=False),
     _Route("GET", ("api", "home", "mode"),
            "_handle_get_home_mode", requires_auth=False),
+    _Route("GET", ("api", "operators"),
+           "_handle_get_operators", requires_auth=True),
     _Route("GET", ("photos", "{filename}"),
            "_handle_get_photo", requires_auth=False),
 
@@ -2422,6 +2430,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     orchestrator: Optional[Any] = None
     keepalive: Optional[BulbKeepAlive] = None
     registry: Optional[DeviceRegistry] = None
+    operator_manager: Optional[OperatorManager] = None
+    lock_manager: Optional[LockManager] = None
 
     # Active /api/command/identify pulses: {ip: stop_event}.
     # Populated by _handle_post_command_identify; cleared when pulse ends.
@@ -5430,15 +5440,52 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         lock_state: dict[str, bool] = getattr(
             self.server, "_lock_state", {},
         )
+        lm: Optional[LockManager] = self.lock_manager
         locks: list[dict[str, Any]] = []
         for lock in lock_defs:
             abbr: str = lock.get("abbr", "?")
-            locks.append({
+            entry: dict[str, Any] = {
                 "abbr": abbr,
                 "name": lock.get("name", abbr),
                 "locked": lock_state.get(abbr),
-            })
-        self._send_json(200, {"locks": locks})
+            }
+            # Add battery from LockManager if available.
+            if lm is not None:
+                battery: Optional[int] = lm.get_battery(abbr)
+                if battery is not None:
+                    entry["battery"] = battery
+            locks.append(entry)
+        # Add occupancy state from LockManager/SignalBus.
+        occupancy: str = "UNKNOWN"
+        if lm is not None:
+            occupancy = lm.get_occupancy_state()
+        self._send_json(200, {"locks": locks, "occupancy": occupancy})
+
+    def _handle_get_home_occupancy(self) -> None:
+        """GET /api/home/occupancy — current occupancy state.
+
+        Response::
+
+            {"state": "HOME"}   or   {"state": "AWAY"}
+        """
+        lm: Optional[LockManager] = self.lock_manager
+        state: str = "UNKNOWN"
+        if lm is not None:
+            state = lm.get_occupancy_state()
+        self._send_json(200, {"state": state})
+
+    def _handle_get_operators(self) -> None:
+        """GET /api/operators — list running operators with status.
+
+        Response::
+
+            {"operators": [{name, type, started, tick_mode, ...}, ...]}
+        """
+        om: Optional[OperatorManager] = self.operator_manager
+        if om is not None:
+            self._send_json(200, {"operators": om.get_status()})
+        else:
+            self._send_json(200, {"operators": []})
 
     def _handle_get_home_mode(self) -> None:
         """GET /api/home/mode — display mode for the /home dashboard.
@@ -6178,6 +6225,11 @@ def main() -> None:
     # Orchestrator reference — set by _background_startup if configured.
     orch: Optional[Any] = None
     keepalive: Optional[BulbKeepAlive] = None
+    # Zigbee/Vivint/Operator/Lock references — set by _background_startup.
+    zigbee_adapter: Optional[ZigbeeAdapter] = None
+    vivint_adapter: Optional[VivintAdapter] = None
+    operator_mgr: Optional[OperatorManager] = None
+    lock_mgr: Optional[LockManager] = None
 
     def _background_startup() -> None:
         """Resolve config identifiers, load devices, start services.
@@ -6192,6 +6244,7 @@ def main() -> None:
         6. Start scheduler, MQTT, orchestrator, media pipeline.
         """
         nonlocal mqtt_bridge, media_mgr, orch, keepalive, ble_trigger_mgr, automation_mgr
+        nonlocal zigbee_adapter, vivint_adapter, operator_mgr, lock_mgr
 
         try:
             # -- Step 1: Start the ARP-based bulb keepalive daemon --------
@@ -6400,6 +6453,68 @@ def main() -> None:
                     )
             else:
                 logging.info("No media_sources configured — media idle")
+
+            # -- Zigbee/Vivint/Operator/Lock startup ----------------------
+            # These all write to the SignalBus, which may be from the
+            # MediaManager or a standalone instance.
+            signal_bus: Optional[SignalBus] = None
+            if media_mgr is not None:
+                signal_bus = media_mgr.signal_bus
+            if signal_bus is None:
+                signal_bus = SignalBus()
+                logging.info("Created standalone SignalBus for operators")
+
+            mqtt_cfg: dict = config.get("mqtt", {})
+            broker_addr: str = mqtt_cfg.get("broker", "localhost")
+            broker_port: int = mqtt_cfg.get("port", 1883)
+
+            # Zigbee adapter (for Z2M devices — motion, contact, temp).
+            z_cfg: dict = config.get("zigbee", {})
+            if z_cfg.get("enabled") and _MQTT_AVAILABLE:
+                zigbee_adapter = ZigbeeAdapter(
+                    config=z_cfg,
+                    bus=signal_bus,
+                    broker=broker_addr,
+                    port=broker_port,
+                )
+                zigbee_adapter.start()
+
+            # Vivint adapter (for lock state — read-only cloud API).
+            v_cfg: dict = config.get("vivint", {})
+            if v_cfg.get("enabled"):
+                vivint_adapter = VivintAdapter(
+                    config=v_cfg,
+                    bus=signal_bus,
+                    mqtt_client=(
+                        mqtt_bridge._client if mqtt_bridge else None
+                    ),
+                )
+                vivint_adapter.start()
+
+            # Operator manager (occupancy, motion gate, battery watch).
+            op_cfgs: list = config.get("operators", [])
+            if op_cfgs:
+                operator_mgr = OperatorManager(signal_bus)
+                operator_mgr.configure(op_cfgs)
+                config["_config_path"] = GlowUpRequestHandler.config_path
+                operator_mgr.start(full_config=config)
+                GlowUpRequestHandler.operator_manager = operator_mgr
+
+            # Lock manager (presentation layer for /home dashboard).
+            if config.get("locks"):
+                config_path_local2: str = GlowUpRequestHandler.config_path or ""
+                db_dir: str = os.path.dirname(os.path.abspath(config_path_local2)) if config_path_local2 else "."
+                lock_mgr = LockManager(
+                    config=config,
+                    server=server,
+                    db_path=os.path.join(db_dir, "state.db"),
+                    broker=broker_addr,
+                    port=broker_port,
+                    bus=signal_bus,
+                )
+                lock_mgr.start()
+                GlowUpRequestHandler.lock_manager = lock_mgr
+
         except Exception:
             logging.exception("Background startup failed")
 
@@ -6412,6 +6527,15 @@ def main() -> None:
         server.serve_forever()
     finally:
         logging.info("Shutting down...")
+        # Stop in reverse startup order.
+        if lock_mgr is not None:
+            lock_mgr.stop()
+        if operator_mgr is not None:
+            operator_mgr.stop()
+        if vivint_adapter is not None:
+            vivint_adapter.stop()
+        if zigbee_adapter is not None:
+            zigbee_adapter.stop()
         if media_mgr is not None:
             media_mgr.shutdown()
         if orch is not None:
