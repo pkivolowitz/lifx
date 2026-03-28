@@ -71,6 +71,7 @@ DEFAULT_IDLE_TIMEOUT: float = 30.0
 MQTT_QOS: int = 0
 
 logger: logging.Logger = logging.getLogger("glowup.media")
+_bus_logger: logging.Logger = logging.getLogger("glowup.signal_bus")
 
 
 # ---------------------------------------------------------------------------
@@ -317,11 +318,26 @@ class SignalBus:
         This is called by extractors during initialization so that the
         API can advertise available signals to the iOS app's picker.
 
+        Warns if the signal was previously registered by a different
+        transport — this catches namespace collisions (e.g., an effect
+        name matching a device name).
+
         Args:
             name: Signal name.
             meta: Metadata describing the signal.
         """
         with self._lock:
+            # Collision detection: warn if transport changes for a signal.
+            existing: Optional[SignalMeta] = self._metadata.get(name)
+            if (existing is not None
+                    and existing.transport
+                    and meta.transport
+                    and existing.transport != meta.transport):
+                _bus_logger.warning(
+                    "Signal namespace collision: '%s' registered by "
+                    "transport '%s', now overwritten by '%s'",
+                    name, existing.transport, meta.transport,
+                )
             self._metadata[name] = meta
             # Initialize with a zero value if not already present.
             if name not in self._signals:

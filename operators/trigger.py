@@ -42,12 +42,12 @@ __version__ = "1.0"
 
 import json
 import logging
-import operator as op_module
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional, Union
 
 from operators import Operator, TICK_BOTH, SignalValue
+from operators.conditions import evaluate_condition
 from param import Param
 
 logger: logging.Logger = logging.getLogger("glowup.operators.trigger")
@@ -66,14 +66,7 @@ DEFAULT_WATCHDOG_MINUTES: float = 30.0
 # Seconds-per-minute conversion factor.
 SECONDS_PER_MINUTE: float = 60.0
 
-# Valid trigger condition operators.
-_CONDITION_OPS: dict[str, Callable] = {
-    "eq":  op_module.eq,
-    "gt":  op_module.gt,
-    "lt":  op_module.lt,
-    "gte": op_module.ge,
-    "lte": op_module.le,
-}
+# Condition operators are in operators/conditions.py (shared module).
 
 # Valid schedule-conflict policies.
 VALID_CONFLICT_POLICIES: frozenset[str] = frozenset({
@@ -101,30 +94,7 @@ def _device_id_for_group(group_name: str) -> str:
     return _GROUP_PREFIX + group_name
 
 
-def _evaluate_condition(
-    op_name: str,
-    threshold: Any,
-    value: Any,
-) -> bool:
-    """Evaluate a trigger condition.
-
-    Args:
-        op_name:   Operator name (``"eq"``, ``"gt"``, etc.).
-        threshold: The threshold value from the config.
-        value:     The signal value to test.
-
-    Returns:
-        ``True`` if the condition is satisfied.
-    """
-    op_fn: Optional[Callable] = _CONDITION_OPS.get(op_name)
-    if op_fn is None:
-        logger.warning("Unknown condition operator: %s", op_name)
-        return False
-    try:
-        return op_fn(value, threshold)
-    except (TypeError, ValueError) as exc:
-        logger.debug("Condition eval error: %s", exc)
-        return False
+# _evaluate_condition is now in operators.conditions.evaluate_condition.
 
 
 def _signal_name_from_sensor(sensor: dict[str, Any]) -> str:
@@ -162,6 +132,7 @@ class TriggerOperator(Operator):
 
     operator_type: str = "trigger"
     description: str = "Sensor-driven light action"
+    depends_on: list[str] = ["motion_gate"]
 
     # input_signals set dynamically from sensor config.
     input_signals: list[str] = []
@@ -169,6 +140,12 @@ class TriggerOperator(Operator):
 
     tick_mode: str = TICK_BOTH
     tick_hz: float = 1.0
+
+    # Configurable per-trigger debounce — minimum seconds between actions.
+    debounce_seconds = Param(
+        DEBOUNCE_SECONDS, min=0.0, max=30.0,
+        description="Minimum seconds between repeated trigger actions",
+    )
 
     def __init__(
         self,
@@ -289,7 +266,7 @@ class TriggerOperator(Operator):
         else:
             cmp_val = fval
 
-        matched: bool = _evaluate_condition(self._condition, threshold, cmp_val)
+        matched: bool = evaluate_condition(self._condition, threshold, cmp_val)
 
         if matched:
             # Reset watchdog timer on every matching event.
@@ -300,7 +277,7 @@ class TriggerOperator(Operator):
         elif not matched and self._active:
             # Condition-based off-trigger.
             if self._off_type == "condition":
-                if _evaluate_condition(self._off_condition, self._off_value, cmp_val):
+                if evaluate_condition(self._off_condition, self._off_value, cmp_val):
                     self._fire_off_action()
 
     def on_tick(self, dt: float) -> None:
@@ -339,7 +316,7 @@ class TriggerOperator(Operator):
         now: float = time.time()
 
         # Debounce.
-        if now - self._last_action < DEBOUNCE_SECONDS:
+        if now - self._last_action < self.debounce_seconds:
             return
 
         if not self._group or not self._dm:

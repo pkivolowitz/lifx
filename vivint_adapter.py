@@ -125,6 +125,10 @@ class VivintAdapter:
             float(config.get("poll_interval_seconds", DEFAULT_POLL_INTERVAL)),
             MIN_POLL_INTERVAL,
         )
+        # Configurable MQTT topic prefix.
+        self._topic_prefix: str = config.get(
+            "mqtt_topic_prefix", MQTT_TOPIC_PREFIX,
+        )
         # Map of vivint device name → config name for signal naming.
         # Config format: {"locks": {"front_door_lock": "Front Door", ...}}
         self._lock_names: dict[str, str] = config.get("locks", {})
@@ -303,7 +307,7 @@ class VivintAdapter:
         # Publish to MQTT.
         if self._mqtt_client:
             try:
-                topic: str = f"{MQTT_TOPIC_PREFIX}/{config_name}/lock_state"
+                topic: str = f"{self._topic_prefix}/{config_name}/lock_state"
                 self._mqtt_client.publish(
                     topic, str(int(lock_value)), qos=MQTT_QOS,
                 )
@@ -334,7 +338,7 @@ class VivintAdapter:
 
             if self._mqtt_client:
                 try:
-                    btopic: str = f"{MQTT_TOPIC_PREFIX}/{config_name}/battery"
+                    btopic: str = f"{self._topic_prefix}/{config_name}/battery"
                     self._mqtt_client.publish(
                         btopic, f"{battery_norm:.2f}", qos=MQTT_QOS,
                     )

@@ -31,6 +31,7 @@ __version__ = "1.0"
 
 import json
 import logging
+import threading
 import time
 from typing import Any, Optional
 
@@ -90,6 +91,7 @@ class BleAdapter:
         bus: Any,
         broker: str = "localhost",
         port: int = 1883,
+        config: Optional[dict[str, Any]] = None,
     ) -> None:
         """Initialize the BLE adapter.
 
@@ -97,16 +99,22 @@ class BleAdapter:
             bus:    SignalBus instance for signal writes.
             broker: MQTT broker address.
             port:   MQTT broker port.
+            config: Optional config dict with ``topic_prefix`` key.
         """
         self._bus: Any = bus
         self._broker: str = broker
         self._port: int = port
+        self._topic_prefix: str = (
+            (config or {}).get("topic_prefix", MQTT_PREFIX)
+        )
         self._client: Any = None
         self._running: bool = False
 
         # Status blobs — stored separately since they are JSON, not scalars.
-        # Keyed by label → dict.
+        # Keyed by label → dict.  Protected by _status_lock for thread safety
+        # (MQTT callbacks arrive on paho's internal thread).
         self._status: dict[str, dict[str, Any]] = {}
+        self._status_lock: threading.Lock = threading.Lock()
 
     def start(self) -> None:
         """Start the MQTT subscriber for BLE topics."""
@@ -131,7 +139,7 @@ class BleAdapter:
         self._client.connect_async(self._broker, self._port)
         self._client.loop_start()
 
-        logger.info("BLE adapter started — subscribing to %s/#", MQTT_PREFIX)
+        logger.info("BLE adapter started — subscribing to %s/#", self._topic_prefix)
 
     def stop(self) -> None:
         """Stop the MQTT subscriber."""
@@ -150,7 +158,8 @@ class BleAdapter:
         Returns:
             Status dict, or None if not received.
         """
-        return self._status.get(label)
+        with self._status_lock:
+            return self._status.get(label)
 
     # --- MQTT callbacks ----------------------------------------------------
 
@@ -170,7 +179,7 @@ class BleAdapter:
         if rc != 0:
             logger.warning("BLE adapter MQTT connect failed: rc=%d", rc)
             return
-        topic: str = f"{MQTT_PREFIX}/#"
+        topic: str = f"{self._topic_prefix}/#"
         client.subscribe(topic)
         logger.info("BLE adapter subscribed to %s", topic)
 
@@ -197,7 +206,9 @@ class BleAdapter:
             if subtopic == "status":
                 # JSON health blob — store separately, not on bus.
                 try:
-                    self._status[label] = json.loads(payload)
+                    blob: dict = json.loads(payload)
+                    with self._status_lock:
+                        self._status[label] = blob
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     pass
                 return

@@ -202,6 +202,11 @@ class Operator:
     input_signals: list[str] = []
     output_signals: list[str] = []
 
+    # Dependency declaration — operator types that must be configured and
+    # dispatched before this one.  OperatorManager topologically sorts
+    # operators so dependencies are always evaluated first.
+    depends_on: list[str] = []
+
     # Tick mode — how the OperatorManager dispatches this operator.
     tick_mode: str = TICK_REACTIVE
 
@@ -216,10 +221,33 @@ class Operator:
         since they leave ``operator_type = None`` they are not registered
         as operators (they register via :class:`~effects.EffectMeta`
         in the effect registry instead).
+
+        Validates tick_mode and warns on type collisions.
         """
         super().__init_subclass__(**kwargs)
+
+        # Validate tick_mode if explicitly set.
+        mode: str = getattr(cls, "tick_mode", TICK_REACTIVE)
+        if mode not in VALID_TICK_MODES:
+            logger.warning(
+                "Operator %s has invalid tick_mode '%s' "
+                "(valid: %s) — defaulting to '%s'",
+                cls.__name__, mode,
+                ", ".join(sorted(VALID_TICK_MODES)),
+                TICK_REACTIVE,
+            )
+            cls.tick_mode = TICK_REACTIVE
+
         otype: Optional[str] = getattr(cls, "operator_type", None)
         if otype is not None:
+            # Warn on type collision — second registration overwrites.
+            if otype in _registry:
+                prev: type = _registry[otype]
+                if prev is not cls:
+                    logger.warning(
+                        "Operator type '%s' collision: %s overwrites %s",
+                        otype, cls.__name__, prev.__name__,
+                    )
             _registry[otype] = cls
             logger.debug("Registered operator type: %s -> %s", otype, cls.__name__)
 
@@ -459,9 +487,16 @@ class OperatorManager:
         Each entry must have ``"type"`` and ``"name"`` keys.  Additional
         keys are passed as operator-specific config.
 
+        Operators are topologically sorted by ``depends_on`` so that
+        dependencies are always dispatched before dependents.  This
+        ensures operator composition (occupancy → motion_gate → trigger)
+        evaluates in the correct order regardless of config file ordering.
+
         Args:
             config_list: List of operator config dicts from server.json.
         """
+        # Phase 1: instantiate all operators (unsorted).
+        unsorted: list[_OperatorSlot] = []
         for entry in config_list:
             otype: str = entry.get("type", "")
             name: str = entry.get("name", "")
@@ -478,7 +513,7 @@ class OperatorManager:
                     operator=op,
                     tick_interval=tick_interval,
                 )
-                self._slots.append(slot)
+                unsorted.append(slot)
                 logger.info(
                     "Configured operator: %s (%s)", name, otype,
                 )
@@ -487,6 +522,75 @@ class OperatorManager:
                     "Failed to create operator '%s' type '%s': %s",
                     name, otype, exc,
                 )
+
+        # Phase 2: topological sort by depends_on.
+        self._slots = self._topo_sort(unsorted)
+
+    @staticmethod
+    def _topo_sort(slots: list["_OperatorSlot"]) -> list["_OperatorSlot"]:
+        """Sort operator slots so dependencies come first.
+
+        Uses Kahn's algorithm.  Operators with no dependencies come
+        first; operators that depend on others come after their
+        dependencies.  Ties preserve config order (stable sort).
+
+        Cycles are detected and logged — cyclic operators are appended
+        at the end rather than silently dropped.
+
+        Args:
+            slots: Unsorted list of operator slots.
+
+        Returns:
+            Sorted list with dependencies before dependents.
+        """
+        if not slots:
+            return slots
+
+        # Build type→slot and dependency graph.
+        by_type: dict[str, list[_OperatorSlot]] = {}
+        for s in slots:
+            otype: str = s.operator.operator_type or ""
+            by_type.setdefault(otype, []).append(s)
+
+        # In-degree count per slot index.
+        idx: dict[int, int] = {id(s): 0 for s in slots}
+        # Adjacency: dependency type → list of dependent slot ids.
+        dependents: dict[str, list[int]] = {}
+        for s in slots:
+            for dep_type in s.operator.depends_on:
+                dependents.setdefault(dep_type, []).append(id(s))
+                idx[id(s)] += 1
+
+        # Kahn's algorithm.
+        ready: list[_OperatorSlot] = [s for s in slots if idx[id(s)] == 0]
+        result: list[_OperatorSlot] = []
+        while ready:
+            s = ready.pop(0)
+            result.append(s)
+            otype = s.operator.operator_type or ""
+            for dep_id in dependents.get(otype, []):
+                idx[dep_id] -= 1
+                if idx[dep_id] == 0:
+                    # Find the slot by id.
+                    for candidate in slots:
+                        if id(candidate) == dep_id:
+                            ready.append(candidate)
+                            break
+
+        # Cycle detection: anything not in result has unresolved deps.
+        if len(result) < len(slots):
+            remaining: list[_OperatorSlot] = [
+                s for s in slots if s not in result
+            ]
+            for s in remaining:
+                logger.warning(
+                    "Operator '%s' has unresolved depends_on — "
+                    "appended after sort (possible cycle)",
+                    s.operator.name,
+                )
+            result.extend(remaining)
+
+        return result
 
     def start(self, full_config: Optional[dict[str, Any]] = None) -> None:
         """Start all configured operators and the tick thread.
@@ -589,6 +693,27 @@ class OperatorManager:
                             "Operator '%s' auto-disabled after %d failures",
                             op.name, MAX_CONSECUTIVE_FAILURES,
                         )
+                        # Publish disable event to the bus so dashboards
+                        # and monitoring operators can react.
+                        self._notify_disabled(op.name)
+
+    def _notify_disabled(self, operator_name: str) -> None:
+        """Write a disable notification signal to the bus.
+
+        Signal: ``system:operator_disabled`` with operator name as value.
+        This allows dashboards and monitoring operators to detect
+        failures without polling the status API.
+
+        Args:
+            operator_name: The name of the disabled operator.
+        """
+        try:
+            self._bus.write(
+                "system:operator_disabled",
+                operator_name,
+            )
+        except Exception:
+            pass  # Bus might not accept string values; best-effort.
 
     def get_status(self) -> list[dict[str, Any]]:
         """Return status for all managed operators.
@@ -662,6 +787,7 @@ class OperatorManager:
                                 "Operator '%s' auto-disabled after %d failures",
                                 op.name, MAX_CONSECUTIVE_FAILURES,
                             )
+                            self._notify_disabled(op.name)
 
             time.sleep(TICK_POLL_INTERVAL)
 
@@ -670,6 +796,13 @@ class OperatorManager:
 # Auto-import concrete operator modules so they register via __init_subclass__.
 # ---------------------------------------------------------------------------
 
-from operators import occupancy as _occupancy  # noqa: F401, E402
-from operators import motion_gate as _motion_gate  # noqa: F401, E402
-from operators import trigger as _trigger  # noqa: F401, E402
+# Auto-import concrete operators so they register via __init_subclass__.
+# Each import is guarded — a missing dependency in one operator must not
+# prevent the others (or the Operator ABC itself) from loading.
+for _mod_name in ("occupancy", "motion_gate", "trigger"):
+    try:
+        __import__(f"operators.{_mod_name}")
+    except Exception as _exc:  # noqa: F841
+        logger.warning(
+            "Could not load operator module '%s': %s", _mod_name, _exc,
+        )

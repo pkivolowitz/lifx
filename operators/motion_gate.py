@@ -16,7 +16,7 @@ Config example::
         "type": "motion_gate",
         "name": "gated_motion",
         "occupancy_signal": "house:occupancy:state",
-        "motion_signals": ["zigbee:*:occupancy", "ble:*:motion"]
+        "motion_signals": ["*:occupancy", "*:motion"]
     }
 """
 
@@ -70,6 +70,7 @@ class MotionGateOperator(Operator):
 
     operator_type: str = "motion_gate"
     description: str = "Gate motion signals on HOME/AWAY occupancy"
+    depends_on: list[str] = ["occupancy"]
 
     # input_signals is set dynamically from config in on_configure.
     input_signals: list[str] = []
@@ -98,8 +99,13 @@ class MotionGateOperator(Operator):
         self._motion_patterns: list[str] = config.get(
             "motion_signals", [],
         )
-        # Set input_signals to include both motion patterns and occupancy.
-        self.input_signals = list(self._motion_patterns)
+        # Subscribe to BOTH motion patterns AND occupancy so we react
+        # when occupancy transitions (HOME→AWAY) even if no motion fires.
+        self.input_signals = list(self._motion_patterns) + [
+            self._occupancy_signal,
+        ]
+        # Track every motion signal name we've seen for bulk suppression.
+        self._known_motion: set[str] = set()
 
     def on_start(self) -> None:
         """Log startup."""
@@ -109,11 +115,16 @@ class MotionGateOperator(Operator):
         )
 
     def on_signal(self, name: str, value: SignalValue) -> None:
-        """Handle a motion signal change.
+        """Handle a motion or occupancy signal change.
+
+        When a motion signal arrives, gate it on current occupancy.
+        When the occupancy signal itself changes to AWAY, suppress
+        all previously-seen motion signals immediately — don't wait
+        for the next motion event to read stale occupancy.
 
         Args:
-            name:  Signal name (e.g., ``"ble:onvis_motion:motion"``).
-            value: Motion value (typically ``1.0`` or ``0.0``).
+            name:  Signal name.
+            value: Signal value.
         """
         # Coerce to float.
         try:
@@ -121,17 +132,29 @@ class MotionGateOperator(Operator):
         except (ValueError, TypeError):
             return
 
-        # Read current occupancy from the bus.
+        # --- Occupancy change: re-gate all known motion signals. ---
+        if name == self._occupancy_signal:
+            if fval != HOME_VALUE:
+                # Transitioned to AWAY — suppress all gated motion.
+                for pattern in self._motion_patterns:
+                    for sig_name in self._known_motion:
+                        gated_name: str = sig_name + GATED_SUFFIX
+                        self.write(gated_name, 0.0)
+                logger.info("Occupancy AWAY — all gated motion suppressed")
+            return
+
+        # --- Motion signal: gate on current occupancy. ---
+        # Track every motion signal name we've seen.
+        self._known_motion.add(name)
+
         occupancy: float = float(self.read(self._occupancy_signal, HOME_VALUE))
 
-        # Gate: pass through if HOME, suppress if AWAY.
         if occupancy == HOME_VALUE:
             gated_value: float = fval
         else:
             gated_value = 0.0
 
-        # Write the gated signal.
-        gated_name: str = name + GATED_SUFFIX
+        gated_name = name + GATED_SUFFIX
         self.write(gated_name, gated_value)
 
         if fval == 1.0 and occupancy != HOME_VALUE:
