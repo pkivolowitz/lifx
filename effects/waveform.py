@@ -13,8 +13,6 @@ spatial layout makes the frequency decomposition visible.
 
 __version__ = "1.0"
 
-import math
-
 from . import (
     DEVICE_TYPE_STRIP,
     MediaEffect, Param, HSBK,

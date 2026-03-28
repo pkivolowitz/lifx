@@ -33,7 +33,6 @@ import argparse
 import signal
 import sys
 import threading
-from typing import Optional
 
 from effects import get_effect_names
 from emitters.screen_matrix import ScreenMatrixEmitter

@@ -19,7 +19,6 @@ constants live in :mod:`ble.hap_constants`.
 __version__ = "1.0"
 
 import logging
-from typing import Union
 
 logger: logging.Logger = logging.getLogger("glowup.ble.tlv")
 

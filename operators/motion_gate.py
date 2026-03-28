@@ -26,10 +26,9 @@ Config example::
 __version__ = "1.0"
 
 import logging
-from typing import Any, Union
+from typing import Any
 
 from operators import Operator, TICK_REACTIVE, SignalValue
-from param import Param
 
 logger: logging.Logger = logging.getLogger("glowup.operators.motion_gate")
 

@@ -28,7 +28,6 @@ import signal
 import sys
 import threading
 import time
-from typing import Optional
 
 from effects import HSBK, get_effect_names
 from emitters.screen import (

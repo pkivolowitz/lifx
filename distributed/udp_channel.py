@@ -23,7 +23,7 @@ import logging
 import socket
 import struct
 import threading
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from .protocol import (
     SignalFrame, pack_signal_frame, unpack_signal_frame,

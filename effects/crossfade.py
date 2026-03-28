@@ -23,7 +23,6 @@ and see the perceptual difference.
 
 __version__ = "2.0"
 
-import math
 import subprocess
 import sys
 import os

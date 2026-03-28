@@ -30,7 +30,6 @@ Requirements:
 __version__ = "1.0"
 
 import argparse
-import math
 import subprocess
 import sys
 import threading

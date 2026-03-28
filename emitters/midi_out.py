@@ -32,7 +32,6 @@ import argparse
 import json
 import logging
 import signal
-import sys
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Optional

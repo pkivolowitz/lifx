@@ -29,8 +29,6 @@ import logging
 import os
 import platform
 import random
-import select
-import shutil
 import socket
 import subprocess
 import threading

@@ -27,9 +27,8 @@ import select
 import signal
 import sys
 import termios
-import time
 import tty
-from typing import Any, Optional
+from typing import Any
 
 import paho.mqtt.client as mqtt
 

@@ -42,7 +42,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 # Param lives in param.py — shared by effects, emitters, and operators.
 from param import Param

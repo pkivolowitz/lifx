@@ -21,7 +21,6 @@ Examples::
 
 __version__ = "1.0"
 
-import socket
 import struct
 import sys
 import time

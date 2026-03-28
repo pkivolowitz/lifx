@@ -38,7 +38,6 @@ import argparse
 import json
 import logging
 import signal
-import sys
 import time
 from typing import Any, Optional
 

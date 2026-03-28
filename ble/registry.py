@@ -37,7 +37,6 @@ __version__ = "1.0"
 
 import json
 import logging
-import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path

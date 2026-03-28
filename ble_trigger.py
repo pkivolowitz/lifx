@@ -33,10 +33,9 @@ __version__ = "1.0"
 
 import json
 import logging
-import struct
 import threading
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 logger: logging.Logger = logging.getLogger("glowup.ble_trigger")
 

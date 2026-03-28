@@ -44,7 +44,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 from operators import Operator, TICK_BOTH, SignalValue
 from operators.conditions import evaluate_condition
@@ -394,7 +394,7 @@ class TriggerOperator(Operator):
             ``True`` if a schedule entry is currently active.
         """
         try:
-            from server import _find_active_entry
+            from schedule_utils import find_active_entry as _find_active_entry
         except ImportError:
             return False
 

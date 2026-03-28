@@ -18,7 +18,7 @@ normalized [0, 1] signal values from the bus.
 __version__ = "1.1"
 
 import math
-from effects import Effect, MediaEffect, Param, HSBK, HSBK_MAX, KELVIN_DEFAULT
+from effects import MediaEffect, Param, HSBK, HSBK_MAX, KELVIN_DEFAULT
 
 # ---------------------------------------------------------------------------
 # Constants

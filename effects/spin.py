@@ -19,8 +19,6 @@ LIFX string lights use 3 zones per bulb.
 
 __version__ = "1.2"
 
-import math
-
 from . import (
     DEVICE_TYPE_STRIP,
     Effect, Param, HSBK,

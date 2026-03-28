@@ -24,9 +24,7 @@ pulse timing are tracked across frames.
 
 __version__ = "2.1"
 
-import math
 import random
-from typing import Optional
 
 from . import (
     DEVICE_TYPE_STRIP,

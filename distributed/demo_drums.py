@@ -32,12 +32,10 @@ Usage::
 __version__ = "1.1"
 
 import argparse
-import math
 import signal as sig
-import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import numpy as np

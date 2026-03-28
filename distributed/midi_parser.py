@@ -36,9 +36,9 @@ References:
 __version__ = "1.0"
 
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional, Union
+from typing import Optional, Union
 
 # ---------------------------------------------------------------------------
 # Constants

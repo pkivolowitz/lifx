@@ -24,7 +24,6 @@ decreases.  This keeps the gaming PC responsive.
 __version__ = "1.0"
 
 import logging
-import math
 import platform
 import subprocess
 import threading

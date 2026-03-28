@@ -99,7 +99,7 @@ from emitters.lifx import LifxEmitter
 from emitters.virtual import VirtualMultizoneEmitter
 from engine import Controller
 from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
-from ble_trigger import BleTriggerManager, sensor_data as _legacy_sensor_data
+from ble_trigger import BleTriggerManager
 from automation import (
     AutomationManager, sensor_data as ble_sensor_data,
     validate_automation, migrate_ble_triggers,
@@ -167,6 +167,24 @@ SCHEDULER_POLL_SECONDS: int = 30
 # Default fade-to-black duration when stopping an effect (ms).
 DEFAULT_FADE_MS: int = 500
 
+# Brightness is normalized from 0-100 percentage to 0-HSBK_MAX.
+BRIGHTNESS_PERCENTAGE_SCALE: int = 100
+
+# Brief delay for multizone devices to initialize after power-on (seconds).
+DEVICE_WAKEUP_DELAY_SECONDS: float = 0.1
+
+# HTTP Strict-Transport-Security max-age (seconds in one year).
+HSTS_MAX_AGE_SECONDS: int = 365 * 24 * 60 * 60  # 31536000
+
+# Timeout for reading audio chunks from the processing queue (seconds).
+AUDIO_QUEUE_TIMEOUT_SECONDS: float = 0.05
+
+# Timeout for the calibration protocol TCP handshake (seconds).
+CALIBRATION_SOCKET_TIMEOUT_SECONDS: float = 10.0
+
+# Delay between calibration pulses (seconds).
+CALIBRATION_PULSE_DELAY_SECONDS: float = 0.1
+
 # HTTP Authorization header name.
 AUTH_HEADER: str = "Authorization"
 
@@ -187,21 +205,11 @@ GROUP_PREFIX: str = "group:"
 LOG_FORMAT: str = "%(asctime)s %(levelname)s %(message)s"
 LOG_DATE_FORMAT: str = "%Y-%m-%d %H:%M:%S"
 
-# Regex for symbolic time specifications (reused from scheduler.py).
-_SYMBOLIC_RE: re.Pattern[str] = re.compile(
-    r"^(sunrise|sunset|dawn|dusk|noon|midnight)"
-    r"(?:([+-])"
-    r"(?:(\d+)h)?"
-    r"(?:(\d+)m)?"
-    r")?$"
+# Schedule parsing regex and constants — canonical source: schedule_utils.py.
+from schedule_utils import (
+    SYMBOLIC_RE as _SYMBOLIC_RE,
+    FIXED_TIME_RE as _FIXED_TIME_RE,
 )
-
-# Regex for fixed HH:MM time specifications.
-_FIXED_TIME_RE: re.Pattern[str] = re.compile(r"^(\d{1,2}):(\d{2})$")
-
-# Valid hours range for fixed time specs.
-MAX_HOUR: int = 23
-MAX_MINUTE: int = 59
 
 # API path prefix.
 API_PREFIX: str = "/api"
@@ -233,14 +241,7 @@ COMMAND_DISCOVER_TIMEOUT_SECONDS: float = 4.0
 # Maximum identify duration accepted from /api/command/identify (seconds).
 COMMAND_IDENTIFY_MAX_DURATION: float = 60.0
 
-# Day-of-week letter to weekday index (Monday=0 .. Sunday=6).
-# Matches Python's date.weekday() convention.
-DAY_LETTER_TO_WEEKDAY: dict[str, int] = {
-    "M": 0, "T": 1, "W": 2, "R": 3, "F": 4, "S": 5, "U": 6,
-}
-
-# All valid day letters (for validation).
-VALID_DAY_LETTERS: str = "MTWRFSU"
+# DAY_LETTER_TO_WEEKDAY and VALID_DAY_LETTERS — in schedule_utils.py.
 
 # Error message for device identifier resolution failures.
 DEVICE_RESOLVE_ERROR: str = "Cannot resolve device identifier"
@@ -1266,7 +1267,7 @@ class DeviceManager:
             raise KeyError(f"Unknown device: {ip}")
 
         # Map 0–100 → 0–65535.
-        bri: int = int(HSBK_MAX * max(0, min(100, brightness)) / 100)
+        bri: int = int(HSBK_MAX * max(0, min(BRIGHTNESS_PERCENTAGE_SCALE, brightness)) / BRIGHTNESS_PERCENTAGE_SCALE)
 
         if isinstance(em, VirtualMultizoneEmitter):
             for member in em.get_emitter_list():
@@ -1354,7 +1355,7 @@ class DeviceManager:
 
             # 3. Power on so zone writes are accepted.
             dev.set_power(on=True, duration_ms=0)
-            time_mod.sleep(0.1)  # Brief delay for device to wake up.
+            time_mod.sleep(DEVICE_WAKEUP_DELAY_SECONDS)
 
             # 4. Clear the persistent committed state with set_color
             # (type 102) and also blank zones with set_zones (type 510).
@@ -1898,256 +1899,17 @@ class DeviceManager:
 
 
 # ---------------------------------------------------------------------------
-# Schedule time parsing (ported from scheduler.py)
+# Schedule time parsing — shared implementation in schedule_utils.py
 # ---------------------------------------------------------------------------
-
-def _parse_time_spec(
-    spec: str,
-    sun: SunTimes,
-    d: date,
-    utc_offset: timedelta,
-) -> Optional[datetime]:
-    """Parse a time specification into a timezone-aware datetime.
-
-    Supports fixed times (``"14:30"``), symbolic solar times
-    (``"sunrise"``, ``"sunset"``), and offsets (``"sunset+30m"``).
-
-    Args:
-        spec:       The time specification string.
-        sun:        Precomputed solar event times for date *d*.
-        d:          Calendar date for resolving the time.
-        utc_offset: Local UTC offset as a timedelta.
-
-    Returns:
-        A timezone-aware datetime, or ``None`` if the symbolic sun event
-        does not occur on this date.
-    """
-    tz: timezone = timezone(utc_offset)
-
-    # Try fixed time first (e.g., "14:30").
-    match = _FIXED_TIME_RE.match(spec)
-    if match:
-        hours: int = int(match.group(1))
-        mins: int = int(match.group(2))
-        if hours > MAX_HOUR or mins > MAX_MINUTE:
-            logging.error("Invalid fixed time: %s", spec)
-            return None
-        return datetime(d.year, d.month, d.day, hours, mins, 0, tzinfo=tz)
-
-    # Try symbolic time (e.g., "sunset+30m").
-    match = _SYMBOLIC_RE.match(spec)
-    if not match:
-        logging.error("Invalid time specification: %r", spec)
-        return None
-
-    symbol: str = match.group(1)
-    sign: Optional[str] = match.group(2)
-    offset_hours: int = int(match.group(3) or 0)
-    offset_mins: int = int(match.group(4) or 0)
-
-    # Resolve symbolic name to a datetime.
-    base_time: Optional[datetime] = None
-    if symbol == "midnight":
-        base_time = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=tz)
-    elif symbol == "noon":
-        base_time = sun.noon
-    elif symbol == "sunrise":
-        base_time = sun.sunrise
-    elif symbol == "sunset":
-        base_time = sun.sunset
-    elif symbol == "dawn":
-        base_time = sun.dawn
-    elif symbol == "dusk":
-        base_time = sun.dusk
-
-    if base_time is None:
-        logging.warning(
-            "Sun event '%s' does not occur on %s (polar day/night?)",
-            symbol, d,
-        )
-        return None
-
-    # Apply offset.
-    if sign:
-        delta: timedelta = timedelta(hours=offset_hours, minutes=offset_mins)
-        if sign == "-":
-            delta = -delta
-        base_time = base_time + delta
-
-    return base_time
-
-
-def _entry_runs_on_day(spec: dict[str, Any], d: date) -> bool:
-    """Check whether a schedule entry runs on a given calendar date.
-
-    If the ``days`` key is absent or empty, the entry runs every day.
-    Otherwise it must be a string of day letters from ``MTWRFSU``
-    (Monday through Sunday, academic convention).
-
-    Args:
-        spec: Schedule entry dict (may contain a ``days`` key).
-        d:    Calendar date to check.
-
-    Returns:
-        ``True`` if the entry should run on date *d*.
-    """
-    days_str: str = spec.get("days", "")
-    if not days_str:
-        return True
-    # Convert the date's weekday (0=Mon .. 6=Sun) to our letter set.
-    weekday: int = d.weekday()
-    for letter, idx in DAY_LETTER_TO_WEEKDAY.items():
-        if idx == weekday:
-            return letter in days_str.upper()
-    return False
-
-
-def _validate_days(days_str: str) -> bool:
-    """Validate a day-of-week string.
-
-    Args:
-        days_str: String of day letters (e.g. ``"MTWRF"``).
-
-    Returns:
-        ``True`` if all characters are valid day letters with no repeats.
-    """
-    upper: str = days_str.upper()
-    return (
-        all(ch in VALID_DAY_LETTERS for ch in upper)
-        and len(upper) == len(set(upper))
-    )
-
-
-def _days_display(days_str: str) -> str:
-    """Format a days string for human display.
-
-    Returns smart labels for common patterns, otherwise the
-    letter string itself.
-
-    Args:
-        days_str: Day letter string (e.g. ``"MTWRF"``).
-
-    Returns:
-        A display string like ``"Weekdays"``, ``"Weekends"``, ``"Daily"``,
-        or the sorted letter string.
-    """
-    if not days_str:
-        return "Daily"
-    upper: str = days_str.upper()
-    # Sort into canonical order.
-    canonical: str = "".join(ch for ch in VALID_DAY_LETTERS if ch in upper)
-    if canonical == VALID_DAY_LETTERS:
-        return "Daily"
-    if canonical == "MTWRF":
-        return "Weekdays"
-    if canonical == "SU":
-        return "Weekends"
-    return canonical
-
-
-def _resolve_entries(
-    specs: list[dict[str, Any]],
-    lat: float,
-    lon: float,
-    d: date,
-    utc_offset: timedelta,
-    group_filter: Optional[str] = None,
-) -> list[tuple[datetime, datetime, dict[str, Any]]]:
-    """Resolve schedule entries for a specific date.
-
-    Args:
-        specs:        List of raw schedule entry dicts.
-        lat:          Observer latitude in degrees.
-        lon:          Observer longitude in degrees.
-        d:            Calendar date for sun time resolution.
-        utc_offset:   Local UTC offset.
-        group_filter: If set, only include entries matching this group.
-
-    Returns:
-        A list of ``(start_datetime, stop_datetime, spec_dict)`` tuples.
-    """
-    sun: SunTimes = sun_times(lat, lon, d, utc_offset)
-    resolved: list[tuple[datetime, datetime, dict[str, Any]]] = []
-
-    for spec in specs:
-        if group_filter is not None and spec.get("group") != group_filter:
-            continue
-
-        # Enabled filter: skip disabled entries (default: enabled).
-        if not spec.get("enabled", True):
-            continue
-
-        # Day-of-week filter: skip entries that don't run on this date.
-        if not _entry_runs_on_day(spec, d):
-            continue
-
-        start: Optional[datetime] = _parse_time_spec(
-            spec["start"], sun, d, utc_offset,
-        )
-        stop: Optional[datetime] = _parse_time_spec(
-            spec["stop"], sun, d, utc_offset,
-        )
-
-        if start is None or stop is None:
-            logging.warning(
-                "Skipping entry '%s': could not resolve times",
-                spec.get("name", "?"),
-            )
-            continue
-
-        # Overnight entries: stop is before start → add a day to stop.
-        if stop <= start:
-            stop += timedelta(days=1)
-
-        resolved.append((start, stop, spec))
-
-    return resolved
-
-
-def _find_active_entry(
-    specs: list[dict[str, Any]],
-    lat: float,
-    lon: float,
-    now: datetime,
-    group_name: str,
-) -> Optional[dict[str, Any]]:
-    """Find the first schedule entry active for a group at time *now*.
-
-    When multiple entries overlap for the same group, config file order
-    determines priority — the first matching entry wins.  This is
-    deterministic and user-controllable: move higher-priority entries
-    earlier in the schedule list.
-
-    Args:
-        specs:      Raw schedule entry dicts (order = priority).
-        lat:        Observer latitude in degrees.
-        lon:        Observer longitude in degrees.
-        now:        Current timezone-aware datetime.
-        group_name: Only consider entries targeting this group.
-
-    Returns:
-        The matching spec dict, or ``None`` if no entry is active.
-    """
-    utc_offset: timedelta = now.utcoffset()
-    today: date = now.date()
-    yesterday: date = today - timedelta(days=1)
-
-    today_resolved = _resolve_entries(
-        specs, lat, lon, today, utc_offset, group_filter=group_name,
-    )
-    yesterday_resolved = _resolve_entries(
-        specs, lat, lon, yesterday, utc_offset, group_filter=group_name,
-    )
-
-    for start, stop, spec in today_resolved:
-        if start <= now < stop:
-            return spec
-
-    for start, stop, spec in yesterday_resolved:
-        if start <= now < stop:
-            return spec
-
-    return None
+from schedule_utils import (
+    parse_time_spec as _parse_time_spec,
+    entry_runs_on_day as _entry_runs_on_day,
+    resolve_entries as _resolve_entries,
+    find_active_entry as _find_active_entry,
+    validate_days as _validate_days,
+    days_display as _days_display,
+    VALID_DAY_LETTERS as _VALID_DAY_LETTERS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -2605,7 +2367,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Strict-Transport-Security",
-                         "max-age=31536000; includeSubDomains")
+                         f"max-age={HSTS_MAX_AGE_SECONDS}; includeSubDomains")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Security-Policy", "default-src 'none'")
 
@@ -4329,7 +4091,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             buf: bytearray = bytearray()
             while source.is_alive():
                 try:
-                    chunk: Optional[bytes] = audio_q.get(timeout=0.05)
+                    chunk: Optional[bytes] = audio_q.get(timeout=AUDIO_QUEUE_TIMEOUT_SECONDS)
                 except _queue.Empty:
                     # Flush whatever we have on timeout.
                     if buf:
@@ -4404,7 +4166,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             CALIBRATION_PORT += 1
             srv_sock.bind(("0.0.0.0", CALIBRATION_PORT))
         srv_sock.listen(1)
-        srv_sock.settimeout(10.0)
+        srv_sock.settimeout(CALIBRATION_SOCKET_TIMEOUT_SECONDS)
 
         logging.info(
             "Calibration: listening on tcp port %d", CALIBRATION_PORT,
@@ -4438,7 +4200,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                     # Silence — send as bulk.
                     client.sendall(chunk)
                 # Brief real-time pause so pulses are spaced in time.
-                time_mod.sleep(0.1)
+                time_mod.sleep(CALIBRATION_PULSE_DELAY_SECONDS)
         except (BrokenPipeError, ConnectionResetError, OSError) as exc:
             logging.warning("Calibration: client disconnected: %s", exc)
 

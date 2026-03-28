@@ -59,7 +59,7 @@ import fnmatch
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional, Union
 
 # Param lives in param.py — shared by effects, emitters, and operators.
@@ -101,6 +101,9 @@ TICK_POLL_HZ: float = 50.0
 
 # Derived poll interval (seconds).
 TICK_POLL_INTERVAL: float = 1.0 / TICK_POLL_HZ
+
+# Floor for operator tick_hz to prevent division by zero.
+MIN_TICK_HZ: float = 0.01
 
 # ---------------------------------------------------------------------------
 # Operator registry
@@ -508,7 +511,7 @@ class OperatorManager:
                 continue
             try:
                 op: Operator = create_operator(otype, name, entry, self._bus)
-                tick_interval: float = 1.0 / max(op.tick_hz, 0.01)
+                tick_interval: float = 1.0 / max(op.tick_hz, MIN_TICK_HZ)
                 slot = _OperatorSlot(
                     operator=op,
                     tick_interval=tick_interval,

@@ -26,7 +26,7 @@ import math
 import struct
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any
 
 from . import SignalBus, SignalMeta
 from .fft import fft_magnitudes, bin_to_bands, spectral_centroid, hann_window

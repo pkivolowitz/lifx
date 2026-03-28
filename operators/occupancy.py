@@ -31,7 +31,7 @@ import logging
 import sqlite3
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 from operators import Operator, TICK_BOTH, SignalValue
 from param import Param

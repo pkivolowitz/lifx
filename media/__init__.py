@@ -34,7 +34,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Union
+from typing import Any, Optional, Union
 
 # ---------------------------------------------------------------------------
 # Optional dependency: paho-mqtt for distributed signal bus

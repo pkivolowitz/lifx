@@ -21,7 +21,6 @@ falling on still water seen from above.
 
 __version__ = "1.0"
 
-import math
 import os
 import random
 import sys

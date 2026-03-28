@@ -36,7 +36,6 @@ EmitterManager calls the SOE lifecycle (``on_open``, ``on_emit``,
 __version__ = "2.3"
 
 import logging
-import time
 from typing import Any, Optional
 
 from effects import HSBK, KELVIN_DEFAULT, hsbk_to_luminance

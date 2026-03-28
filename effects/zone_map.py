@@ -29,7 +29,6 @@ with a rotating hue for detailed inspection.
 __version__ = "2.0"
 
 import sys
-from typing import Optional
 
 from . import (
     DEVICE_TYPE_STRIP,

@@ -896,10 +896,9 @@ class AutomationManager:
             ``True`` if a schedule entry is currently active.
         """
         try:
-            # Import here to avoid circular imports at module level.
-            from server import _find_active_entry
+            from schedule_utils import find_active_entry as _find_active_entry
         except ImportError:
-            logger.error("Cannot import _find_active_entry from server")
+            logger.error("Cannot import find_active_entry from schedule_utils")
             raise
 
         try:

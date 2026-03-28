@@ -24,7 +24,6 @@ __version__ = "1.0"
 import argparse
 import json
 import logging
-import math
 import os
 import signal
 import sys

@@ -7,3 +7,6 @@ ble_pairing.json
 xcuserdata/
 appstore/
 AUDIT_REPORT.md
+state.db
+state.db-wal
+state.db-shm

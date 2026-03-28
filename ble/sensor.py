@@ -37,10 +37,8 @@ import asyncio
 import hashlib
 import json
 import logging
-import math
 import signal
 import struct
-import sys
 import time
 from typing import Any, Optional
 

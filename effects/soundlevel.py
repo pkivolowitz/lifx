@@ -15,8 +15,6 @@ base brightness — graceful degradation, never dark.
 
 __version__ = "1.0"
 
-import math
-
 from . import (
     MediaEffect, Param, HSBK,
     HSBK_MAX, KELVIN_DEFAULT, KELVIN_MIN, KELVIN_MAX,
