@@ -96,7 +96,7 @@ class OccupancyOperator(Operator):
     operator_type: str = "occupancy"
     description: str = "Derive HOME/AWAY from aggregate lock state"
 
-    input_signals: list[str] = ["*:*:lock_state"]
+    input_signals: list[str] = ["*:lock_state"]
     output_signals: list[str] = [OCCUPANCY_SIGNAL]
 
     tick_mode: str = TICK_BOTH

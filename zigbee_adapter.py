@@ -31,6 +31,8 @@ import logging
 import time
 from typing import Any, Optional
 
+from media import SignalMeta
+
 logger: logging.Logger = logging.getLogger("glowup.zigbee")
 
 # ---------------------------------------------------------------------------
@@ -43,8 +45,8 @@ DEFAULT_Z2M_PREFIX: str = "zigbee2mqtt"
 # Default GlowUp output topic prefix.
 DEFAULT_GLOWUP_PREFIX: str = "glowup/zigbee"
 
-# SignalBus source prefix for Zigbee signals.
-SIGNAL_SOURCE: str = "zigbee"
+# Transport identifier for metadata registration.
+TRANSPORT: str = "zigbee"
 
 # Z2M bridge subtopic — internal coordination, skip these.
 BRIDGE_SUBTOPIC: str = "bridge"
@@ -242,8 +244,15 @@ class ZigbeeAdapter:
             if normalized is None:
                 continue
 
-            # Write to SignalBus.
-            signal_name: str = f"{SIGNAL_SOURCE}:{friendly_name}:{key}"
+            # Write to SignalBus (transport-free naming).
+            signal_name: str = f"{friendly_name}:{key}"
+            if hasattr(self._bus, 'register'):
+                self._bus.register(signal_name, SignalMeta(
+                    signal_type="scalar",
+                    description=f"Zigbee {friendly_name} {key}",
+                    source_name=friendly_name,
+                    transport=TRANSPORT,
+                ))
             self._bus.write(signal_name, normalized)
 
             # Publish to GlowUp MQTT topic for remote subscribers.

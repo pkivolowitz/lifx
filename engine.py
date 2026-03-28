@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import collections
 
-__version__ = "2.1"
+__version__ = "2.2"
 
 import logging
 import queue
@@ -43,6 +43,7 @@ from typing import Any, Callable, Optional
 
 from effects import Effect, create_effect, get_registry, KELVIN_DEFAULT
 from emitters import Emitter
+from media import SignalMeta
 from transport import SendMode
 
 # ---------------------------------------------------------------------------
@@ -106,6 +107,13 @@ PIPELINE_LOW_WATER: int = 5
 # Pipeline size for audio-reactive / media effects.  Smaller buffer
 # trades smoothness for lower latency — at 20 FPS, 2 frames = ~100ms.
 PIPELINE_LOW_LATENCY: int = 2
+
+# Signal name format for effect parameters on the bus.
+# Pattern: {effect_name}:{param_name}
+# Example: "breathe:speed" — a Param set via API or bound to a sensor.
+# Transport metadata on these signals is "param" — distinguishing
+# user-set constants from sensor data without polluting the name.
+PARAM_TRANSPORT: str = "param"
 
 
 class Engine:
@@ -248,6 +256,18 @@ class Engine:
             # If this is a MediaEffect, give it direct bus access.
             if signal_bus is not None and hasattr(effect, '_signal_bus'):
                 effect._signal_bus = signal_bus
+            # Write initial param values to bus as signals.
+            # Each param becomes {effect_name}:{param_name} on the bus.
+            # Bindings are applied as signal routing: the bound source
+            # signal overwrites the param signal each frame.
+            if signal_bus is not None and hasattr(effect, 'name') and effect.name:
+                self._publish_params_to_bus(effect, signal_bus)
+                # Apply bindings as bus routing — write the source signal
+                # name so the render loop reads the routed value.
+                if bindings:
+                    self._apply_binding_routes(
+                        effect, bindings, signal_bus,
+                    )
             # When a signal bus is active (media/audio-reactive effects),
             # shrink the pipeline to minimize latency.  The standard 10-frame
             # buffer adds 500ms at 20 FPS — unacceptable for real-time audio.
@@ -402,12 +422,15 @@ class Engine:
                 self._stop_event.wait(interval)
                 continue
 
-            # --- Signal binding resolution ---
-            # Before rendering, overwrite bound effect params with live
-            # signal values from the bus.  This lets any existing effect
-            # respond to audio/video/sensor data without modification.
-            if bindings and signal_bus:
-                self._resolve_bindings(effect, bindings, signal_bus)
+            # --- Param-as-signal resolution ---
+            # Before rendering, read param signals from the bus.  This
+            # handles both static params (API-set constants) and bindings
+            # (sensor-routed values) through a single path.  Params are
+            # signals; the bus is the single source of truth when active.
+            if signal_bus:
+                self._resolve_bindings_and_params(
+                    effect, bindings, signal_bus,
+                )
 
             # Use wall-clock time.  The pipeline depth is small enough
             # (500 ms at high water) that the time skew between render
@@ -582,54 +605,137 @@ class Engine:
                 self._stop_event.wait(sleep_time)
 
     @staticmethod
-    def _resolve_bindings(effect: Effect, bindings: dict[str, dict],
-                          signal_bus: Any) -> None:
-        """Overwrite effect params with live signal values from the bus.
+    def _publish_params_to_bus(effect: Effect, signal_bus: Any) -> None:
+        """Write current effect param values to the bus as signals.
 
-        For each binding, reads the named signal, applies optional array
-        reduction and scaling, then sets the param on the effect.
+        Each param becomes ``{effect.name}:{param_name}`` on the bus.
+        This makes params visible to operators, the dashboard, and
+        other effects — a parameter is just a signal with a constant
+        value and a declared range.
 
         Args:
             effect:     The active effect instance.
-            bindings:   Dict mapping param names to binding specifications.
-            signal_bus: The :class:`SignalBus` to read from.
+            signal_bus: The :class:`SignalBus` to write to.
         """
-        for param_name, binding in bindings.items():
-            signal_name: str = binding.get("signal", "")
-            if not signal_name:
-                continue
-
-            value = signal_bus.read(signal_name, 0.0)
-
-            # Reduce array signals to a scalar.
-            if isinstance(value, list):
-                reduce_fn: str = binding.get("reduce", "max")
-                if not value:
-                    value = 0.0
-                elif reduce_fn == "max":
-                    value = max(value)
-                elif reduce_fn == "mean":
-                    value = sum(value) / len(value)
-                elif reduce_fn == "sum":
-                    value = min(1.0, sum(value))
-                else:
-                    value = max(value)
-
-            # Scale the normalized [0, 1] value to the param's range.
-            scale = binding.get("scale")
-            if scale and len(scale) >= 2:
-                lo, hi = float(scale[0]), float(scale[1])
-            else:
-                # Use the param's own min/max from the Param definition.
-                param_def = effect._param_defs.get(param_name)
-                if param_def:
-                    lo, hi = param_def.min, param_def.max
-                else:
-                    lo, hi = 0.0, 1.0
-
-            scaled: float = lo + float(value) * (hi - lo)
+        effect_name: str = effect.name or "unknown"
+        for param_name, param_def in effect._param_defs.items():
+            signal_name: str = f"{effect_name}:{param_name}"
+            value = getattr(effect, param_name, param_def.default)
             try:
-                setattr(effect, param_name, scaled)
+                fval: float = float(value)
+            except (TypeError, ValueError):
+                continue  # Skip non-numeric params (choices, strings).
+            signal_bus.register(signal_name, SignalMeta(
+                signal_type="scalar",
+                description=f"{effect_name} param {param_name}",
+                source_name=effect_name,
+                transport=PARAM_TRANSPORT,
+                min_val=float(param_def.min) if param_def.min is not None else 0.0,
+                max_val=float(param_def.max) if param_def.max is not None else 1.0,
+            ))
+            signal_bus.write(signal_name, fval)
+
+    @staticmethod
+    def _apply_binding_routes(
+        effect: Effect,
+        bindings: dict[str, dict],
+        signal_bus: Any,
+    ) -> None:
+        """Set up binding routes: source signal → param signal on the bus.
+
+        A binding like ``{"speed": {"signal": "foyer:audio:bass"}}`` means
+        "each frame, read ``foyer:audio:bass``, scale it, and write the
+        result to ``breathe:speed``."  The render loop then reads
+        ``breathe:speed`` uniformly — it doesn't know or care whether the
+        value came from an API call or an audio sensor.
+
+        Binding metadata (reduce, scale) is stored alongside for the
+        render loop to apply.
+
+        Args:
+            effect:     The active effect instance.
+            bindings:   Binding specification dict.
+            signal_bus: The :class:`SignalBus`.
+        """
+        # Nothing to store persistently — the render loop reads bindings
+        # from self._bindings each frame and applies routing inline.
+        # This method exists for future bus-level routing if needed.
+        pass
+
+    @staticmethod
+    def _resolve_bindings_and_params(
+        effect: Effect,
+        bindings: Optional[dict[str, dict]],
+        signal_bus: Any,
+    ) -> None:
+        """Read param signals from the bus and apply to the effect.
+
+        This is the unified param resolution path.  Every frame:
+
+        - For each effect param, read ``{effect.name}:{param}`` from the bus.
+        - For params with bindings, read the source signal, reduce/scale it,
+          write the result to the param signal, THEN read the param signal.
+        - Set the effect attribute.
+
+        Bindings are signal routing — they write to the param signal on the
+        bus before the param signal is read.  This means the bus always has
+        the current value, whether it came from the API, a binding, or an
+        operator writing directly.
+
+        Args:
+            effect:     The active effect instance.
+            bindings:   Optional binding specifications.
+            signal_bus: The :class:`SignalBus` to read/write.
+        """
+        effect_name: str = effect.name or "unknown"
+
+        # First pass: apply bindings (source → param signal routing).
+        if bindings:
+            for param_name, binding in bindings.items():
+                source_signal: str = binding.get("signal", "")
+                if not source_signal:
+                    continue
+
+                value = signal_bus.read(source_signal, 0.0)
+
+                # Reduce array signals to a scalar.
+                if isinstance(value, list):
+                    reduce_fn: str = binding.get("reduce", "max")
+                    if not value:
+                        value = 0.0
+                    elif reduce_fn == "max":
+                        value = max(value)
+                    elif reduce_fn == "mean":
+                        value = sum(value) / len(value)
+                    elif reduce_fn == "sum":
+                        value = min(1.0, sum(value))
+                    else:
+                        value = max(value)
+
+                # Scale the normalized [0, 1] value to the param's range.
+                scale = binding.get("scale")
+                if scale and len(scale) >= 2:
+                    lo, hi = float(scale[0]), float(scale[1])
+                else:
+                    param_def = effect._param_defs.get(param_name)
+                    if param_def and param_def.min is not None:
+                        lo, hi = float(param_def.min), float(param_def.max)
+                    else:
+                        lo, hi = 0.0, 1.0
+
+                scaled: float = lo + float(value) * (hi - lo)
+                # Write the routed value to the param signal on the bus.
+                param_signal: str = f"{effect_name}:{param_name}"
+                signal_bus.write(param_signal, scaled)
+
+        # Second pass: read all param signals from the bus → effect attributes.
+        for param_name in effect._param_defs:
+            param_signal = f"{effect_name}:{param_name}"
+            bus_value = signal_bus.read(param_signal, None)
+            if bus_value is None:
+                continue  # Param not on bus (non-numeric, or bus not seeded).
+            try:
+                setattr(effect, param_name, effect._param_defs[param_name].validate(bus_value))
             except Exception:
                 _log.warning(
                     "Failed to set param %s on effect: %s",
@@ -765,6 +871,10 @@ class Controller:
     def update_params(self, **kwargs: Any) -> None:
         """Update parameters on the running effect.
 
+        If the signal bus is active, writes to bus signals (which the
+        render loop reads back next frame).  Otherwise, sets attributes
+        directly on the effect (CLI path).
+
         Unknown parameter names are silently ignored so that callers
         can pass a superset of params safely.
 
@@ -774,8 +884,24 @@ class Controller:
             **kwargs: Parameter names mapped to new values.
         """
         with self.engine._lock:
-            if self.engine.effect is not None:
-                self.engine.effect.set_params(**kwargs)
+            effect: Optional[Effect] = self.engine.effect
+            if effect is None:
+                return
+            bus = self.engine._signal_bus
+            if bus is not None and hasattr(effect, 'name') and effect.name:
+                # Write to bus — render loop reads it back next frame.
+                for param_name, value in kwargs.items():
+                    if param_name not in effect._param_defs:
+                        continue
+                    validated = effect._param_defs[param_name].validate(value)
+                    try:
+                        signal_name: str = f"{effect.name}:{param_name}"
+                        bus.write(signal_name, float(validated))
+                    except (TypeError, ValueError):
+                        pass  # Non-numeric param — skip bus, fall through.
+            else:
+                # No bus (CLI mode) — direct attribute write.
+                effect.set_params(**kwargs)
 
     def get_status(self) -> dict[str, Any]:
         """Return the current engine state as a JSON-serializable dict.

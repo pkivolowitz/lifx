@@ -664,3 +664,12 @@ class OperatorManager:
                             )
 
             time.sleep(TICK_POLL_INTERVAL)
+
+
+# ---------------------------------------------------------------------------
+# Auto-import concrete operator modules so they register via __init_subclass__.
+# ---------------------------------------------------------------------------
+
+from operators import occupancy as _occupancy  # noqa: F401, E402
+from operators import motion_gate as _motion_gate  # noqa: F401, E402
+from operators import trigger as _trigger  # noqa: F401, E402

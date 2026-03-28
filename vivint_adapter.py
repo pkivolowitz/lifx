@@ -41,6 +41,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from media import SignalMeta
+
 logger: logging.Logger = logging.getLogger("glowup.vivint")
 
 # ---------------------------------------------------------------------------
@@ -49,6 +51,9 @@ logger: logging.Logger = logging.getLogger("glowup.vivint")
 
 # MQTT topic prefix for Vivint signals.
 MQTT_TOPIC_PREFIX: str = "glowup/vivint"
+
+# Transport identifier for metadata registration.
+TRANSPORT: str = "vivint"
 
 # MQTT QoS for lock state messages (at-least-once).
 MQTT_QOS: int = 1
@@ -280,12 +285,19 @@ class VivintAdapter:
         # --- Lock state ---
         locked: bool = device.is_locked
         lock_value: float = 1.0 if locked else 0.0
-        signal_name: str = f"vivint:{config_name}:lock_state"
+        signal_name: str = f"{config_name}:lock_state"
 
         prev: Optional[float] = self._last_lock_state.get(config_name)
         self._last_lock_state[config_name] = lock_value
 
-        # Write to SignalBus.
+        # Register with transport metadata and write to SignalBus.
+        if hasattr(self._bus, 'register'):
+            self._bus.register(signal_name, SignalMeta(
+                signal_type="scalar",
+                description=f"Vivint {config_name} lock state",
+                source_name=config_name,
+                transport=TRANSPORT,
+            ))
         self._bus.write(signal_name, lock_value)
 
         # Publish to MQTT.
@@ -309,8 +321,15 @@ class VivintAdapter:
         battery_raw: Optional[int] = device.battery_level
         if battery_raw is not None:
             battery_norm: float = float(battery_raw) / BATTERY_SCALE
-            battery_signal: str = f"vivint:{config_name}:battery"
+            battery_signal: str = f"{config_name}:battery"
             self._last_battery[config_name] = battery_norm
+            if hasattr(self._bus, 'register'):
+                self._bus.register(battery_signal, SignalMeta(
+                    signal_type="scalar",
+                    description=f"Vivint {config_name} battery",
+                    source_name=config_name,
+                    transport=TRANSPORT,
+                ))
             self._bus.write(battery_signal, battery_norm)
 
             if self._mqtt_client:

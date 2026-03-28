@@ -88,12 +88,18 @@ class SignalMeta:
         signal_type: ``"scalar"`` or ``"array"``.
         description: Human-readable description of the signal.
         source_name: Name of the media source that produces this signal.
+        transport:   Radio/protocol that delivered the signal (``"ble"``,
+                     ``"zigbee"``, ``"vivint"``, ``"audio"``, etc.).
+                     Transport is metadata, not part of the signal name —
+                     operators subscribe to ``device:property``, not
+                     ``transport:device:property``.
         min_val:     Expected minimum value (always 0.0 for normalized).
         max_val:     Expected maximum value (always 1.0 for normalized).
     """
     signal_type: str = "scalar"
     description: str = ""
     source_name: str = ""
+    transport: str = ""
     min_val: float = 0.0
     max_val: float = 1.0
 
@@ -103,13 +109,16 @@ class SignalMeta:
         Returns:
             Dict suitable for API responses.
         """
-        return {
+        d: dict[str, Any] = {
             "type": self.signal_type,
             "description": self.description,
             "source": self.source_name,
             "min": self.min_val,
             "max": self.max_val,
         }
+        if self.transport:
+            d["transport"] = self.transport
+        return d
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +149,7 @@ class SignalBus:
     def __init__(self) -> None:
         """Initialize an empty signal bus."""
         self._signals: dict[str, SignalValue] = {}
+        self._timestamps: dict[str, float] = {}        # signal → monotonic write time
         self._metadata: dict[str, SignalMeta] = {}
         self._lock: threading.Lock = threading.Lock()
         self._mqtt_client: Optional[Any] = None
@@ -166,6 +176,7 @@ class SignalBus:
         """
         with self._lock:
             self._signals[name] = value
+            self._timestamps[name] = time.monotonic()
         # Network publish is outside the lock intentionally — holding
         # the lock during MQTT I/O would block all signal reads for the
         # duration of the publish (tens of ms).  Local-before-remote
@@ -201,6 +212,83 @@ class SignalBus:
         """
         with self._lock:
             return self._signals.get(name, default)
+
+    def read_timestamp(self, name: str) -> Optional[float]:
+        """Read the monotonic timestamp of a signal's last write.
+
+        Args:
+            name: Signal name.
+
+        Returns:
+            Monotonic time of last write, or ``None`` if never written.
+        """
+        with self._lock:
+            return self._timestamps.get(name)
+
+    def read_with_timestamp(
+        self, name: str, default: SignalValue = 0.0,
+    ) -> tuple[SignalValue, Optional[float]]:
+        """Atomically read a signal value and its write timestamp.
+
+        Args:
+            name:    Signal name.
+            default: Value returned if the signal does not exist.
+
+        Returns:
+            Tuple of (value, monotonic_timestamp).  Timestamp is ``None``
+            if the signal has never been written.
+        """
+        with self._lock:
+            return (
+                self._signals.get(name, default),
+                self._timestamps.get(name),
+            )
+
+    def signals_by_prefix(
+        self, prefix: str,
+    ) -> dict[str, tuple[SignalValue, Optional[float]]]:
+        """Read all signals matching a prefix, with timestamps.
+
+        Useful for reconstructing grouped views (e.g., all BLE sensor
+        readings) from the flat signal namespace.
+
+        Args:
+            prefix: Signal name prefix (e.g., ``"ble:"``).
+
+        Returns:
+            Dict mapping signal names to (value, timestamp) tuples.
+        """
+        with self._lock:
+            return {
+                name: (value, self._timestamps.get(name))
+                for name, value in self._signals.items()
+                if name.startswith(prefix)
+            }
+
+    def signals_by_transport(
+        self, transport: str,
+    ) -> dict[str, tuple[SignalValue, Optional[float]]]:
+        """Read all signals registered with a specific transport, with timestamps.
+
+        Uses the ``transport`` field of :class:`SignalMeta` to filter.
+        Signals that were never registered with metadata are excluded.
+
+        Args:
+            transport: Transport identifier (e.g., ``"ble"``, ``"zigbee"``).
+
+        Returns:
+            Dict mapping signal names to (value, timestamp) tuples.
+        """
+        with self._lock:
+            matching: set[str] = {
+                name for name, meta in self._metadata.items()
+                if meta.transport == transport
+            }
+            return {
+                name: (self._signals[name], self._timestamps.get(name))
+                for name in matching
+                if name in self._signals
+            }
 
     def read_many(self, names: list[str],
                   default: SignalValue = 0.0) -> dict[str, SignalValue]:

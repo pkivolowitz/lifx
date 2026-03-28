@@ -134,17 +134,17 @@ class TestUdpLoopback(unittest.TestCase):
 
     def test_add_remove_target(self) -> None:
         """Adding and removing targets works correctly."""
-        self._sender.add_target("10.0.0.99", 9999)
+        self._sender.add_target("127.0.0.99", 9999)
         # Should now have 2 targets.
         self._receiver.add_callback(self._on_frame)
         self._receiver.start()
 
-        # Send should attempt both targets (one will fail — 10.0.0.99
+        # Send should attempt both targets (one will fail — 127.0.0.99
         # doesn't exist, but UDP send doesn't fail on unreachable).
         sent: int = self._sender.send("test:target", b"x", DTYPE_FLOAT32)
         self.assertEqual(sent, 2)
 
-        self._sender.remove_target("10.0.0.99", 9999)
+        self._sender.remove_target("127.0.0.99", 9999)
         sent = self._sender.send("test:target", b"y", DTYPE_FLOAT32)
         self.assertEqual(sent, 1)
 

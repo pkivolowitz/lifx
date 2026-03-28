@@ -108,6 +108,7 @@ from operators import OperatorManager
 from lock_manager import LockManager
 from zigbee_adapter import ZigbeeAdapter
 from vivint_adapter import VivintAdapter
+from ble_adapter import BleAdapter
 from media import MediaManager, SignalBus
 from media.source import AudioStreamServer
 from solar import SunTimes, sun_times
@@ -2432,6 +2433,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     registry: Optional[DeviceRegistry] = None
     operator_manager: Optional[OperatorManager] = None
     lock_manager: Optional[LockManager] = None
+    ble_adapter: Optional[Any] = None
+    signal_bus: Optional[SignalBus] = None
 
     # Active /api/command/identify pulses: {ip: stop_event}.
     # Populated by _handle_post_command_identify; cleared when pulse ends.
@@ -2721,9 +2724,20 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 if pat.startswith(_PARAM_OPEN) and pat.endswith(_PARAM_CLOSE)
             ]
 
-            # Dispatch.
+            # Dispatch with error boundary — return 500 JSON on crash.
             handler_fn: Callable = getattr(self, route.handler)
-            handler_fn(*handler_args)
+            try:
+                handler_fn(*handler_args)
+            except Exception as exc:
+                logging.exception(
+                    "Handler %s crashed: %s", route.handler, exc,
+                )
+                try:
+                    self._send_json(500, {
+                        "error": f"Internal error: {type(exc).__name__}: {exc}",
+                    })
+                except Exception:
+                    pass  # Response already started or connection dead.
             return
 
         # No route matched.
@@ -2767,12 +2781,12 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         self._send_json(200, {"effects": effects})
 
     def _handle_get_groups(self) -> None:
-        """GET /api/groups — device groups from config.
+        """GET /api/groups — resolved device groups (IPs).
 
-        Returns all device groups defined in the server config,
-        excluding comment keys (those starting with ``_``).
-        Merges both ``groups`` and ``schedule_groups`` sections
-        so the dashboard schedule modal shows every valid target.
+        Returns all device groups with members resolved to live IP
+        addresses.  Config groups are defined with labels/MACs, but
+        this endpoint returns IPs so CLI and API clients can connect
+        directly.
 
         Response::
 
@@ -2783,7 +2797,8 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 }
             }
         """
-        groups: dict[str, list[str]] = _get_groups(self.config)
+        # Use the DeviceManager's resolved groups (labels → IPs).
+        groups: dict[str, list[str]] = dict(self.device_manager._group_config)
         # Include schedule-specific groups so schedule dropdowns are complete.
         sched_groups: dict[str, Any] = self.config.get("schedule_groups", {})
         for name, entries in sched_groups.items():
@@ -2988,33 +3003,97 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     def _handle_get_ble_sensors(self) -> None:
         """GET /api/ble/sensors — all BLE sensor readings.
 
-        Returns current motion, temperature, humidity, and status
-        for all configured BLE sensors.  Each entry is enriched with
-        a ``location`` field from the ``sensor_locations`` config map
-        when one is set.
+        Reads from the SignalBus (populated by BleAdapter).  Signals
+        are named ``ble:{label}:{characteristic}`` — this endpoint
+        reconstructs the per-label grouped view and adds location and
+        status metadata.
         """
+        bus: Optional[SignalBus] = self.signal_bus
+        if bus is None:
+            self._send_json(200, {})
+            return
+
         locations: dict[str, str] = self.config.get(
             "sensor_locations", {},
         )
-        all_data: dict[str, dict] = ble_sensor_data.get_all()
-        for lbl, readings in all_data.items():
+        ble_signals: dict = bus.signals_by_transport("ble")
+
+        # Group by label: {label}:{char} → {label: {char: val, ...}}
+        grouped: dict[str, dict[str, Any]] = {}
+        boot: float = time_mod.monotonic()
+        now_wall: float = time_mod.time()
+        for name, (value, ts) in ble_signals.items():
+            parts: list[str] = name.split(":")
+            if len(parts) != 2:
+                continue
+            label: str = parts[0]
+            char: str = parts[1]
+            if label not in grouped:
+                grouped[label] = {}
+            # Convert value to int for motion (legacy compat).
+            if char == "motion":
+                grouped[label][char] = int(value)
+            else:
+                grouped[label][char] = value
+            # Convert monotonic timestamp to wall-clock epoch.
+            if ts is not None:
+                wall_ts: float = now_wall - (boot - ts)
+                existing: float = grouped[label].get("last_update", 0.0)
+                if wall_ts > existing:
+                    grouped[label]["last_update"] = wall_ts
+
+        # Enrich with location and status blobs.
+        adapter: Optional[Any] = self.ble_adapter
+        for lbl, readings in grouped.items():
             loc: str = locations.get(lbl, "")
             if loc:
                 readings["location"] = loc
-        self._send_json(200, all_data)
+            if adapter is not None:
+                status: Optional[dict] = adapter.get_status_blob(lbl)
+                if status is not None:
+                    readings["status"] = status
+
+        self._send_json(200, grouped)
 
     def _handle_get_ble_sensor_detail(self, label: str) -> None:
         """GET /api/ble/sensors/{label} — single sensor readings."""
-        data: dict = ble_sensor_data.get(label)
-        if not data:
+        bus: Optional[SignalBus] = self.signal_bus
+        if bus is None:
             self._send_json(404, {"error": f"No data for '{label}'"})
             return
+
+        prefix: str = f"{label}:"
+        signals: dict = bus.signals_by_prefix(prefix)
+        if not signals:
+            self._send_json(404, {"error": f"No data for '{label}'"})
+            return
+
+        data: dict[str, Any] = {}
+        boot: float = time_mod.monotonic()
+        now_wall: float = time_mod.time()
+        for name, (value, ts) in signals.items():
+            char: str = name.split(":")[-1]
+            if char == "motion":
+                data[char] = int(value)
+            else:
+                data[char] = value
+            if ts is not None:
+                wall_ts: float = now_wall - (boot - ts)
+                existing: float = data.get("last_update", 0.0)
+                if wall_ts > existing:
+                    data["last_update"] = wall_ts
+
         locations: dict[str, str] = self.config.get(
             "sensor_locations", {},
         )
         loc: str = locations.get(label, "")
         if loc:
             data["location"] = loc
+        adapter: Optional[Any] = self.ble_adapter
+        if adapter is not None:
+            status: Optional[dict] = adapter.get_status_blob(label)
+            if status is not None:
+                data["status"] = status
         self._send_json(200, data)
 
     def _handle_put_sensor_location(self, label: str) -> None:
@@ -3048,33 +3127,45 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     # Automation endpoints
     # ------------------------------------------------------------------
 
+    def _get_trigger_operators(self) -> list[dict[str, Any]]:
+        """Return trigger-type entries from the operators config list.
+
+        Returns:
+            List of trigger operator config dicts.
+        """
+        return [
+            op for op in self.config.get("operators", [])
+            if op.get("type") == "trigger"
+        ]
+
     def _handle_get_automations(self) -> None:
-        """GET /api/automations — list all automations with status."""
-        automations: list[dict[str, Any]] = list(
-            self.config.get("automations", []),
-        )
-        # Enrich with runtime status from the manager.
-        mgr: Optional[AutomationManager] = self.automation_manager
-        status_list: list[dict] = (
-            mgr.get_status() if mgr is not None else []
-        )
-        status_map: dict[int, dict] = {
-            s["index"]: s for s in status_list
+        """GET /api/automations — list all trigger operators with status.
+
+        Returns trigger operators from the operators config, enriched
+        with runtime status from the OperatorManager.
+        """
+        triggers: list[dict[str, Any]] = self._get_trigger_operators()
+        # Get runtime status from OperatorManager.
+        om: Optional[OperatorManager] = self.operator_manager
+        status_list: list[dict] = om.get_status() if om is not None else []
+        status_map: dict[str, dict] = {
+            s["name"]: s for s in status_list if s.get("type") == "trigger"
         }
         result: list[dict[str, Any]] = []
-        for i, auto in enumerate(automations):
-            entry: dict[str, Any] = dict(auto)
+        for i, trig in enumerate(triggers):
+            entry: dict[str, Any] = dict(trig)
             entry["index"] = i
-            st: dict = status_map.get(i, {})
+            st: dict = status_map.get(trig.get("name", ""), {})
             entry["active"] = st.get("active", False)
             entry["last_triggered"] = st.get("last_triggered", 0)
             result.append(entry)
         self._send_json(200, {"automations": result})
 
     def _handle_post_automation_create(self) -> None:
-        """POST /api/automations — create a new automation.
+        """POST /api/automations — create a new trigger operator.
 
-        Request body matches the automation data model (see automation.py).
+        Request body matches the automation data model.  The entry is
+        stored as a trigger operator in the ``operators`` config list.
         """
         body: Optional[dict[str, Any]] = self._read_json_body()
         if body is None:
@@ -3102,23 +3193,30 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         body.setdefault("schedule_conflict", "defer")
         body.setdefault("off_action", {"effect": "off", "params": {}})
 
-        # Copy before mutating — automation manager reads concurrently.
-        automations: list = list(self.config.get("automations", []))
-        automations.append(body)
-        self.config["automations"] = automations
-        self._save_config_field("automations", automations)
+        # Wrap as trigger operator entry.
+        body["type"] = "trigger"
+        if "name" not in body:
+            body["name"] = f"trigger_{int(time_mod.time())}"
 
-        # Notify the manager to reload subscriptions.
-        mgr: Optional[AutomationManager] = self.automation_manager
-        if mgr is not None:
-            mgr.reload()
+        operators_list: list = list(self.config.get("operators", []))
+        operators_list.append(body)
+        self.config["operators"] = operators_list
+        self._save_config_field("operators", operators_list)
 
-        self._send_json(201, {"index": len(automations) - 1, **body})
+        # Hot-reload requires restart for now — OperatorManager doesn't
+        # support adding instances at runtime yet.  Log it.
+        logging.info(
+            "Trigger operator '%s' created — restart to activate",
+            body.get("name", "?"),
+        )
+
+        triggers: list = self._get_trigger_operators()
+        self._send_json(201, {"index": len(triggers) - 1, **body})
 
     def _handle_put_automation(self, index: int) -> None:
-        """PUT /api/automations/{index} — update an automation."""
-        automations: list = list(self.config.get("automations", []))
-        if index < 0 or index >= len(automations):
+        """PUT /api/automations/{index} — update a trigger operator."""
+        triggers: list = self._get_trigger_operators()
+        if index < 0 or index >= len(triggers):
             self._send_json(404, {"error": f"No automation at index {index}"})
             return
 
@@ -3145,39 +3243,59 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         body.setdefault("enabled", True)
         body.setdefault("schedule_conflict", "defer")
         body.setdefault("off_action", {"effect": "off", "params": {}})
+        body["type"] = "trigger"
+        body.setdefault("name", triggers[index].get("name", ""))
 
-        automations[index] = body
-        self.config["automations"] = automations
-        self._save_config_field("automations", automations)
+        # Replace in the full operators list.
+        target_name: str = triggers[index].get("name", "")
+        operators_list: list = list(self.config.get("operators", []))
+        for i, op in enumerate(operators_list):
+            if op.get("type") == "trigger" and op.get("name") == target_name:
+                operators_list[i] = body
+                break
+        self.config["operators"] = operators_list
+        self._save_config_field("operators", operators_list)
 
-        mgr: Optional[AutomationManager] = self.automation_manager
-        if mgr is not None:
-            mgr.reload()
+        logging.info(
+            "Trigger operator '%s' updated — restart to activate changes",
+            body.get("name", "?"),
+        )
 
         self._send_json(200, {"index": index, **body})
 
     def _handle_post_automation_enabled(self, index: int) -> None:
-        """POST /api/automations/{index}/enabled — toggle automation."""
-        automations: list = list(self.config.get("automations", []))
-        if index < 0 or index >= len(automations):
+        """POST /api/automations/{index}/enabled — toggle trigger."""
+        triggers: list = self._get_trigger_operators()
+        if index < 0 or index >= len(triggers):
             self._send_json(404, {"error": f"No automation at index {index}"})
             return
 
-        # Capture name now — index may be stale after body read.
-        auto_name: str = automations[index].get("name", "")
+        auto_name: str = triggers[index].get("name", "")
 
         body: Optional[dict[str, Any]] = self._read_json_body()
         if body is None:
             return
 
         enabled: bool = bool(body.get("enabled", True))
-        automations[index]["enabled"] = enabled
-        self.config["automations"] = automations
-        self._save_config_field("automations", automations)
 
-        mgr: Optional[AutomationManager] = self.automation_manager
-        if mgr is not None:
-            mgr.reload()
+        # Update in the full operators list.
+        operators_list: list = list(self.config.get("operators", []))
+        for op in operators_list:
+            if op.get("type") == "trigger" and op.get("name") == auto_name:
+                op["enabled"] = enabled
+                break
+        self.config["operators"] = operators_list
+        self._save_config_field("operators", operators_list)
+
+        # Also toggle at runtime if operator is running.
+        om: Optional[OperatorManager] = self.operator_manager
+        if om is not None:
+            for slot in om._slots:
+                if slot.operator.name == auto_name:
+                    from operators.trigger import TriggerOperator
+                    if isinstance(slot.operator, TriggerOperator):
+                        slot.operator.set_enabled(enabled)
+                    break
 
         self._send_json(200, {
             "index": index,
@@ -3186,23 +3304,29 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         })
 
     def _handle_delete_automation(self, index: int) -> None:
-        """DELETE /api/automations/{index} — remove an automation."""
-        automations: list = list(self.config.get("automations", []))
-        if index < 0 or index >= len(automations):
+        """DELETE /api/automations/{index} — remove a trigger operator."""
+        triggers: list = self._get_trigger_operators()
+        if index < 0 or index >= len(triggers):
             self._send_json(404, {"error": f"No automation at index {index}"})
             return
 
-        removed: dict = automations.pop(index)
-        self.config["automations"] = automations
-        self._save_config_field("automations", automations)
+        target_name: str = triggers[index].get("name", "")
 
-        mgr: Optional[AutomationManager] = self.automation_manager
-        if mgr is not None:
-            mgr.reload()
+        # Remove from the full operators list.
+        operators_list: list = list(self.config.get("operators", []))
+        operators_list = [
+            op for op in operators_list
+            if not (op.get("type") == "trigger" and op.get("name") == target_name)
+        ]
+        self.config["operators"] = operators_list
+        self._save_config_field("operators", operators_list)
 
-        self._send_json(200, {
-            "deleted": removed.get("name", f"index {index}"),
-        })
+        logging.info(
+            "Trigger operator '%s' deleted — restart to fully remove",
+            target_name,
+        )
+
+        self._send_json(200, {"deleted": target_name})
 
     # ------------------------------------------------------------------
 
@@ -6120,6 +6244,72 @@ def _build_parser() -> "argparse.ArgumentParser":
     return parser
 
 
+def _migrate_automations_to_triggers(config: dict[str, Any]) -> None:
+    """Auto-migrate ``automations`` list to trigger-type operators.
+
+    If the config has an ``automations`` section but no trigger-type entries
+    in ``operators``, converts each automation into a trigger operator config
+    and appends it to the ``operators`` list.  The ``automations`` key is
+    removed after migration.
+
+    Args:
+        config: Server config dict (modified in place).
+    """
+    automations: list[dict] = config.get("automations", [])
+    if not automations:
+        return
+
+    # Check if trigger operators already exist.
+    operators: list[dict] = config.get("operators", [])
+    has_triggers: bool = any(
+        op.get("type") == "trigger" for op in operators
+    )
+    if has_triggers:
+        # Already migrated — don't duplicate.
+        return
+
+    migrated: int = 0
+    for auto in automations:
+        name: str = auto.get("name", f"migrated_{migrated}")
+        trigger_entry: dict[str, Any] = {
+            "type": "trigger",
+            "name": name,
+            "enabled": auto.get("enabled", True),
+            "sensor": auto.get("sensor", {}),
+            "trigger": auto.get("trigger", {}),
+            "action": auto.get("action", {}),
+            "off_trigger": auto.get("off_trigger", {}),
+            "off_action": auto.get("off_action", {}),
+            "schedule_conflict": auto.get("schedule_conflict", "defer"),
+        }
+        operators.append(trigger_entry)
+        migrated += 1
+
+    config["operators"] = operators
+    # Remove the old automations key — trigger operators are the authority.
+    del config["automations"]
+
+    logging.info(
+        "Migrated %d automation(s) to trigger operators", migrated,
+    )
+
+    # Persist the migration to disk.
+    config_path: Optional[str] = config.get("_config_path")
+    if not config_path:
+        return
+    try:
+        with open(config_path, "r") as f:
+            disk_cfg: dict = json.load(f)
+        disk_cfg["operators"] = operators
+        disk_cfg.pop("automations", None)
+        with open(config_path, "w") as f:
+            json.dump(disk_cfg, f, indent=4)
+            f.write("\n")
+        logging.info("Persisted trigger migration to %s", config_path)
+    except Exception as exc:
+        logging.warning("Failed to persist trigger migration: %s", exc)
+
+
 def main() -> None:
     """Entry point for the GlowUp REST API server."""
     parser: argparse.ArgumentParser = _build_parser()
@@ -6228,6 +6418,7 @@ def main() -> None:
     # Zigbee/Vivint/Operator/Lock references — set by _background_startup.
     zigbee_adapter: Optional[ZigbeeAdapter] = None
     vivint_adapter: Optional[VivintAdapter] = None
+    ble_adpt: Optional[BleAdapter] = None
     operator_mgr: Optional[OperatorManager] = None
     lock_mgr: Optional[LockManager] = None
 
@@ -6244,7 +6435,7 @@ def main() -> None:
         6. Start scheduler, MQTT, orchestrator, media pipeline.
         """
         nonlocal mqtt_bridge, media_mgr, orch, keepalive, ble_trigger_mgr, automation_mgr
-        nonlocal zigbee_adapter, vivint_adapter, operator_mgr, lock_mgr
+        nonlocal zigbee_adapter, vivint_adapter, ble_adpt, operator_mgr, lock_mgr
 
         try:
             # -- Step 1: Start the ARP-based bulb keepalive daemon --------
@@ -6399,17 +6590,9 @@ def main() -> None:
                 )
                 ble_trigger_mgr.start()
 
-            # Start automation manager if automations are configured.
-            if config.get("automations") and _MQTT_AVAILABLE:
-                mqtt_cfg = config.get("mqtt", {})
-                automation_mgr = AutomationManager(
-                    config=config,
-                    device_manager=dm,
-                    broker=mqtt_cfg.get("broker", "localhost"),
-                    port=mqtt_cfg.get("port", 1883),
-                )
-                automation_mgr.start()
-                GlowUpRequestHandler.automation_manager = automation_mgr
+            # AutomationManager retired — trigger operators handle this now.
+            # Automations are auto-migrated to trigger operators in
+            # _migrate_automations_to_triggers() above.
 
             # Start the distributed orchestrator if configured.
             if config.get("distributed") and _HAS_DISTRIBUTED:
@@ -6454,19 +6637,30 @@ def main() -> None:
             else:
                 logging.info("No media_sources configured — media idle")
 
-            # -- Zigbee/Vivint/Operator/Lock startup ----------------------
-            # These all write to the SignalBus, which may be from the
+            # -- Sensor adapters / Operators / Lock manager ------------------
+            # All adapters write to the SignalBus, which may be from the
             # MediaManager or a standalone instance.
             signal_bus: Optional[SignalBus] = None
             if media_mgr is not None:
-                signal_bus = media_mgr.signal_bus
+                signal_bus = media_mgr.bus
             if signal_bus is None:
                 signal_bus = SignalBus()
                 logging.info("Created standalone SignalBus for operators")
+            GlowUpRequestHandler.signal_bus = signal_bus
 
             mqtt_cfg: dict = config.get("mqtt", {})
             broker_addr: str = mqtt_cfg.get("broker", "localhost")
             broker_port: int = mqtt_cfg.get("port", 1883)
+
+            # BLE adapter (bridges glowup/ble/# MQTT → SignalBus).
+            if _MQTT_AVAILABLE:
+                ble_adpt = BleAdapter(
+                    bus=signal_bus,
+                    broker=broker_addr,
+                    port=broker_port,
+                )
+                ble_adpt.start()
+                GlowUpRequestHandler.ble_adapter = ble_adpt
 
             # Zigbee adapter (for Z2M devices — motion, contact, temp).
             z_cfg: dict = config.get("zigbee", {})
@@ -6491,12 +6685,18 @@ def main() -> None:
                 )
                 vivint_adapter.start()
 
-            # Operator manager (occupancy, motion gate, battery watch).
+            # Auto-migrate automations[] → trigger operators in operators[].
+            config["_config_path"] = GlowUpRequestHandler.config_path
+            _migrate_automations_to_triggers(config)
+
+            # Operator manager — handles all operator types including
+            # trigger operators (which replace AutomationManager).
             op_cfgs: list = config.get("operators", [])
             if op_cfgs:
                 operator_mgr = OperatorManager(signal_bus)
                 operator_mgr.configure(op_cfgs)
                 config["_config_path"] = GlowUpRequestHandler.config_path
+                config["_device_manager"] = dm
                 operator_mgr.start(full_config=config)
                 GlowUpRequestHandler.operator_manager = operator_mgr
 
@@ -6534,6 +6734,8 @@ def main() -> None:
             operator_mgr.stop()
         if vivint_adapter is not None:
             vivint_adapter.stop()
+        if ble_adpt is not None:
+            ble_adpt.stop()
         if zigbee_adapter is not None:
             zigbee_adapter.stop()
         if media_mgr is not None:

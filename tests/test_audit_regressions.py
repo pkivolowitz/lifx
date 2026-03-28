@@ -842,10 +842,10 @@ class TestEngineNoBareExcepts(unittest.TestCase):
         )
 
     def test_no_except_pass_in_resolve_bindings(self) -> None:
-        """_resolve_bindings must not contain 'except Exception' + 'pass'."""
+        """_resolve_bindings_and_params must not contain 'except Exception' + 'pass'."""
         import inspect
         from engine import Engine
-        source: str = inspect.getsource(Engine._resolve_bindings)
+        source: str = inspect.getsource(Engine._resolve_bindings_and_params)
         import re
         bare_excepts: list[str] = re.findall(
             r"except Exception:\s*\n\s*pass",
@@ -854,7 +854,7 @@ class TestEngineNoBareExcepts(unittest.TestCase):
         self.assertEqual(
             len(bare_excepts), 0,
             f"Found {len(bare_excepts)} bare 'except Exception: pass' "
-            f"blocks in _resolve_bindings — should log warnings",
+            f"blocks in _resolve_bindings_and_params — should log warnings",
         )
 
     def test_render_thread_logs_on_render_error(self) -> None:
@@ -891,12 +891,14 @@ class TestEngineNoBareExcepts(unittest.TestCase):
         )
 
     def test_resolve_bindings_logs_on_setattr_error(self) -> None:
-        """_resolve_bindings must log when setattr fails."""
+        """_resolve_bindings_and_params must log when setattr fails."""
         from engine import Engine
+        from param import Param
 
         # Effect where setattr raises for a specific param.
         class _BrokenEffect:
-            _param_defs = {}
+            name = "broken"
+            _param_defs = {"speed": Param(1.0, min=0.1, max=10.0)}
 
             def __setattr__(self, name: str, value: Any) -> None:
                 if name == "speed":
@@ -904,16 +906,13 @@ class TestEngineNoBareExcepts(unittest.TestCase):
                 super().__setattr__(name, value)
 
         effect = _BrokenEffect()
-        bindings: dict = {
-            "speed": {"signal": "audio.rms", "mode": "latest"},
-        }
 
-        # Mock signal bus with a .read() method.
+        # Mock signal bus that returns a value for the param signal.
         mock_bus = MagicMock()
         mock_bus.read.return_value = 0.5
 
         with self.assertLogs("glowup.engine", level=logging.WARNING) as cm:
-            Engine._resolve_bindings(effect, bindings, mock_bus)
+            Engine._resolve_bindings_and_params(effect, None, mock_bus)
 
         found: bool = any("Failed to set param" in msg for msg in cm.output)
         self.assertTrue(

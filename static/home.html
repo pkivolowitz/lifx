@@ -184,6 +184,21 @@ body {
     overflow: hidden;
 }
 
+.sensor-card.error-state {
+    border-color: var(--stale-color);
+    opacity: 0.7;
+}
+.sensor-card.error-state .reading-temp,
+.sensor-card.error-state .reading-humid {
+    color: var(--stale-color);
+}
+.sensor-error {
+    font-size: 0.8rem;
+    color: var(--stale-color);
+    margin-top: 4px;
+    font-style: italic;
+}
+
 .sensor-location {
     font-size: clamp(1.4rem, 3vw, 2.2rem);
     font-weight: 600;
@@ -664,13 +679,55 @@ body {
         }
     }
 
+    /** Mark all existing sensor cards as errored. */
+    function markSensorError(msg) {
+        var cards = sensorGrid.querySelectorAll('[id^="sensor-"]');
+        cards.forEach(function (card) {
+            card.classList.add("error-state");
+            var errEl = card.querySelector(".sensor-error");
+            if (!errEl) {
+                errEl = document.createElement("div");
+                errEl.className = "sensor-error";
+                card.appendChild(errEl);
+            }
+            errEl.textContent = msg;
+        });
+    }
+
+    /** Clear error state from all sensor cards. */
+    function clearSensorError() {
+        var cards = sensorGrid.querySelectorAll('[id^="sensor-"]');
+        cards.forEach(function (card) {
+            card.classList.remove("error-state");
+            var errEl = card.querySelector(".sensor-error");
+            if (errEl) errEl.textContent = "";
+        });
+    }
+
     /** Fetch sensor data and update all cards. */
     function pollSensors() {
         fetch("/api/ble/sensors")
-            .then(function (r) { return r.json(); })
+            .then(function (r) {
+                if (!r.ok) {
+                    return r.json().then(function (body) {
+                        markSensorError(
+                            "API error " + r.status + ": " +
+                            (body.error || "unknown")
+                        );
+                        return null;
+                    });
+                }
+                return r.json();
+            })
             .then(function (sensors) {
-                /* Ignore auth errors from old server versions. */
-                if (sensors.error) return;
+                if (!sensors) return;
+
+                if (sensors.error) {
+                    markSensorError(sensors.error);
+                    return;
+                }
+
+                clearSensorError();
 
                 const labels = Object.keys(sensors);
                 if (labels.length === 0) {
@@ -694,8 +751,8 @@ body {
                     }
                 });
             })
-            .catch(function () {
-                /* Network hiccup — leave display as-is. */
+            .catch(function (err) {
+                markSensorError("Offline: " + (err.message || "network error"));
             });
     }
 
@@ -766,13 +823,23 @@ body {
 
     function pollLocks() {
         fetch("/api/home/locks")
-            .then(function (r) { return r.json(); })
+            .then(function (r) {
+                if (!r.ok) {
+                    locksCard.classList.add("error-state");
+                    return null;
+                }
+                return r.json();
+            })
             .then(function (data) {
+                if (!data) return;
                 if (data.error) return;
+                locksCard.classList.remove("error-state");
                 renderLocks(data.locks || []);
                 renderOccupancy(data.occupancy || "UNKNOWN");
             })
-            .catch(function () { /* leave as-is */ });
+            .catch(function () {
+                locksCard.classList.add("error-state");
+            });
     }
 
     pollLocks();
