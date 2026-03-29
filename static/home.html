@@ -64,19 +64,26 @@ body.dark-mode {
     --card-shadow:   none;
     --temp-color:    #e07840;
     --humid-color:   #4aa8d4;
-    --motion-on:     #4dcc80;
-    --motion-off:    rgba(255, 255, 255, 0.15);
+    --motion-on:     #2a6b3a;
+    --motion-off:    rgba(255, 255, 255, 0.10);
     --label-color:   rgba(255, 255, 255, 0.3);
     --text-color:    rgba(255, 255, 255, 0.5);
     --stale-color:   #e55;
     --photo-opacity: 0.05;
-    --lock-locked:   #4dcc80;
-    --lock-unlocked: #e55;
-    --lock-unknown:  rgba(255, 255, 255, 0.15);
+    --lock-locked:   #2a6b3a;
+    --lock-unlocked: #8b3030;
+    --lock-unknown:  rgba(255, 255, 255, 0.10);
 }
 body.dark-mode .sensor-card,
 body.dark-mode .locks-card {
     border-color: rgba(255, 255, 255, 0.08);
+}
+body.dark-mode img,
+body.dark-mode .photo-bg {
+    filter: grayscale(100%) brightness(0.4);
+}
+body.dark-mode {
+    opacity: 0.65;
 }
 
 /* ------------------------------------------------------------------ */
@@ -458,6 +465,120 @@ body {
 }
 
 /* ------------------------------------------------------------------ */
+/* Security card — alarm state + door contacts                        */
+/* ------------------------------------------------------------------ */
+.security-card {
+    text-align: center;
+}
+
+.alarm-state {
+    font-size: clamp(1rem, 2.2vw, 1.6rem);
+    font-weight: 700;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    padding: 6px 0;
+    margin-bottom: 8px;
+    border-radius: 8px;
+}
+.alarm-state.disarmed     { color: var(--lock-unlocked); }
+.alarm-state.armed_stay   { color: var(--lock-locked); }
+.alarm-state.armed_away   { color: var(--humid-color); }
+.alarm-state.unknown      { color: var(--lock-unknown); }
+
+.doors-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    flex: 1;
+    align-content: center;
+}
+
+.door-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.door-status {
+    font-family: var(--font-clock);
+    font-size: clamp(1rem, 2.2vw, 1.6rem);
+    font-weight: 600;
+}
+.door-status.closed { color: var(--lock-locked); }
+.door-status.open   { color: var(--lock-unlocked); }
+
+.door-name {
+    font-size: clamp(0.55rem, 1vw, 0.75rem);
+    color: var(--label-color);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.door-battery {
+    font-size: 0.55rem;
+    color: var(--label-color);
+}
+.door-battery.low {
+    color: var(--lock-unlocked);
+    animation: blink-3-1 2s step-end infinite;
+}
+
+/* ------------------------------------------------------------------ */
+/* Camera card — cycles through NVR snapshots                         */
+/* ------------------------------------------------------------------ */
+.camera-card {
+    padding: 0;
+    overflow: hidden;
+    position: relative;
+}
+.camera-card img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.camera-label {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 4px 8px;
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    font-size: clamp(0.6rem, 1.2vw, 0.85rem);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    text-align: center;
+}
+
+/* ------------------------------------------------------------------ */
+/* Battery alert card — low battery warnings across all Vivint devices */
+/* ------------------------------------------------------------------ */
+.battery-alert-card {
+    text-align: center;
+    aspect-ratio: auto;
+}
+.battery-alert-card .sensor-location {
+    color: var(--lock-unlocked);
+}
+.battery-alerts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: center;
+}
+.battery-alert-item {
+    font-size: clamp(0.7rem, 1.4vw, 1rem);
+    color: var(--lock-unlocked);
+    animation: blink-3-1 2s step-end infinite;
+}
+.battery-alert-item .batt-pct {
+    font-weight: 700;
+}
+
+/* ------------------------------------------------------------------ */
 /* Responsive tweaks                                                  */
 /* ------------------------------------------------------------------ */
 @media (max-width: 600px) {
@@ -514,6 +635,22 @@ body {
             <div class="locks-title">Locks</div>
             <div id="occupancyBadge" class="occupancy-badge" style="display:none"></div>
             <div class="locks-row" id="locksRow"></div>
+        </div>
+        <!-- Security card — alarm state + door contacts. -->
+        <div class="security-card sensor-card" id="securityCard">
+            <div class="sensor-location">Security</div>
+            <div class="alarm-state unknown" id="alarmState">Unknown</div>
+            <div class="doors-row" id="doorsRow"></div>
+        </div>
+        <!-- Camera card — cycles through NVR snapshots. -->
+        <div class="camera-card sensor-card" id="cameraCard" style="display:none">
+            <img id="cameraImg" alt="Camera">
+            <div class="camera-label" id="cameraLabel"></div>
+        </div>
+        <!-- Battery alert card — shown only when low batteries exist. -->
+        <div class="battery-alert-card sensor-card" id="batteryAlertCard" style="display:none">
+            <div class="sensor-location">Low Battery</div>
+            <div class="battery-alerts-list" id="batteryAlertsList"></div>
         </div>
         <div class="no-data" id="noData">Waiting for sensor data&hellip;</div>
     </div>
@@ -895,6 +1032,150 @@ body {
 
     pollLocks();
     setInterval(pollLocks, SENSOR_POLL_MS);
+
+    /* -------------------------------------------------------------- */
+    /* Security — alarm state + door contacts                         */
+    /* -------------------------------------------------------------- */
+
+    var alarmStateEl = document.getElementById("alarmState");
+    var doorsRowEl = document.getElementById("doorsRow");
+    var securityCard = document.getElementById("securityCard");
+
+    var ALARM_LABELS = {
+        "disarmed":   "Disarmed",
+        "armed_stay": "Armed Stay",
+        "armed_away": "Armed Away",
+        "unknown":    "Unknown"
+    };
+
+    function renderAlarm(state) {
+        var label = ALARM_LABELS[state] || state;
+        alarmStateEl.textContent = label;
+        alarmStateEl.className = "alarm-state " + (state || "unknown");
+    }
+
+    function renderDoors(doors) {
+        doorsRowEl.innerHTML = "";
+        if (!doors || doors.length === 0) return;
+
+        doors.forEach(function (door) {
+            var item = document.createElement("div");
+            item.className = "door-item";
+
+            var status = document.createElement("div");
+            status.className = "door-status " + (door.open ? "open" : "closed");
+            status.textContent = door.open ? "OPEN" : "CLOSED";
+
+            var name = document.createElement("div");
+            name.className = "door-name";
+            name.textContent = door.name || "";
+
+            item.appendChild(status);
+            item.appendChild(name);
+
+            if (door.battery != null) {
+                var batt = document.createElement("div");
+                batt.className = "door-battery";
+                if (door.battery <= 10) batt.classList.add("low");
+                batt.textContent = door.battery + "%";
+                item.appendChild(batt);
+            }
+
+            doorsRowEl.appendChild(item);
+        });
+    }
+
+    /* Low battery threshold (percent). */
+    var LOW_BATTERY_THRESHOLD = 20;
+
+    var batteryAlertCard = document.getElementById("batteryAlertCard");
+    var batteryAlertsList = document.getElementById("batteryAlertsList");
+
+    function renderBatteryAlerts(sensors) {
+        var alerts = [];
+        Object.keys(sensors).forEach(function (key) {
+            var s = sensors[key];
+            if (s.battery != null && s.battery <= LOW_BATTERY_THRESHOLD) {
+                alerts.push({ name: s.name || key, battery: s.battery });
+            }
+        });
+
+        if (alerts.length === 0) {
+            batteryAlertCard.style.display = "none";
+            return;
+        }
+
+        batteryAlertCard.style.display = "";
+        batteryAlertsList.innerHTML = "";
+        alerts.sort(function (a, b) { return a.battery - b.battery; });
+        alerts.forEach(function (a) {
+            var item = document.createElement("div");
+            item.className = "battery-alert-item";
+            item.innerHTML = a.name + ' <span class="batt-pct">' + a.battery + '%</span>';
+            batteryAlertsList.appendChild(item);
+        });
+    }
+
+    function pollSecurity() {
+        fetch("/api/home/security")
+            .then(function (r) {
+                if (!r.ok) return null;
+                return r.json();
+            })
+            .then(function (data) {
+                if (!data) return;
+                if (data.error) return;
+                renderAlarm(data.alarm || "unknown");
+                renderDoors(data.doors || []);
+                renderBatteryAlerts(data.sensors || {});
+            })
+            .catch(function () {
+                securityCard.classList.add("error-state");
+            });
+    }
+
+    pollSecurity();
+    setInterval(pollSecurity, SENSOR_POLL_MS);
+
+    /* -------------------------------------------------------------- */
+    /* Camera feed — cycles through NVR snapshots                     */
+    /* -------------------------------------------------------------- */
+
+    var cameraCard = document.getElementById("cameraCard");
+    var cameraImg = document.getElementById("cameraImg");
+    var cameraLabel = document.getElementById("cameraLabel");
+    var cameraList = [];
+    var cameraIndex = 0;
+
+    /* How long each camera is shown (ms). */
+    var CAMERA_CYCLE_MS = 5000;
+
+    function loadCameraList() {
+        fetch("/api/home/cameras")
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.cameras && data.cameras.length > 0) {
+                    cameraList = data.cameras;
+                    cameraCard.style.display = "";
+                    showNextCamera();
+                }
+            })
+            .catch(function () { /* no cameras */ });
+    }
+
+    function showNextCamera() {
+        if (cameraList.length === 0) return;
+
+        var cam = cameraList[cameraIndex];
+        cameraIndex = (cameraIndex + 1) % cameraList.length;
+
+        /* Cache-bust with timestamp so the browser fetches a fresh snapshot. */
+        cameraImg.src = "/api/home/camera/" + cam.id + "?t=" + Date.now();
+        cameraLabel.textContent = cam.name || ("Channel " + cam.id);
+    }
+
+    loadCameraList();
+    setInterval(showNextCamera, CAMERA_CYCLE_MS);
 
     /* -------------------------------------------------------------- */
     /* Photo slideshow                                                */

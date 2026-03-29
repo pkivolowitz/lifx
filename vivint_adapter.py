@@ -99,13 +99,20 @@ try:
     import vivintpy  # noqa: F401
     from vivintpy.account import Account
     from vivintpy.devices.door_lock import DoorLock
+    from vivintpy.devices.wireless_sensor import WirelessSensor
     from vivintpy.entity import UPDATE as VIVINT_UPDATE_EVENT
     _HAS_VIVINTPY: bool = True
 except ImportError:
     _HAS_VIVINTPY = False
     Account = None  # type: ignore[assignment,misc]
     DoorLock = None  # type: ignore[assignment,misc]
+    WirelessSensor = None  # type: ignore[assignment,misc]
     VIVINT_UPDATE_EVENT = "update"  # type: ignore[assignment]
+
+# Alarm panel armed states — raw integer values from Vivint API.
+ALARM_STATE_DISARMED: int = 0
+ALARM_STATE_ARMED_STAY: int = 3
+ALARM_STATE_ARMED_AWAY: int = 4
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +166,12 @@ class VivintAdapter:
         # Last known states — preserved across reconnects and stale periods.
         self._last_lock_state: dict[str, float] = {}
         self._last_battery: dict[str, float] = {}
+
+        # Alarm panel state.
+        self._alarm_state: Optional[str] = None  # "disarmed", "armed_stay", "armed_away"
+
+        # Wireless sensor states: name → {is_on, battery, sensor_type, ...}.
+        self._sensor_states: dict[str, dict[str, Any]] = {}
 
     def start(self) -> None:
         """Start the Vivint adapter in a background thread."""
@@ -299,11 +312,11 @@ class VivintAdapter:
     # --- PubNub real-time callbacks ------------------------------------------
 
     def _register_pubnub_callbacks(self) -> None:
-        """Register an update callback on each DoorLock device.
+        """Register update callbacks on alarm panel, locks, and sensors.
 
         vivintpy's Entity base class emits an ``"update"`` event whenever
-        PubNub pushes new state.  We hook into that so lock state changes
-        publish to MQTT immediately instead of waiting for the next poll.
+        PubNub pushes new state.  We hook into that so state changes
+        publish to MQTT immediately instead of waiting for the 60s poll.
         """
         if not self._account:
             return
@@ -311,12 +324,19 @@ class VivintAdapter:
         registered: int = 0
         for system in self._account.systems:
             for alarm_panel in system.alarm_panels:
+                # Alarm panel itself.
+                alarm_panel.on(
+                    VIVINT_UPDATE_EVENT,
+                    self._make_panel_handler(alarm_panel),
+                )
+                registered += 1
                 for device in alarm_panel.devices:
-                    if not isinstance(device, DoorLock):
-                        continue
-                    # Capture device in closure.
-                    device.on(VIVINT_UPDATE_EVENT, self._make_pubnub_handler(device))
-                    registered += 1
+                    if isinstance(device, DoorLock):
+                        device.on(VIVINT_UPDATE_EVENT, self._make_pubnub_handler(device))
+                        registered += 1
+                    elif WirelessSensor and isinstance(device, WirelessSensor):
+                        device.on(VIVINT_UPDATE_EVENT, self._make_sensor_handler(device))
+                        registered += 1
 
         if registered:
             logger.info(
@@ -344,6 +364,26 @@ class VivintAdapter:
                     "PubNub callback error for %s: %s", device.name, exc,
                 )
         return _on_pubnub_update
+
+    def _make_panel_handler(self, panel: Any) -> Any:
+        """Create a PubNub handler for alarm panel state changes."""
+        def _on_panel_update(data: dict) -> None:
+            try:
+                self._process_alarm_panel(panel)
+                logger.debug("PubNub alarm panel update")
+            except Exception as exc:
+                logger.warning("PubNub alarm panel error: %s", exc)
+        return _on_panel_update
+
+    def _make_sensor_handler(self, device: Any) -> Any:
+        """Create a PubNub handler for a wireless sensor."""
+        def _on_sensor_update(data: dict) -> None:
+            try:
+                self._process_sensor(device)
+                logger.debug("PubNub sensor update for %s", device.name)
+            except Exception as exc:
+                logger.warning("PubNub sensor error for %s: %s", device.name, exc)
+        return _on_sensor_update
 
     async def _poll_loop(self) -> None:
         """Periodically read lock state and refresh the auth token.
@@ -420,16 +460,18 @@ class VivintAdapter:
             logger.warning("Failed to save Vivint token: %s", exc)
 
     async def _read_locks(self) -> None:
-        """Read all lock devices and update signals."""
+        """Read all devices: alarm panel, locks, and wireless sensors."""
         if not self._account:
             return
 
         for system in self._account.systems:
             for alarm_panel in system.alarm_panels:
+                self._process_alarm_panel(alarm_panel)
                 for device in alarm_panel.devices:
-                    if not isinstance(device, DoorLock):
-                        continue
-                    self._process_lock(device)
+                    if isinstance(device, DoorLock):
+                        self._process_lock(device)
+                    elif WirelessSensor and isinstance(device, WirelessSensor):
+                        self._process_sensor(device)
 
     def _process_lock(self, device: Any) -> None:
         """Process a single lock device — write signals and MQTT.
@@ -508,18 +550,123 @@ class VivintAdapter:
                 except Exception as exc:
                     logger.debug("MQTT publish error (battery): %s", exc)
 
+    def _process_alarm_panel(self, panel: Any) -> None:
+        """Process alarm panel state — write signal and MQTT.
+
+        Args:
+            panel: A vivintpy AlarmPanel instance.
+        """
+        if panel.is_armed_away:
+            state_str: str = "armed_away"
+        elif panel.is_armed_stay:
+            state_str = "armed_stay"
+        else:
+            state_str = "disarmed"
+
+        prev: Optional[str] = self._alarm_state
+        self._alarm_state = state_str
+
+        signal_name: str = "alarm:state"
+        state_value: float = float(panel.state) if panel.state is not None else 0.0
+
+        if hasattr(self._bus, 'register'):
+            self._bus.register(signal_name, SignalMeta(
+                signal_type="scalar",
+                description="Vivint alarm panel state",
+                source_name="alarm",
+                transport=TRANSPORT,
+            ))
+        self._bus.write(signal_name, state_value)
+
+        if self._mqtt_client:
+            try:
+                self._mqtt_client.publish(
+                    f"{self._topic_prefix}/alarm/state",
+                    state_str, qos=MQTT_QOS,
+                )
+            except Exception as exc:
+                logger.debug("MQTT publish error (alarm): %s", exc)
+
+        if prev != state_str:
+            logger.info("Alarm panel: %s", state_str)
+
+    def _process_sensor(self, device: Any) -> None:
+        """Process a wireless sensor — write signals and MQTT.
+
+        Publishes is_on (open/triggered), battery, and sensor_type for
+        each wireless sensor (door contacts, glass break, motion, smoke/CO).
+
+        Args:
+            device: A vivintpy WirelessSensor instance.
+        """
+        name: str = device.name
+        # Normalize to a config-friendly key.
+        key: str = name.lower().replace(" ", "_").replace("&", "and")
+
+        is_on: bool = device.is_on if hasattr(device, 'is_on') else False
+        on_value: float = 1.0 if is_on else 0.0
+        battery: Optional[int] = device.battery_level if hasattr(device, 'battery_level') else None
+        sensor_type: str = ""
+        if hasattr(device, 'sensor_type') and device.sensor_type is not None:
+            st: Any = device.sensor_type
+            # May be an enum (SensorType.EXIT_ENTRY_1) or a raw int.
+            if hasattr(st, 'name'):
+                sensor_type = st.name.lower()
+            else:
+                sensor_type = str(st)
+
+        # Track state.
+        prev: dict[str, Any] = self._sensor_states.get(key, {})
+        self._sensor_states[key] = {
+            "name": name,
+            "is_on": is_on,
+            "battery": battery,
+            "sensor_type": sensor_type,
+        }
+
+        # Signal: {key}:state (1.0 = open/triggered, 0.0 = closed/clear).
+        signal_name: str = f"{key}:state"
+        if hasattr(self._bus, 'register'):
+            self._bus.register(signal_name, SignalMeta(
+                signal_type="scalar",
+                description=f"Vivint {name} state",
+                source_name=key,
+                transport=TRANSPORT,
+            ))
+        self._bus.write(signal_name, on_value)
+
+        # MQTT publish.
+        if self._mqtt_client:
+            try:
+                self._mqtt_client.publish(
+                    f"{self._topic_prefix}/sensor/{key}/state",
+                    str(int(on_value)), qos=MQTT_QOS,
+                )
+                if battery is not None:
+                    self._mqtt_client.publish(
+                        f"{self._topic_prefix}/sensor/{key}/battery",
+                        str(battery), qos=MQTT_QOS,
+                    )
+            except Exception as exc:
+                logger.debug("MQTT publish error (sensor %s): %s", key, exc)
+
+        if prev.get("is_on") != is_on:
+            state_label: str = "OPEN/ON" if is_on else "closed/off"
+            logger.info("Sensor %s (%s): %s", key, name, state_label)
+
     # --- Introspection -----------------------------------------------------
 
     def get_status(self) -> dict[str, Any]:
         """Return adapter status for API responses.
 
         Returns:
-            Dict with connection state and last-known lock values.
+            Dict with connection state and last-known values.
         """
         return {
             "connected": self._account is not None,
             "lock_count": len(self._lock_names),
             "poll_interval_seconds": self._poll_interval,
+            "alarm_state": self._alarm_state,
             "locks": {
                 name: {
                     "lock_state": self._last_lock_state.get(name),
@@ -527,4 +674,5 @@ class VivintAdapter:
                 }
                 for name in self._lock_names
             },
+            "sensors": self._sensor_states,
         }

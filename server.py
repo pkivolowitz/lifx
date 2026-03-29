@@ -108,6 +108,7 @@ from operators import OperatorManager
 from lock_manager import LockManager
 from zigbee_adapter import ZigbeeAdapter
 from vivint_adapter import VivintAdapter
+from nvr_adapter import NvrAdapter
 from ble_adapter import BleAdapter
 from media import MediaManager, SignalBus
 from media.source import AudioStreamServer
@@ -303,6 +304,12 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_home_lights", requires_auth=False),
     _Route("GET", ("api", "home", "locks"),
            "_handle_get_home_locks", requires_auth=False),
+    _Route("GET", ("api", "home", "security"),
+           "_handle_get_home_security", requires_auth=False),
+    _Route("GET", ("api", "home", "cameras"),
+           "_handle_get_home_cameras", requires_auth=False),
+    _Route("GET", ("api", "home", "camera", "{channel}"),
+           "_handle_get_home_camera_snapshot", requires_auth=False),
     _Route("GET", ("api", "home", "occupancy"),
            "_handle_get_home_occupancy", requires_auth=False),
     _Route("GET", ("api", "home", "mode"),
@@ -5347,6 +5354,106 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             occupancy = lm.get_occupancy_state()
         self._send_json(200, {"locks": locks, "occupancy": occupancy})
 
+    def _handle_get_home_security(self) -> None:
+        """GET /api/home/security — alarm + door sensor state for /home.
+
+        Returns alarm panel state and door contact sensors.
+
+        Response::
+
+            {
+              "alarm": "armed_stay",
+              "doors": [
+                {"name": "Front Door", "open": false, "battery": 68},
+                {"name": "Back Door", "open": false, "battery": 36},
+                {"name": "Side Door", "open": false, "battery": 86}
+              ],
+              "sensors": { ... all sensor states ... }
+            }
+        """
+        va: Any = getattr(self.server, "_vivint_adapter", None)
+        if va is None:
+            self._send_json(200, {
+                "alarm": "unknown",
+                "doors": [],
+                "sensors": {},
+            })
+            return
+
+        status: dict[str, Any] = va.get_status()
+        alarm_state: str = status.get("alarm_state") or "unknown"
+        all_sensors: dict[str, Any] = status.get("sensors", {})
+
+        # Extract door contact sensors (exit_entry type = 1).
+        # sensor_type may be "exit_entry_1" (enum str) or "1" (int str).
+        DOOR_SENSOR_TYPES: set[str] = {"exit_entry_1", "1"}
+        doors: list[dict[str, Any]] = []
+        for _key, sdata in sorted(all_sensors.items()):
+            stype: str = str(sdata.get("sensor_type", ""))
+            if stype in DOOR_SENSOR_TYPES:
+                doors.append({
+                    "name": sdata.get("name", _key),
+                    "open": sdata.get("is_on", False),
+                    "battery": sdata.get("battery"),
+                })
+
+        self._send_json(200, {
+            "alarm": alarm_state,
+            "doors": doors,
+            "sensors": all_sensors,
+        })
+
+    def _handle_get_home_cameras(self) -> None:
+        """GET /api/home/cameras — list configured camera channels.
+
+        Response::
+
+            {
+              "cameras": [
+                {"id": 0, "name": "Shed"},
+                {"id": 1, "name": "Backyard"}
+              ]
+            }
+        """
+        nvr: Any = getattr(self.server, "_nvr_adapter", None)
+        if nvr is None:
+            self._send_json(200, {"cameras": []})
+            return
+        self._send_json(200, {"cameras": nvr.get_channels()})
+
+    def _handle_get_home_camera_snapshot(self, channel_str: str) -> None:
+        """GET /api/home/camera/{channel} — proxy a JPEG snapshot.
+
+        Returns the cached JPEG snapshot for the given NVR channel.
+        Content-Type is image/jpeg.  Returns 404 if no snapshot or
+        503 if the NVR adapter is not running.
+
+        Args:
+            channel_str: The channel number as a string from the URL.
+        """
+        try:
+            channel: int = int(channel_str.split("?")[0])
+        except ValueError:
+            self._send_json(400, {"error": "invalid channel"})
+            return
+
+        nvr: Any = getattr(self.server, "_nvr_adapter", None)
+        if nvr is None:
+            self._send_json(503, {"error": "NVR adapter not running"})
+            return
+
+        jpeg: Optional[bytes] = nvr.get_snapshot(channel)
+        if jpeg is None:
+            self._send_json(404, {"error": "no snapshot available"})
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(jpeg)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(jpeg)
+
     def _handle_get_home_occupancy(self) -> None:
         """GET /api/home/occupancy — current occupancy state.
 
@@ -6180,6 +6287,7 @@ def main() -> None:
     # Zigbee/Vivint/Operator/Lock references — set by _background_startup.
     zigbee_adapter: Optional[ZigbeeAdapter] = None
     vivint_adapter: Optional[VivintAdapter] = None
+    nvr_adapter: Optional[NvrAdapter] = None
     ble_adpt: Optional[BleAdapter] = None
     operator_mgr: Optional[OperatorManager] = None
     lock_mgr: Optional[LockManager] = None
@@ -6197,7 +6305,7 @@ def main() -> None:
         6. Start scheduler, MQTT, orchestrator, media pipeline.
         """
         nonlocal mqtt_bridge, media_mgr, orch, keepalive, ble_trigger_mgr, automation_mgr
-        nonlocal zigbee_adapter, vivint_adapter, ble_adpt, operator_mgr, lock_mgr
+        nonlocal zigbee_adapter, vivint_adapter, nvr_adapter, ble_adpt, operator_mgr, lock_mgr
 
         try:
             # -- Step 1: Start the ARP-based bulb keepalive daemon --------
@@ -6446,6 +6554,14 @@ def main() -> None:
                     ),
                 )
                 vivint_adapter.start()
+                server._vivint_adapter = vivint_adapter
+
+            # NVR camera adapter (Reolink snapshot proxy).
+            nvr_cfg: dict = config.get("nvr", {})
+            if nvr_cfg.get("host"):
+                nvr_adapter = NvrAdapter(nvr_cfg)
+                nvr_adapter.start()
+                server._nvr_adapter = nvr_adapter
 
             # Auto-migrate automations[] → trigger operators in operators[].
             config["_config_path"] = GlowUpRequestHandler.config_path
@@ -6494,6 +6610,8 @@ def main() -> None:
             lock_mgr.stop()
         if operator_mgr is not None:
             operator_mgr.stop()
+        if nvr_adapter is not None:
+            nvr_adapter.stop()
         if vivint_adapter is not None:
             vivint_adapter.stop()
         if ble_adpt is not None:
