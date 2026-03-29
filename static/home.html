@@ -9,30 +9,30 @@
 /* Design tokens — warm, cheerful, light palette                      */
 /* ------------------------------------------------------------------ */
 :root {
-    /* Background — soft warm cream with a hint of peach. */
-    --bg-from:       #fdf6ee;
-    --bg-to:         #fce8d5;
+    /* Background — dark loam and weathered leather. */
+    --bg-from:       #3a2e24;
+    --bg-to:         #2c2218;
 
     /* Clock. */
-    --clock-color:   #3d3029;
-    --date-color:    #8a7262;
+    --clock-color:   #d4c4a8;
+    --date-color:    #9a8870;
 
     /* Sensor card. */
-    --card-bg:       rgba(255, 255, 255, 0.7);
-    --card-border:   rgba(210, 180, 150, 0.3);
-    --card-shadow:   0 4px 24px rgba(180, 140, 100, 0.12);
+    --card-bg:       rgba(62, 50, 38, 0.8);
+    --card-border:   rgba(140, 115, 80, 0.3);
+    --card-shadow:   0 4px 24px rgba(0, 0, 0, 0.25);
 
     /* Readings. */
-    --temp-color:    #d4622a;
-    --humid-color:   #2a8fbf;
-    --motion-on:     #3daa6d;
-    --motion-off:    #c4b8ad;
-    --label-color:   #9a8878;
-    --stale-color:   #c44;
-    --text-color:    #4a3f36;
+    --temp-color:    #d4864a;
+    --humid-color:   #6aaa90;
+    --motion-on:     #7ab06a;
+    --motion-off:    #6a5e50;
+    --label-color:   #9a8870;
+    --stale-color:   #c45a3a;
+    --text-color:    #c4b49a;
 
     /* Photo overlay. */
-    --photo-opacity: 0.15;
+    --photo-opacity: 0.12;
 
     /* Typography — system fonts, no external deps. */
     --font-clock:    "SF Mono", "Menlo", "Consolas", monospace;
@@ -40,10 +40,10 @@
                      Helvetica, Arial, sans-serif;
 
     /* Locks. */
-    --lock-locked:   #3daa6d;
-    --lock-unlocked: #c44;
-    --lock-unknown:  #c4b8ad;
-    --lock-size:     clamp(64px, 12vw, 110px);
+    --lock-locked:   #7ab06a;
+    --lock-unlocked: #c45a3a;
+    --lock-unknown:  #6a5e50;
+    --lock-size:     clamp(36px, 5vw, 60px);
 
     /* Layout. */
     --max-width:     1400px;
@@ -96,7 +96,7 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 32px 24px 24px;
+    padding: 32px 24px 32px;
     position: relative;
 }
 
@@ -129,22 +129,19 @@ body {
 .clock-time {
     font-family: var(--font-clock);
     /* Across-room readable: ~6-8 inches on a 24" monitor. */
-    font-size: clamp(5rem, 14vw, 12rem);
+    font-size: clamp(5.5rem, 15.4vw, 13.2rem);
     font-weight: 200;
     letter-spacing: 0.04em;
     color: var(--clock-color);
     line-height: 1;
 }
 
-.clock-seconds {
-    font-size: 0.4em;
-    opacity: 0.35;
-    vertical-align: super;
-    margin-left: 4px;
+.clock-ampm {
+    margin-left: 8px;
 }
 
 .clock-date {
-    font-size: clamp(1.2rem, 3vw, 2rem);
+    font-size: clamp(1.32rem, 3.3vw, 2.2rem);
     font-weight: 300;
     color: var(--date-color);
     margin-top: 10px;
@@ -157,9 +154,9 @@ body {
 /* ------------------------------------------------------------------ */
 .sensor-grid {
     display: grid;
-    /* Always 3 columns with a small gap between squares. */
+    /* 4 columns of smaller cards. */
     gap: 12px;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     width: 100%;
 }
 
@@ -355,14 +352,14 @@ body {
     letter-spacing: 0.10em;
     text-transform: uppercase;
     color: var(--text-color);
-    margin-bottom: 16px;
+    margin-bottom: 8px;
 }
 
 .locks-row {
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: clamp(16px, 4vw, 40px);
+    gap: clamp(8px, 2vw, 20px);
     flex-wrap: wrap;
 }
 
@@ -370,20 +367,20 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
+    gap: 3px;
 }
 
 .lock-circle {
     width: var(--lock-size);
     height: var(--lock-size);
     border-radius: 50%;
-    border: 3px solid var(--lock-unknown);
+    border: 2px solid var(--lock-unknown);
     background: transparent;
     display: flex;
     align-items: center;
     justify-content: center;
     font-family: var(--font-clock);
-    font-size: clamp(1.2rem, 3.5vw, 2.2rem);
+    font-size: clamp(0.8rem, 2vw, 1.4rem);
     font-weight: 600;
     letter-spacing: 0.04em;
     color: var(--lock-unknown);
@@ -408,12 +405,32 @@ body {
 }
 
 .lock-battery {
-    font-size: 0.7rem;
+    font-size: 0.6rem;
     color: var(--label-color);
-    margin-top: 2px;
+    margin-top: 1px;
 }
 .lock-battery.low {
     color: var(--lock-unlocked);
+    animation: blink-3-1 2s step-end infinite;
+}
+
+/* Critical battery — whole lock-item blinks. */
+.lock-item.battery-critical .lock-circle,
+.lock-item.battery-critical .lock-name,
+.lock-item.battery-critical .lock-battery {
+    color: var(--lock-unlocked);
+    border-color: var(--lock-unlocked);
+    animation: blink-3-1 2s step-end infinite;
+}
+.lock-item.battery-critical .lock-circle.locked {
+    background: var(--lock-unlocked);
+    color: #fff;
+}
+
+/* 3:1 duty cycle blink — visible 75%, hidden 25%. */
+@keyframes blink-3-1 {
+    0%, 75%  { opacity: 1; }
+    75.01%, 100% { opacity: 0; }
 }
 .occupancy-badge {
     font-size: 0.8rem;
@@ -433,7 +450,7 @@ body {
 }
 
 .lock-name {
-    font-size: clamp(0.65rem, 1.2vw, 0.9rem);
+    font-size: clamp(0.55rem, 1vw, 0.75rem);
     font-weight: 400;
     color: var(--label-color);
     letter-spacing: 0.06em;
@@ -454,6 +471,26 @@ body {
     .clock-section { margin-bottom: 16px; }
     .clock-time { font-size: clamp(3rem, 10vw, 7rem); }
     .sensor-card { padding: 16px; }
+}
+
+/* ------------------------------------------------------------------ */
+/* Footer                                                              */
+/* ------------------------------------------------------------------ */
+.footer {
+    position: fixed;
+    bottom: 12px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--text-color);
+    opacity: 0.6;
+    letter-spacing: 0.04em;
+    z-index: 1;
+}
+.footer a {
+    color: var(--text-color);
+    text-decoration: underline;
 }
 </style>
 </head>
@@ -546,7 +583,7 @@ body {
 
         clockTimeEl.innerHTML =
             h + ":" + m +
-            '<span class="clock-seconds">' + s + " " + ampm + "</span>";
+            '<span class="clock-ampm">' + ampm + "</span>";
 
         const day = DAYS[now.getDay()];
         const month = MONTHS[now.getMonth()];
@@ -557,6 +594,19 @@ body {
 
     updateClock();
     setInterval(updateClock, 1000);
+
+    /* -------------------------------------------------------------- */
+    /* Fullscreen — append ?fullscreen=1 to enter Fullscreen API.     */
+    /* -------------------------------------------------------------- */
+
+    if (new URLSearchParams(window.location.search).get("fullscreen") === "1") {
+        document.addEventListener("click", function requestFS() {
+            var el = document.documentElement;
+            var rfs = el.requestFullscreen || el.webkitRequestFullscreen;
+            if (rfs) rfs.call(el);
+            document.removeEventListener("click", requestFS);
+        }, { once: true });
+    }
 
     /* -------------------------------------------------------------- */
     /* Dark mode                                                      */
@@ -801,7 +851,8 @@ body {
             if (lock.battery != null) {
                 var batt = document.createElement("div");
                 batt.className = "lock-battery";
-                if (lock.battery < 20) batt.classList.add("low");
+                if (lock.battery <= 10) batt.classList.add("low");
+                if (lock.battery <= 5) item.classList.add("battery-critical");
                 batt.textContent = lock.battery + "%";
                 item.appendChild(batt);
             }
@@ -902,5 +953,11 @@ body {
 
 })();
 </script>
+
+<div class="footer">
+    &copy; 2026 Perry Kivolowitz &middot; MIT License &middot;
+    <a href="/dashboard">Dashboard</a>
+</div>
+
 </body>
 </html>

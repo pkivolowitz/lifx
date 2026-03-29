@@ -32,12 +32,16 @@ preserves last-known values — it does NOT flip signals to unknown on timeout.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.2"
 
 import asyncio
+import json
 import logging
+import os
+import stat
 import threading
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from media import SignalMeta
@@ -74,6 +78,19 @@ RECONNECT_DELAY: float = 300.0
 # Maximum reconnect delay (seconds).
 MAX_RECONNECT_DELAY: float = 3600.0
 
+# Refresh token file path — written by vivint_setup.py, read by this adapter.
+# Stored alongside server.json in /etc/glowup/ so it works regardless of
+# which user runs the service (root via systemd, pi via CLI).
+TOKEN_FILE: Path = Path("/etc/glowup/.vivint_token")
+
+# File permissions: owner read/write only.
+TOKEN_FILE_MODE: int = stat.S_IRUSR | stat.S_IWUSR
+
+# Proactive token refresh interval (seconds).  Vivint refresh tokens have
+# a ~5-6 hour lifetime.  Refreshing every 90 minutes keeps them alive with
+# comfortable margin.
+TOKEN_REFRESH_INTERVAL: float = 5400.0
+
 # ---------------------------------------------------------------------------
 # Optional dependency check
 # ---------------------------------------------------------------------------
@@ -82,11 +99,13 @@ try:
     import vivintpy  # noqa: F401
     from vivintpy.account import Account
     from vivintpy.devices.door_lock import DoorLock
+    from vivintpy.entity import UPDATE as VIVINT_UPDATE_EVENT
     _HAS_VIVINTPY: bool = True
 except ImportError:
     _HAS_VIVINTPY = False
     Account = None  # type: ignore[assignment,misc]
     DoorLock = None  # type: ignore[assignment,misc]
+    VIVINT_UPDATE_EVENT = "update"  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -221,17 +240,50 @@ class VivintAdapter:
                 )
 
     async def _connect(self) -> None:
-        """Authenticate and connect to Vivint cloud."""
-        logger.info("Connecting to Vivint cloud...")
-        self._account = Account(
-            username=self._username,
-            password=self._password,
-        )
-        await self._account.connect(
-            load_devices=True,
-            subscribe_for_realtime_updates=True,
-        )
+        """Authenticate and connect to Vivint cloud.
+
+        Tries the saved refresh token first (no 2FA needed).  Falls back to
+        username/password if the token is missing or expired.  If 2FA is
+        required during fallback, logs an error — run vivint_setup.py
+        interactively to generate a fresh token.
+        """
+        refresh_token: Optional[str] = self._load_token()
+
+        if refresh_token:
+            logger.info("Connecting to Vivint cloud with saved refresh token...")
+            self._account = Account(
+                username=self._username,
+                password=self._password,
+                refresh_token=refresh_token,
+            )
+        else:
+            logger.info("Connecting to Vivint cloud with username/password...")
+            self._account = Account(
+                username=self._username,
+                password=self._password,
+            )
+
+        try:
+            await self._account.connect(
+                load_devices=True,
+                subscribe_for_realtime_updates=True,
+            )
+        except Exception as exc:
+            exc_name: str = type(exc).__name__
+            if "MfaRequired" in exc_name:
+                logger.error(
+                    "Vivint requires 2FA — run 'python3 vivint_setup.py' "
+                    "on the Pi interactively to generate a refresh token"
+                )
+                raise
+            raise
+
         logger.info("Connected to Vivint cloud")
+        # Persist the (possibly refreshed) token for next startup.
+        self._save_token()
+        # Register PubNub real-time callbacks on each lock device so state
+        # changes publish to MQTT immediately, not just on the 60s poll.
+        self._register_pubnub_callbacks()
         # Do an immediate read after connecting.
         await self._read_locks()
 
@@ -244,8 +296,64 @@ class VivintAdapter:
                 pass
             self._account = None
 
+    # --- PubNub real-time callbacks ------------------------------------------
+
+    def _register_pubnub_callbacks(self) -> None:
+        """Register an update callback on each DoorLock device.
+
+        vivintpy's Entity base class emits an ``"update"`` event whenever
+        PubNub pushes new state.  We hook into that so lock state changes
+        publish to MQTT immediately instead of waiting for the next poll.
+        """
+        if not self._account:
+            return
+
+        registered: int = 0
+        for system in self._account.systems:
+            for alarm_panel in system.alarm_panels:
+                for device in alarm_panel.devices:
+                    if not isinstance(device, DoorLock):
+                        continue
+                    # Capture device in closure.
+                    device.on(VIVINT_UPDATE_EVENT, self._make_pubnub_handler(device))
+                    registered += 1
+
+        if registered:
+            logger.info(
+                "Registered PubNub real-time callbacks on %d lock(s)", registered,
+            )
+
+    def _make_pubnub_handler(self, device: Any) -> Any:
+        """Create a PubNub update handler bound to a specific device.
+
+        Args:
+            device: The DoorLock device instance.
+
+        Returns:
+            A callback that re-processes the lock on every PubNub update.
+        """
+        def _on_pubnub_update(data: dict) -> None:
+            """Handle a PubNub real-time update for a lock device."""
+            try:
+                self._process_lock(device)
+                logger.debug(
+                    "PubNub real-time update for %s", device.name,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "PubNub callback error for %s: %s", device.name, exc,
+                )
+        return _on_pubnub_update
+
     async def _poll_loop(self) -> None:
-        """Periodically read lock state as fallback to PubNub updates."""
+        """Periodically read lock state and refresh the auth token.
+
+        Lock state is polled every ``_poll_interval`` seconds.  The refresh
+        token is re-saved every ``TOKEN_REFRESH_INTERVAL`` seconds to keep
+        it alive across restarts.
+        """
+        last_token_refresh: float = time.time()
+
         while self._running:
             await asyncio.sleep(self._poll_interval)
             if not self._running:
@@ -254,6 +362,62 @@ class VivintAdapter:
                 await self._read_locks()
             except Exception as exc:
                 logger.warning("Vivint poll error: %s", exc)
+
+            # Proactively refresh and persist the token.
+            now: float = time.time()
+            if now - last_token_refresh >= TOKEN_REFRESH_INTERVAL:
+                self._save_token()
+                last_token_refresh = now
+                logger.debug("Vivint refresh token persisted")
+
+    # --- Token persistence --------------------------------------------------
+
+    def _load_token(self) -> Optional[str]:
+        """Load saved refresh token from disk.
+
+        Returns:
+            The refresh token string, or ``None`` if not found.
+        """
+        if not TOKEN_FILE.exists():
+            logger.debug("No saved Vivint token at %s", TOKEN_FILE)
+            return None
+        try:
+            token: str = TOKEN_FILE.read_text().strip()
+            if token:
+                logger.info("Loaded Vivint refresh token from %s", TOKEN_FILE)
+                return token
+        except Exception as exc:
+            logger.warning("Failed to read Vivint token file: %s", exc)
+        return None
+
+    def _save_token(self) -> None:
+        """Extract and persist the current refresh token to disk.
+
+        Writes to ``TOKEN_FILE`` with mode 0600.  Called after successful
+        connection and periodically during the poll loop to keep the
+        token fresh for next startup.
+        """
+        if not self._account:
+            return
+
+        # After auth, api.tokens is a dict containing OAuth tokens including
+        # "refresh_token".  Note: api.refresh_token is a method (for refreshing),
+        # not a getter — use api.tokens dict instead.
+        refresh_token: str = ""
+        if hasattr(self._account, "api") and hasattr(self._account.api, "tokens"):
+            tokens: Any = self._account.api.tokens
+            if isinstance(tokens, dict):
+                refresh_token = tokens.get("refresh_token", "")
+
+        if not refresh_token:
+            logger.debug("No refresh token available to persist")
+            return
+
+        try:
+            TOKEN_FILE.write_text(refresh_token)
+            os.chmod(TOKEN_FILE, TOKEN_FILE_MODE)
+        except Exception as exc:
+            logger.warning("Failed to save Vivint token: %s", exc)
 
     async def _read_locks(self) -> None:
         """Read all lock devices and update signals."""

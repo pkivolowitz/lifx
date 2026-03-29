@@ -113,6 +113,7 @@ MSG_STATE_LABEL: int = 25
 MSG_GET_VERSION: int = 32
 MSG_STATE_VERSION: int = 33
 MSG_GET_GROUP: int = 51
+MSG_SET_GROUP: int = 52
 MSG_STATE_GROUP: int = 53
 MSG_LIGHT_GET: int = 101
 MSG_LIGHT_SET_COLOR: int = 102
@@ -1227,6 +1228,61 @@ class LifxDevice:
                 "utf-8", errors="replace",
             )
         return self.group
+
+    def set_group(self, group_name: str) -> bool:
+        """Write a group name to the device firmware via SetGroup (type 52).
+
+        The group payload is: 16-byte UUID + 32-byte label + 8-byte timestamp.
+        We generate a deterministic UUID from the group name so all devices
+        in the same group share the same UUID (matching LIFX app behavior).
+
+        Args:
+            group_name: The group name (max 32 bytes UTF-8).
+
+        Returns:
+            ``True`` if the device acknowledged, ``False`` on timeout.
+        """
+        import hashlib
+        import struct
+
+        # Deterministic UUID from group name — same name = same UUID across
+        # all devices, which is how the LIFX app groups them.
+        group_uuid: bytes = hashlib.md5(
+            group_name.encode("utf-8"),
+        ).digest()[:GROUP_LABEL_OFFSET]
+
+        # 32-byte null-padded label.
+        encoded_label: bytes = group_name.encode("utf-8")[:LABEL_FIELD_SIZE]
+        padded_label: bytes = encoded_label.ljust(LABEL_FIELD_SIZE, b'\x00')
+
+        # 8-byte updated_at timestamp (nanoseconds since epoch).
+        updated_at: bytes = struct.pack("<Q", int(time.time() * 1e9))
+
+        payload: bytes = group_uuid + padded_label + updated_at
+
+        self._send(MSG_SET_GROUP, payload, ack=True)
+
+        old_timeout: float = self.sock.gettimeout() or SOCKET_TIMEOUT
+        try:
+            self.sock.settimeout(SOCKET_TIMEOUT)
+            deadline: float = time.monotonic() + SOCKET_TIMEOUT
+            while time.monotonic() < deadline:
+                try:
+                    data, _ = self.sock.recvfrom(MAX_UDP_PAYLOAD)
+                    msg = _parse_message(data)
+                    if msg and msg.get("type") == MSG_ACKNOWLEDGEMENT:
+                        self.group = group_name
+                        return True
+                except socket.timeout:
+                    break
+        except Exception as exc:
+            _log.warning(
+                "set_group(%r) failed: %s: %s",
+                group_name, type(exc).__name__, exc,
+            )
+        finally:
+            self.sock.settimeout(old_timeout)
+        return False
 
     def query_version(self) -> tuple[Optional[int], Optional[int]]:
         """Query and cache the vendor and product IDs.
