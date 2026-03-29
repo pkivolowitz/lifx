@@ -257,8 +257,9 @@ class NvrAdapter:
                         with self._lock:
                             self._snapshots[ch_id] = (jpeg, time.time())
                 except Exception as exc:
-                    logger.debug(
-                        "Snapshot error for channel %d: %s", ch_id, exc,
+                    logger.warning(
+                        "Snapshot error for channel %d (%s): %s",
+                        ch_id, type(exc).__name__, exc,
                     )
 
             await asyncio.sleep(self._interval)

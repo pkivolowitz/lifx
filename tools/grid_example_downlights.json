@@ -1,0 +1,21 @@
+{
+    "name": "Kitchen Ceiling",
+    "dimensions": [4, 3],
+    "member": {
+        "product": "SuperColour 800 Flush Downlight",
+        "zones": 1,
+        "color": true,
+        "kelvin_range": [1500, 9000]
+    },
+    "cells": {
+        "0,0": "DL NW",
+        "1,0": "DL NC",
+        "3,0": "DL NE",
+        "0,1": "DL CW",
+        "2,1": "DL C",
+        "3,1": "DL CE",
+        "0,2": "DL SW",
+        "1,2": "DL SC",
+        "3,2": "DL SE"
+    }
+}

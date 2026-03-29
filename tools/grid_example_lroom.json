@@ -1,0 +1,39 @@
+{
+    "name": "L-Shaped Room",
+    "dimensions": [6, 6],
+    "member": {
+        "product": "SuperColour 800 Flush Downlight",
+        "zones": 1,
+        "color": true,
+        "kelvin_range": [1500, 9000]
+    },
+    "cells": {
+        "0,0": "Hall NW",
+        "1,0": "Hall NE",
+        "0,1": "Hall W",
+        "1,1": "Hall E",
+        "0,2": "Hall SW",
+        "1,2": "Hall SE",
+
+        "0,3": "Main 1",
+        "1,3": "Main 2",
+        "2,3": "Main 3",
+        "3,3": "Main 4",
+        "4,3": "Main 5",
+        "5,3": "Main 6",
+
+        "0,4": "Main 7",
+        "1,4": "Main 8",
+        "2,4": "Main 9",
+        "3,4": "Main 10",
+        "4,4": "Main 11",
+        "5,4": "Main 12",
+
+        "0,5": "Main 13",
+        "1,5": "Main 14",
+        "2,5": "Main 15",
+        "3,5": "Main 16",
+        "4,5": "Main 17",
+        "5,5": "Main 18"
+    }
+}

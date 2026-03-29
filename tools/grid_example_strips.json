@@ -1,0 +1,17 @@
+{
+    "name": "Wall Art",
+    "dimensions": [16, 3],
+    "member": {
+        "product": "LIFX Z Strip",
+        "zones": 8,
+        "color": true,
+        "kelvin_range": [2500, 9000]
+    },
+    "cells": {
+        "0,0": "Strip Top-L",
+        "8,0": "Strip Top-R",
+        "0,1": "Strip Mid-L",
+        "0,2": "Strip Bot-L",
+        "8,2": "Strip Bot-R"
+    }
+}
