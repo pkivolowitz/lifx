@@ -106,16 +106,39 @@ from automation import (
     validate_automation, migrate_ble_triggers,
 )
 from operators import OperatorManager
-from lock_manager import LockManager
-from zigbee_adapter import ZigbeeAdapter
-from vivint_adapter import VivintAdapter
-from nvr_adapter import NvrAdapter
+try:
+    from lock_manager import LockManager
+    _HAS_LOCK_MANAGER: bool = True
+except ImportError:
+    _HAS_LOCK_MANAGER = False
+
+try:
+    from zigbee_adapter import ZigbeeAdapter
+    _HAS_ZIGBEE: bool = True
+except ImportError:
+    _HAS_ZIGBEE = False
+
+try:
+    from vivint_adapter import VivintAdapter
+    _HAS_VIVINT: bool = True
+except ImportError:
+    _HAS_VIVINT = False
+
+try:
+    from nvr_adapter import NvrAdapter
+    _HAS_NVR: bool = True
+except ImportError:
+    _HAS_NVR = False
 try:
     from printer_adapter import PrinterAdapter
     _HAS_PRINTER: bool = True
 except ImportError:
     _HAS_PRINTER = False
-from ble_adapter import BleAdapter
+try:
+    from ble_adapter import BleAdapter
+    _HAS_BLE_ADAPTER: bool = True
+except ImportError:
+    _HAS_BLE_ADAPTER = False
 from media import MediaManager, SignalBus
 from media.source import AudioStreamServer
 from solar import SunTimes, sun_times
@@ -2408,7 +2431,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
     keepalive: Optional[BulbKeepAlive] = None
     registry: Optional[DeviceRegistry] = None
     operator_manager: Optional[OperatorManager] = None
-    lock_manager: Optional[LockManager] = None
+    lock_manager: Optional[Any] = None
     ble_adapter: Optional[Any] = None
     signal_bus: Optional[SignalBus] = None
 
@@ -5564,7 +5587,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         lock_state: dict[str, bool] = getattr(
             self.server, "_lock_state", {},
         )
-        lm: Optional[LockManager] = self.lock_manager
+        lm: Optional[Any] = self.lock_manager
         locks: list[dict[str, Any]] = []
         for lock in lock_defs:
             abbr: str = lock.get("abbr", "?")
@@ -5695,7 +5718,7 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
 
             {"state": "HOME"}   or   {"state": "AWAY"}
         """
-        lm: Optional[LockManager] = self.lock_manager
+        lm: Optional[Any] = self.lock_manager
         state: str = "UNKNOWN"
         if lm is not None:
             state = lm.get_occupancy_state()
@@ -6552,12 +6575,12 @@ def main() -> None:
     orch: Optional[Any] = None
     keepalive: Optional[BulbKeepAlive] = None
     # Zigbee/Vivint/Operator/Lock references — set by _background_startup.
-    zigbee_adapter: Optional[ZigbeeAdapter] = None
-    vivint_adapter: Optional[VivintAdapter] = None
-    nvr_adapter: Optional[NvrAdapter] = None
-    ble_adpt: Optional[BleAdapter] = None
+    zigbee_adapter: Optional[Any] = None
+    vivint_adapter: Optional[Any] = None
+    nvr_adapter: Optional[Any] = None
+    ble_adpt: Optional[Any] = None
     operator_mgr: Optional[OperatorManager] = None
-    lock_mgr: Optional[LockManager] = None
+    lock_mgr: Optional[Any] = None
 
     def _background_startup() -> None:
         """Resolve config identifiers, load devices, start services.
@@ -6790,7 +6813,7 @@ def main() -> None:
             broker_port: int = mqtt_cfg.get("port", 1883)
 
             # BLE adapter (bridges glowup/ble/# MQTT → SignalBus).
-            if _MQTT_AVAILABLE:
+            if _MQTT_AVAILABLE and _HAS_BLE_ADAPTER:
                 ble_adpt = BleAdapter(
                     bus=signal_bus,
                     broker=broker_addr,
@@ -6801,7 +6824,7 @@ def main() -> None:
 
             # Zigbee adapter (for Z2M devices — motion, contact, temp).
             z_cfg: dict = config.get("zigbee", {})
-            if z_cfg.get("enabled") and _MQTT_AVAILABLE:
+            if z_cfg.get("enabled") and _MQTT_AVAILABLE and _HAS_ZIGBEE:
                 zigbee_adapter = ZigbeeAdapter(
                     config=z_cfg,
                     bus=signal_bus,
@@ -6812,7 +6835,7 @@ def main() -> None:
 
             # Vivint adapter (for lock state — read-only cloud API).
             v_cfg: dict = config.get("vivint", {})
-            if v_cfg.get("enabled"):
+            if v_cfg.get("enabled") and _HAS_VIVINT:
                 vivint_adapter = VivintAdapter(
                     config=v_cfg,
                     bus=signal_bus,
@@ -6825,7 +6848,7 @@ def main() -> None:
 
             # NVR camera adapter (Reolink snapshot proxy).
             nvr_cfg: dict = config.get("nvr", {})
-            if nvr_cfg.get("host"):
+            if nvr_cfg.get("host") and _HAS_NVR:
                 nvr_adapter = NvrAdapter(nvr_cfg)
                 nvr_adapter.start()
                 server._nvr_adapter = nvr_adapter
@@ -6857,7 +6880,7 @@ def main() -> None:
                 GlowUpRequestHandler.operator_manager = operator_mgr
 
             # Lock manager (presentation layer for /home dashboard).
-            if config.get("locks"):
+            if config.get("locks") and _HAS_LOCK_MANAGER:
                 config_path_local2: str = GlowUpRequestHandler.config_path or ""
                 db_dir: str = os.path.dirname(os.path.abspath(config_path_local2)) if config_path_local2 else "."
                 lock_mgr = LockManager(
