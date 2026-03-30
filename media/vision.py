@@ -57,6 +57,12 @@ except ImportError:
 # = 100 pixels of perimeter, divided into N regions.
 DEFAULT_EDGE_REGIONS: int = 24
 
+# Grid extraction resolution for screen_light2d.  The frame is
+# downscaled to this grid and per-cell HSB is published.  The effect
+# scales to the actual device resolution via nearest-neighbor.
+GRID_EXTRACT_W: int = 32
+GRID_EXTRACT_H: int = 32
+
 # Number of random pixel samples per edge region for stochastic sampling.
 # Higher = more stable color, more CPU.  64 at 24 regions = 1536 samples
 # total per frame — negligible cost vs the blur.
@@ -195,8 +201,12 @@ class VisionExtractor:
                 "brightness", "energy", "flash",
                 "dominant_hue", "dominant_sat",
                 "motion_angle", "motion_magnitude",
+                "grid_w", "grid_h",
             ]
-            arrays: list[str] = ["edge_colors", "edge_brightness"]
+            arrays: list[str] = [
+                "edge_colors", "edge_brightness",
+                "grid_hues", "grid_sats", "grid_bris",
+            ]
             for name in scalars:
                 self._bus.register(f"{prefix}:{name}", SignalMeta(
                     signal_type="scalar",
@@ -428,6 +438,80 @@ class VisionExtractor:
         self._bus.write(
             f"{prefix}:motion_magnitude", self._smooth_motion_mag,
         )
+
+        # --- Grid colors (full-frame downscale for 2D effects) ---
+        # Downscale the frame to a fixed grid and publish per-cell
+        # hue, saturation, and brightness arrays for screen_light2d.
+        self._extract_and_publish_grid(fframe, hue, sat, max_c, prefix)
+
+    def _extract_and_publish_grid(
+        self,
+        fframe: "np.ndarray",
+        hue: "np.ndarray",
+        sat: "np.ndarray",
+        bri: "np.ndarray",
+        prefix: str,
+    ) -> None:
+        """Downscale per-pixel HSB to a fixed grid and publish.
+
+        Divides the frame into a grid of cells and computes the average
+        hue, saturation, and brightness per cell.  Published as flat
+        row-major arrays on the signal bus.
+
+        Args:
+            fframe: Float frame [0,1] (H, W, 3).
+            hue:    Per-pixel hue array [0,1] (H, W).
+            sat:    Per-pixel saturation array [0,1] (H, W).
+            bri:    Per-pixel brightness array [0,1] (H, W).
+            prefix: Signal bus prefix.
+        """
+        fh, fw = fframe.shape[:2]
+        # Target grid resolution — generous enough for tile walls,
+        # downsampled further by the effect if needed.
+        gw: int = min(fw, GRID_EXTRACT_W)
+        gh: int = min(fh, GRID_EXTRACT_H)
+
+        # Cell dimensions.
+        cw: float = fw / gw
+        ch: float = fh / gh
+
+        grid_hues: list[float] = []
+        grid_sats: list[float] = []
+        grid_bris: list[float] = []
+
+        for gy in range(gh):
+            y0: int = int(gy * ch)
+            y1: int = int((gy + 1) * ch)
+            for gx in range(gw):
+                x0: int = int(gx * cw)
+                x1: int = int((gx + 1) * cw)
+
+                # Average HSB over the cell region.
+                cell_bri: float = float(bri[y0:y1, x0:x1].mean())
+                cell_sat: float = float(sat[y0:y1, x0:x1].mean())
+
+                # Hue averaging uses the brightest pixel's hue to
+                # avoid mean-of-hues wrapping artifacts (e.g., red
+                # pixels at 0.0 and 0.95 averaging to green at 0.475).
+                cell_region_bri = bri[y0:y1, x0:x1]
+                if cell_region_bri.size > 0 and cell_bri > 0.01:
+                    peak_idx = cell_region_bri.argmax()
+                    peak_y, peak_x = np.unravel_index(
+                        peak_idx, cell_region_bri.shape,
+                    )
+                    cell_hue: float = float(hue[y0 + peak_y, x0 + peak_x])
+                else:
+                    cell_hue = 0.0
+
+                grid_hues.append(cell_hue)
+                grid_sats.append(cell_sat)
+                grid_bris.append(cell_bri)
+
+        self._bus.write(f"{prefix}:grid_hues", grid_hues)
+        self._bus.write(f"{prefix}:grid_sats", grid_sats)
+        self._bus.write(f"{prefix}:grid_bris", grid_bris)
+        self._bus.write(f"{prefix}:grid_w", gw)
+        self._bus.write(f"{prefix}:grid_h", gh)
 
     def _median_cut(
         self,

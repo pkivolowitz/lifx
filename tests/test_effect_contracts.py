@@ -96,6 +96,7 @@ GRID_EFFECTS: frozenset[str] = frozenset({
     "spectrum2d",
     "matrix_rain",
     "fireworks2d",
+    "screen_light2d",
     "_grid_map",
 })
 

@@ -110,7 +110,11 @@ from lock_manager import LockManager
 from zigbee_adapter import ZigbeeAdapter
 from vivint_adapter import VivintAdapter
 from nvr_adapter import NvrAdapter
-from printer_adapter import PrinterAdapter
+try:
+    from printer_adapter import PrinterAdapter
+    _HAS_PRINTER: bool = True
+except ImportError:
+    _HAS_PRINTER = False
 from ble_adapter import BleAdapter
 from media import MediaManager, SignalBus
 from media.source import AudioStreamServer
@@ -826,18 +830,20 @@ class DeviceManager:
                 new_emitters[ip] = LifxEmitter.from_device(dev)
 
             # Build VirtualMultizoneEmitters for multi-device groups.
+            # Single-member groups still get a virtual emitter so they
+            # can be referenced by group:Name in operators and the API.
             for group_name, ips in self._group_config.items():
-                if len(ips) < 2:
+                if not ips:
                     continue
                 member_emitters: list[Emitter] = [
                     new_emitters[ip] for ip in ips
                     if ip in new_emitters
                 ]
-                if len(member_emitters) < 2:
+                if not member_emitters:
                     logging.warning(
-                        "Group '%s' has fewer than 2 reachable devices "
-                        "(%d/%d) — skipping virtual emitter",
-                        group_name, len(member_emitters), len(ips),
+                        "Group '%s' has no reachable devices "
+                        "(%d configured) — skipping virtual emitter",
+                        group_name, len(ips),
                     )
                     continue
                 group_id: str = _group_id_from_name(group_name)
@@ -6826,7 +6832,7 @@ def main() -> None:
 
             # Printer monitor (Brother CSV endpoint).
             printer_cfg: dict = config.get("printer", {})
-            if printer_cfg.get("host"):
+            if printer_cfg.get("host") and _HAS_PRINTER:
                 printer_adapter = PrinterAdapter(
                     config=printer_cfg,
                     bus=signal_bus,

@@ -875,6 +875,11 @@ def _parse_args() -> argparse.Namespace:
              "standalone config.  The positional config arg must point to "
              "the server.json (e.g., /etc/glowup/server.json).",
     )
+    parser.add_argument(
+        "--video-url", default=None, metavar="URL",
+        help="Video source URL (HDHomeRun, RTSP, etc.) for "
+             "screen_light2d.  Starts ffmpeg → VisionExtractor pipeline.",
+    )
     return parser.parse_args()
 
 
@@ -936,6 +941,68 @@ def main() -> int:
 
     em.power_on()
 
+    # Wire up media pipeline if --video-url is provided.
+    # This feeds ScreenSource → VisionExtractor → SignalBus so
+    # screen_light2d (and other MediaEffects) can read vision signals.
+    signal_bus: Any = None
+    video_proc: Any = None
+    video_thread: Any = None
+
+    if args.video_url:
+        try:
+            import subprocess as _sp
+            import numpy as np
+            from media import SignalBus
+            from media.vision import VisionExtractor
+
+            signal_bus = SignalBus()
+            vision: VisionExtractor = VisionExtractor(
+                source_name="screen", bus=signal_bus,
+            )
+
+            # Capture resolution — small for fast processing.
+            CAP_W: int = 320
+            CAP_H: int = 240
+            CAP_FPS: int = args.fps
+            FRAME_BYTES: int = CAP_W * CAP_H * 3
+
+            cap_cmd: list[str] = [
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-i", args.video_url,
+                "-vf", f"scale={CAP_W}:{CAP_H}",
+                "-r", str(CAP_FPS),
+                "-f", "rawvideo", "-pix_fmt", "rgb24",
+                "pipe:1",
+            ]
+            print(
+                f"  Video: {args.video_url} → {CAP_W}x{CAP_H} "
+                f"@ {CAP_FPS} fps", flush=True,
+            )
+            video_proc = _sp.Popen(
+                cap_cmd, stdout=_sp.PIPE, stderr=_sp.DEVNULL,
+            )
+
+            def _video_reader() -> None:
+                """Read raw RGB frames and feed to VisionExtractor."""
+                while video_proc and video_proc.poll() is None:
+                    data: bytes = video_proc.stdout.read(FRAME_BYTES)
+                    if len(data) < FRAME_BYTES:
+                        break
+                    frame: np.ndarray = np.frombuffer(
+                        data, dtype=np.uint8,
+                    ).reshape((CAP_H, CAP_W, 3))
+                    vision.process_pyramid(
+                        [frame], CAP_W, CAP_H,
+                    )
+
+            video_thread = threading.Thread(
+                target=_video_reader, daemon=True, name="video-reader",
+            )
+            video_thread.start()
+        except ImportError as exc:
+            print(f"Warning: video pipeline unavailable — {exc}")
+            signal_bus = None
+
     # Wire up controller and play the effect.
     ctrl: Controller = Controller([em], fps=args.fps,
                                   zones_per_bulb=args.zpb)
@@ -943,16 +1010,19 @@ def main() -> int:
         effect_name,
         width=config.cols,
         height=config.rows,
+        signal_bus=signal_bus,
     )
 
     # Block until Ctrl+C.
-    stop: threading.Event = threading.Event()
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    stop.wait()
+    stop_event: threading.Event = threading.Event()
+    signal.signal(signal.SIGINT, lambda *_: stop_event.set())
+    signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
+    stop_event.wait()
 
     ctrl.stop(fade_ms=0)
     em.close()
+    if video_proc:
+        video_proc.kill()
 
     return 0
 
