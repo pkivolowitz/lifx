@@ -1479,7 +1479,7 @@ class LifxDevice:
         self.matrix_width = first_width
         self.matrix_height = first_height
         self.tile_count = actual_tiles
-        self.zone_count = first_width * first_height
+        self.zone_count = first_width * first_height * actual_tiles
         _log.info(
             "query_device_chain(%s): %dx%d, %d tile(s), %d zones",
             self.ip, first_width, first_height,

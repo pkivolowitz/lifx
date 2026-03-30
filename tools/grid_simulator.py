@@ -212,16 +212,30 @@ class GridConfig:
     All devices in a grid are homogeneous — same zone count, same
     capabilities.  The ``member`` section defines the shared template.
 
+    Two layout modes:
+
+    - **Flat** (``member.matrix`` absent): ``dimensions`` are in zone
+      units.  Each cell is a single zone (bulb) or horizontal strip.
+    - **Matrix** (``member.matrix`` = ``[w, h]``): ``dimensions`` are
+      in **cell** units.  Each cell contains a ``w × h`` pixel matrix
+      (e.g. 8×8 for LIFX Tiles).  Effects compute at pixel resolution
+      (``cell_cols * matrix_w`` × ``cell_rows * matrix_h``).
+
     Attributes:
         name:             Grid display name.
-        cols:             Grid width in zone units.
-        rows:             Grid height.
+        cols:             Grid width in zone units (pixel-level for matrix).
+        rows:             Grid height in zone units (pixel-level for matrix).
+        cell_cols:        Grid width in cell units.
+        cell_rows:        Grid height in cell units.
+        matrix_w:         Internal pixel width per cell (1 for flat mode).
+        matrix_h:         Internal pixel height per cell (1 for flat mode).
+        is_matrix:        True if member defines a matrix layout.
         product:          Member device product name.
         zones_per_member: Zones per device (1 for bulbs, N for strips).
         has_color:        Whether devices support color.
         kelvin_range:     (min, max) kelvin range.
-        cells:            Mapping of ``(col, row)`` → device label.
-        filled_zones:     Set of zone indices that have a device.
+        cells:            Mapping of ``(col, row)`` → device label (cell units).
+        filled_zones:     Set of zone indices that have a device (pixel-level).
         filled_count:     Number of devices placed in the grid.
 
     Args:
@@ -244,15 +258,15 @@ class GridConfig:
 
         self.name: str = raw.get("name", "Untitled Grid")
 
-        # Grid dimensions: [columns, rows] in zone units.
+        # Grid dimensions: [columns, rows] in cell units.
         dims: Any = raw.get("dimensions")
         if not isinstance(dims, list) or len(dims) != 2:
             raise ValueError("'dimensions' must be [columns, rows]")
-        self.cols: int = int(dims[0])
-        self.rows: int = int(dims[1])
-        if self.cols < 1 or self.rows < 1:
+        self.cell_cols: int = int(dims[0])
+        self.cell_rows: int = int(dims[1])
+        if self.cell_cols < 1 or self.cell_rows < 1:
             raise ValueError(
-                f"Dimensions must be positive: {self.cols}x{self.rows}"
+                f"Dimensions must be positive: {self.cell_cols}x{self.cell_rows}"
             )
 
         # Member template — shared device properties.
@@ -267,7 +281,25 @@ class GridConfig:
         kr: list[int] = member.get("kelvin_range", [1500, 9000])
         self.kelvin_range: tuple[int, int] = (int(kr[0]), int(kr[1]))
 
-        # Parse cell placements: "col,row" → label.
+        # Matrix dimensions — internal pixel grid per cell.
+        # Absent or [1,1] means flat mode (single-zone bulbs, strips).
+        mat: Any = member.get("matrix")
+        if mat and isinstance(mat, list) and len(mat) == 2:
+            self.matrix_w: int = int(mat[0])
+            self.matrix_h: int = int(mat[1])
+            self.is_matrix: bool = True
+        else:
+            self.matrix_w = 1
+            self.matrix_h = 1
+            self.is_matrix = False
+
+        # Pixel-level dimensions — what effects compute on.
+        # Flat mode: cols/rows = cell_cols/cell_rows (1:1).
+        # Matrix mode: cols/rows = cell_cols * matrix_w, cell_rows * matrix_h.
+        self.cols: int = self.cell_cols * self.matrix_w
+        self.rows: int = self.cell_rows * self.matrix_h
+
+        # Parse cell placements: "col,row" → label (in cell units).
         self.cells: dict[tuple[int, int], str] = {}
         raw_cells: dict[str, str] = raw.get("cells", {})
         for key, label in raw_cells.items():
@@ -276,31 +308,37 @@ class GridConfig:
                 raise ValueError(f"Cell key '{key}' must be 'col,row'")
             col: int = int(parts[0].strip())
             row: int = int(parts[1].strip())
-            if col < 0 or col >= self.cols:
+            if col < 0 or col >= self.cell_cols:
                 raise ValueError(
-                    f"Cell column {col} outside grid width {self.cols}"
+                    f"Cell column {col} outside grid width {self.cell_cols}"
                 )
-            if row < 0 or row >= self.rows:
+            if row < 0 or row >= self.cell_rows:
                 raise ValueError(
-                    f"Cell row {row} outside grid height {self.rows}"
-                )
-            if col + self.zones_per_member > self.cols:
-                raise ValueError(
-                    f"Device at ({col},{row}) extends beyond grid width "
-                    f"({col} + {self.zones_per_member} > {self.cols})"
+                    f"Cell row {row} outside grid height {self.cell_rows}"
                 )
             self.cells[(col, row)] = label
 
         if not self.cells:
             raise ValueError("Grid has no filled cells")
 
-        # Build the set of filled zone indices.
-        # For single-zone: one index per cell.
-        # For multizone: zones_per_member consecutive indices per cell.
+        # Build the set of filled pixel-level zone indices.
+        # For flat mode: one index per cell (or zones_per_member consecutive).
+        # For matrix mode: matrix_w * matrix_h indices per occupied cell.
         self.filled_zones: set[int] = set()
-        for (col, row) in self.cells:
-            for z in range(self.zones_per_member):
-                self.filled_zones.add(row * self.cols + col + z)
+        for (cell_col, cell_row) in self.cells:
+            if self.is_matrix:
+                # Each cell occupies a matrix_w × matrix_h block of pixels.
+                px_col: int = cell_col * self.matrix_w
+                px_row: int = cell_row * self.matrix_h
+                for dy in range(self.matrix_h):
+                    for dx in range(self.matrix_w):
+                        idx: int = (px_row + dy) * self.cols + (px_col + dx)
+                        self.filled_zones.add(idx)
+            else:
+                for z in range(self.zones_per_member):
+                    self.filled_zones.add(
+                        cell_row * self.cols + cell_col + z
+                    )
 
         self.filled_count: int = len(self.cells)
 
@@ -366,21 +404,15 @@ class GridEmitter(Emitter):
             term = os.get_terminal_size()
         except OSError:
             term = os.terminal_size((120, 40))
-        zpb: int = config.zones_per_member
-
-        # Number of device slots per row.
-        # For single-zone (zpb=1): one slot per column.
-        # For multizone: slots at every zpb column boundary.
-        device_slot_count: int = (config.cols + zpb - 1) // zpb
-
-        # Horizontal gaps between device slots.
-        h_gaps: int = max(0, device_slot_count - 1) * CELL_GAP_CHARS
-        # Vertical gaps between grid rows.
-        v_gaps: int = max(0, config.rows - 1) * CELL_GAP_CHARS
+        # Layout computation.
+        # Gaps appear between cells (not between pixels within a cell).
+        h_gaps: int = max(0, config.cell_cols - 1) * CELL_GAP_CHARS
+        v_gaps: int = max(0, config.cell_rows - 1) * CELL_GAP_CHARS
 
         avail_w: int = term.columns - BORDER_TOTAL_CHARS
         avail_h: int = term.lines - BORDER_TOTAL_CHARS - 1  # cursor parking
 
+        # Characters per pixel column and rows per pixel row.
         self._chars_per_zone: int = max(
             MIN_CHARS_PER_ZONE,
             (avail_w - h_gaps) // config.cols,
@@ -452,8 +484,8 @@ class GridEmitter(Emitter):
         return EmitterCapabilities(
             accepted_frame_types=[FRAME_TYPE_STRIP],
             zones=self._config.total_zones,
-            width=self._config.cols,
-            height=self._config.rows,
+            width=self._config.cols,   # pixel-level width
+            height=self._config.rows,  # pixel-level height
         )
 
     # --- Engine-facing properties ------------------------------------------
@@ -482,6 +514,12 @@ class GridEmitter(Emitter):
     def product_name(self) -> str:
         """Description with grid dimensions and fill count."""
         cfg: GridConfig = self._config
+        if cfg.is_matrix:
+            return (
+                f"Virtual Grid ({cfg.cell_cols}x{cfg.cell_rows} cells, "
+                f"{cfg.cols}x{cfg.rows}px, "
+                f"{cfg.filled_count} devices)"
+            )
         return (
             f"Virtual Grid ({cfg.cols}x{cfg.rows}, "
             f"{cfg.filled_count} devices)"
@@ -525,30 +563,37 @@ class GridEmitter(Emitter):
                 self._fps_actual = (len(self._fps_times) - 1) / span
 
         config: GridConfig = self._config
-        zpb: int = config.zones_per_member
         cpz: int = self._chars_per_zone
         out: list[str] = []
+        mw: int = config.matrix_w
+        mh: int = config.matrix_h
 
         er, eg, eb = EMPTY_CELL_RGB
         empty_seq: str = f"{CSI}38;2;{er};{eg};{eb}m"
 
-        for grid_row in range(config.rows):
-            # Screen Y for the top of this grid row.
+        for px_row in range(config.rows):
+            # Determine which cell row this pixel row belongs to.
+            cell_row: int = px_row // mh
+
+            # Screen Y: account for per-cell gaps (not per-pixel).
             sy: int = (
                 2  # row 1 is top border, row 2 is first interior row
-                + grid_row * (self._cell_h + CELL_GAP_CHARS)
+                + px_row * self._cell_h
+                + cell_row * CELL_GAP_CHARS
             )
 
             for dy in range(self._cell_h):
                 out.append(_move(sy + dy, 2))  # column 2 = inside left border
 
-                for grid_col in range(config.cols):
-                    # Insert gap at device slot boundaries (not before first).
-                    if grid_col > 0 and grid_col % zpb == 0:
+                for px_col in range(config.cols):
+                    cell_col: int = px_col // mw
+
+                    # Insert gap at cell boundaries (not pixel boundaries).
+                    if px_col > 0 and px_col % mw == 0:
                         out.append(RESET)
                         out.append(" " * CELL_GAP_CHARS)
 
-                    idx: int = grid_row * config.cols + grid_col
+                    idx: int = px_row * config.cols + px_col
                     if idx in config.filled_zones and idx < len(colors):
                         r, g, b = _hsbk_to_rgb(*colors[idx])
                         out.append(f"{CSI}38;2;{r};{g};{b}m")
@@ -561,7 +606,7 @@ class GridEmitter(Emitter):
 
         # Update bottom border with profiling stats.
         elapsed: float = now - self._start_time if self._start_time else 0.0
-        grid_total: int = config.cols * config.rows
+        grid_total: int = config.total_zones
         out.append(_move(self._frame_h, 1))
         out.append(_border_line(BOX_BL, BOX_BR, self._frame_w, [
             f"FPS: {self._fps_actual:.0f}/{self._fps_target}",
@@ -612,10 +657,16 @@ class GridEmitter(Emitter):
         out: list[str] = [CLEAR_SCREEN, HIDE_CURSOR]
 
         # Dimension display string.
-        dim_str: str = f"{config.cols}x{config.rows}"
-        if config.zones_per_member > 1:
-            dev_cols: int = config.cols // config.zones_per_member
-            dim_str += f" ({dev_cols}dev x{config.zones_per_member}z)"
+        if config.is_matrix:
+            dim_str: str = (
+                f"{config.cell_cols}x{config.cell_rows} cells "
+                f"({config.cols}x{config.rows}px)"
+            )
+        else:
+            dim_str = f"{config.cols}x{config.rows}"
+            if config.zones_per_member > 1:
+                dev_cols: int = config.cols // config.zones_per_member
+                dim_str += f" ({dev_cols}dev x{config.zones_per_member}z)"
 
         # Top border with grid info.
         out.append(_move(1, 1))
@@ -699,49 +750,37 @@ def _print_info(config: GridConfig) -> None:
     Args:
         config: Parsed :class:`GridConfig` to display.
     """
-    zpb: int = config.zones_per_member
     print(f"Grid: {config.name}")
-    print(f"  Dimensions: {config.cols} x {config.rows} (zone units)")
-    if zpb > 1:
-        dev_cols: int = config.cols // zpb
-        print(f"  Device slots: {dev_cols} x {config.rows}")
+    print(f"  Cell grid: {config.cell_cols} x {config.cell_rows}")
+    if config.is_matrix:
+        print(f"  Matrix per cell: {config.matrix_w} x {config.matrix_h}")
+        print(f"  Pixel resolution: {config.cols} x {config.rows}")
+    else:
+        zpb: int = config.zones_per_member
+        if zpb > 1:
+            dev_cols: int = config.cell_cols // zpb
+            print(f"  Device slots: {dev_cols} x {config.cell_rows}")
     print(f"  Member: {config.product}")
-    print(f"    Zones per device: {zpb}")
+    if not config.is_matrix:
+        print(f"    Zones per device: {config.zones_per_member}")
     print(f"    Color: {config.has_color}")
     print(f"    Kelvin: {config.kelvin_range[0]}\u2013{config.kelvin_range[1]}")
     print(f"  Devices placed: {config.filled_count}")
-    total: int = config.cols * config.rows
-    print(f"  Zone fill: {len(config.filled_zones)}/{total}")
+    print(f"  Zone fill: {len(config.filled_zones)}/{config.total_zones}")
     print()
 
-    # Visual grid map.
+    # Visual grid map (always in cell units).
     print("  Layout:")
-    if zpb == 1:
-        # Single-zone: show label per cell.
-        max_label: int = 14
-        for row in range(config.rows):
-            parts: list[str] = []
-            for col in range(config.cols):
-                lbl: Optional[str] = config.cells.get((col, row))
-                if lbl:
-                    parts.append(lbl[:max_label].center(max_label))
-                else:
-                    parts.append("--".center(max_label))
-            print(f"    {'|'.join(parts)}")
-    else:
-        # Multizone: show device per slot.
-        max_label = 14
-        dev_cols: int = config.cols // zpb
-        for row in range(config.rows):
-            parts = []
-            for dc in range(dev_cols):
-                col: int = dc * zpb
-                lbl = config.cells.get((col, row))
-                if lbl:
-                    parts.append(lbl[:max_label].center(max_label))
-                else:
-                    parts.append("--".center(max_label))
-            print(f"    {'|'.join(parts)}")
+    max_label: int = 14
+    for row in range(config.cell_rows):
+        parts: list[str] = []
+        for col in range(config.cell_cols):
+            lbl: Optional[str] = config.cells.get((col, row))
+            if lbl:
+                parts.append(lbl[:max_label].center(max_label))
+            else:
+                parts.append("--".center(max_label))
+        print(f"    {'|'.join(parts)}")
     print()
 
 

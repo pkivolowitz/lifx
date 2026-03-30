@@ -1,0 +1,19 @@
+{
+    "name": "4-Tile Staircase",
+    "description": "4 LIFX Tiles in a 3x3 sparse grid — staircase pattern. Each cell is one 8x8 tile. zones=1 means one cell per grid position; the 64 internal pixels are handled by the matrix emitter.",
+    "dimensions": [3, 3],
+    "member": {
+        "product": "Tile",
+        "zones": 1,
+        "pixels_per_zone": 64,
+        "matrix": [8, 8],
+        "color": true,
+        "kelvin_range": [1500, 9000]
+    },
+    "cells": {
+        "0,2": "Tile 0",
+        "1,1": "Tile 1",
+        "2,1": "Tile 2",
+        "2,0": "Tile 3"
+    }
+}
