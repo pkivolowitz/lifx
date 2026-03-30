@@ -162,3 +162,79 @@ not prompt again.
 If you prefer not to grant the permission, simply dismiss the dialog.
 The simulator will still work; the window just won't automatically
 come to the front on launch.
+
+### Grid Simulator
+
+The grid simulator (`tools/grid_simulator.py`) is a standalone
+terminal-based previewer for 2D effects on virtual device grids.  It
+renders colored blocks using 24-bit ANSI escape codes — no tkinter
+required, works over SSH.
+
+Unlike `--sim` (which previews a single device or group), the grid
+simulator renders an entire 2D grid of devices with sparse cell
+placement, visual gaps between devices, and FPS statistics.
+
+```bash
+- Preview fireworks2d on a 4-tile staircase grid
+python3 tools/grid_simulator.py tools/grid_example_tiles_staircase.json fireworks2d
+
+- Load a named grid from the server config
+python3 tools/grid_simulator.py /etc/glowup/server.json --grid Staircase fireworks2d
+
+- Show grid layout without animating
+python3 tools/grid_simulator.py tools/grid_example_tiles_staircase.json --info
+
+- List all available effects
+python3 tools/grid_simulator.py --list
+```
+
+| Flag        | Default    | Description                                           |
+|-------------|------------|-------------------------------------------------------|
+| `config`    | —          | Path to grid JSON or server.json (positional)         |
+| `effect`    | `plasma2d` | Effect name (positional)                              |
+| `--fps`     | 20         | Target frames per second                              |
+| `--info`    | —          | Print grid layout and exit                            |
+| `--grid`    | —          | Load a named grid from a server.json grids section    |
+| `--zpb`     | 1          | Zones per bulb grouping                               |
+| `--list`    | —          | List available effects and exit                       |
+
+**Grid configuration files** define dimensions, member device
+template, and cell placements:
+
+```json
+{
+    "name": "4-Tile Staircase",
+    "dimensions": [3, 3],
+    "member": {
+        "product": "Tile",
+        "matrix": [8, 8],
+        "color": true,
+        "kelvin_range": [1500, 9000]
+    },
+    "cells": {
+        "0,2": "Tile 0",
+        "1,1": "Tile 1",
+        "2,1": "Tile 2",
+        "2,0": "Tile 3"
+    }
+}
+```
+
+Two layout modes:
+
+- **Matrix mode** (`member.matrix` present) — each cell is a pixel
+  grid (e.g., 8×8 for LIFX Tiles).  The effect computes at full
+  pixel resolution: `cell_cols × matrix_w` by `cell_rows × matrix_h`.
+- **Flat mode** (no `member.matrix`) — each cell is a single zone or
+  horizontal strip.  Used for single-zone downlights or string-light
+  scanline grids.
+
+Grids may be **sparse** — not every cell needs a device.  Occupied
+cells render with color; empty cells show as dim dots.
+
+Example configs are in `tools/`:
+
+- `grid_example_tiles_staircase.json` — 4 Tiles in a staircase
+- `grid_example_downlights.json` — 8 downlights in a 4×3 ceiling
+- `grid_example_strips.json` — 2 string lights side by side
+- `grid_example_lroom.json` — L-shaped room with 24 downlights

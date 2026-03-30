@@ -91,6 +91,49 @@ also appear for independent control.  The scheduler plays effects on
 the virtual device so the animation spans all member devices as a
 unified canvas.
 
+### Grids
+
+Grids are 2D spatial arrangements of devices — a higher-level
+abstraction than groups.  Where a group concatenates member zones
+linearly (a 1D canvas), a grid places members on a 2D cell grid
+and computes at pixel resolution.
+
+All members of a grid must have identical geometry (e.g., all 8×8
+Tiles, or all 36-zone string lights).  The grid may be **sparse** —
+not every cell needs a device.  Empty cells receive no data.
+
+Grids appear in the API identified by `grid:<name>` (e.g.,
+`grid:Staircase`).  The `width` and `height` effect parameters are
+auto-injected from the grid's pixel dimensions.
+
+```json
+"grids": {
+    "Staircase": {
+        "dimensions": [3, 3],
+        "member": {
+            "product": "Tile",
+            "matrix": [8, 8]
+        },
+        "cells": {
+            "0,2": "Tile 0",
+            "1,1": "Tile 1",
+            "2,1": "Tile 2",
+            "2,0": "Tile 3"
+        }
+    }
+}
+```
+
+- **dimensions** — cell grid size `[columns, rows]`
+- **member.matrix** — internal pixel dimensions per device `[w, h]`; omit for single-zone devices
+- **cells** — `"col,row"` → device label, MAC, or IP; positions within `dimensions`
+
+The logical canvas is `cell_cols × member_w` by `cell_rows × member_h`
+pixels.  A 3×3 grid of 8×8 Tiles produces a 24×24 (576 pixel) canvas.
+
+String lights can form grids too — each light is one horizontal
+scanline, stacked vertically like raster lines on a CRT.
+
 The `schedule` section is optional — the server works in API-only mode
 without it.
 

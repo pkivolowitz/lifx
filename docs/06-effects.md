@@ -26,6 +26,7 @@ listings so users see relevant effects first.
 | `double_slit` | strip |
 | `embers` | strip |
 | `fireworks` | strip |
+| `fireworks2d` | matrix |
 | `flag` | strip |
 | `jacobs_ladder` | strip |
 | `matrix_rain` | matrix |
@@ -268,6 +269,51 @@ python3 glowup.py play fireworks --ip <device-ip> --launch-rate 2.0 --trail-leng
 
 # Slow, dramatic rockets with long fades
 python3 glowup.py play fireworks --ip <device-ip> --ascent-speed 4.0 --burst-duration 4.0 --max-rockets 5
+```
+
+---
+
+### fireworks2d
+
+**2D fireworks display** — the matrix counterpart of `fireworks`.
+Shells launch from random positions along the bottom edge and rise with
+ease-out deceleration (simulating drag and gravity), trailing white-hot
+exhaust with perpendicular width.  At zenith each shell detonates into
+a circular 2D gaussian bloom that expands outward and fades through
+four color phases: white-hot flash → saturated chemical color → peak
+hold → warm orange cooldown.
+
+Multiple shells blend additively in RGB space — the same physically
+correct compositing as the 1D fireworks.
+
+Designed for LIFX Tile grids and the grid simulator.  Works on Luna
+(7×5) but low resolution limits the visual.
+
+| Parameter          | Default | Range       | Description                                          |
+|--------------------|---------|-------------|------------------------------------------------------|
+| `--max-shells`     | 3       | 1–20        | Maximum simultaneous shells in flight               |
+| `--launch-rate`    | 0.4     | 0.05–5.0   | Average new shells launched per second              |
+| `--ascent-speed`   | 6.0     | 1.0–40.0   | Rise speed in pixels per second                     |
+| `--trail-length`   | 4.0     | 0.5–20.0   | Exhaust trail length in pixels                      |
+| `--burst-spread`   | 6.0     | 1.0–30.0   | Maximum burst radius in pixels from zenith          |
+| `--burst-duration` | 1.8     | 0.2–8.0    | Seconds for the burst to fade completely to black   |
+| `--kelvin`         | 3500    | 1500–9000  | Color temperature in Kelvin                          |
+| `--width`          | 7       | 1–500      | Grid width in pixels (auto-set from device)         |
+| `--height`         | 5       | 1–300      | Grid height in pixels (auto-set from device)        |
+
+**Examples:**
+
+```bash
+- Preview in the grid simulator (no hardware needed)
+python3 tools/grid_simulator.py tools/grid_example_tiles_staircase.json fireworks2d
+
+- Play on a physical Luna
+python3 glowup.py play fireworks2d --device LUNA
+
+- Play on a grid of Tiles via the server API
+curl -X POST http://pi:8420/api/devices/grid:Staircase/play \
+     -H "Authorization: Bearer $TOKEN" \
+     -d '{"effect": "fireworks2d"}'
 ```
 
 ---

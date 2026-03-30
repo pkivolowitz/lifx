@@ -247,14 +247,17 @@ class GridConfig:
         ValueError: If required fields are missing or invalid.
     """
 
-    def __init__(self, path: str) -> None:
-        """Load and validate a grid configuration file.
+    def __init__(self, path_or_dict: Any) -> None:
+        """Load and validate a grid configuration.
 
         Args:
-            path: Path to the JSON configuration file.
+            path_or_dict: Path to a JSON config file, or a raw dict.
         """
-        with open(path) as f:
-            raw: dict[str, Any] = json.load(f)
+        if isinstance(path_or_dict, dict):
+            raw: dict[str, Any] = path_or_dict
+        else:
+            with open(path_or_dict) as f:
+                raw = json.load(f)
 
         self.name: str = raw.get("name", "Untitled Grid")
 
@@ -788,6 +791,45 @@ def _print_info(config: GridConfig) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+def _load_grid_from_server_json(path: str, grid_name: str) -> GridConfig:
+    """Extract a named grid definition from a server.json file.
+
+    The server.json ``grids`` section contains grid definitions keyed
+    by name.  Each entry has the same structure as a standalone grid
+    config file (dimensions, member, cells).
+
+    Args:
+        path:      Path to server.json.
+        grid_name: Name of the grid to extract.
+
+    Returns:
+        A :class:`GridConfig` built from the extracted definition.
+
+    Raises:
+        ValueError: If the grid is not found or the file has no grids.
+        FileNotFoundError: If the server.json file doesn't exist.
+    """
+    with open(path) as f:
+        server_cfg: dict[str, Any] = json.load(f)
+
+    grids: dict[str, Any] = server_cfg.get("grids", {})
+    if not grids:
+        raise ValueError(f"No 'grids' section in {path}")
+
+    if grid_name not in grids:
+        available: str = ", ".join(sorted(grids.keys()))
+        raise ValueError(
+            f"Grid '{grid_name}' not found.  Available: {available}"
+        )
+
+    grid_def: dict[str, Any] = dict(grids[grid_name])
+    # Inject name if not present.
+    if "name" not in grid_def:
+        grid_def["name"] = grid_name
+
+    return GridConfig(grid_def)
+
+
 def _parse_args() -> argparse.Namespace:
     """Parse command-line arguments.
 
@@ -827,6 +869,12 @@ def _parse_args() -> argparse.Namespace:
         "--list", "-l", action="store_true", dest="list_effects",
         help="List available effects and exit",
     )
+    parser.add_argument(
+        "--grid", "-g", default=None, metavar="NAME",
+        help="Load a named grid from a server.json file instead of a "
+             "standalone config.  The positional config arg must point to "
+             "the server.json (e.g., /etc/glowup/server.json).",
+    )
     return parser.parse_args()
 
 
@@ -851,9 +899,13 @@ def main() -> int:
         print("Error: config file required.  Use --list for effects.")
         return 1
 
-    # Load and validate config.
+    # Load and validate config — either standalone JSON or a named grid
+    # extracted from a server.json file.
     try:
-        config: GridConfig = GridConfig(args.config)
+        if args.grid:
+            config = _load_grid_from_server_json(args.config, args.grid)
+        else:
+            config = GridConfig(args.config)
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
         print(f"Config error: {exc}")
         return 1

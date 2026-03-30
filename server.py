@@ -97,6 +97,7 @@ from effects import (
 from emitters import Emitter
 from emitters.lifx import LifxEmitter
 from emitters.virtual import VirtualMultizoneEmitter
+from emitters.virtual_grid import VirtualGridEmitter
 from engine import Controller
 from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
 from ble_trigger import BleTriggerManager
@@ -109,6 +110,7 @@ from lock_manager import LockManager
 from zigbee_adapter import ZigbeeAdapter
 from vivint_adapter import VivintAdapter
 from nvr_adapter import NvrAdapter
+from printer_adapter import PrinterAdapter
 from ble_adapter import BleAdapter
 from media import MediaManager, SignalBus
 from media.source import AudioStreamServer
@@ -201,6 +203,9 @@ EFFECT_DEFAULTS_FILENAME: str = "effect_defaults.json"
 # Prefix used to distinguish group identifiers from IP addresses in
 # the API path and internal device dictionaries.
 GROUP_PREFIX: str = "group:"
+
+# Prefix for grid identifiers (2D spatial device arrangements).
+GRID_PREFIX: str = "grid:"
 
 # Logging format matching scheduler.py.
 LOG_FORMAT: str = "%(asctime)s %(levelname)s %(message)s"
@@ -314,6 +319,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_home_occupancy", requires_auth=False),
     _Route("GET", ("api", "home", "mode"),
            "_handle_get_home_mode", requires_auth=False),
+    _Route("GET", ("api", "home", "printer"),
+           "_handle_get_home_printer", requires_auth=False),
     _Route("GET", ("api", "operators"),
            "_handle_get_operators", requires_auth=True),
     _Route("GET", ("photos", "{filename}"),
@@ -561,6 +568,21 @@ def _group_id_from_name(group_name: str) -> str:
     return GROUP_PREFIX + group_name
 
 
+def _is_grid_id(device_id: str) -> bool:
+    """Return ``True`` if *device_id* is a grid identifier."""
+    return device_id.startswith(GRID_PREFIX)
+
+
+def _grid_name_from_id(device_id: str) -> str:
+    """Extract the grid name from a ``grid:name`` identifier."""
+    return device_id[len(GRID_PREFIX):]
+
+
+def _grid_id_from_name(grid_name: str) -> str:
+    """Build a ``grid:name`` identifier from a grid name."""
+    return GRID_PREFIX + grid_name
+
+
 def _validate_device_id(device_id: str) -> bool:
     """Return ``True`` if *device_id* is a valid IP or group identifier.
 
@@ -601,7 +623,8 @@ class DeviceManager:
     def __init__(self, device_ips: list[str],
                  nicknames: Optional[dict[str, str]] = None,
                  config_dir: Optional[str] = None,
-                 groups: Optional[dict[str, list[str]]] = None) -> None:
+                 groups: Optional[dict[str, list[str]]] = None,
+                 grids: Optional[dict[str, Any]] = None) -> None:
         """Initialize with the device IPs from the config file.
 
         Args:
@@ -615,6 +638,8 @@ class DeviceManager:
             groups:     Group name → IP list mapping from the config.
                         Multi-device groups are exposed as virtual
                         multizone devices with a unified zone canvas.
+            grids:      Grid name → grid definition dict from config.
+                        2D spatial arrangements of matrix/strip devices.
         """
         self._devices: dict[str, LifxDevice] = {}
         self._emitters: dict[str, Emitter] = {}
@@ -627,6 +652,8 @@ class DeviceManager:
         self._device_ips: list[str] = device_ips
         # Group config: group name → ordered list of member IPs.
         self._group_config: dict[str, list[str]] = groups or {}
+        # Grid config: grid name → grid definition dict.
+        self._grid_config: dict[str, Any] = grids or {}
         # User-assigned nicknames: IP → display name.
         self._nicknames: dict[str, str] = nicknames or {}
         # User-saved effect parameter defaults: effect name → {param: value}.
@@ -830,6 +857,33 @@ class DeviceManager:
                     group_name, len(member_emitters), vem.zone_count,
                 )
 
+            # Build VirtualGridEmitters for 2D device grids.
+            grid_config: dict[str, Any] = self._grid_config
+            for grid_name, gdef in grid_config.items():
+                if grid_name.startswith("_"):
+                    continue
+                try:
+                    grid_em: Optional[VirtualGridEmitter] = (
+                        self._build_grid_emitter(
+                            grid_name, gdef, new_emitters,
+                        )
+                    )
+                except Exception as exc:
+                    logging.warning(
+                        "Grid '%s' construction failed: %s",
+                        grid_name, exc,
+                    )
+                    continue
+                if grid_em is not None:
+                    grid_id: str = _grid_id_from_name(grid_name)
+                    old_gctrl: Optional[Controller] = (
+                        self._controllers.get(grid_id)
+                    )
+                    if old_gctrl is not None:
+                        old_gctrl.stop(fade_ms=0)
+                        del self._controllers[grid_id]
+                    new_emitters[grid_id] = grid_em
+
             # Clean up controllers for emitter IDs that no longer exist
             # (e.g., groups whose members all went offline).
             gone_ids: set[str] = set(self._emitters) - set(new_emitters)
@@ -866,6 +920,128 @@ class DeviceManager:
         """
         with self._lock:
             return self._devices.get(ip)
+
+    def _build_grid_emitter(
+        self,
+        grid_name: str,
+        gdef: dict[str, Any],
+        emitters: dict[str, Emitter],
+    ) -> Optional[VirtualGridEmitter]:
+        """Build a VirtualGridEmitter from a grid definition.
+
+        Resolves cell labels to emitters, discovers member geometry,
+        enforces homogeneity, and constructs the grid emitter.
+
+        Args:
+            grid_name: Display name for the grid.
+            gdef:      Grid definition dict (dimensions, member, cells).
+            emitters:  Current emitter map (IP → Emitter).
+
+        Returns:
+            A :class:`VirtualGridEmitter`, or ``None`` if construction
+            fails (insufficient members, geometry mismatch, etc.).
+        """
+        dims: Any = gdef.get("dimensions")
+        if not isinstance(dims, list) or len(dims) != 2:
+            logging.warning(
+                "Grid '%s': 'dimensions' must be [cols, rows]", grid_name,
+            )
+            return None
+
+        cell_cols: int = int(dims[0])
+        cell_rows: int = int(dims[1])
+
+        # Parse cell assignments: "col,row" → label/IP.
+        raw_cells: dict[str, str] = gdef.get("cells", {})
+        if not raw_cells:
+            logging.warning("Grid '%s': no cells defined", grid_name)
+            return None
+
+        # Resolve cell labels to emitters.
+        cell_emitters: dict[tuple[int, int], Emitter] = {}
+        for key, ident in raw_cells.items():
+            parts: list[str] = key.split(",")
+            if len(parts) != 2:
+                logging.warning(
+                    "Grid '%s': bad cell key '%s'", grid_name, key,
+                )
+                continue
+            col: int = int(parts[0].strip())
+            row: int = int(parts[1].strip())
+
+            # Resolve identifier (label, MAC, or IP) to an emitter.
+            resolved_ip: Optional[str] = None
+            if _validate_ip(ident):
+                resolved_ip = ident
+            elif self._registry and self._keepalive:
+                resolved_ip = self._registry.resolve_to_ip(
+                    ident, self._keepalive,
+                )
+            if resolved_ip is None or resolved_ip not in emitters:
+                logging.warning(
+                    "Grid '%s': cannot resolve cell %d,%d ('%s')",
+                    grid_name, col, row, ident,
+                )
+                continue
+            cell_emitters[(col, row)] = emitters[resolved_ip]
+
+        if not cell_emitters:
+            logging.warning(
+                "Grid '%s': no cells could be resolved", grid_name,
+            )
+            return None
+
+        # Discover member geometry from the first resolved emitter
+        # and enforce homogeneity.
+        member_w: int = 1
+        member_h: int = 1
+        first_em: Emitter = next(iter(cell_emitters.values()))
+
+        if hasattr(first_em, 'is_matrix') and first_em.is_matrix:
+            member_w = getattr(first_em, 'matrix_width', 1) or 1
+            member_h = getattr(first_em, 'matrix_height', 1) or 1
+        elif first_em.is_multizone:
+            # Strip-as-scanline: width = zone count, height = 1.
+            member_w = first_em.zone_count or 1
+            member_h = 1
+        # Else single-zone: 1×1.
+
+        # If member spec is in the config, prefer it (allows simulator
+        # compatibility and pre-configuration before hardware arrives).
+        member_cfg: dict[str, Any] = gdef.get("member", {})
+        mat: Any = member_cfg.get("matrix")
+        if mat and isinstance(mat, list) and len(mat) == 2:
+            member_w = int(mat[0])
+            member_h = int(mat[1])
+
+        # Verify all members have matching geometry.
+        for (c, r), em in cell_emitters.items():
+            em_w: int = 1
+            em_h: int = 1
+            if hasattr(em, 'is_matrix') and em.is_matrix:
+                em_w = getattr(em, 'matrix_width', 1) or 1
+                em_h = getattr(em, 'matrix_height', 1) or 1
+            elif em.is_multizone:
+                em_w = em.zone_count or 1
+                em_h = 1
+            if em_w != member_w or em_h != member_h:
+                logging.warning(
+                    "Grid '%s': cell %d,%d geometry %d×%d "
+                    "mismatches expected %d×%d",
+                    grid_name, c, r, em_w, em_h, member_w, member_h,
+                )
+                return None
+
+        grid_em: VirtualGridEmitter = VirtualGridEmitter(
+            cell_emitters=cell_emitters,
+            cell_cols=cell_cols,
+            cell_rows=cell_rows,
+            member_w=member_w,
+            member_h=member_h,
+            name=grid_name,
+            owns_emitters=False,
+        )
+        return grid_em
 
     def get_emitter(self, device_id: str) -> Optional[Emitter]:
         """Look up an emitter by device ID (IP or group identifier).
@@ -1031,11 +1207,23 @@ class DeviceManager:
             try:
                 em.power_on(duration_ms=0)
                 self._power_states[ip] = True
-                if isinstance(em, VirtualMultizoneEmitter):
+                if isinstance(em, (VirtualMultizoneEmitter, VirtualGridEmitter)):
                     for member in em.get_emitter_list():
                         self._power_states[member.emitter_id] = True
             except Exception as exc:
                 logging.warning("power_on failed for %s before play: %s", ip, exc)
+        # Auto-inject matrix width/height for 2D effects on matrix
+        # or grid emitters.  Without this the effect defaults (7×5)
+        # would produce the wrong pixel count for larger grids.
+        if em is not None:
+            mw: Optional[int] = getattr(em, 'matrix_width', None)
+            mh: Optional[int] = getattr(em, 'matrix_height', None)
+            if mw and mh:
+                if "width" not in params:
+                    params["width"] = mw
+                if "height" not in params:
+                    params["height"] = mh
+
         # Close the previous effect's diagnostics record before starting
         # a new one, so replaced effects get a proper stop_reason.
         if self._diag is not None:
@@ -1824,6 +2012,7 @@ class DeviceManager:
                 if status.get("running"):
                     current_effect = status.get("effect")
             is_group: bool = isinstance(em, VirtualMultizoneEmitter)
+            is_grid: bool = isinstance(em, VirtualGridEmitter)
             nickname: Optional[str] = self._nicknames.get(dev_id)
             source: Optional[str] = (
                 self._play_sources.get(dev_id) if current_effect else None
@@ -1843,12 +2032,24 @@ class DeviceManager:
                 "source": source,
                 "overridden": self.is_overridden(dev_id),
                 "is_group": is_group,
+                "is_grid": is_grid,
             }
             if is_matrix:
                 entry["width"] = getattr(em, 'matrix_width', None)
                 entry["height"] = getattr(em, 'matrix_height', None)
 
-            if is_group:
+            if is_grid:
+                entry["mac"] = ""
+                entry["group"] = ""
+                member_ip_list = [
+                    m.emitter_id for m in em.get_emitter_list()
+                ]
+                entry["member_ips"] = member_ip_list
+                entry["power"] = any(
+                    self._power_states.get(mip, True)
+                    for mip in member_ip_list
+                )
+            elif is_group:
                 entry["mac"] = ""
                 entry["group"] = em.label
                 member_ip_list: list[str] = [
@@ -2245,9 +2446,11 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             The resolved IP address or ``group:name`` string, or
             ``None`` if the identifier cannot be resolved.
         """
-        # Group identifiers pass through unchanged.
+        # Group and grid identifiers pass through unchanged.
         if _is_group_id(identifier):
             return identifier if len(identifier) > len(GROUP_PREFIX) else None
+        if _is_grid_id(identifier):
+            return identifier if len(identifier) > len(GRID_PREFIX) else None
 
         # Raw IP addresses pass through unchanged.
         if _validate_ip(identifier):
@@ -4753,7 +4956,9 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
         mac: str = body.get("mac", "").strip().lower()
         ip_arg: str = body.get("ip", "").strip()
 
-        # Resolve IP to MAC if no MAC provided.
+        # Resolve IP to MAC if no MAC provided.  When both mac and ip
+        # are given, the caller knows the static IP of an offline device
+        # — skip the ARP lookup entirely.
         if not mac and ip_arg:
             daemon: Optional[BulbKeepAlive] = self.keepalive
             if daemon is not None:
@@ -4768,8 +4973,10 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(400, {"error": "Label is required"})
             return
 
+        force: bool = bool(body.get("force", False))
+
         try:
-            reg.add_device(mac, label, notes)
+            reg.add_device(mac, label, notes, force=force)
             reg.save()
         except ValueError as exc:
             self._send_json(400, {"error": str(exc)})
@@ -4996,9 +5203,27 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             if reg is not None and mac:
                 entry["registry_label"] = reg.mac_to_label(mac) or ""
 
+        # Append offline registry devices not found in the ARP cache.
+        # These are registered but not currently on the network (e.g.
+        # photo-eye-controlled bulbs powered off during the day).
+        live_macs: set[str] = {e.get("mac", "") for e in devices}
+        if reg is not None and target_ip is None:
+            for r_mac, r_entry in reg.all_devices().items():
+                if r_mac not in live_macs:
+                    devices.append({
+                        "ip": "",
+                        "mac": r_mac,
+                        "label": "",
+                        "product": "",
+                        "group": "",
+                        "zones": 0,
+                        "registry_label": r_entry.get("label", ""),
+                        "offline": True,
+                    })
+
         logging.info(
-            "API: command/discover — returning %d device(s) from ARP cache",
-            len(devices),
+            "API: command/discover — returning %d device(s) (%d from ARP cache)",
+            len(devices), len(live_macs),
         )
         self._send_json(200, {"devices": devices})
 
@@ -5342,11 +5567,14 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
                 "name": lock.get("name", abbr),
                 "locked": lock_state.get(abbr),
             }
-            # Add battery from LockManager if available.
+            # Add battery and last-update timestamp from LockManager.
             if lm is not None:
                 battery: Optional[int] = lm.get_battery(abbr)
                 if battery is not None:
                     entry["battery"] = battery
+                updated_at: Optional[float] = lm.get_updated_at(abbr)
+                if updated_at is not None:
+                    entry["updated_at"] = updated_at
             locks.append(entry)
         # Add occupancy state from LockManager/SignalBus.
         occupancy: str = "UNKNOWN"
@@ -5535,6 +5763,38 @@ class GlowUpRequestHandler(http.server.BaseHTTPRequestHandler):
             "is_night": is_night,
             "lights_off": lights_off,
             "location": display_cfg.get("location", ""),
+        })
+
+    def _handle_get_home_printer(self) -> None:
+        """GET /api/home/printer — printer consumable and error state.
+
+        Returns the last known printer status from the printer adapter.
+        The adapter polls the Brother CSV endpoint periodically (default
+        once per day).  Only returns data when a printer alert is active
+        (toner_low, no_paper, jam, cover_open, drum_low) so the frontend
+        can show/hide a popup card accordingly.
+
+        Response::
+
+            {
+              "status": "ok",
+              "name": "Brother HL-5470DW",
+              "alerts": [],
+              "details": { ... },
+              "last_poll": 1711720000.0
+            }
+        """
+        pa: Any = getattr(self.server, "_printer_adapter", None)
+        if pa is None:
+            self._send_json(200, {"status": "unconfigured", "alerts": []})
+            return
+        state: dict[str, Any] = pa.get_status()
+        self._send_json(200, {
+            "status": state.get("status", "unknown"),
+            "name": state.get("name", ""),
+            "alerts": state.get("details", {}).get("alerts", []),
+            "details": state.get("details", {}),
+            "last_poll": state.get("last_poll", 0),
         })
 
     def _handle_get_photo(self, filename: str) -> None:
@@ -6223,6 +6483,7 @@ def main() -> None:
         device_ips=[], nicknames=nicknames,
         config_dir=os.path.dirname(os.path.abspath(config_path)),
         groups={},
+        grids=config.get("grids", {}),
     )
 
     # -- HTTP server (bind immediately) -------------------------------------
@@ -6562,6 +6823,17 @@ def main() -> None:
                 nvr_adapter = NvrAdapter(nvr_cfg)
                 nvr_adapter.start()
                 server._nvr_adapter = nvr_adapter
+
+            # Printer monitor (Brother CSV endpoint).
+            printer_cfg: dict = config.get("printer", {})
+            if printer_cfg.get("host"):
+                printer_adapter = PrinterAdapter(
+                    config=printer_cfg,
+                    bus=signal_bus,
+                    mqtt_client=(mqtt_bridge._client if mqtt_bridge else None),
+                )
+                printer_adapter.start()
+                server._printer_adapter = printer_adapter
 
             # Auto-migrate automations[] → trigger operators in operators[].
             config["_config_path"] = GlowUpRequestHandler.config_path

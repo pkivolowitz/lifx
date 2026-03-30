@@ -614,7 +614,8 @@ class TestFrameCorrectness(UseCaseTest):
         "soundlevel", "theremin", "waveform",
         # 2D matrix effects return a fixed width × height frame, not
         # zone_count zones — excluded from the zone-count contract check.
-        "_grid_map", "matrix_rain", "plasma2d", "ripple2d", "spectrum2d",
+        "_grid_map", "fireworks2d", "matrix_rain", "plasma2d", "ripple2d",
+        "spectrum2d",
     }
 
     def test_all_effects_produce_legal_hsbk(self) -> None:
