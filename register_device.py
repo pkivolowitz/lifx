@@ -9,11 +9,15 @@ Usage::
 
     python3 register_device.py <ip-or-mac> "Label Name"   # register with label
     python3 register_device.py <ip-or-mac>                 # prompts for label
+    python3 register_device.py --offline <ip> <mac> "Label"  # register offline device
     python3 register_device.py --list               # show registry
     python3 register_device.py --push-labels        # write all labels to bulbs
     python3 register_device.py --clear-label <ip>   # blank the firmware label
     python3 register_device.py --remove <mac-or-label>  # unregister a device
     python3 register_device.py --help               # this message
+
+    Add --force to any registration command to reassign a label
+    that is already in use by a different MAC address.
 
 Designed for rapid use during a bulk identification session.
 """
@@ -208,7 +212,7 @@ def _is_mac(identifier: str) -> bool:
     return len(parts) == 6 and all(len(p) == 2 for p in parts)
 
 
-def cmd_add(identifier: str, label: str) -> None:
+def cmd_add(identifier: str, label: str, force: bool = False) -> None:
     """Register a device by IP address or MAC address.
 
     The server accepts either ``ip`` or ``mac``.  When a MAC is
@@ -218,12 +222,15 @@ def cmd_add(identifier: str, label: str) -> None:
     Args:
         identifier: Device IP address or MAC address.
         label:      User-defined label.
+        force:      If True, reassign label from its current MAC.
     """
-    body: dict[str, str] = {"label": label}
+    body: dict[str, Any] = {"label": label}
     if _is_mac(identifier):
         body["mac"] = identifier.lower()
     else:
         body["ip"] = identifier
+    if force:
+        body["force"] = True
 
     result: dict[str, Any] = _api_post("/api/registry/device", body)
 
@@ -235,6 +242,39 @@ def cmd_add(identifier: str, label: str) -> None:
         print(f"Label written to bulb firmware: {label}")
     else:
         print("WARNING: Could not write label to bulb (timeout or offline)")
+
+
+def cmd_add_offline(
+    ip: str, mac: str, label: str, force: bool = False,
+) -> None:
+    """Register an offline device when both IP and MAC are known.
+
+    Sends both ``ip`` and ``mac`` so the server skips the ARP lookup.
+    The device does not need to be reachable.
+
+    Args:
+        ip:    Static IP address of the device.
+        mac:   MAC address of the device.
+        label: User-defined label.
+        force: If True, reassign label from its current MAC.
+    """
+    body: dict[str, Any] = {
+        "ip": ip,
+        "mac": mac.lower(),
+        "label": label,
+    }
+    if force:
+        body["force"] = True
+    result: dict[str, Any] = _api_post("/api/registry/device", body)
+
+    reg_mac: str = result.get("mac", "?")
+    fw: bool = result.get("firmware_written", False)
+
+    print(f"Registered (offline): {reg_mac} → {label}  (IP: {ip})")
+    if fw:
+        print(f"Label written to bulb firmware: {label}")
+    else:
+        print("(device offline — label will be written when it comes online)")
 
 
 def cmd_remove(identifier: str) -> None:
@@ -322,7 +362,11 @@ def main() -> None:
         print(__doc__)
         sys.exit(1)
 
-    arg1: str = sys.argv[1]
+    # Extract --force flag from anywhere in the arg list.
+    force: bool = "--force" in sys.argv
+    argv: list[str] = [a for a in sys.argv if a != "--force"]
+
+    arg1: str = argv[1]
 
     if arg1 in ("--help", "-h"):
         print(__doc__)
@@ -331,29 +375,37 @@ def main() -> None:
         cmd_list()
     elif arg1 == "--push-labels":
         cmd_push_labels()
+    elif arg1 == "--offline":
+        if len(argv) < 5:
+            print(
+                'Usage: register_device.py --offline <ip> <mac> "Label" [--force]',
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        cmd_add_offline(argv[2], argv[3], argv[4], force=force)
     elif arg1 == "--remove":
-        if len(sys.argv) < 3:
+        if len(argv) < 3:
             print("Usage: register_device.py --remove <mac-or-label>",
                   file=sys.stderr)
             sys.exit(1)
-        cmd_remove(sys.argv[2])
+        cmd_remove(argv[2])
     elif arg1 == "--clear-label":
-        if len(sys.argv) < 3:
+        if len(argv) < 3:
             print("Usage: register_device.py --clear-label <ip>",
                   file=sys.stderr)
             sys.exit(1)
-        cmd_clear_label(sys.argv[2])
+        cmd_clear_label(argv[2])
     else:
-        # register_device.py <ip-or-mac> [label]
+        # register_device.py <ip-or-mac> [label] [--force]
         identifier: str = arg1
-        if len(sys.argv) >= 3:
-            label: str = sys.argv[2]
+        if len(argv) >= 3:
+            label: str = argv[2]
         else:
             label = input(f"Label for {identifier}: ").strip()
             if not label:
                 print("ERROR: Label cannot be empty", file=sys.stderr)
                 sys.exit(1)
-        cmd_add(identifier, label)
+        cmd_add(identifier, label, force=force)
 
 
 if __name__ == "__main__":

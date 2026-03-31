@@ -269,6 +269,41 @@ that drops into eldercare, acoustic detection, industrial monitoring,
 entertainment — any domain where sensors feed compute that drives
 action.
 
+## Sensor Adapters
+
+Sensor adapters bridge external data sources into the SOE pipeline
+via the SignalBus.  All adapters inherit from a common base:
+
+```python
+class SensorAdapter(AdapterBase):
+```
+
+SensorAdapter inherits from `AdapterBase` (defined in `adapter_base.py`),
+which provides the `_running` flag, `running` property, and abstract
+`start()`/`stop()` lifecycle.  Three transport-specific base classes
+handle lifecycle boilerplate: `MqttAdapterBase`, `PollingAdapterBase`,
+and `AsyncPollingAdapterBase`.
+
+| Adapter | Source | Base class | Status |
+|---------|--------|-----------|--------|
+| BleAdapter | ONVIS BLE sensors | MqttAdapterBase | Deployed |
+| ZigbeeAdapter | Zigbee2MQTT devices | MqttAdapterBase | Deployed |
+| VivintAdapter | Vivint locks and sensors | MqttAdapterBase | Deployed |
+| NvrAdapter | Reolink NVR snapshot proxy | PollingAdapterBase | Deployed |
+| PrinterAdapter | Brother printer monitor | AsyncPollingAdapterBase | Deployed |
+
+## Operators
+
+Operators transform signals between sensors and emitters.  Three
+built-in operators:
+
+- `OccupancyOperator` — home/away state derived from lock patterns
+- `MotionGateOperator` — suppresses motion events when away
+- `TriggerOperator` — binds sensor events to device actions with
+  watchdog timeouts
+
+See the `operators/` directory for implementation details.
+
 ## Current Integration Status
 
 | Component | Status | Notes |

@@ -214,6 +214,17 @@ class SignalBus:
         with self._lock:
             return self._signals.get(name, default)
 
+    def snapshot(self) -> dict[str, SignalValue]:
+        """Return a copy of all current signal values.
+
+        Thread-safe — takes the lock for the duration of the copy.
+
+        Returns:
+            Dict mapping signal names to their current values.
+        """
+        with self._lock:
+            return dict(self._signals)
+
     def read_timestamp(self, name: str) -> Optional[float]:
         """Read the monotonic timestamp of a signal's last write.
 

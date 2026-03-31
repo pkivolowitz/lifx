@@ -19,12 +19,19 @@ for discovery responses (default 3.0 seconds).
 
 __version__ = "1.0"
 
+import json
+import logging
 import socket
 import struct
 import sys
 import time
 import random
-from typing import Optional
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any, Optional
+
+logger: logging.Logger = logging.getLogger("glowup.discover")
 
 # ---------------------------------------------------------------------------
 # Network constants
@@ -175,6 +182,18 @@ MAX_QUERY_RETRIES: int = 3
 
 RECV_BUFFER_SIZE: int = 1024
 """Buffer size in bytes for UDP recvfrom calls."""
+
+# Marker character for registered devices not found on the network.
+OFFLINE_MARKER: str = "*"
+
+# GlowUp server port for registry API queries.
+REGISTRY_API_PORT: int = 8420
+
+# Timeout for registry API requests (seconds).
+REGISTRY_API_TIMEOUT: float = 5.0
+
+# Path to the bearer-token file.
+TOKEN_PATH: Path = Path.home() / ".glowup_token"
 
 # ---------------------------------------------------------------------------
 # MAC address constants
@@ -806,6 +825,37 @@ def truncate(s: str, w: int) -> str:
     return s[:w - 1] + "~" if len(s) > w else s
 
 
+def fetch_registry() -> list[dict[str, Any]]:
+    """Fetch the device registry from the GlowUp server API.
+
+    Returns a list of device dicts with ``mac``, ``label``, ``ip``,
+    ``online``, and ``notes`` keys.  Returns an empty list if the
+    server is unreachable or the token file is missing.
+    """
+    if not TOKEN_PATH.exists():
+        return []
+
+    try:
+        from network_config import net
+        server_host: str = net.server
+    except ImportError:
+        return []
+
+    token: str = TOKEN_PATH.read_text().strip()
+    url: str = f"http://{server_host}:{REGISTRY_API_PORT}/api/registry"
+    req: urllib.request.Request = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=REGISTRY_API_TIMEOUT) as resp:
+            data: dict[str, Any] = json.loads(resp.read())
+            return data.get("devices", [])
+    except Exception as exc:
+        logger.warning("Registry fetch failed (%s): %s", url, exc)
+        return []
+
+
 def main() -> None:
     """Run the LIFX device discovery and display results in a table.
 
@@ -831,17 +881,26 @@ def main() -> None:
     print("Scanning for LIFX devices...", flush=True)
     devices = discover(timeout)
 
-    if not devices:
-        print("No LIFX devices found.")
-        sys.exit(0)
+    live_count: int = len(devices)
+    if live_count:
+        print(
+            f"Found {live_count} device(s). Querying details...\n",
+            flush=True,
+        )
+    else:
+        print("No live devices found.\n", flush=True)
 
-    print(
-        f"Found {len(devices)} device(s). Querying details...\n",
-        flush=True,
-    )
+    # Fetch registry early so we can report server status in the banner.
+    registry: list[dict[str, Any]] = fetch_registry()
+    if not registry:
+        print("No server configured. Using broadcast only.\n", flush=True)
+
+    # Collect discovered MACs so we can identify offline registry devices.
+    discovered_macs: set[str] = set()
 
     rows: list[dict[str, str]] = []
     for _mac, dev in devices.items():
+        discovered_macs.add(dev["mac"])
         label = get_label(dev)
         group = get_group(dev)
         vendor, product = get_version(dev)
@@ -873,6 +932,7 @@ def main() -> None:
             dtype = "Bulb"
 
         rows.append({
+            "mark": " ",
             "label": label,
             "product": product_name,
             "type": dtype,
@@ -885,11 +945,37 @@ def main() -> None:
             "fw": firmware,
         })
 
-    # Sort by group first, then label within each group
-    rows.sort(key=lambda r: (r["group"], r["label"]))
+    # Append offline registry devices marked with *.
+    offline_count: int = 0
+    for reg_dev in registry:
+        reg_mac: str = reg_dev.get("mac", "")
+        if reg_mac and reg_mac not in discovered_macs:
+            offline_count += 1
+            rows.append({
+                "mark": OFFLINE_MARKER,
+                "label": reg_dev.get("label", "?"),
+                "product": "",
+                "type": "",
+                "mac": reg_mac,
+                "ip": reg_dev.get("ip", "") or "",
+                "group": "",
+                "pwr": "",
+                "bright": "",
+                "color": "",
+                "fw": "",
+            })
 
-    # Column definitions: (header, dict key, minimum width)
+    if not rows:
+        print("No devices found (live or registered).")
+        sys.exit(0)
+
+    # Sort: live devices by group/label first, offline at the bottom.
+    rows.sort(key=lambda r: (r["mark"] != " ", r["group"], r["label"]))
+
+    # Column definitions: (header, dict key, minimum width).
+    # Leading 1-char column: blank = live, * = registered but offline.
     cols: list[tuple[str, str, int]] = [
+        (" ",           "mark",    1),
         ("Label",       "label",   12),
         ("Product",     "product", 14),
         ("Type",        "type",     6),
@@ -910,6 +996,7 @@ def main() -> None:
         widths.append(w)
 
     # Shrink columns if total width exceeds MAX_COL_WIDTH
+    # Account for the extra 1-char mark column + separator.
     total_sep = (len(cols) - 1) * COLUMN_SEPARATOR_WIDTH
     available = MAX_COL_WIDTH - total_sep
     total_w = sum(widths)
@@ -948,7 +1035,12 @@ def main() -> None:
         )
         print(line)
 
-    print(f"\n{len(rows)} device(s) found.")
+    # Summary line.
+    summary: str = f"\n{live_count} live"
+    if offline_count:
+        summary += f", {offline_count} offline (*)"
+    summary += f" — {live_count + offline_count} total."
+    print(summary)
 
 
 if __name__ == "__main__":

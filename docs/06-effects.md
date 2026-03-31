@@ -43,6 +43,7 @@ listings so users see relevant effects first.
 | `rule30` | strip |
 | `rule_trio` | strip |
 | `screen_light` | all |
+| `screen_light2d` | matrix |
 | `sine` | strip |
 | `sonar` | strip |
 | `soundlevel` | all |
@@ -1140,8 +1141,10 @@ setup instructions.
 | Effect | Description |
 |--------|-------------|
 | `screen_light` | Screen-reactive ambient lighting — color-samples the display |
+| `screen_light2d` | Full-frame video → tile grid color mapping |
 | `soundlevel` | VU meter — brightness tracks audio RMS level |
 | `spectrum2d` | 2D frequency spectrum — requires terminal matrix emitter |
+| `spectrum_sweep` | Frequency band sweep — scrolling spectral waterfall |
 | `waveform` | Oscilloscope — maps the audio waveform to zones |
 
 ## Distributed Pipeline Effects

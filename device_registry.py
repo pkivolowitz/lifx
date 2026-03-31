@@ -151,11 +151,9 @@ class DeviceRegistry:
                         f"Invalid MAC address in registry: {mac_raw!r}"
                     )
 
-                # Validate LIFX OUI.
-                if not mac.startswith(LIFX_OUI):
-                    raise ValueError(
-                        f"MAC {mac} does not start with LIFX OUI ({LIFX_OUI})"
-                    )
+                # Note: OUI check removed — registry now tracks all
+                # network devices (cameras, printers, receivers), not
+                # only LIFX bulbs.
 
                 # Validate label.
                 label: str = entry.get("label", "").strip()
@@ -220,6 +218,38 @@ class DeviceRegistry:
         """Return a snapshot of the full registry (MAC → entry dict)."""
         with self._lock:
             return dict(self._devices)
+
+    def ip_to_label(
+        self,
+        ip: str,
+        keepalive: Optional["BulbKeepAlive"] = None,
+    ) -> Optional[str]:
+        """Return the registered label for a device at a given IP.
+
+        Uses the keepalive daemon's ARP table to resolve IP → MAC,
+        then looks up the MAC in the registry.  This is the reverse
+        lookup path for devices that are offline or query-silent.
+
+        Args:
+            ip:        Device IP address (e.g. ``10.0.0.164``).
+            keepalive: Optional keepalive daemon for IP → MAC resolution.
+
+        Returns:
+            The registered label, or ``None`` if unresolvable.
+        """
+        if keepalive is not None:
+            bulbs: dict[str, str] = keepalive.known_bulbs
+            mac: Optional[str] = bulbs.get(ip)
+            if mac is not None:
+                return self.mac_to_label(mac)
+        # Fallback: scan registry entries for a stored IP match.
+        # Covers offline devices registered with --offline that
+        # recorded their IP in the entry.
+        with self._lock:
+            for _mac, entry in self._devices.items():
+                if entry.get("ip") == ip:
+                    return entry.get("label")
+        return None
 
     def is_known_mac(self, mac: str) -> bool:
         """Return ``True`` if the MAC is registered."""
@@ -349,6 +379,8 @@ class DeviceRegistry:
         mac: str,
         label: str,
         notes: str = "",
+        force: bool = False,
+        ip: str = "",
     ) -> None:
         """Add or update a device in the registry.
 
@@ -356,10 +388,15 @@ class DeviceRegistry:
             mac:   Lowercase colon-separated MAC address.
             label: User-defined label (max 32 bytes UTF-8).
             notes: Optional human-readable notes.
+            force: If ``True``, reassign the label from its current
+                   MAC to the new one instead of raising on collision.
+            ip:    Optional last-known IP address.  Stored so offline
+                   devices can be resolved by IP without ARP.
 
         Raises:
             ValueError: If the MAC or label is invalid, or the label
-                        is already in use by a different device.
+                        is already in use by a different device (and
+                        *force* is ``False``).
         """
         mac = mac.strip().lower()
         label = label.strip()
@@ -383,8 +420,18 @@ class DeviceRegistry:
                 label.lower()
             )
             if existing_mac is not None and existing_mac != mac:
-                raise ValueError(
-                    f"Label {label!r} is already assigned to {existing_mac}"
+                if not force:
+                    raise ValueError(
+                        f"Label {label!r} is already assigned to {existing_mac}"
+                    )
+                # Force: remove the label from the old MAC.
+                old_entry = self._devices.get(existing_mac)
+                if old_entry:
+                    self._devices.pop(existing_mac)
+                self._label_to_mac.pop(label.lower(), None)
+                logger.info(
+                    "Force: reassigned label %r from %s to %s",
+                    label, existing_mac, mac,
                 )
 
             # Remove old label mapping if this MAC had a different label.
@@ -397,6 +444,8 @@ class DeviceRegistry:
             entry: dict[str, Any] = {"label": label}
             if notes:
                 entry["notes"] = notes
+            if ip:
+                entry["ip"] = ip
             self._devices[mac] = entry
             self._label_to_mac[label.lower()] = mac
 

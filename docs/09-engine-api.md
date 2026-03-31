@@ -5,7 +5,7 @@
 
 The `Controller` class in `engine.py` is the thread-safe public interface
 for controlling the effect engine. It is designed to be driven by the CLI
-today and a REST API in the future.
+today and the REST API server (server.py).
 
 ### Controller Methods
 
@@ -20,9 +20,21 @@ emitter = LifxEmitter.from_device(devices[0])
 ctrl = Controller([emitter], fps=20)
 ```
 
-**`play(effect_name: str, **params) -> None`**
+**`Controller.__init__(emitters, fps=20, transition_ms=50, fps_explicit=False, zones_per_bulb=1)`**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `emitters` | *(required)* | List of emitter instances to drive |
+| `fps` | `20` | Target frames per second |
+| `transition_ms` | `50` | LIFX transition time per frame in milliseconds |
+| `fps_explicit` | `False` | When True, use the exact fps value without auto-tuning |
+| `zones_per_bulb` | `1` | Zones per physical bulb (3 for LIFX string lights) |
+
+**`play(effect_name: str, bindings=None, signal_bus=None, **params) -> None`**
 Start an effect by its registered name. Any keyword arguments override
-the effect's default parameters.
+the effect's default parameters. `bindings` provides parameter-to-signal
+mappings for live modulation; `signal_bus` enables live signal reads from
+the SOE pipeline.
 
 ```python
 ctrl.play("cylon", speed=1.5, width=12, hue=0)

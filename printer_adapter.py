@@ -28,18 +28,18 @@ MQTT output::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import csv
 import io
 import json
 import logging
-import threading
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Optional
 
+from adapter_base import PollingAdapterBase
 from media import SignalMeta
 
 logger: logging.Logger = logging.getLogger("glowup.printer")
@@ -83,7 +83,7 @@ DRUM_WARN_THRESHOLD: float = 15.0
 # PrinterAdapter
 # ---------------------------------------------------------------------------
 
-class PrinterAdapter:
+class PrinterAdapter(PollingAdapterBase):
     """Polls a Brother network printer for consumable and error state.
 
     Args:
@@ -105,47 +105,32 @@ class PrinterAdapter:
             bus:         SignalBus instance for signal writes.
             mqtt_client: Optional paho MQTT client for MQTT publishing.
         """
-        self._host: str = config.get("host", "")
-        self._name: str = config.get("name", "Printer")
-        self._poll_interval: float = max(
+        poll_interval: float = max(
             float(config.get("poll_interval_seconds", DEFAULT_POLL_INTERVAL)),
             MIN_POLL_INTERVAL,
         )
+        super().__init__(
+            poll_interval=poll_interval,
+            thread_name="printer-adapter",
+        )
+        self._host: str = config.get("host", "")
+        self._name: str = config.get("name", "Printer")
         self._bus: Any = bus
         self._mqtt_client: Any = mqtt_client
-
-        self._running: bool = False
-        self._thread: Optional[threading.Thread] = None
 
         # Last known state — preserved across polls.
         self._last_status: str = "unknown"
         self._last_details: dict[str, Any] = {}
         self._last_poll: float = 0.0
 
-    def start(self) -> None:
-        """Start the printer adapter in a background thread."""
+    def _check_prerequisites(self) -> bool:
+        """Check that a printer host is configured."""
         if not self._host:
-            logger.warning("No printer host configured — printer adapter disabled")
-            return
-
-        self._running = True
-        self._thread = threading.Thread(
-            target=self._poll_loop,
-            daemon=True,
-            name="printer-adapter",
-        )
-        self._thread.start()
-        logger.info(
-            "Printer adapter started — %s at %s (poll every %.0fs)",
-            self._name, self._host, self._poll_interval,
-        )
-
-    def stop(self) -> None:
-        """Stop the adapter."""
-        self._running = False
-        if self._thread:
-            self._thread.join(timeout=10.0)
-        logger.info("Printer adapter stopped")
+            logger.warning(
+                "No printer host configured — printer adapter disabled",
+            )
+            return False
+        return True
 
     # --- Public API --------------------------------------------------------
 
@@ -172,23 +157,7 @@ class PrinterAdapter:
         self._do_poll()
         return self.get_status()
 
-    # --- Internal ----------------------------------------------------------
-
-    def _poll_loop(self) -> None:
-        """Background thread: poll the printer periodically."""
-        # Immediate first poll on startup.
-        self._do_poll()
-
-        while self._running:
-            # Sleep in small increments so stop() is responsive.
-            sleep_remaining: float = self._poll_interval
-            while sleep_remaining > 0 and self._running:
-                chunk: float = min(sleep_remaining, 5.0)
-                time.sleep(chunk)
-                sleep_remaining -= chunk
-
-            if self._running:
-                self._do_poll()
+    # --- Polling -----------------------------------------------------------
 
     def _do_poll(self) -> None:
         """Execute a single poll cycle."""
@@ -338,3 +307,16 @@ class PrinterAdapter:
         if match:
             return match.group(1).strip()
         return "unknown"
+
+    # --- Hooks -------------------------------------------------------------
+
+    def _on_started(self) -> None:
+        """Log printer-specific start message."""
+        logger.info(
+            "Printer adapter started — %s at %s (poll every %.0fs)",
+            self._name, self._host, self._poll_interval,
+        )
+
+    def _on_stopped(self) -> None:
+        """Log printer-specific stop message."""
+        logger.info("Printer adapter stopped")

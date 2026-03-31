@@ -7,8 +7,9 @@
 
 LIFX devices maintain internal state that persists across sessions.
 Occasionally — particularly after switching between different control
-sources (this engine, the LIFX app, HomeKit) — a device may display
+sources (this engine, the LIFX app) — a device may display
 unexpected colors or brief visual artifacts when a new effect starts.
+GlowUp is the sole controller for all LIFX devices in this deployment.
 
 If you notice residual colors from a previous session, simply
 **power-cycle the device** (off, then on) using the physical switch or
@@ -271,3 +272,15 @@ RIFF/SoundFont.
 auto-power devices.  Run with the latest code (which adds
 `set_power(True)` during discovery), or power the device on manually
 via the LIFX app first.
+
+## Device Registry
+
+Device identity is managed via the MAC-based registry at
+`/etc/glowup/device_registry.json`.  Use `register_device.py` to add,
+remove, or relabel devices.  See [Device Registry](26-device-registry.md).
+
+## The /home Kiosk Page
+
+The /home page is an ambient display designed for wall-mounted kiosk
+use.  It requires no authentication and shows sensor data, cameras,
+locks, weather, and other tiles.

@@ -129,8 +129,8 @@ this topic to detect when GlowUp is unreachable.
 
 ### Notes
 
-- **Dependency:** `paho-mqtt>=2.0` is the only pip dependency in the
-  entire project and is required only for MQTT.  If you do not need
+- **Dependency:** `paho-mqtt>=2.0` is the only pip dependency for the
+  core server MQTT bridge and is required only for MQTT.  If you do not need
   MQTT, do not install it — the server works without it.
 - **Scheduler conflict:** Commands received via MQTT set a phone
   override on the device, pausing the GlowUp scheduler.  Publish to
@@ -149,3 +149,14 @@ this topic to detect when GlowUp is unreachable.
   live MQTT broker.  If you try it, please open an issue at the
   [GitHub repo](https://github.com/pkivolowitz/lifx/issues) with
   any corrections or suggestions.
+
+### Adapter MQTT Topics
+
+Adapters publish sensor data to MQTT using the following topic patterns:
+
+| Topic pattern | Source | Data |
+|---------------|--------|------|
+| `glowup/ble/{label}/{property}` | BLE sensor adapter | Motion, temperature, humidity, status |
+| `glowup/zigbee/{device}/{property}` | Zigbee2MQTT adapter | Normalized Zigbee device signals |
+| `glowup/vivint/{device}/{property}` | Vivint adapter | Lock and sensor states |
+| `glowup/printer/{property}` | Printer adapter | Printer status and details |

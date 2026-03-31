@@ -27,13 +27,15 @@ Configuration (in server.json)::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import asyncio
 import logging
 import threading
 import time
 from typing import Any, Optional
+
+from adapter_base import AsyncPollingAdapterBase
 
 logger: logging.Logger = logging.getLogger("glowup.nvr")
 
@@ -72,7 +74,7 @@ except ImportError:
 # NvrAdapter
 # ---------------------------------------------------------------------------
 
-class NvrAdapter:
+class NvrAdapter(AsyncPollingAdapterBase):
     """Pulls JPEG snapshots from a Reolink NVR and caches them.
 
     Args:
@@ -85,6 +87,11 @@ class NvrAdapter:
         Args:
             config: NVR config section from server.json.
         """
+        super().__init__(
+            thread_name="nvr-adapter",
+            reconnect_delay=RECONNECT_DELAY,
+            max_reconnect_delay=MAX_RECONNECT_DELAY,
+        )
         self._host_addr: str = config.get("host", "")
         self._port: int = int(config.get("port", 80))
         self._username: str = config.get("username", "")
@@ -95,60 +102,30 @@ class NvrAdapter:
             MIN_SNAPSHOT_INTERVAL,
         )
 
-        self._running: bool = False
-        self._thread: Optional[threading.Thread] = None
         self._host: Any = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Snapshot cache: channel_id → (jpeg_bytes, timestamp).
         self._lock: threading.Lock = threading.Lock()
         self._snapshots: dict[int, tuple[bytes, float]] = {}
 
-    def start(self) -> None:
-        """Start the NVR adapter in a background thread."""
+    def _check_prerequisites(self) -> bool:
+        """Check reolink_aio, host, and channels."""
         if not _HAS_REOLINK:
             logger.warning(
                 "reolink_aio not installed — NVR adapter disabled. "
                 "Install with: pip install reolink_aio"
             )
-            return
+            return False
 
         if not self._host_addr:
             logger.error("NVR adapter requires host in config")
-            return
+            return False
 
         if not self._channels:
             logger.warning("No NVR channels configured")
-            return
+            return False
 
-        self._running = True
-        self._thread = threading.Thread(
-            target=self._run_loop,
-            daemon=True,
-            name="nvr-adapter",
-        )
-        self._thread.start()
-        channel_names: str = ", ".join(
-            ch.get("name", str(ch["id"])) for ch in self._channels
-        )
-        logger.info(
-            "NVR adapter started — %d channel(s): %s",
-            len(self._channels), channel_names,
-        )
-
-    def stop(self) -> None:
-        """Stop the adapter and disconnect from NVR."""
-        self._running = False
-        if self._loop and self._host:
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    self._disconnect(), self._loop,
-                )
-            except Exception:
-                pass
-        if self._thread:
-            self._thread.join(timeout=10.0)
-        logger.info("NVR adapter stopped")
+        return True
 
     # --- Public API --------------------------------------------------------
 
@@ -190,37 +167,7 @@ class NvrAdapter:
             },
         }
 
-    # --- Internal event loop -----------------------------------------------
-
-    def _run_loop(self) -> None:
-        """Background thread: runs asyncio event loop for reolink_aio."""
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
-        try:
-            self._loop.run_until_complete(self._main_loop())
-        except Exception as exc:
-            logger.error("NVR adapter loop crashed: %s", exc)
-        finally:
-            self._loop.close()
-
-    async def _main_loop(self) -> None:
-        """Async main loop: connect and poll snapshots."""
-        reconnect_delay: float = RECONNECT_DELAY
-
-        while self._running:
-            try:
-                await self._connect()
-                reconnect_delay = RECONNECT_DELAY
-                await self._snapshot_loop()
-            except Exception as exc:
-                logger.error(
-                    "NVR connection error: %s — retrying in %.0fs",
-                    exc, reconnect_delay,
-                )
-                await asyncio.sleep(reconnect_delay)
-                reconnect_delay = min(
-                    reconnect_delay * 2.0, MAX_RECONNECT_DELAY,
-                )
+    # --- AsyncPollingAdapterBase interface ----------------------------------
 
     async def _connect(self) -> None:
         """Connect to the Reolink NVR."""
@@ -244,7 +191,7 @@ class NvrAdapter:
                 pass
             self._host = None
 
-    async def _snapshot_loop(self) -> None:
+    async def _run_cycle(self) -> None:
         """Periodically pull snapshots from all channels."""
         while self._running:
             for ch_cfg in self._channels:
@@ -263,3 +210,19 @@ class NvrAdapter:
                     )
 
             await asyncio.sleep(self._interval)
+
+    # --- Hooks -------------------------------------------------------------
+
+    def _on_started(self) -> None:
+        """Log NVR-specific start message."""
+        channel_names: str = ", ".join(
+            ch.get("name", str(ch["id"])) for ch in self._channels
+        )
+        logger.info(
+            "NVR adapter started — %d channel(s): %s",
+            len(self._channels), channel_names,
+        )
+
+    def _on_stopped(self) -> None:
+        """Log NVR-specific stop message."""
+        logger.info("NVR adapter stopped")

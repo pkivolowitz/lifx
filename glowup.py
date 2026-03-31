@@ -677,15 +677,20 @@ def _print_discover_table(
     """
     # Only include the Registry column if any row has a non-empty value.
     has_registry: bool = any(r.get("registry", "") for r in rows)
+    # Only include the leading marker column if any row is offline.
+    has_offline: bool = any(r.get("mark", " ") != " " for r in rows)
 
-    cols: List[Tuple[str, str, int]] = [
+    cols: List[Tuple[str, str, int]] = []
+    if has_offline:
+        cols.append((" ", "mark", 1))
+    cols.extend([
         ("Label",       "label",    _COL_MIN_LABEL),
         ("Product",     "product",  _COL_MIN_PRODUCT),
         ("Group",       "group",    _COL_MIN_GROUP),
         ("IP Address",  "ip",       _COL_MIN_IP),
         ("MAC Address", "mac",      _COL_MIN_MAC),
         ("Zones",       "zones",    _COL_MIN_ZONES),
-    ]
+    ])
     if has_registry:
         cols.append(("Registry", "registry", _COL_MIN_REGISTRY))
 
@@ -706,7 +711,12 @@ def _print_discover_table(
             for i in range(len(cols))
         )
         _print(line)
-    _print(f"\n{len(rows)} device(s) found.")
+    offline_n: int = sum(1 for r in rows if r.get("mark", " ") != " ")
+    live_n: int = len(rows) - offline_n
+    if offline_n:
+        _print(f"\n{live_n} live, {offline_n} offline (*) — {len(rows)} total.")
+    else:
+        _print(f"\n{len(rows)} device(s) found.")
 
     if emit_json:
         _print("\n" + json.dumps(
@@ -758,10 +768,11 @@ def cmd_discover(args: argparse.Namespace) -> None:
             return
         rows: List[Dict[str, str]] = [
             {
+                "mark":     "*" if d.get("offline") else " ",
                 "label":    d.get("label") or "?",
                 "product":  d.get("product") or "?",
                 "group":    d.get("group") or "",
-                "ip":       d.get("ip", "?"),
+                "ip":       d.get("ip") or "",
                 "mac":      d.get("mac", "?"),
                 "zones":    str(d.get("zones") or "-"),
                 "registry": d.get("registry_label") or "",
@@ -797,6 +808,7 @@ def cmd_discover(args: argparse.Namespace) -> None:
 
     udp_rows: List[Dict[str, str]] = [
         {
+            "mark":    " ",
             "label":   dev.label or "?",
             "product": dev.product_name or "?",
             "group":   dev.group or "",

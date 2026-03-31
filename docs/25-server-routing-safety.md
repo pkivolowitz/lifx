@@ -366,7 +366,7 @@ WiFi radios awake (prevents power-save deep sleep).
 Result: The dashboard's "Found (ARP)" section always shows what's
 actually online, even on a fragmented mesh network.
 
-For details see [Distributed Framework](docs/18-distributed.md) and
+For details see [MQTT](19-mqtt.md) and
 the source: [bulb_keepalive.py](../bulb_keepalive.py).
 
 ---
@@ -454,8 +454,15 @@ Or use `glowup off`.
 
 ---
 
+## Handler Mixin Architecture
+
+The server's request handler uses a mixin pattern -- 12
+domain-specific handler classes in `handlers/` are composed into a
+single `GlowUpRequestHandler`.  Routes are declared in a table
+(`_ROUTES`) and dispatched automatically.
+
 ## See Also
 
-- [Troubleshooting](docs/14-troubleshooting.md) — General issues
-- [REST API Server](docs/11-rest-api.md) — Full API reference
-- [Quick Start](docs/03-quick-start.md) — Getting started
+- [Troubleshooting](14-troubleshooting.md) -- General issues
+- [REST API Server](11-rest-api.md) -- Full API reference
+- [Quick Start](03-quick-start.md) -- Getting started

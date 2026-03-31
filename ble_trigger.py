@@ -124,7 +124,11 @@ class BleTriggerManager:
             try:
                 from network_config import net
                 broker = net.broker
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "network_config unavailable, defaulting to localhost: %s",
+                    exc,
+                )
                 broker = "localhost"
         self._broker: str = broker
         self._port: int = port

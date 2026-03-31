@@ -88,7 +88,7 @@ def cmd_pair(args: argparse.Namespace) -> None:
 
         print("Starting pair-setup...")
         session = HapSession(gatt)
-        keys = await session.pair_setup(setup_code.encode("utf-8"))
+        keys = await session.pair_setup(setup_code)
 
         registry.mark_paired(args.label, keys)
         print(f"Pairing complete! Device '{args.label}' is now paired.")

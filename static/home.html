@@ -45,6 +45,11 @@
     --lock-unknown:  #6a5e50;
     --lock-size:     clamp(36px, 5vw, 60px);
 
+    /* Soil. */
+    --soil-wet:      #4a9a7a;
+    --soil-dry:      #c4864a;
+    --soil-critical: #c45a3a;
+
     /* Layout. */
     --max-width:     1400px;
     --card-radius:   24px;
@@ -154,6 +159,27 @@ body {
     margin-top: 10px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+}
+
+/* Portrait (rotated display) — 3-wide grid.
+   Wayland compositors with wlr-randr transform may not report
+   orientation correctly — JS adds .portrait class as fallback. */
+@media (orientation: portrait) {
+    .sensor-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+    .sensor-card {
+        padding: 28px;
+        min-height: 180px;
+    }
+}
+/* JS fallback: body.portrait applied when window.innerHeight > innerWidth. */
+body.portrait .sensor-grid {
+    grid-template-columns: repeat(3, 1fr);
+}
+body.portrait .sensor-card {
+    padding: 28px;
+    min-height: 180px;
 }
 
 /* ------------------------------------------------------------------ */
@@ -464,6 +490,24 @@ body {
     text-transform: uppercase;
 }
 
+/* Stale lock — data age exceeds threshold, state untrustworthy. */
+.lock-circle.stale {
+    border-color: var(--stale-color);
+    color: var(--stale-color);
+    background: transparent;
+    box-shadow: none;
+    animation: lock-stale-pulse 2s ease-in-out infinite;
+}
+@keyframes lock-stale-pulse {
+    0%, 100% { opacity: 0.5; }
+    50%      { opacity: 1; }
+}
+.lock-stale-label {
+    font-size: clamp(0.55rem, 1vw, 0.75rem);
+    color: var(--stale-color);
+    margin-top: 2px;
+}
+
 /* ------------------------------------------------------------------ */
 /* Security card — alarm state + door contacts                        */
 /* ------------------------------------------------------------------ */
@@ -525,6 +569,142 @@ body {
 }
 
 /* ------------------------------------------------------------------ */
+/* Weather card — Open-Meteo                                          */
+/* ------------------------------------------------------------------ */
+.weather-card {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.weather-icon {
+    font-size: clamp(2.5rem, 6vw, 4rem);
+    line-height: 1;
+    margin-bottom: 4px;
+}
+.weather-temp {
+    font-family: var(--font-clock);
+    font-size: clamp(2.2rem, 5vw, 3.6rem);
+    font-weight: 200;
+    color: var(--clock-color);
+    line-height: 1.1;
+}
+.weather-details {
+    font-size: clamp(0.75rem, 1.4vw, 1.1rem);
+    color: var(--label-color);
+    margin-top: 6px;
+    line-height: 1.4;
+}
+
+/* ------------------------------------------------------------------ */
+/* Air quality card                                                   */
+/* ------------------------------------------------------------------ */
+.aqi-card {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.aqi-value {
+    font-family: var(--font-clock);
+    font-size: clamp(2.5rem, 6vw, 4rem);
+    font-weight: 200;
+    line-height: 1.1;
+}
+.aqi-label {
+    font-size: clamp(1rem, 2vw, 1.4rem);
+    font-weight: 600;
+    margin-top: 2px;
+}
+.aqi-details {
+    font-size: clamp(0.7rem, 1.2vw, 1rem);
+    color: var(--label-color);
+    margin-top: 6px;
+    line-height: 1.4;
+}
+/* AQI color coding. */
+.aqi-good       { color: #6aaa90; }
+.aqi-moderate   { color: #d4c44a; }
+.aqi-sensitive  { color: #d4864a; }
+.aqi-unhealthy  { color: #c45a3a; }
+.aqi-very-bad   { color: #8b3060; }
+.aqi-hazardous  { color: #6b2040; }
+
+/* ------------------------------------------------------------------ */
+/* UV index card                                                      */
+/* ------------------------------------------------------------------ */
+.uv-card {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.uv-value {
+    font-family: var(--font-clock);
+    font-size: clamp(2.5rem, 6vw, 4rem);
+    font-weight: 200;
+    line-height: 1.1;
+}
+.uv-label {
+    font-size: clamp(1rem, 2vw, 1.4rem);
+    font-weight: 600;
+    margin-top: 2px;
+}
+.uv-details {
+    font-size: clamp(0.7rem, 1.2vw, 1rem);
+    color: var(--label-color);
+    margin-top: 6px;
+}
+/* UV color coding. */
+.uv-low      { color: #6aaa90; }
+.uv-moderate { color: #d4c44a; }
+.uv-high     { color: #d4864a; }
+.uv-veryhigh { color: #c45a3a; }
+.uv-extreme  { color: #8b3060; }
+
+/* ------------------------------------------------------------------ */
+/* NWS alerts card                                                    */
+/* ------------------------------------------------------------------ */
+.alerts-card {
+    display: flex;
+    flex-direction: column;
+}
+.alerts-card .sensor-location {
+    color: #6aaa90;
+}
+.alerts-card.has-alerts .sensor-location {
+    color: #c45a3a;
+    animation: blink-3-1 2s step-end infinite;
+}
+.alerts-list {
+    font-size: clamp(0.7rem, 1.3vw, 1rem);
+    color: var(--label-color);
+    line-height: 1.5;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+.alert-item {
+    margin-bottom: 6px;
+    color: #d4864a;
+}
+.alert-item.warning { color: #c45a3a; }
+.alert-item.watch   { color: #d4c44a; }
+.alerts-clear {
+    color: #6aaa90;
+    font-size: clamp(1rem, 2vw, 1.4rem);
+    text-align: center;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* ------------------------------------------------------------------ */
 /* Camera card — cycles through NVR snapshots                         */
 /* ------------------------------------------------------------------ */
 .camera-card {
@@ -556,6 +736,26 @@ body {
 /* ------------------------------------------------------------------ */
 /* Battery alert card — low battery warnings across all Vivint devices */
 /* ------------------------------------------------------------------ */
+/* Printer alert card — shown only when printer needs attention. */
+.printer-alert-card {
+    text-align: center;
+    aspect-ratio: auto;
+}
+.printer-alert-card .sensor-location {
+    color: var(--stale-color);
+}
+.printer-alerts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: center;
+}
+.printer-alert-item {
+    font-size: clamp(0.7rem, 1.4vw, 1rem);
+    color: var(--stale-color);
+    animation: blink-3-1 2s step-end infinite;
+}
+
 .battery-alert-card {
     text-align: center;
     aspect-ratio: auto;
@@ -577,6 +777,121 @@ body {
 .battery-alert-item .batt-pct {
     font-weight: 700;
 }
+
+/* ------------------------------------------------------------------ */
+/* Soil moisture card — compact, scrolls through sensors              */
+/* ------------------------------------------------------------------ */
+.soil-card {
+    text-align: center;
+    aspect-ratio: 1 / 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: clamp(16px, 3vw, 32px);
+}
+.soil-card .sensor-location {
+    color: var(--soil-wet);
+    font-size: clamp(1rem, 2vw, 1.4rem);
+    font-weight: 600;
+    margin-bottom: clamp(8px, 2vw, 16px);
+}
+.soil-reading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: clamp(2px, 0.5vw, 6px);
+    flex: 1;
+    justify-content: center;
+}
+.soil-name {
+    font-size: clamp(0.85rem, 1.8vw, 1.2rem);
+    color: var(--label-color);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.soil-moisture-value {
+    font-size: clamp(3rem, 8vw, 5.5rem);
+    font-weight: 700;
+    font-family: var(--font-clock);
+    line-height: 1;
+}
+.soil-moisture-unit {
+    font-size: clamp(0.8rem, 1.5vw, 1.1rem);
+    color: var(--label-color);
+}
+.soil-details {
+    font-size: clamp(0.75rem, 1.3vw, 1rem);
+    color: var(--label-color);
+    margin-top: clamp(6px, 1vw, 12px);
+}
+.soil-dots {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-top: clamp(8px, 1.5vw, 16px);
+}
+.soil-dot {
+    width: clamp(6px, 1vw, 10px);
+    height: clamp(6px, 1vw, 10px);
+    border-radius: 50%;
+    background: var(--label-color);
+    opacity: 0.3;
+}
+.soil-dot.active {
+    opacity: 1.0;
+    background: var(--soil-wet);
+}
+
+/* ------------------------------------------------------------------ */
+/* Moon phase card                                                    */
+/* ------------------------------------------------------------------ */
+.moon-card {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.moon-card canvas {
+    margin-bottom: 6px;
+}
+.moon-name {
+    font-size: clamp(1rem, 2vw, 1.4rem);
+    font-weight: 600;
+    color: var(--clock-color);
+}
+.moon-details {
+    font-size: clamp(0.7rem, 1.2vw, 1rem);
+    color: var(--label-color);
+    margin-top: 4px;
+    line-height: 1.4;
+}
+
+/* ------------------------------------------------------------------ */
+/* Webcam card — external JPEG feeds with resilient fallback          */
+/* ------------------------------------------------------------------ */
+.webcam-card {
+    padding: 0;
+    overflow: hidden;
+    position: relative;
+}
+.webcam-card img {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+.webcam-label {
+    position: absolute;
+    bottom: 6px;
+    right: 10px;
+    font-size: clamp(0.6rem, 1vw, 0.85rem);
+    color: rgba(255, 255, 255, 0.6);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+    letter-spacing: 0.06em;
+}
+/* Span sizes: 1x1 (default), 2x1, 3x1. */
+.webcam-span-2 { grid-column: span 2; }
+.webcam-span-3 { grid-column: span 3; }
 
 /* ------------------------------------------------------------------ */
 /* Responsive tweaks                                                  */
@@ -652,6 +967,55 @@ body {
             <div class="sensor-location">Low Battery</div>
             <div class="battery-alerts-list" id="batteryAlertsList"></div>
         </div>
+        <!-- Printer alert card — shown only when printer needs attention. -->
+        <div class="printer-alert-card sensor-card" id="printerAlertCard" style="display:none">
+            <div class="sensor-location">Printer</div>
+            <div class="printer-alerts-list" id="printerAlertsList"></div>
+        </div>
+        <!-- Weather card — Open-Meteo, no API key. -->
+        <div class="weather-card sensor-card" id="weatherCard" style="display:none">
+            <div class="sensor-location">Weather</div>
+            <div class="weather-icon" id="weatherIcon"></div>
+            <div class="weather-temp" id="weatherTemp"></div>
+            <div class="weather-details" id="weatherDetails"></div>
+        </div>
+        <!-- Air quality + pollen card — Open-Meteo AQI. -->
+        <div class="aqi-card sensor-card" id="aqiCard" style="display:none">
+            <div class="sensor-location">Air Quality</div>
+            <div class="aqi-value" id="aqiValue"></div>
+            <div class="aqi-label" id="aqiLabel"></div>
+            <div class="aqi-details" id="aqiDetails"></div>
+        </div>
+        <!-- UV index card — Open-Meteo. -->
+        <div class="uv-card sensor-card" id="uvCard" style="display:none">
+            <div class="sensor-location">UV Index</div>
+            <div class="uv-value" id="uvValue"></div>
+            <div class="uv-label" id="uvLabel"></div>
+            <div class="uv-details" id="uvDetails"></div>
+        </div>
+        <!-- NWS severe weather alerts. -->
+        <div class="alerts-card sensor-card" id="alertsCard" style="display:none">
+            <div class="sensor-location" id="alertsTitle">Alerts</div>
+            <div class="alerts-list" id="alertsList"></div>
+        </div>
+        <!-- Soil moisture card — scrolls through all soil sensors. -->
+        <div class="soil-card sensor-card" id="soilCard" style="display:none">
+            <div class="sensor-location">Soil</div>
+            <div class="soil-reading" id="soilReading"></div>
+            <div class="soil-dots" id="soilDots"></div>
+        </div>
+        <!-- Moon phase — pure math, canvas-drawn. -->
+        <div class="moon-card sensor-card" id="moonCard">
+            <div class="sensor-location">Moon</div>
+            <canvas id="moonCanvas" width="120" height="120"></canvas>
+            <div class="moon-name" id="moonName"></div>
+            <div class="moon-details" id="moonDetails"></div>
+        </div>
+        <!-- Fairhope Pier webcam — YouTube live thumbnail. -->
+        <div class="webcam-card sensor-card webcam-span-3" id="fairhopeCard" style="display:none">
+            <img id="fairhopeImg" alt="Fairhope Pier">
+            <div class="webcam-label">Fairhope Pier</div>
+        </div>
         <div class="no-data" id="noData">Waiting for sensor data&hellip;</div>
     </div>
 </div>
@@ -704,6 +1068,15 @@ body {
     /* -------------------------------------------------------------- */
     /* Clock                                                          */
     /* -------------------------------------------------------------- */
+
+    /* Portrait detection — Wayland wlr-randr rotation may not trigger
+       CSS orientation: portrait, so detect via JS and add class. */
+    function checkPortrait() {
+        document.body.classList.toggle("portrait",
+            window.innerHeight > window.innerWidth);
+    }
+    checkPortrait();
+    window.addEventListener("resize", checkPortrait);
 
     const clockTimeEl = document.getElementById("clockTime");
     const clockDateEl = document.getElementById("clockDate");
@@ -858,7 +1231,25 @@ body {
 
             const updatedEl = card.querySelector(".reading-updated");
             const dt = new Date(data.last_update * 1000);
-            updatedEl.textContent = "Updated " + dt.toLocaleTimeString();
+            var updatedText = "Updated " + dt.toLocaleTimeString();
+
+            /* Watchdog countdown — shows time remaining until off-action. */
+            if (data.watchdog && data.watchdog.last_trigger > 0) {
+                var wd = data.watchdog;
+                var timeoutSec = wd.timeout_minutes * 60;
+                var elapsed = Date.now() / 1000 - wd.last_trigger;
+                var remaining = timeoutSec - elapsed;
+                var absMin = Math.floor(Math.abs(remaining) / 60);
+                var absSec = Math.floor(Math.abs(remaining) % 60);
+                var pad = absSec < 10 ? "0" : "";
+                if (remaining >= 0) {
+                    updatedText += "  \u23f1 " + absMin + ":" + pad + absSec;
+                } else {
+                    updatedText += "  \u23f1 \u2212" + absMin + ":" + pad + absSec + " OVERDUE";
+                }
+            }
+
+            updatedEl.textContent = updatedText;
         }
 
         if (isNew) {
@@ -957,20 +1348,36 @@ body {
 
     /** Render lock circles with battery from API data. */
     function renderLocks(locks) {
-        /* locks: [{abbr, name, locked, battery}, ...] */
+        /* locks: [{abbr, name, locked, battery, updated_at}, ...] */
         if (!locks || locks.length === 0) {
             locksRow.innerHTML = "";
             return;
         }
         locksRow.innerHTML = "";
 
+        var nowSec = Date.now() / 1000;
+
         locks.forEach(function (lock) {
             var item = document.createElement("div");
             item.className = "lock-item";
 
+            /* Staleness check — same threshold as sensors. */
+            var stale = false;
+            var staleMins = 0;
+            if (lock.updated_at) {
+                var age = nowSec - lock.updated_at;
+                if (age > STALE_THRESHOLD_S) {
+                    stale = true;
+                    staleMins = Math.floor(age / 60);
+                }
+            }
+
             var circle = document.createElement("div");
             circle.className = "lock-circle";
-            if (lock.locked === true) {
+            if (stale) {
+                /* Stale overrides lock/unlock color — data is untrustworthy. */
+                circle.classList.add("stale");
+            } else if (lock.locked === true) {
                 circle.classList.add("locked");
             } else if (lock.locked === false) {
                 circle.classList.add("unlocked");
@@ -992,6 +1399,14 @@ body {
                 if (lock.battery <= 5) item.classList.add("battery-critical");
                 batt.textContent = lock.battery + "%";
                 item.appendChild(batt);
+            }
+
+            /* Stale warning below battery/name. */
+            if (stale) {
+                var staleEl = document.createElement("div");
+                staleEl.className = "lock-stale-label";
+                staleEl.textContent = "Stale " + staleMins + "m";
+                item.appendChild(staleEl);
             }
 
             locksRow.appendChild(item);
@@ -1138,6 +1553,510 @@ body {
     setInterval(pollSecurity, SENSOR_POLL_MS);
 
     /* -------------------------------------------------------------- */
+    /* Printer alert — shown only when printer needs attention         */
+    /* -------------------------------------------------------------- */
+
+    var printerAlertCard = document.getElementById("printerAlertCard");
+    var printerAlertsList = document.getElementById("printerAlertsList");
+
+    /* Human-readable labels for printer alert codes. */
+    var PRINTER_ALERT_LABELS = {
+        "toner_low": "Toner Low",
+        "no_paper": "Out of Paper",
+        "jam": "Paper Jam",
+        "cover_open": "Cover Open",
+        "drum_low": "Drum Low",
+        "error": "Error",
+        "offline": "Offline"
+    };
+
+    /* Poll every 5 minutes — the adapter only polls the printer once
+       per day, so frequent fetches are cheap (cached on server). */
+    var PRINTER_POLL_MS = 300000;
+
+    function pollPrinter() {
+        fetch("/api/home/printer")
+            .then(function (r) {
+                if (!r.ok) return null;
+                return r.json();
+            })
+            .then(function (data) {
+                if (!data) return;
+                var alerts = data.alerts || [];
+                if (alerts.length === 0 || data.status === "ok" || data.status === "unconfigured") {
+                    printerAlertCard.style.display = "none";
+                    return;
+                }
+                printerAlertCard.style.display = "";
+                printerAlertsList.innerHTML = "";
+                alerts.forEach(function (code) {
+                    var item = document.createElement("div");
+                    item.className = "printer-alert-item";
+                    item.textContent = PRINTER_ALERT_LABELS[code] || code;
+                    printerAlertsList.appendChild(item);
+                });
+            })
+            .catch(function () {});
+    }
+
+    pollPrinter();
+    setInterval(pollPrinter, PRINTER_POLL_MS);
+
+    /* -------------------------------------------------------------- */
+    /* Soil moisture — scrolls through all soil sensors               */
+    /* -------------------------------------------------------------- */
+
+    var soilCard = document.getElementById("soilCard");
+    var soilReading = document.getElementById("soilReading");
+    var soilDots = document.getElementById("soilDots");
+    var soilSensors = [];
+    var soilIndex = 0;
+
+    /* Cycle through sensors every 4 seconds. */
+    var SOIL_CYCLE_MS = 4000;
+
+    /* Color based on moisture level. */
+    function soilColor(pct) {
+        if (pct >= 40) return "var(--soil-wet)";
+        if (pct >= 20) return "var(--soil-dry)";
+        return "var(--soil-critical)";
+    }
+
+    function renderSoilSensor(idx) {
+        if (soilSensors.length === 0) {
+            soilCard.style.display = "none";
+            return;
+        }
+        soilCard.style.display = "";
+        var s = soilSensors[idx % soilSensors.length];
+        var moisture = s.soil_moisture != null ? Math.round(s.soil_moisture) : "--";
+        var batt = s.battery != null ? Math.round(s.battery) : "--";
+        var temp = s.temperature != null ? cToF(s.temperature).toFixed(1) : "--";
+        var name = (s.name || "").replace(/_/g, " ");
+        var color = moisture !== "--" ? soilColor(moisture) : "var(--label-color)";
+
+        soilReading.innerHTML =
+            '<div class="soil-name">' + name + '</div>' +
+            '<div class="soil-moisture-value" style="color:' + color + '">' + moisture + '</div>' +
+            '<div class="soil-moisture-unit">% moisture</div>' +
+            '<div class="soil-details">\u{1F321}\u{FE0F} ' + temp + '\u{00B0}F &nbsp; \u{1F50B} ' + batt + '%</div>';
+
+        /* Navigation dots — only if multiple sensors. */
+        if (soilSensors.length > 1) {
+            soilDots.innerHTML = "";
+            for (var i = 0; i < soilSensors.length; i++) {
+                var dot = document.createElement("div");
+                dot.className = "soil-dot" + (i === idx % soilSensors.length ? " active" : "");
+                soilDots.appendChild(dot);
+            }
+            soilDots.style.display = "";
+        } else {
+            soilDots.style.display = "none";
+        }
+    }
+
+    function pollSoil() {
+        fetch("/api/home/soil")
+            .then(function (r) {
+                if (!r.ok) return null;
+                return r.json();
+            })
+            .then(function (data) {
+                if (!data) return;
+                soilSensors = data.sensors || [];
+                renderSoilSensor(soilIndex);
+            })
+            .catch(function () {});
+    }
+
+    function cycleSoil() {
+        if (soilSensors.length > 1) {
+            soilIndex = (soilIndex + 1) % soilSensors.length;
+            renderSoilSensor(soilIndex);
+        }
+    }
+
+    pollSoil();
+    setInterval(pollSoil, SENSOR_POLL_MS);
+    setInterval(cycleSoil, SOIL_CYCLE_MS);
+
+    /* -------------------------------------------------------------- */
+    /* Weather — Open-Meteo (free, no API key)                        */
+    /* -------------------------------------------------------------- */
+
+    var weatherCard = document.getElementById("weatherCard");
+    var weatherIcon = document.getElementById("weatherIcon");
+    var weatherTemp = document.getElementById("weatherTemp");
+    var weatherDetails = document.getElementById("weatherDetails");
+
+    /* WMO weather code → description + icon. */
+    var WMO_CODES = {
+        0: ["Clear", "\u2600\uFE0F"],
+        1: ["Mostly Clear", "\u{1F324}\uFE0F"],
+        2: ["Partly Cloudy", "\u26C5"],
+        3: ["Overcast", "\u2601\uFE0F"],
+        45: ["Fog", "\u{1F32B}\uFE0F"],
+        48: ["Rime Fog", "\u{1F32B}\uFE0F"],
+        51: ["Light Drizzle", "\u{1F326}\uFE0F"],
+        53: ["Drizzle", "\u{1F326}\uFE0F"],
+        55: ["Heavy Drizzle", "\u{1F326}\uFE0F"],
+        61: ["Light Rain", "\u{1F327}\uFE0F"],
+        63: ["Rain", "\u{1F327}\uFE0F"],
+        65: ["Heavy Rain", "\u{1F327}\uFE0F"],
+        71: ["Light Snow", "\u{1F328}\uFE0F"],
+        73: ["Snow", "\u{1F328}\uFE0F"],
+        75: ["Heavy Snow", "\u{1F328}\uFE0F"],
+        80: ["Light Showers", "\u{1F326}\uFE0F"],
+        81: ["Showers", "\u{1F327}\uFE0F"],
+        82: ["Heavy Showers", "\u{1F327}\uFE0F"],
+        95: ["Thunderstorm", "\u26C8\uFE0F"],
+        96: ["Thunderstorm + Hail", "\u26C8\uFE0F"],
+        99: ["Heavy Thunderstorm", "\u26C8\uFE0F"]
+    };
+
+    /* Poll interval: 15 minutes (weather doesn't change fast). */
+    var WEATHER_POLL_MS = 900000;
+
+    /* Mobile, AL coordinates. */
+    var WEATHER_URL = "https://api.open-meteo.com/v1/forecast" +
+        "?latitude=30.69&longitude=-88.04" +
+        "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m" +
+        "&temperature_unit=fahrenheit&wind_speed_unit=mph";
+
+    var weatherRetries = 0;
+
+    function pollWeather() {
+        fetch(WEATHER_URL)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!data.current) return;
+                var c = data.current;
+                var code = c.weather_code;
+                var wmo = WMO_CODES[code] || ["Unknown", "\u2753"];
+
+                weatherIcon.textContent = wmo[1];
+                weatherTemp.innerHTML = Math.round(c.temperature_2m) +
+                    '<span class="unit">\u00B0F</span>';
+                weatherDetails.textContent = wmo[0] +
+                    "  \u00B7  " + Math.round(c.relative_humidity_2m) + "% humidity" +
+                    "  \u00B7  " + Math.round(c.wind_speed_10m) + " mph";
+                weatherCard.style.display = "";
+                weatherRetries = 0;
+            })
+            .catch(function () {
+                if (weatherRetries < 6) {
+                    weatherRetries++;
+                    setTimeout(pollWeather, 10000);
+                }
+            });
+    }
+
+    pollWeather();
+    setInterval(pollWeather, WEATHER_POLL_MS);
+
+    /* -------------------------------------------------------------- */
+    /* Air Quality + Pollen — Open-Meteo AQI API                      */
+    /* -------------------------------------------------------------- */
+
+    var aqiCard = document.getElementById("aqiCard");
+    var aqiValue = document.getElementById("aqiValue");
+    var aqiLabel = document.getElementById("aqiLabel");
+    var aqiDetails = document.getElementById("aqiDetails");
+
+    var AQI_URL = "https://air-quality-api.open-meteo.com/v1/air-quality" +
+        "?latitude=30.69&longitude=-88.04" +
+        "&current=us_aqi,pm2_5,pm10,grass_pollen,birch_pollen,ragweed_pollen,alder_pollen";
+
+    function aqiCategory(aqi) {
+        if (aqi <= 50)  return ["Good", "aqi-good"];
+        if (aqi <= 100) return ["Moderate", "aqi-moderate"];
+        if (aqi <= 150) return ["Sensitive Groups", "aqi-sensitive"];
+        if (aqi <= 200) return ["Unhealthy", "aqi-unhealthy"];
+        if (aqi <= 300) return ["Very Unhealthy", "aqi-very-bad"];
+        return ["Hazardous", "aqi-hazardous"];
+    }
+
+    function pollAqi() {
+        fetch(AQI_URL)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!data.current) return;
+                var c = data.current;
+                var aqi = Math.round(c.us_aqi || 0);
+                var cat = aqiCategory(aqi);
+
+                aqiValue.textContent = aqi;
+                aqiValue.className = "aqi-value " + cat[1];
+                aqiLabel.textContent = cat[0];
+                aqiLabel.className = "aqi-label " + cat[1];
+
+                var parts = [];
+                if (c.pm2_5 != null) parts.push("PM2.5: " + c.pm2_5.toFixed(1));
+                if (c.pm10 != null) parts.push("PM10: " + c.pm10.toFixed(1));
+                var pollen = [];
+                if (c.grass_pollen) pollen.push("Grass: " + Math.round(c.grass_pollen));
+                if (c.birch_pollen) pollen.push("Tree: " + Math.round(c.birch_pollen));
+                if (c.ragweed_pollen) pollen.push("Ragweed: " + Math.round(c.ragweed_pollen));
+                if (c.alder_pollen) pollen.push("Alder: " + Math.round(c.alder_pollen));
+                if (pollen.length > 0) parts.push(pollen.join(", "));
+
+                aqiDetails.textContent = parts.join("  \u00B7  ");
+                aqiCard.style.display = "";
+            })
+            .catch(function () {});
+    }
+
+    pollAqi();
+    setInterval(pollAqi, WEATHER_POLL_MS);
+
+    /* -------------------------------------------------------------- */
+    /* UV Index — Open-Meteo                                          */
+    /* -------------------------------------------------------------- */
+
+    var uvCard = document.getElementById("uvCard");
+    var uvValue = document.getElementById("uvValue");
+    var uvLabel = document.getElementById("uvLabel");
+    var uvDetails = document.getElementById("uvDetails");
+
+    var UV_URL = "https://api.open-meteo.com/v1/forecast" +
+        "?latitude=30.69&longitude=-88.04" +
+        "&current=uv_index&daily=uv_index_max" +
+        "&temperature_unit=fahrenheit&timezone=America/Chicago&forecast_days=1";
+
+    function uvCategory(uv) {
+        if (uv < 3)  return ["Low", "uv-low"];
+        if (uv < 6)  return ["Moderate", "uv-moderate"];
+        if (uv < 8)  return ["High", "uv-high"];
+        if (uv < 11) return ["Very High", "uv-veryhigh"];
+        return ["Extreme", "uv-extreme"];
+    }
+
+    function pollUv() {
+        fetch(UV_URL)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!data.current) return;
+                var uv = data.current.uv_index;
+                var cat = uvCategory(uv);
+                var maxUv = (data.daily && data.daily.uv_index_max)
+                    ? data.daily.uv_index_max[0] : null;
+
+                uvValue.textContent = uv.toFixed(1);
+                uvValue.className = "uv-value " + cat[1];
+                uvLabel.textContent = cat[0];
+                uvLabel.className = "uv-label " + cat[1];
+
+                if (maxUv != null) {
+                    var maxCat = uvCategory(maxUv);
+                    uvDetails.innerHTML = "Today's peak: " +
+                        '<span class="' + maxCat[1] + '">' +
+                        maxUv.toFixed(1) + " (" + maxCat[0] + ")</span>";
+                } else {
+                    uvDetails.textContent = "";
+                }
+                uvCard.style.display = "";
+            })
+            .catch(function () {});
+    }
+
+    pollUv();
+    setInterval(pollUv, WEATHER_POLL_MS);
+
+    /* -------------------------------------------------------------- */
+    /* NWS Severe Weather Alerts                                      */
+    /* -------------------------------------------------------------- */
+
+    var alertsCard = document.getElementById("alertsCard");
+    var alertsTitle = document.getElementById("alertsTitle");
+    var alertsList = document.getElementById("alertsList");
+
+    /* NWS point-based alerts for Mobile, AL. */
+    var NWS_URL = "https://api.weather.gov/alerts/active?point=30.69,-88.04";
+
+    /* Poll every 5 minutes — severe weather changes fast. */
+    var ALERTS_POLL_MS = 300000;
+
+    function pollAlerts() {
+        fetch(NWS_URL, {headers: {"User-Agent": "GlowUp/1.0"}})
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var features = data.features || [];
+                alertsList.innerHTML = "";
+
+                if (features.length === 0) {
+                    alertsCard.classList.remove("has-alerts");
+                    alertsTitle.textContent = "Alerts";
+                    alertsList.innerHTML = '<div class="alerts-clear">All Clear</div>';
+                } else {
+                    alertsCard.classList.add("has-alerts");
+                    alertsTitle.textContent = features.length +
+                        " Alert" + (features.length > 1 ? "s" : "");
+                    for (var i = 0; i < features.length; i++) {
+                        var p = features[i].properties;
+                        var div = document.createElement("div");
+                        var severity = (p.severity || "").toLowerCase();
+                        var cssClass = "alert-item";
+                        if (p.event && p.event.toLowerCase().indexOf("warning") >= 0) cssClass += " warning";
+                        else if (p.event && p.event.toLowerCase().indexOf("watch") >= 0) cssClass += " watch";
+                        div.className = cssClass;
+                        div.textContent = p.event || "Unknown Alert";
+                        alertsList.appendChild(div);
+                    }
+                }
+                alertsCard.style.display = "";
+            })
+            .catch(function () {});
+    }
+
+    pollAlerts();
+    setInterval(pollAlerts, ALERTS_POLL_MS);
+
+    /* -------------------------------------------------------------- */
+    /* Moon phase — pure math, canvas-drawn                           */
+    /* -------------------------------------------------------------- */
+
+    var moonCanvas = document.getElementById("moonCanvas");
+    var moonCtx = moonCanvas.getContext("2d");
+    var moonName = document.getElementById("moonName");
+    var moonDetails = document.getElementById("moonDetails");
+
+    /* Known new moon reference: Jan 6 2000 18:14 UTC. */
+    var KNOWN_NEW_MOON = Date.UTC(2000, 0, 6, 18, 14);
+    var SYNODIC_MONTH = 29.53058867;
+    var MS_PER_DAY = 86400000;
+
+    var PHASE_NAMES = [
+        [0.0625, "New Moon"],
+        [0.1875, "Waxing Crescent"],
+        [0.3125, "First Quarter"],
+        [0.4375, "Waxing Gibbous"],
+        [0.5625, "Full Moon"],
+        [0.6875, "Waning Gibbous"],
+        [0.8125, "Last Quarter"],
+        [0.9375, "Waning Crescent"],
+        [1.0001, "New Moon"]
+    ];
+
+    function drawMoon() {
+        var now = Date.now();
+        var daysSinceRef = (now - KNOWN_NEW_MOON) / MS_PER_DAY;
+        var phase = (daysSinceRef % SYNODIC_MONTH) / SYNODIC_MONTH;
+        var age = daysSinceRef % SYNODIC_MONTH;
+        var illumination = 0.5 * (1 - Math.cos(2 * Math.PI * phase));
+
+        /* Phase name. */
+        var name = "New Moon";
+        for (var i = 0; i < PHASE_NAMES.length; i++) {
+            if (phase < PHASE_NAMES[i][0]) {
+                name = PHASE_NAMES[i][1];
+                break;
+            }
+        }
+
+        /* Next full and new moon. */
+        var daysToFull = ((0.5 - phase + 1) % 1) * SYNODIC_MONTH;
+        var daysToNew = ((1.0 - phase) % 1) * SYNODIC_MONTH;
+        if (daysToFull < 0.5) daysToFull = SYNODIC_MONTH;
+        if (daysToNew < 0.5) daysToNew = SYNODIC_MONTH;
+
+        moonName.textContent = name;
+        moonDetails.textContent =
+            Math.round(illumination * 100) + "% illuminated" +
+            "  \u00B7  Day " + Math.round(age) +
+            "\nFull in " + Math.round(daysToFull) + "d" +
+            "  \u00B7  New in " + Math.round(daysToNew) + "d";
+
+        /* Draw the moon on canvas. */
+        var w = moonCanvas.width;
+        var h = moonCanvas.height;
+        var cx = w / 2;
+        var cy = h / 2;
+        var r = Math.min(cx, cy) - 4;
+
+        moonCtx.clearRect(0, 0, w, h);
+
+        /* Full lit disc — pale yellow-white. */
+        moonCtx.beginPath();
+        moonCtx.arc(cx, cy, r, 0, 2 * Math.PI);
+        moonCtx.fillStyle = "#e8e4d4";
+        moonCtx.fill();
+
+        /* Shadow overlay using two arcs to create the terminator.
+           The terminator is an ellipse whose x-radius varies with phase. */
+        moonCtx.beginPath();
+
+        /* phase 0 = new (all shadow), 0.5 = full (no shadow).
+           0-0.5 = waxing (shadow on left, shrinking right-to-left).
+           0.5-1 = waning (shadow on right, growing left-to-right). */
+        var shadowPhase = phase <= 0.5 ? phase * 2 : (1 - phase) * 2;
+        /* shadowPhase 0 = full shadow, 1 = no shadow. */
+        var terminatorX = r * Math.cos(Math.PI * shadowPhase);
+
+        if (phase <= 0.5) {
+            /* Waxing: shadow is on the left side. */
+            /* Draw left half-circle (shadow edge). */
+            moonCtx.arc(cx, cy, r, Math.PI / 2, -Math.PI / 2, false);
+            /* Draw terminator ellipse back. */
+            moonCtx.ellipse(cx, cy, Math.abs(terminatorX), r,
+                0, -Math.PI / 2, Math.PI / 2, terminatorX < 0);
+        } else {
+            /* Waning: shadow is on the right side. */
+            moonCtx.arc(cx, cy, r, -Math.PI / 2, Math.PI / 2, false);
+            moonCtx.ellipse(cx, cy, Math.abs(terminatorX), r,
+                0, Math.PI / 2, -Math.PI / 2, terminatorX < 0);
+        }
+
+        moonCtx.fillStyle = "#1a1a1a";
+        moonCtx.fill();
+    }
+
+    drawMoon();
+    /* Update once per hour — moon doesn't change fast. */
+    setInterval(drawMoon, 3600000);
+
+    /* -------------------------------------------------------------- */
+    /* Fairhope Pier webcam — YouTube live thumbnail                   */
+    /* -------------------------------------------------------------- */
+
+    var fairhopeCard = document.getElementById("fairhopeCard");
+    var fairhopeImg = document.getElementById("fairhopeImg");
+
+    /* Span is configurable via URL query: ?webcam_span=1 or 2 or 3.
+       Default is 3 (full row in portrait 3-column grid). */
+    var webcamSpanParam = new URLSearchParams(window.location.search).get("webcam_span");
+    var webcamSpan = parseInt(webcamSpanParam, 10);
+    if (webcamSpan === 1 || webcamSpan === 2 || webcamSpan === 3) {
+        fairhopeCard.classList.remove("webcam-span-2", "webcam-span-3");
+        if (webcamSpan > 1) fairhopeCard.classList.add("webcam-span-" + webcamSpan);
+    }
+    var FAIRHOPE_URL = "https://i.ytimg.com/vi/N5wWOVOTHmQ/maxresdefault_live.jpg";
+    var WEBCAM_POLL_MS = 60000;  /* Refresh every 60 seconds. */
+    var fairhopeFailCount = 0;
+    var WEBCAM_MAX_FAILS = 10;   /* Stop trying after 10 consecutive failures. */
+
+    function pollFairhope() {
+        if (fairhopeFailCount >= WEBCAM_MAX_FAILS) return;
+
+        var img = new Image();
+        img.onload = function () {
+            /* Valid image returned — show it. */
+            fairhopeImg.src = img.src;
+            fairhopeCard.style.display = "";
+            fairhopeFailCount = 0;
+        };
+        img.onerror = function () {
+            /* Failed — hide tile, increment fail counter. */
+            fairhopeCard.style.display = "none";
+            fairhopeFailCount++;
+        };
+        /* Cache-bust so the browser fetches a fresh frame. */
+        img.src = FAIRHOPE_URL + "?t=" + Date.now();
+    }
+
+    pollFairhope();
+    setInterval(pollFairhope, WEBCAM_POLL_MS);
+
+    /* -------------------------------------------------------------- */
     /* Camera feed — cycles through NVR snapshots                     */
     /* -------------------------------------------------------------- */
 
@@ -1150,6 +2069,9 @@ body {
     /* How long each camera is shown (ms). */
     var CAMERA_CYCLE_MS = 5000;
 
+    var cameraRetries = 0;
+    var MAX_CAMERA_RETRIES = 6;
+
     function loadCameraList() {
         fetch("/api/home/cameras")
             .then(function (r) { return r.json(); })
@@ -1158,9 +2080,17 @@ body {
                     cameraList = data.cameras;
                     cameraCard.style.display = "";
                     showNextCamera();
+                } else if (cameraRetries < MAX_CAMERA_RETRIES) {
+                    cameraRetries++;
+                    setTimeout(loadCameraList, 5000);
                 }
             })
-            .catch(function () { /* no cameras */ });
+            .catch(function () {
+                if (cameraRetries < MAX_CAMERA_RETRIES) {
+                    cameraRetries++;
+                    setTimeout(loadCameraList, 5000);
+                }
+            });
     }
 
     function showNextCamera() {
@@ -1237,7 +2167,8 @@ body {
 
 <div class="footer">
     &copy; 2026 Perry Kivolowitz &middot; MIT License &middot;
-    <a href="/dashboard">Dashboard</a>
+    <a href="/dashboard">Dashboard</a> &middot;
+    <a href="http://10.0.0.123:8099" target="_blank">Zigbee</a>
 </div>
 
 </body>

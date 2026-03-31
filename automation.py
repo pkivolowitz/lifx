@@ -451,6 +451,42 @@ class AutomationManager:
         """Return the current automations list from config."""
         return self._config.get("automations", [])
 
+    def get_watchdog_states(self) -> dict[str, dict[str, Any]]:
+        """Return watchdog countdown state keyed by sensor label.
+
+        For each active watchdog automation, returns the sensor label
+        mapped to timeout_minutes, last_trigger timestamp, and active
+        flag.  The client computes the countdown from these values.
+
+        Returns:
+            Dict of ``{sensor_label: {"timeout_minutes": float,
+            "last_trigger": float, "active": bool}}``.
+        """
+        result: dict[str, dict[str, Any]] = {}
+        with self._lock:
+            for i, auto in enumerate(self.automations):
+                if not auto.get("enabled", True):
+                    continue
+                off_trigger: dict = auto.get("off_trigger", {})
+                if off_trigger.get("type") != "watchdog":
+                    continue
+                sensor: dict = auto.get("sensor", {})
+                label: str = sensor.get("label", "")
+                if not label:
+                    continue
+                state: _AutomationState = self._states.get(
+                    i, _AutomationState(),
+                )
+                timeout_min: float = off_trigger.get(
+                    "minutes", DEFAULT_WATCHDOG_MINUTES,
+                )
+                result[label] = {
+                    "timeout_minutes": timeout_min,
+                    "last_trigger": state.last_trigger,
+                    "active": state.active,
+                }
+        return result
+
     def start(self) -> None:
         """Start the MQTT subscriber and watchdog thread."""
         try:

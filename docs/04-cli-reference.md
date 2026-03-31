@@ -22,7 +22,12 @@ python3 glowup.py discover [--timeout SECONDS] [--ip ADDRESS] [--json]
 | `--timeout` | 5.0     | How long to listen for responses (s)           |
 | `--ip`      | *(none)* | Query a specific device IP instead of broadcast |
 | `--json`    | off     | Also print results as JSON                     |
-| `--local`   | off     | Force direct UDP instead of server routing     |
+
+**Global flag** (works with any subcommand):
+
+| Option    | Default | Description                                    |
+|-----------|---------|------------------------------------------------|
+| `--local` | off     | Force direct UDP instead of server routing     |
 
 Output is a formatted table showing each device's label, product type,
 group, IP address, MAC address, and zone count.
@@ -140,6 +145,22 @@ luma-converted brightness.  You can mix any device types freely.
 | `--sim-only` | off    | Same as `--sim` but never sends commands to the lights.  With `--device`, fetches zone count from the server so you see the real geometry. |
 | `--zpb`     | 3       | Zones per bulb.  Effects render one color per bulb; the engine replicates it across all zones in the bulb.  Default 3 matches LIFX string lights (36 zones = 12 bulbs).  Use 1 for per-zone rendering. |
 | `--lerp`    | oklab   | Color interpolation: `oklab` (best), `lab` (classic CIELAB), `hsb` (cheap) |
+| `--zones`   | *(none)* | Number of zones for headless/sim-only rendering (no device needed) |
+| `--zoom`    | 1       | Simulator pixel zoom factor                   |
+| `--transition` | *(none)* | Override transition time in milliseconds    |
+
+**Audio / media options** (used with audio-reactive effects like `spectrum_sweep`, `soundlevel`, `waveform`):
+
+| Option              | Default | Description                                    |
+|---------------------|---------|------------------------------------------------|
+| `--music-dir`       | *(none)* | Directory of music files for media source     |
+| `--bands`           | 32      | Number of FFT frequency bands                  |
+| `--audio-offset-ms` | 0       | Audio timing offset in milliseconds            |
+| `--audio-device`    | *(none)* | ALSA/CoreAudio device name for live mic input |
+| `--skip-calibration` | off    | Skip the audio calibration phase              |
+| `--screen`          | off     | Use screen capture as the media source        |
+| `--video-url`       | *(none)* | Video URL for screen-reactive effects (e.g., HDHomeRun) |
+| `--no-blur`         | off     | Disable blur in screen-reactive effects       |
 
 You must specify `--device`, `--ip`, `--group`, or `--zones` (not combinations).
 
@@ -314,6 +335,31 @@ Powering off all devices...
 ✓ Emergency power-off complete
 ```
 
-See [Server Routing & Safety](docs/25-server-routing-safety.md) for details.
+See [Server Routing & Safety](25-server-routing-safety.md) for details.
 
-**Requires:** [ffmpeg](https://ffmpeg.org/) must be installed and on your PATH.
+### replay
+
+Replay a Standard MIDI File onto the signal bus via MQTT.  Used for
+re-playing MIDI events at original tempo or bulk-loading data.
+
+```bash
+python3 glowup.py replay --file <path.mid> [options]
+```
+
+| Option          | Default        | Description                                    |
+|-----------------|----------------|------------------------------------------------|
+| `--file`        | *(required)*   | Path to a Standard MIDI File (.mid)            |
+| `--broker`      | `localhost`    | MQTT broker host                               |
+| `--port`        | 1883           | MQTT broker port                               |
+| `--speed`       | 1.0            | Replay speed multiplier (0 = as fast as possible) |
+| `--signal-name` | `midi`         | Signal name on the bus                         |
+
+**Examples:**
+
+```bash
+python3 glowup.py replay --file song.mid
+python3 glowup.py replay --file song.mid --speed 0    # bulk ingest
+python3 glowup.py replay --file song.mid --speed 2    # double speed
+```
+
+**Requires:** [MQTT broker](19-mqtt.md) running, `paho-mqtt` installed.

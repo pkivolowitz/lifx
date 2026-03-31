@@ -1,5 +1,7 @@
 # GlowUp Test Guide
 
+All test files live under the `tests/` directory.
+
 A reference for advanced developers (and future Claude instances) explaining
 what the higher-level tests prove, what failure modes they guard against, and
 how the test infrastructure works.
@@ -10,28 +12,28 @@ Tests are organized in three tiers:
 
 | Tier | Files | What it tests | Speed |
 |------|-------|---------------|-------|
-| **Unit** | `test_audit_regressions.py`, `test_routing.py`, `test_config.py`, `test_virtual_multizone.py` | Individual functions, source-level invariants, symbol correctness | < 1s |
-| **Use-case** | `test_use_cases.py` | Full Controller → Engine → Emitter pipeline with real effects | ~19s |
-| **Distributed** | `test_distributed.py` | Multi-machine SOE pipeline, wire protocols, MIDI/audio with known fixtures | < 1s |
+| **Unit** | `tests/test_audit_regressions.py`, `tests/test_routing.py`, `tests/test_config.py`, `tests/test_virtual_multizone.py` | Individual functions, source-level invariants, symbol correctness | < 1s |
+| **Use-case** | `tests/test_use_cases.py` | Full Controller → Engine → Emitter pipeline with real effects | ~19s |
+| **Distributed** | `tests/test_distributed.py` | Multi-machine SOE pipeline, wire protocols, MIDI/audio with known fixtures | < 1s |
 
 ### Running tests
 
 ```bash
 # All tests (fast tiers):
-python3 -m unittest test_audit_regressions test_routing test_config \
-    test_virtual_multizone test_distributed
+python3 -m pytest tests/test_audit_regressions.py tests/test_routing.py tests/test_config.py \
+    tests/test_virtual_multizone.py tests/test_distributed.py
 
 # Use-case tests (slower — runs real effect engines):
-python3 -m unittest test_use_cases -v
+python3 -m pytest tests/test_use_cases.py -v
 
 # Everything:
-python3 -m unittest discover -p "test_*.py" -v
+python3 -m pytest tests/ -v
 ```
 
 ### Pre-commit hook
 
 A git pre-commit hook at `.git/hooks/pre-commit` runs the fast suite
-(173 tests, ~1 second) automatically before every commit. If any test
+(1,150+ tests, ~1 second) automatically before every commit. If any test
 fails, the commit is rejected.
 
 **Location:** `.git/hooks/pre-commit` (not tracked by git — lives only
@@ -49,7 +51,7 @@ in the local clone).
 in the hook file's own header comments. Recreate it, `chmod +x`, done.
 The hook is also referenced in `standing_rules.md` on the NAS.
 
-**Note:** The hook does NOT run the use-case tests (`test_use_cases.py`,
+**Note:** The hook does NOT run the use-case tests (`tests/test_use_cases.py`,
 ~19s) to keep commits fast. Run those manually before major pushes.
 
 ---
@@ -62,17 +64,17 @@ should be the first thing you check after any code change.
 
 ```bash
 # Run all unit tests:
-python3 -m unittest test_audit_regressions test_routing test_config \
-    test_virtual_multizone -v
+python3 -m pytest tests/test_audit_regressions.py tests/test_routing.py tests/test_config.py \
+    tests/test_virtual_multizone.py -v
 
 # Run a single file:
-python3 -m unittest test_routing -v
+python3 -m pytest tests/test_routing.py -v
 
 # Run a single test class:
-python3 -m unittest test_audit_regressions.TestEngineNoBareExcepts -v
+python3 -m pytest tests/test_audit_regressions.py::TestEngineNoBareExcepts -v
 
 # Run a single test method:
-python3 -m unittest test_audit_regressions.TestEngineNoBareExcepts.test_no_except_pass_in_render_loop
+python3 -m pytest tests/test_audit_regressions.py::TestEngineNoBareExcepts::test_no_except_pass_in_render_loop
 ```
 
 There are also unit tests under `tests/` (a subdirectory with its own
@@ -80,52 +82,52 @@ There are also unit tests under `tests/` (a subdirectory with its own
 
 ```bash
 # MIDI parser and pipeline tests:
-python3 -m unittest tests.test_midi_parser tests.test_midi_pipeline -v
+python3 -m pytest tests/test_midi_parser.py tests/test_midi_pipeline.py -v
 
 # Environment sanity checks (NTP, Python version):
-python3 -m unittest tests.test_environment -v
+python3 -m pytest tests/test_environment.py -v
 
 # Diagnostics DB (skipped if psycopg2/DB unavailable):
-python3 -m unittest tests.test_diagnostics -v
+python3 -m pytest tests/test_diagnostics.py -v
 ```
 
-Additional standalone test files in the project root:
+Additional test files in the `tests/` directory:
 
 | File | What it covers |
 |------|----------------|
-| `test_audit_regressions.py` | Logger symbol fixes, PRODUCT_MAP integrity, Emitter ABC, signal handler consolidation, HSB→RGB conversion, BulbDB DSN, MQTT client factory, bare-except replacements, error handling consistency, broadcast_power_off extraction |
-| `test_routing.py` | Server route table integrity, handler existence, pattern matching, route flags, method/segment indexing |
-| `test_config.py` | `_load_config` validation — auth tokens, ports, groups, empty groups, schedule entries |
-| `test_virtual_multizone.py` | VirtualMultizoneEmitter zone routing, fan-out, skip_wake |
-| `test_effects.py` | Every effect's `render()` at multiple zone counts (1, 3, 36, 108) |
-| `test_protocol.py` | LIFX transport protocol constants and message parsing |
-| `test_transport_adapter.py` | Transport adapter signal routing |
-| `test_udp_channel.py` | UDP sender/receiver pack/unpack |
-| `test_multizone_products.py` | Product ID → multizone classification |
-| `test_schedule.py` | Schedule time resolution, day filtering, solar calculations |
-| `test_solar.py` | Sunrise/sunset computation accuracy |
-| `test_fft.py` | FFT windowing and bin mapping |
-| `test_media.py` | MediaManager lifecycle, source start/stop |
-| `test_override.py` | Phone override state machine |
-| `test_cylon_ack.py` | Ack-paced send timing for the cylon effect |
-| `test_e2e_audio.py` | Audio capture → extraction → signal bus (needs ffmpeg) |
-| `test_audio_out.py` | AudioOutEmitter construction, params, lifecycle, registration |
+| `tests/test_audit_regressions.py` | Logger symbol fixes, PRODUCT_MAP integrity, Emitter ABC, signal handler consolidation, HSB→RGB conversion, BulbDB DSN, MQTT client factory, bare-except replacements, error handling consistency, broadcast_power_off extraction |
+| `tests/test_routing.py` | Server route table integrity, handler existence, pattern matching, route flags, method/segment indexing |
+| `tests/test_config.py` | `_load_config` validation — auth tokens, ports, groups, empty groups, schedule entries |
+| `tests/test_virtual_multizone.py` | VirtualMultizoneEmitter zone routing, fan-out, skip_wake |
+| `tests/test_effects.py` | Every effect's `render()` at multiple zone counts (1, 3, 36, 108) |
+| `tests/test_protocol.py` | LIFX transport protocol constants and message parsing |
+| `tests/test_transport_adapter.py` | Transport adapter signal routing |
+| `tests/test_udp_channel.py` | UDP sender/receiver pack/unpack |
+| `tests/test_multizone_products.py` | Product ID → multizone classification |
+| `tests/test_schedule.py` | Schedule time resolution, day filtering, solar calculations |
+| `tests/test_solar.py` | Sunrise/sunset computation accuracy |
+| `tests/test_fft.py` | FFT windowing and bin mapping |
+| `tests/test_media.py` | MediaManager lifecycle, source start/stop |
+| `tests/test_override.py` | Phone override state machine |
+| `tests/test_cylon_ack.py` | Ack-paced send timing for the cylon effect |
+| `tests/test_e2e_audio.py` | Audio capture → extraction → signal bus (needs ffmpeg) |
+| `tests/test_audio_out.py` | AudioOutEmitter construction, params, lifecycle, registration |
 
 To discover and run *everything* (including the slower use-case tests):
 
 ```bash
-python3 -m unittest discover -s . -p "test_*.py" -v
+python3 -m pytest tests/ -v
 ```
 
-This recurses into `tests/` automatically. Expect ~535 tests and ~20 seconds
-on a modern Mac. The 9 pre-existing `plasma2d`/`spectrum2d` failures in
-`test_effects.py` are known issues unrelated to the audit work.
+Expect 1,150+ tests and ~20 seconds on a modern Mac.  The 9 pre-existing
+`plasma2d`/`spectrum2d` failures in `tests/test_effects.py` are known issues
+unrelated to the audit work.
 
 ---
 
 ## Test Infrastructure
 
-### RecordingEmitter (test_use_cases.py)
+### RecordingEmitter (tests/test_use_cases.py)
 
 The key to hardware-free pipeline testing. Implements the full `Emitter`
 interface but writes frames to a list instead of UDP sockets.
@@ -157,13 +159,13 @@ at any time with identical content — no external downloads, no git-lfs.
 | `test_440hz.mp3` | MP3 128kbps | 440 Hz sine (from WAV via ffmpeg) | MP3 codec pipeline |
 | `test_corrupt.mp3` | Random bytes | 4096 bytes of deterministic garbage | Codec error handling |
 
-**If a fixture is missing:** `test_distributed.py` auto-regenerates all
+**If a fixture is missing:** `tests/test_distributed.py` auto-regenerates all
 fixtures on import. The MP3 fixture requires ffmpeg at generation time —
 if ffmpeg is absent, MP3 tests are skipped (not failed).
 
 ---
 
-## Use-Case Tests (test_use_cases.py)
+## Use-Case Tests (tests/test_use_cases.py)
 
 These tests prove that the effect engine works end-to-end as a user would
 experience it. Each test category maps to a real usage scenario.
@@ -326,7 +328,7 @@ params must be silently ignored.
 
 ---
 
-## Distributed Tests (test_distributed.py)
+## Distributed Tests (tests/test_distributed.py)
 
 These tests prove the multi-machine agent system works — capability
 registration, work assignment, wire protocols, and audio/MIDI processing

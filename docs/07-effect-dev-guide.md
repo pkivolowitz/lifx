@@ -5,6 +5,10 @@
 
 ### Architecture Overview
 
+> **Note:** this tree is a simplified view. The actual codebase has additional
+> directories: `emitters/`, `handlers/`, `scheduling/`, `ble/`, `distributed/`,
+> `operators/`, `tools/`. See the project root for the complete layout.
+
 ```
 glowup.py              CLI — argparse, dispatches to subcommand handlers
     │
@@ -268,16 +272,17 @@ must interpolate from one HSBK tuple to another. The choice of *where*
 that interpolation happens (which color space) makes a dramatic visible
 difference.
 
-GlowUp ships two interpolation backends, selectable at runtime:
+GlowUp ships three interpolation backends, selectable at runtime:
 
 ```bash
-python3 glowup.py play flag --ip 192.0.2.62 --lerp lab    # default — perceptually uniform
-python3 glowup.py play flag --ip 192.0.2.62 --lerp hsb    # lightweight fallback
+python3 glowup.py play flag --ip 192.0.2.62 --lerp oklab  # default — best perceptual uniformity
+python3 glowup.py play flag --ip 192.0.2.62 --lerp lab    # classic CIELAB
+python3 glowup.py play flag --ip 192.0.2.62 --lerp hsb    # cheap
 ```
 
 The `--lerp` switch is available on the `play` subcommand and in the
-server configuration (`"lerp": "lab"` or `"lerp": "hsb"` in the config
-JSON). The default is `lab`.
+server configuration (`"lerp": "oklab"`, `"lerp": "lab"`, or `"lerp": "hsb"`
+in the config JSON). The default is `oklab`.
 
 #### The Problem with HSB Interpolation
 

@@ -19,37 +19,41 @@ python3 -m pytest tests/test_effects.py -v
 
 ### Test Modules
 
-**780+ test methods** across 33 test files.  The table below lists every
+**1,150+ test methods** across 36 test files.  The table below lists every
 module; run `python3 -m pytest test_*.py tests/ -v` for the full count.
 
 | Module | Tests | What it covers |
 |--------|------:|----------------|
-| `test_effects.py` | 160 | Every registered effect × {1, 3, 36, 108} zones — frame length, HSBK range, 50-frame stability |
-| `test_use_cases.py` | 17 | End-to-end Controller/Engine/Emitter pipeline integration |
-| `test_effect_contracts.py` | 6 | Effect render contract enforcement (170 subtests) |
-| `test_schedule.py` | 47 | Time parsing, symbolic solar times, overnight wraparound, day filtering |
-| `test_schedule_unification.py` | 17 | Unified schedule config for server and scheduler |
-| `test_config.py` | 28 | Server config validation: auth, ports, groups, MQTT, file errors |
-| `test_override.py` | 19 | DeviceManager override logic: group-level, member-level, clear-and-resume |
-| `test_solar.py` | 11 | Solar calculations for multiple latitudes (polar, equatorial, mid-latitude) |
-| `test_virtual_multizone.py` | 8 | VirtualMultizoneEmitter zone mapping and dispatch |
-| `test_multizone_products.py` | 7 | LIFX product database validation against official registry |
-| `test_routing.py` | 22 | Declarative URL route table consistency and pattern matching |
-| `test_rest_integration.py` | 66 | REST API integration with real HTTP server (security, validation, CRUD) |
-| `test_audit_critical.py` | 52 | Regression tests for critical audit fixes (C1–C17) |
-| `test_audit_medium.py` | 25 | Regression tests for medium-severity audit fixes (M1–M35) |
-| `test_audit_regressions.py` | 66 | Tech debt audit regressions (HSBK, signals, MQTT, logging) |
-| `test_fuzz.py` | 42 | Fuzz testing: random bytes to parsers, validators, and param system |
-| `test_concurrency.py` | 11 | Thread safety under contention (overrides, config, registry) |
-| `test_affinity.py` | 12 | Effect device affinity metadata validation |
-| `test_distributed.py` | 62 | Distributed SOE pipeline, MIDI parsing, audio extraction |
-| `test_fft.py` | 22 | Dual-path FFT with numpy and pure-Python fallback |
-| `test_media.py` | 38 | SignalBus and AudioExtractor pipeline operations |
-| `test_audio_out.py` | 30 | AudioOutEmitter registration, parameters, mute, lifecycle |
-| `test_protocol.py` | 20 | Distributed protocol UDP wire format pack/unpack |
-| `test_transport_adapter.py` | 8 | UDP transport loopback and SignalValue interface |
-| `test_udp_channel.py` | 11 | UDP sender/receiver loopback frame validation |
-| `test_luna_hardware.py` | 23 | Hardware validation for LIFX Luna 700-series matrix (requires device) |
+| `tests/test_effects.py` | 168 | Every registered effect × {1, 3, 36, 108} zones — frame length, HSBK range, 50-frame stability |
+| `tests/test_use_cases.py` | 17 | End-to-end Controller/Engine/Emitter pipeline integration |
+| `tests/test_effect_contracts.py` | 6 | Effect render contract enforcement (170 subtests) |
+| `tests/test_schedule.py` | 47 | Time parsing, symbolic solar times, overnight wraparound, day filtering |
+| `tests/test_schedule_unification.py` | 17 | Unified schedule config for server and scheduler |
+| `tests/test_config.py` | 28 | Server config validation: auth, ports, groups, MQTT, file errors |
+| `tests/test_override.py` | 19 | DeviceManager override logic: group-level, member-level, clear-and-resume |
+| `tests/test_solar.py` | 11 | Solar calculations for multiple latitudes (polar, equatorial, mid-latitude) |
+| `tests/test_virtual_multizone.py` | 8 | VirtualMultizoneEmitter zone mapping and dispatch |
+| `tests/test_multizone_products.py` | 7 | LIFX product database validation against official registry |
+| `tests/test_routing.py` | 22 | Declarative URL route table consistency and pattern matching |
+| `tests/test_rest_integration.py` | 66 | REST API integration with real HTTP server (security, validation, CRUD) |
+| `tests/test_audit_critical.py` | 52 | Regression tests for critical audit fixes (C1–C17) |
+| `tests/test_audit_medium.py` | 25 | Regression tests for medium-severity audit fixes (M1–M35) |
+| `tests/test_audit_regressions.py` | 66 | Tech debt audit regressions (HSBK, signals, MQTT, logging) |
+| `tests/test_fuzz.py` | 42 | Fuzz testing: random bytes to parsers, validators, and param system |
+| `tests/test_concurrency.py` | 11 | Thread safety under contention (overrides, config, registry) |
+| `tests/test_affinity.py` | 12 | Effect device affinity metadata validation |
+| `tests/test_distributed.py` | 62 | Distributed SOE pipeline, MIDI parsing, audio extraction |
+| `tests/test_fft.py` | 22 | Dual-path FFT with numpy and pure-Python fallback |
+| `tests/test_media.py` | 38 | SignalBus and AudioExtractor pipeline operations |
+| `tests/test_audio_out.py` | 30 | AudioOutEmitter registration, parameters, mute, lifecycle |
+| `tests/test_protocol.py` | 20 | Distributed protocol UDP wire format pack/unpack |
+| `tests/test_transport_adapter.py` | 8 | UDP transport loopback and SignalValue interface |
+| `tests/test_udp_channel.py` | 11 | UDP sender/receiver loopback frame validation |
+| `tests/test_luna_hardware.py` | 23 | Hardware validation for LIFX Luna 700-series matrix (requires device) |
+| `tests/test_adapter_base.py` | 117 | Adapter base class lifecycle, MQTT, polling, async |
+| `tests/test_automation.py` | 65 | Automation rules, watchdog, trigger conditions |
+| `tests/test_ble_endpoint.py` | 8 | BLE sensor REST endpoint |
+| `tests/test_engine.py` | 40 | Engine controller lifecycle, play/stop/resume |
 | `tests/test_diagnostics.py` | 13 | PostgreSQL diagnostics subsystem |
 | `tests/test_environment.py` | 3 | System-level environment sanity checks |
 | `tests/test_midi_parser.py` | 36 | MIDI file parser (header, events, edge cases) |

@@ -15,9 +15,16 @@ emitters/
     ├── lifx.py              LIFX LAN protocol driver (first concrete emitter)
     ├── audio_out.py         Audio tone synthesizer (CoreAudio/PortAudio)
     ├── virtual.py           Virtual multizone composite device
+    ├── virtual_grid.py      2D spatial arrangement of matrix and strip devices
     ├── screen.py            ANSI terminal simulator (1D strip)
     └── screen_matrix.py     tkinter simulator (2D matrix)
 ```
+
+VirtualGridEmitter (`emitters/virtual_grid.py`) -- 2D spatial
+arrangement of matrix and strip devices.  Routes pixel frames to
+member devices by cell position.  Supports sparse grids (not all
+cells filled), matrix devices (LIFX Tiles), and strip scanline
+mapping.
 
 **Key design principle:** Emitters are output endpoints.  They receive
 abstract frames from an operator and express them in a specific medium.

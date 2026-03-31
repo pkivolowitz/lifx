@@ -78,11 +78,15 @@ EFFECT_SETTLE_SECONDS: float = 2.0
 #: Expected Luna product IDs (US and International variants).
 LUNA_PRODUCT_IDS: set[int] = {219, 220}
 
+#: Test brightness — 10% to avoid blinding.  Luna at full brightness
+#: in a dark room is physically painful.
+TEST_BRIGHTNESS: int = HSBK_MAX // 10
+
 #: HSBK tuples for test colors.
-RED: tuple[int, int, int, int] = (0, HSBK_MAX, HSBK_MAX, 3500)
-GREEN: tuple[int, int, int, int] = (21845, HSBK_MAX, HSBK_MAX, 3500)
-BLUE: tuple[int, int, int, int] = (43690, HSBK_MAX, HSBK_MAX, 3500)
-WHITE: tuple[int, int, int, int] = (0, 0, HSBK_MAX, 4000)
+RED: tuple[int, int, int, int] = (0, HSBK_MAX, TEST_BRIGHTNESS, 3500)
+GREEN: tuple[int, int, int, int] = (21845, HSBK_MAX, TEST_BRIGHTNESS, 3500)
+BLUE: tuple[int, int, int, int] = (43690, HSBK_MAX, TEST_BRIGHTNESS, 3500)
+WHITE: tuple[int, int, int, int] = (0, 0, TEST_BRIGHTNESS, 4000)
 BLACK: tuple[int, int, int, int] = HSBK_BLACK_DEFAULT
 
 #: Tolerance for HSBK readback comparison.  Firmware may quantize or
@@ -501,14 +505,14 @@ class TestLunaHardware(unittest.TestCase):
         """SetTileEffect(MORPH) with a rainbow palette does not error."""
         dev: LifxDevice = _get_device()
 
-        # Rainbow palette: 6 saturated hues.
+        # Rainbow palette: 6 saturated hues at test brightness.
         palette: list[tuple[int, int, int, int]] = [
-            (0, HSBK_MAX, HSBK_MAX, 3500),         # red
-            (10922, HSBK_MAX, HSBK_MAX, 3500),      # yellow
-            (21845, HSBK_MAX, HSBK_MAX, 3500),      # green
-            (32768, HSBK_MAX, HSBK_MAX, 3500),      # cyan
-            (43690, HSBK_MAX, HSBK_MAX, 3500),      # blue
-            (54613, HSBK_MAX, HSBK_MAX, 3500),      # magenta
+            (0, HSBK_MAX, TEST_BRIGHTNESS, 3500),         # red
+            (10922, HSBK_MAX, TEST_BRIGHTNESS, 3500),      # yellow
+            (21845, HSBK_MAX, TEST_BRIGHTNESS, 3500),      # green
+            (32768, HSBK_MAX, TEST_BRIGHTNESS, 3500),      # cyan
+            (43690, HSBK_MAX, TEST_BRIGHTNESS, 3500),      # blue
+            (54613, HSBK_MAX, TEST_BRIGHTNESS, 3500),      # magenta
         ]
         dev.set_tile_effect(
             TILE_EFFECT_MORPH, speed_ms=3000, duration_ns=0, palette=palette,
@@ -585,14 +589,12 @@ class TestLunaHardware(unittest.TestCase):
 
     # -- 13: Cleanup --------------------------------------------------------
 
-    def test_99_restore_white(self) -> None:
-        """Restore Luna to a neutral white state after testing."""
+    def test_99_power_off(self) -> None:
+        """Power off Luna after testing."""
         dev: LifxDevice = _get_device()
         dev.clear_tile_effect()
-        total: int = dev.zone_count or 0
-        if total > 0:
-            dev.set_tile_zones([WHITE] * total, duration_ms=500)
-            time.sleep(1.0)
+        dev.set_power(False, duration_ms=500)
+        time.sleep(0.5)
         logger.info("Luna restored to neutral white")
 
 

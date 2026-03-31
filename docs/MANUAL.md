@@ -17,7 +17,7 @@ persistence, and ML pipelines.  You don't need all of it.  Start
 where you are and add layers when you need them.
 
 - **[Core](#core)** — Pretty lights from the command line. Start here.
-  - **[Server](#server)** — Always-on Pi with REST API and scheduling.
+  - **[Server](#server)** — Always-on Pi with REST API, scheduling, device registry, adapters, automations, operators, kiosk display.
     - **[Remote Access](#remote-access)** — iOS app, Cloudflare tunnel, Home Assistant, Node-RED.
     - **[Database](#database)** — PostgreSQL logging, diagnostics, dashboard.
     - **[Distributed](#distributed)** — Multi-machine MQTT bus, SOE pipeline, agents.
@@ -40,7 +40,7 @@ box and some bulbs.
 
 **You need:** Python 3.10+, LIFX devices on your LAN.
 
-**You get:** 33 built-in effects, live simulator preview, CLI
+**You get:** 35 built-in effects, live simulator preview, CLI
 control, video recording of effects.
 
 | Section | Description |
@@ -49,7 +49,7 @@ control, video recording of effects.
 | [Requirements](02-requirements.md) | Hardware, software, and network prerequisites |
 | [Quick Start](03-quick-start.md) | Get running in 60 seconds |
 | [CLI Reference](04-cli-reference.md) | discover, effects, identify, play, record, replay |
-| [Built-in Effects](06-effects.md) | All 33 public effects with parameter tables |
+| [Built-in Effects](06-effects.md) | All 35 public effects with parameter tables |
 | [Live Simulator](08-simulator.md) | tkinter preview window (--sim, --sim-only) |
 | [Troubleshooting](14-troubleshooting.md) | Common issues and fixes |
 
@@ -77,6 +77,13 @@ updates.
 | [Scheduler](05-scheduler.md) | Daemon mode, config file, symbolic times, systemd |
 | [REST API Server](11-rest-api.md) | server.py endpoints, auth, SSE, overrides, systemd |
 | [Server Routing & Safety](25-server-routing-safety.md) | Auto-routing via server, emergency power-off, ARP keepalive |
+| [Device Registry](26-device-registry.md) | MAC-based device identity, label resolution, register_device.py |
+| [Adapter Base Classes](27-adapter-base.md) | MqttAdapterBase, PollingAdapterBase, AsyncPollingAdapterBase |
+| [BLE Sensors](28-ble-sensors.md) | BLE sensor daemon, MQTT bridge, ONVIS integration |
+| [Zigbee Adapter](29-zigbee-adapter.md) | Zigbee2MQTT normalization, soil/motion/contact sensors |
+| [Automation & Triggers](30-automation.md) | Sensor-driven rules, watchdog timeouts, CRUD API |
+| [Operators](31-operators.md) | Signal transformers: occupancy, motion gate, triggers |
+| [Kiosk Display](32-kiosk.md) | /home ambient display, setup_clock.sh, portrait mode |
 
 **Back:** [Core](#core) | **Next:** [Remote Access](#remote-access) | [Database](#database) | [Distributed](#distributed)
 
@@ -263,3 +270,10 @@ Every chapter in one flat list, for reference.
 | [MIDI Pipeline](23-midi-pipeline.md) | Core → Server → Distributed → MIDI |
 | [Persistent Services](24-persistent-services.md) | Core → any component |
 | [Server Routing & Safety](25-server-routing-safety.md) | Core → Server |
+| [Device Registry](26-device-registry.md) | Core → Server |
+| [Adapter Base Classes](27-adapter-base.md) | Core → Server → Developer |
+| [BLE Sensors](28-ble-sensors.md) | Core → Server → Distributed |
+| [Zigbee Adapter](29-zigbee-adapter.md) | Core → Server → Distributed |
+| [Automation & Triggers](30-automation.md) | Core → Server |
+| [Operators](31-operators.md) | Core → Server → Developer |
+| [Kiosk Display](32-kiosk.md) | Core → Server |

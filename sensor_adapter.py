@@ -35,22 +35,24 @@ Example::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import logging
-from abc import ABC, abstractmethod
 from typing import Any, Optional
 
+from adapter_base import AdapterBase
 from media import SignalMeta
 
 logger: logging.Logger = logging.getLogger("glowup.sensor_adapter")
 
 
-class SensorAdapter(ABC):
+class SensorAdapter(AdapterBase):
     """Abstract base class for sensor transport adapters.
 
-    Subclasses implement :meth:`start` and :meth:`stop` for their
-    specific transport (MQTT, polling, subprocess, etc.) and call
+    Extends :class:`~adapter_base.AdapterBase` with a signal bus
+    reference and the ``_write_signal`` helper.  Subclasses implement
+    :meth:`start` and :meth:`stop` (inherited as abstract from
+    ``AdapterBase``) for their specific transport and call
     :meth:`_write_signal` to publish normalized data to the bus.
 
     Args:
@@ -67,15 +69,8 @@ class SensorAdapter(ABC):
         Args:
             bus: SignalBus instance for signal writes.
         """
+        super().__init__()
         self._bus: Any = bus
-
-    @abstractmethod
-    def start(self) -> None:
-        """Start the adapter — begin ingesting sensor data."""
-
-    @abstractmethod
-    def stop(self) -> None:
-        """Stop the adapter — release resources and stop ingestion."""
 
     def _write_signal(
         self,

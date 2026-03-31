@@ -24,13 +24,13 @@ Requires ``paho-mqtt`` (already a project dependency for MQTT bridge).
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import json
 import logging
-import time
 from typing import Any, Optional
 
+from adapter_base import MqttAdapterBase
 from media import SignalMeta
 
 logger: logging.Logger = logging.getLogger("glowup.zigbee")
@@ -69,25 +69,12 @@ BOOLEAN_PROPERTIES: frozenset[str] = frozenset({
     "tamper", "battery_low",
 })
 
-# ---------------------------------------------------------------------------
-# Optional dependency check
-# ---------------------------------------------------------------------------
-
-try:
-    import paho.mqtt.client as mqtt
-    _HAS_PAHO: bool = True
-    _PAHO_V2: bool = hasattr(mqtt, "CallbackAPIVersion")
-except ImportError:
-    _HAS_PAHO = False
-    _PAHO_V2 = False
-    mqtt = None  # type: ignore[assignment]
-
 
 # ---------------------------------------------------------------------------
 # ZigbeeAdapter
 # ---------------------------------------------------------------------------
 
-class ZigbeeAdapter:
+class ZigbeeAdapter(MqttAdapterBase):
     """Normalize Zigbee2MQTT payloads into SignalBus signals and MQTT topics.
 
     Args:
@@ -112,102 +99,21 @@ class ZigbeeAdapter:
             broker: MQTT broker address.
             port:   MQTT broker port.
         """
+        z2m_prefix: str = config.get("z2m_prefix", DEFAULT_Z2M_PREFIX)
+        super().__init__(
+            broker=broker,
+            port=port,
+            subscribe_prefix=z2m_prefix,
+            client_id_prefix="glowup-zigbee",
+        )
         self._bus: Any = bus
-        self._broker: str = broker
-        self._port: int = port
-        self._z2m_prefix: str = config.get("z2m_prefix", DEFAULT_Z2M_PREFIX)
         self._glowup_prefix: str = config.get(
             "topic_prefix", DEFAULT_GLOWUP_PREFIX,
         )
-        self._client: Any = None
-        self._running: bool = False
 
-    def start(self) -> None:
-        """Start the MQTT subscriber for Zigbee2MQTT topics."""
-        if not _HAS_PAHO:
-            logger.warning(
-                "paho-mqtt not installed — Zigbee adapter disabled"
-            )
-            return
+    # --- Message handling --------------------------------------------------
 
-        self._running = True
-
-        if _PAHO_V2:
-            self._client = mqtt.Client(
-                mqtt.CallbackAPIVersion.VERSION2,
-                client_id=f"glowup-zigbee-{int(time.time())}",
-            )
-        else:
-            self._client = mqtt.Client(
-                client_id=f"glowup-zigbee-{int(time.time())}",
-            )
-
-        self._client.on_connect = self._on_connect
-        self._client.on_message = self._on_message
-        self._client.connect_async(self._broker, self._port)
-        self._client.loop_start()
-
-        logger.info(
-            "Zigbee adapter started — subscribing to %s/#",
-            self._z2m_prefix,
-        )
-
-    def stop(self) -> None:
-        """Stop the MQTT subscriber."""
-        self._running = False
-        if self._client:
-            self._client.loop_stop()
-            self._client.disconnect()
-        logger.info("Zigbee adapter stopped")
-
-    # --- MQTT callbacks ----------------------------------------------------
-
-    def _on_connect(
-        self,
-        client: Any,
-        userdata: Any,
-        flags: Any,
-        rc: int,
-        properties: Any = None,
-    ) -> None:
-        """Subscribe to all Zigbee2MQTT topics on connect.
-
-        Args:
-            client:     The paho MQTT client.
-            userdata:   User data (unused).
-            flags:      Connection flags.
-            rc:         Return code (0 = success).
-            properties: MQTT v5 properties (unused).
-        """
-        if rc != 0:
-            logger.warning("Zigbee adapter MQTT connect failed: rc=%d", rc)
-            return
-        topic: str = f"{self._z2m_prefix}/#"
-        client.subscribe(topic)
-        logger.info("Zigbee adapter subscribed to %s", topic)
-
-    def _on_message(
-        self,
-        client: Any,
-        userdata: Any,
-        msg: Any,
-    ) -> None:
-        """Parse Z2M message and write normalized signals.
-
-        Args:
-            client:   The paho MQTT client.
-            userdata: User data (unused).
-            msg:      The MQTT message.
-        """
-        try:
-            self._process_message(msg.topic, msg.payload)
-        except Exception as exc:
-            logger.debug(
-                "Zigbee message processing error on %s: %s",
-                msg.topic, exc,
-            )
-
-    def _process_message(self, topic: str, payload: bytes) -> None:
+    def _handle_message(self, topic: str, payload: bytes) -> None:
         """Parse and normalize a single Z2M message.
 
         Args:
@@ -323,6 +229,19 @@ class ZigbeeAdapter:
         """
         return {
             "running": self._running,
-            "z2m_prefix": self._z2m_prefix,
+            "z2m_prefix": self._subscribe_prefix,
             "glowup_prefix": self._glowup_prefix,
         }
+
+    # --- Hooks -------------------------------------------------------------
+
+    def _on_started(self) -> None:
+        """Log Zigbee-specific start message."""
+        logger.info(
+            "Zigbee adapter started — subscribing to %s/#",
+            self._subscribe_prefix,
+        )
+
+    def _on_stopped(self) -> None:
+        """Log Zigbee-specific stop message."""
+        logger.info("Zigbee adapter stopped")

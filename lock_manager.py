@@ -123,6 +123,10 @@ class LockManager:
         # Battery state: abbr → percentage (0-100 integer).
         self._battery: dict[str, int] = {}
 
+        # Last-update epoch timestamps: abbr → time.time() float.
+        # Used by the /api/home/locks endpoint to detect stale data.
+        self._updated_at: dict[str, float] = {}
+
     def start(self) -> None:
         """Open SQLite, restore state, start MQTT subscriber."""
         # Initialize server's _lock_state dict.
@@ -198,6 +202,17 @@ class LockManager:
         """
         return self._battery.get(abbr)
 
+    def get_updated_at(self, abbr: str) -> Optional[float]:
+        """Get epoch timestamp of last lock state update.
+
+        Args:
+            abbr: Lock abbreviation (e.g., ``"FD"``).
+
+        Returns:
+            Unix epoch float, or None if never updated.
+        """
+        return self._updated_at.get(abbr)
+
     def get_occupancy_state(self) -> str:
         """Get current occupancy state from the SignalBus.
 
@@ -263,6 +278,7 @@ class LockManager:
             if prop == "lock_state":
                 locked: bool = payload.strip() == "1"
                 self._server._lock_state[abbr] = locked
+                self._updated_at[abbr] = time.time()
                 self._persist_lock(abbr, locked)
                 logger.debug("Lock %s → %s", abbr, "locked" if locked else "unlocked")
 
@@ -334,17 +350,24 @@ class LockManager:
             return
         try:
             cursor = self._db.execute(
-                "SELECT abbr, locked, battery FROM lock_state"
+                "SELECT abbr, locked, battery, updated_at FROM lock_state"
             )
             for row in cursor.fetchall():
                 abbr: str = row[0]
                 locked_int: Optional[int] = row[1]
                 battery: Optional[int] = row[2]
+                updated_iso: Optional[str] = row[3]
 
                 if locked_int is not None:
                     self._server._lock_state[abbr] = bool(locked_int)
                 if battery is not None:
                     self._battery[abbr] = battery
+                if updated_iso:
+                    try:
+                        dt = datetime.fromisoformat(updated_iso)
+                        self._updated_at[abbr] = dt.timestamp()
+                    except (ValueError, TypeError):
+                        pass
 
             count: int = len(self._server._lock_state)
             if count:

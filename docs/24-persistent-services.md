@@ -54,6 +54,9 @@ The repo includes service files for the most common components:
 | `glowup-server.service` | REST API server | `server.py server.json` |
 | `glowup-scheduler.service` | Standalone scheduler | `scheduler.py /etc/glowup/schedule.json` |
 | `glowup-agent.service` | Distributed worker agent | `distributed/worker_agent.py agent.json` |
+| `glowup-ble-sensor.service` | BLE sensor daemon (runs on broker-2, publishes to MQTT) | `ble/__main__.py` |
+| `zigbee2mqtt.service` | Zigbee2MQTT coordinator service | managed by Z2M |
+| `99-zigbee-dongle.rules` | udev rules for SONOFF Zigbee USB dongle | N/A (udev) |
 
 Copy and edit for your paths:
 

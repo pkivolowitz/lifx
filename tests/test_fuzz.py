@@ -391,7 +391,13 @@ class TestFuzzFftMagnitudes(unittest.TestCase):
                 self.assertGreaterEqual(val, 0.0)
 
     def test_extreme_values(self) -> None:
-        """Samples containing inf, -inf, and extreme floats must not crash."""
+        """Samples containing inf, -inf, and extreme floats must not crash.
+
+        numpy emits RuntimeWarning on extreme FFT inputs — this is
+        expected.  If the warning disappears, something changed in
+        the input sanitization that needs investigation.
+        """
+        import warnings
         extreme_cases: list[list[float]] = [
             [float("inf")] * 64,
             [float("-inf")] * 64,
@@ -401,9 +407,20 @@ class TestFuzzFftMagnitudes(unittest.TestCase):
             [0.0] * 64,
             [1.0, -1.0] * 32,
         ]
-        for samples in extreme_cases:
-            result = _fft_mod.fft_magnitudes(samples)
-            self.assertIsInstance(result, list)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            for samples in extreme_cases:
+                result = _fft_mod.fft_magnitudes(samples)
+                self.assertIsInstance(result, list)
+        # At least one RuntimeWarning expected from inf/extreme inputs.
+        runtime_warnings: list = [
+            w for w in caught if issubclass(w.category, RuntimeWarning)
+        ]
+        self.assertGreater(
+            len(runtime_warnings), 0,
+            "Expected RuntimeWarning from extreme FFT inputs — "
+            "sanitization may have changed",
+        )
 
     def test_empty_input(self) -> None:
         """Empty sample list must return empty result."""

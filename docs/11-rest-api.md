@@ -281,7 +281,17 @@ Authorization: Bearer your-secret-token-here
 | `GET` | `/dashboard` | Web dashboard |
 | `GET` | `/home` | Sensor display dashboard |
 | `GET` | `/api/home/lights` | Light status for home display |
+| `GET` | `/api/home/locks` | Lock states for /home display |
+| `GET` | `/api/home/security` | Alarm panel and door contact states |
+| `GET` | `/api/home/cameras` | NVR camera channel list |
+| `GET` | `/api/home/camera/{channel}` | JPEG snapshot for a camera channel |
+| `GET` | `/api/home/occupancy` | Current home/away occupancy state |
+| `GET` | `/api/home/mode` | Current system mode |
+| `GET` | `/api/home/printer` | Printer status |
+| `GET` | `/api/home/soil` | Soil moisture sensor readings |
 | `GET` | `/api/home/photos` | Photos for home display |
+| `GET` | `/api/operators` | List configured operators and their states |
+| `GET` | `/api/state` | Current server state snapshot |
 | `GET` | `/photos/{filename}` | Serve photo from static/photos/ |
 
 **Examples:**

@@ -32,18 +32,18 @@ preserves last-known values — it does NOT flip signals to unknown on timeout.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.2"
+__version__ = "1.3"
 
 import asyncio
 import json
 import logging
 import os
 import stat
-import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
 
+from adapter_base import AsyncPollingAdapterBase
 from media import SignalMeta
 
 logger: logging.Logger = logging.getLogger("glowup.vivint")
@@ -119,7 +119,7 @@ ALARM_STATE_ARMED_AWAY: int = 4
 # VivintAdapter
 # ---------------------------------------------------------------------------
 
-class VivintAdapter:
+class VivintAdapter(AsyncPollingAdapterBase):
     """Reads lock state from Vivint cloud and writes to SignalBus + MQTT.
 
     Args:
@@ -141,6 +141,11 @@ class VivintAdapter:
             bus:         SignalBus instance for signal writes.
             mqtt_client: Optional paho MQTT client for MQTT publishing.
         """
+        super().__init__(
+            thread_name="vivint-adapter",
+            reconnect_delay=RECONNECT_DELAY,
+            max_reconnect_delay=MAX_RECONNECT_DELAY,
+        )
         self._config: dict[str, Any] = config
         self._bus: Any = bus
         self._mqtt_client: Any = mqtt_client
@@ -158,10 +163,7 @@ class VivintAdapter:
         # Config format: {"locks": {"front_door_lock": "Front Door", ...}}
         self._lock_names: dict[str, str] = config.get("locks", {})
 
-        self._running: bool = False
-        self._thread: Optional[threading.Thread] = None
         self._account: Any = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Last known states — preserved across reconnects and stale periods.
         self._last_lock_state: dict[str, float] = {}
@@ -173,84 +175,28 @@ class VivintAdapter:
         # Wireless sensor states: name → {is_on, battery, sensor_type, ...}.
         self._sensor_states: dict[str, dict[str, Any]] = {}
 
-    def start(self) -> None:
-        """Start the Vivint adapter in a background thread."""
+    def _check_prerequisites(self) -> bool:
+        """Check vivintpy, credentials, and lock config."""
         if not _HAS_VIVINTPY:
             logger.warning(
                 "vivintpy not installed — Vivint adapter disabled. "
                 "Install with: pip install vivintpy"
             )
-            return
+            return False
 
         if not self._username or not self._password:
             logger.error(
                 "Vivint adapter requires username and password in config"
             )
-            return
+            return False
 
         if not self._lock_names:
             logger.warning("No locks configured in vivint section")
-            return
+            return False
 
-        self._running = True
-        self._thread = threading.Thread(
-            target=self._run_loop,
-            daemon=True,
-            name="vivint-adapter",
-        )
-        self._thread.start()
-        logger.info(
-            "Vivint adapter started — %d lock(s) configured",
-            len(self._lock_names),
-        )
+        return True
 
-    def stop(self) -> None:
-        """Stop the adapter and disconnect from Vivint."""
-        self._running = False
-        if self._loop:
-            # Schedule disconnect on the event loop.
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    self._disconnect(), self._loop,
-                )
-            except Exception:
-                pass
-        if self._thread:
-            self._thread.join(timeout=10.0)
-        logger.info("Vivint adapter stopped")
-
-    # --- Internal event loop -----------------------------------------------
-
-    def _run_loop(self) -> None:
-        """Background thread: runs asyncio event loop for vivintpy."""
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
-        try:
-            self._loop.run_until_complete(self._main_loop())
-        except Exception as exc:
-            logger.error("Vivint adapter loop crashed: %s", exc)
-        finally:
-            self._loop.close()
-
-    async def _main_loop(self) -> None:
-        """Async main loop: connect, subscribe, poll."""
-        reconnect_delay: float = RECONNECT_DELAY
-
-        while self._running:
-            try:
-                await self._connect()
-                reconnect_delay = RECONNECT_DELAY  # Reset on success.
-                await self._poll_loop()
-            except Exception as exc:
-                logger.error(
-                    "Vivint connection error: %s — retrying in %.0fs",
-                    exc, reconnect_delay,
-                )
-                await asyncio.sleep(reconnect_delay)
-                # Exponential backoff, capped.
-                reconnect_delay = min(
-                    reconnect_delay * 2.0, MAX_RECONNECT_DELAY,
-                )
+    # --- AsyncPollingAdapterBase interface ----------------------------------
 
     async def _connect(self) -> None:
         """Authenticate and connect to Vivint cloud.
@@ -308,6 +254,31 @@ class VivintAdapter:
             except Exception:
                 pass
             self._account = None
+
+    async def _run_cycle(self) -> None:
+        """Periodically read lock state and refresh the auth token.
+
+        Lock state is polled every ``_poll_interval`` seconds.  The refresh
+        token is re-saved every ``TOKEN_REFRESH_INTERVAL`` seconds to keep
+        it alive across restarts.
+        """
+        last_token_refresh: float = time.time()
+
+        while self._running:
+            await asyncio.sleep(self._poll_interval)
+            if not self._running:
+                break
+            try:
+                await self._read_locks()
+            except Exception as exc:
+                logger.warning("Vivint poll error: %s", exc)
+
+            # Proactively refresh and persist the token.
+            now: float = time.time()
+            if now - last_token_refresh >= TOKEN_REFRESH_INTERVAL:
+                self._save_token()
+                last_token_refresh = now
+                logger.debug("Vivint refresh token persisted")
 
     # --- PubNub real-time callbacks ------------------------------------------
 
@@ -384,31 +355,6 @@ class VivintAdapter:
             except Exception as exc:
                 logger.warning("PubNub sensor error for %s: %s", device.name, exc)
         return _on_sensor_update
-
-    async def _poll_loop(self) -> None:
-        """Periodically read lock state and refresh the auth token.
-
-        Lock state is polled every ``_poll_interval`` seconds.  The refresh
-        token is re-saved every ``TOKEN_REFRESH_INTERVAL`` seconds to keep
-        it alive across restarts.
-        """
-        last_token_refresh: float = time.time()
-
-        while self._running:
-            await asyncio.sleep(self._poll_interval)
-            if not self._running:
-                break
-            try:
-                await self._read_locks()
-            except Exception as exc:
-                logger.warning("Vivint poll error: %s", exc)
-
-            # Proactively refresh and persist the token.
-            now: float = time.time()
-            if now - last_token_refresh >= TOKEN_REFRESH_INTERVAL:
-                self._save_token()
-                last_token_refresh = now
-                logger.debug("Vivint refresh token persisted")
 
     # --- Token persistence --------------------------------------------------
 
@@ -676,3 +622,16 @@ class VivintAdapter:
             },
             "sensors": self._sensor_states,
         }
+
+    # --- Hooks -------------------------------------------------------------
+
+    def _on_started(self) -> None:
+        """Log Vivint-specific start message."""
+        logger.info(
+            "Vivint adapter started — %d lock(s) configured",
+            len(self._lock_names),
+        )
+
+    def _on_stopped(self) -> None:
+        """Log Vivint-specific stop message."""
+        logger.info("Vivint adapter stopped")

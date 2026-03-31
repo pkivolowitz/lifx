@@ -1760,7 +1760,9 @@ class LifxDevice:
 
         width: int = self.matrix_width or 8
         height: int = self.matrix_height or 8
-        total: int = width * height
+        tiles: int = self.tile_count or 1
+        pixels_per_tile: int = width * height
+        total: int = pixels_per_tile * tiles
 
         # Pad or trim to exact device pixel count.
         if len(colors) < total:
@@ -1768,14 +1770,14 @@ class LifxDevice:
         elif len(colors) > total:
             colors = colors[:total]
 
-        if total <= TILE_PIXELS_PER_PACKET:
-            # Single-packet path (Luna, Candle, Tile — 64 or fewer zones).
+        if tiles == 1 and pixels_per_tile <= TILE_PIXELS_PER_PACKET:
+            # Single-tile, single-packet path (Luna, Candle, one Tile).
             self._send_set64(
                 tile_index=0, colors=colors, width=width,
                 duration_ms=duration_ms, fb_index=FB_DISPLAY,
             )
-        else:
-            # Multi-packet path (Ceiling = 128 zones).
+        elif tiles == 1:
+            # Single-tile, multi-packet path (Ceiling = 128 zones).
             # Write to temp buffer in row batches, then copy to display.
             rows_per_batch: int = TILE_PIXELS_PER_PACKET // width
             for row_start in range(0, height, rows_per_batch):
@@ -1793,6 +1795,17 @@ class LifxDevice:
                 tile_index=0, width=width, height=height,
                 duration_ms=duration_ms,
             )
+        else:
+            # Multi-tile chain — send Set64 per tile.  Each tile gets
+            # its own slice of the color array.
+            for t in range(tiles):
+                start: int = t * pixels_per_tile
+                end: int = start + pixels_per_tile
+                tile_colors: list[tuple[int, int, int, int]] = colors[start:end]
+                self._send_set64(
+                    tile_index=t, colors=tile_colors, width=width,
+                    duration_ms=duration_ms, fb_index=FB_DISPLAY,
+                )
 
     def _send_set64(
         self,

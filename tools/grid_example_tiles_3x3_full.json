@@ -1,0 +1,17 @@
+{
+    "name": "3x3 Full Tile Wall",
+    "dimensions": [3, 3],
+    "member": {
+        "product": "Tile",
+        "zones": 1,
+        "pixels_per_zone": 64,
+        "matrix": [8, 8],
+        "color": true,
+        "kelvin_range": [1500, 9000]
+    },
+    "cells": {
+        "0,0": "Tile 1", "1,0": "Tile 2", "2,0": "Tile 3",
+        "0,1": "Tile 4", "1,1": "Tile 5", "2,1": "Tile 6",
+        "0,2": "Tile 7", "1,2": "Tile 8", "2,2": "Tile 9"
+    }
+}

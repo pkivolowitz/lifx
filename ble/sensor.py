@@ -72,6 +72,10 @@ RECONNECT_DELAY: float = 5.0
 # Maximum reconnect backoff.
 MAX_RECONNECT_DELAY: float = 60.0
 
+# BlueZ only allows one BLE scan at a time.  This lock serializes
+# scan+connect across all device monitor tasks.
+_scan_lock: asyncio.Lock = asyncio.Lock()
+
 # Seconds between status publishes.
 STATUS_INTERVAL: float = 60.0
 
@@ -85,6 +89,15 @@ CHAR_HUMIDITY: str = "00000010-0000-1000-8000-0026bb765291"
 PAIR_VERIFY_UUID: str = "0000004e-0000-1000-8000-0026bb765291"
 PAIR_VERIFY_IID: int = 0x0023
 IID_DESC_UUID: str = "dc46f0fe-81d2-4616-b5d9-6abdd796939a"
+
+# Known IIDs for ONVIS SMS2 — both units have identical firmware.
+# Used as fallback when descriptor reads fail (they can desync the
+# encrypted session by performing unencrypted reads post-verify).
+SMS2_KNOWN_IIDS: dict[str, int] = {
+    CHAR_HUMIDITY: 2643,
+    CHAR_MOTION: 3074,
+    CHAR_TEMPERATURE: 2723,
+}
 OP_WRITE: int = 0x02
 OP_READ: int = 0x03
 HAP_VALUE: int = 0x01
@@ -398,7 +411,11 @@ async def pair_verify(
         )
 
         logger.info("Pair-verify complete — encrypted session established")
-        return HapEncryptedSession(client, c2a, a2c)
+        session = HapEncryptedSession(client, c2a, a2c)
+        # Continue TID sequence from pair-verify so the accessory
+        # doesn't see a TID reset (some firmware rejects reused TIDs).
+        session._tid = tid_ctr[0]
+        return session
 
     except Exception as exc:
         logger.error("Pair-verify failed: %s", exc, exc_info=True)
@@ -411,13 +428,39 @@ async def pair_verify(
 
 async def discover_sensor_iids(
     client,
+    use_known: bool = True,
 ) -> dict[str, int]:
     """Discover IIDs for sensor characteristics.
+
+    When *use_known* is True and the device matches a known IID table
+    (ONVIS SMS2), returns hardcoded IIDs without any descriptor reads.
+    This avoids unencrypted GATT operations that can desync the
+    encrypted HAP session established by pair-verify.
+
+    Args:
+        client: Connected BleakClient.
+        use_known: If True, prefer SMS2_KNOWN_IIDS over descriptor reads.
 
     Returns:
         Dict mapping characteristic UUID to IID.
     """
-    result: dict[str, int] = {}
+    # Check if all sensor UUIDs match a known IID table.
+    present_uuids: set[str] = set()
+    for svc in client.services:
+        for ch in svc.characteristics:
+            if ch.uuid in SENSOR_NAMES:
+                present_uuids.add(ch.uuid)
+
+    if use_known and present_uuids and present_uuids <= set(SMS2_KNOWN_IIDS):
+        result: dict[str, int] = {
+            u: SMS2_KNOWN_IIDS[u] for u in present_uuids
+        }
+        for u, iid in result.items():
+            logger.info("  %s: IID=%d (known)", SENSOR_NAMES[u], iid)
+        return result
+
+    # Fallback: read IID descriptors (may desync encrypted session).
+    result = {}
     for svc in client.services:
         for ch in svc.characteristics:
             if ch.uuid in SENSOR_NAMES:
@@ -522,11 +565,13 @@ async def monitor_device(
     except ImportError:
         raise ImportError("pip install bleak")
 
-    logger.info("Scanning for %s (%s)...", label, address)
-    ble_dev = await BleakScanner.find_device_by_address(address, timeout=15)
-    if ble_dev is None:
-        logger.warning("%s not found", label)
-        return
+    # Serialize scan+connect — BlueZ rejects concurrent scans.
+    async with _scan_lock:
+        logger.info("Scanning for %s (%s)...", label, address)
+        ble_dev = await BleakScanner.find_device_by_address(address, timeout=15)
+        if ble_dev is None:
+            logger.warning("%s not found", label)
+            return
 
     async with BleakClient(ble_dev, timeout=30) as client:
         logger.info("Connected to %s", label)
@@ -542,6 +587,12 @@ async def monitor_device(
         if session is None:
             logger.error("Pair-verify failed for %s", label)
             return
+
+        # Allow the accessory firmware to finish transitioning from
+        # pair-verify to encrypted session mode.  Without this delay,
+        # freshly paired ONVIS SMS2 units reject the first encrypted
+        # read with ATT 0x0E.
+        await asyncio.sleep(3.0)
 
         # Discover sensor IIDs.
         iids: dict[str, int] = await discover_sensor_iids(client)
@@ -643,6 +694,21 @@ async def monitor_device(
     }))
 
 
+async def _staggered_start(
+    delay: float,
+    coro_func: Any,
+    *args: Any,
+) -> None:
+    """Wait *delay* seconds then call *coro_func* with *args*.
+
+    Used to stagger BLE device monitor launches so concurrent
+    scans don't collide on BlueZ.
+    """
+    if delay > 0:
+        await asyncio.sleep(delay)
+    await coro_func(*args)
+
+
 async def _monitor_with_reconnect(
     label: str,
     address: str,
@@ -671,6 +737,121 @@ async def _monitor_with_reconnect(
         delay = min(delay * 1.5, MAX_RECONNECT_DELAY)
 
 
+async def _monitor_gsn(
+    gsn_devices: dict[str, str],
+    publisher: MqttPublisher,
+    watchdog_seconds: float = 120.0,
+) -> None:
+    """Monitor Thread-capable devices via passive GSN scanning.
+
+    Watches BLE advertisements for GSN (Global State Number) changes.
+    When a device's GSN increments, motion=1 is published.  A watchdog
+    publishes motion=0 after no GSN change for *watchdog_seconds*.
+
+    No GATT connection, no encryption — purely passive advertisement
+    scanning.  Works with SMS2/Thread sensors that shut down HAP-BLE
+    GATT after commissioning.
+
+    Args:
+        gsn_devices:      Dict mapping device label → BLE address.
+        publisher:        MQTT publisher instance.
+        watchdog_seconds: Seconds of no GSN change before motion=0.
+    """
+    try:
+        from bleak import BleakScanner
+    except ImportError:
+        raise ImportError("pip install bleak")
+
+    from .scanner import APPLE_COMPANY_ID, HOMEKIT_TYPE
+
+    # Track last-seen GSN and motion state per device.
+    last_gsn: dict[str, int] = {}
+    motion_active: dict[str, bool] = {}
+    last_change_t: dict[str, float] = {}
+    # Reverse lookup: BLE address → label.
+    addr_to_label: dict[str, str] = {
+        addr.upper(): label for label, addr in gsn_devices.items()
+    }
+
+    for label in gsn_devices:
+        motion_active[label] = False
+        last_change_t[label] = time.time()
+
+    logger.info(
+        "GSN monitor starting — %d device(s): %s",
+        len(gsn_devices), ", ".join(gsn_devices.keys()),
+    )
+
+    def _on_advertisement(device, adv_data) -> None:
+        """Process BLE advertisements for GSN changes."""
+        addr: str = device.address.upper()
+        if addr not in addr_to_label:
+            return
+
+        apple_data: Optional[bytes] = adv_data.manufacturer_data.get(
+            APPLE_COMPANY_ID
+        )
+        if apple_data is None:
+            return
+
+        # Parse GSN from HomeKit sub-message within Apple data.
+        pos: int = 0
+        while pos < len(apple_data) - 1:
+            sub_type: int = apple_data[pos]
+            sub_len: int = apple_data[pos + 1]
+            pos += 2
+            if sub_type == HOMEKIT_TYPE and sub_len >= 11:
+                # GSN is at offset 9-10 (LE uint16) within the payload.
+                gsn: int = struct.unpack_from("<H", apple_data, pos + 9)[0]
+                label: str = addr_to_label[addr]
+
+                prev: Optional[int] = last_gsn.get(label)
+                if prev is not None and gsn != prev:
+                    # GSN changed — motion detected.
+                    publisher.publish(label, "motion", "1")
+                    motion_active[label] = True
+                    last_change_t[label] = time.time()
+                    logger.info("%s GSN %d→%d — motion", label, prev, gsn)
+                elif prev is None:
+                    logger.info(
+                        "%s initial GSN=%d", label, gsn,
+                    )
+                last_gsn[label] = gsn
+                return
+            pos += sub_len
+
+    scanner = BleakScanner(detection_callback=_on_advertisement)
+    await scanner.start()
+    logger.info("GSN scanner running")
+
+    # Publish initial status for all GSN devices.
+    for label, addr in gsn_devices.items():
+        publisher.publish(label, "status", json.dumps({
+            "state": "gsn_monitoring",
+            "address": addr,
+            "mode": "passive_gsn",
+            "sensors": ["motion"],
+            "timestamp": time.time(),
+        }))
+
+    try:
+        while True:
+            await asyncio.sleep(5.0)
+            # Watchdog: clear motion if no GSN change for a while.
+            now: float = time.time()
+            for label in gsn_devices:
+                if motion_active.get(label) and (
+                    now - last_change_t.get(label, 0) > watchdog_seconds
+                ):
+                    publisher.publish(label, "motion", "0")
+                    motion_active[label] = False
+                    logger.info("%s watchdog — motion cleared", label)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await scanner.stop()
+
+
 async def run_daemon(
     config_path: str = "ble_pairing.json",
     broker: str = DEFAULT_BROKER,
@@ -679,40 +860,71 @@ async def run_daemon(
 ) -> None:
     """Run the BLE sensor daemon with concurrent multi-device support.
 
-    Each paired device gets its own monitor task with independent
-    reconnect logic.  All tasks run concurrently via asyncio.gather.
+    Devices with ``"mode": "gsn"`` are monitored via passive
+    advertisement scanning (GSN changes = motion).  All other paired
+    devices use the traditional encrypted GATT polling path.
+
+    Each GATT device gets its own monitor task with independent
+    reconnect logic.  All GSN devices share a single scanner task.
     """
     with open(config_path) as f:
         pairing: dict = json.load(f)
 
-    paired: list[str] = [
-        label
-        for label, dev in pairing.get("devices", {}).items()
-        if dev.get("paired")
-    ]
-    if not paired:
+    devices: dict[str, dict] = pairing.get("devices", {})
+
+    # Split devices by mode.
+    gatt_devices: list[str] = []
+    gsn_devices: dict[str, str] = {}  # label → address
+
+    for label, dev in devices.items():
+        if not dev.get("paired"):
+            continue
+        mode: str = dev.get("mode", "gatt")
+        if mode == "gsn":
+            gsn_devices[label] = dev["address"]
+        else:
+            gatt_devices.append(label)
+
+    total: int = len(gatt_devices) + len(gsn_devices)
+    if total == 0:
         logger.error("No paired devices in %s", config_path)
         return
 
     publisher = MqttPublisher(broker=broker, port=mqtt_port)
     publisher.connect()
 
-    logger.info(
-        "BLE sensor daemon starting — %d device(s): %s",
-        len(paired), ", ".join(paired),
-    )
+    parts: list[str] = []
+    if gatt_devices:
+        parts.append(f"{len(gatt_devices)} GATT: {', '.join(gatt_devices)}")
+    if gsn_devices:
+        parts.append(
+            f"{len(gsn_devices)} GSN: {', '.join(gsn_devices.keys())}"
+        )
+    logger.info("BLE sensor daemon starting — %s", " | ".join(parts))
 
-    # Launch one monitor task per device — they run concurrently.
     tasks: list[asyncio.Task] = []
-    for label in paired:
-        address: str = pairing["devices"][label]["address"]
+
+    # Launch GATT monitor tasks (existing path).
+    LAUNCH_STAGGER: float = 3.0
+    for i, label in enumerate(gatt_devices):
+        address: str = devices[label]["address"]
         task: asyncio.Task = asyncio.create_task(
-            _monitor_with_reconnect(
-                label, address, pairing, publisher, poll_interval
+            _staggered_start(
+                i * LAUNCH_STAGGER,
+                _monitor_with_reconnect,
+                label, address, pairing, publisher, poll_interval,
             ),
             name=f"ble-{label}",
         )
         tasks.append(task)
+
+    # Launch GSN scanner task if any GSN devices exist.
+    if gsn_devices:
+        gsn_task: asyncio.Task = asyncio.create_task(
+            _monitor_gsn(gsn_devices, publisher),
+            name="ble-gsn-scanner",
+        )
+        tasks.append(gsn_task)
 
     try:
         await asyncio.gather(*tasks)

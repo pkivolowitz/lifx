@@ -341,8 +341,8 @@ class MediaSource(ABC):
             try:
                 self._process.kill()
                 self._process.wait(timeout=3.0)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Process cleanup: %s", exc)
             self._process = None
 
     def _reader_loop(self) -> None:
@@ -915,15 +915,15 @@ class AudioStreamServer:
         if self._server_sock is not None:
             try:
                 self._server_sock.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Server socket cleanup: %s", exc)
             self._server_sock = None
         with self._lock:
             for client in self._clients:
                 try:
                     client.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Client socket cleanup: %s", exc)
             self._clients.clear()
         if self._accept_thread is not None:
             self._accept_thread.join(timeout=3.0)
@@ -948,8 +948,8 @@ class AudioStreamServer:
             for client in dead:
                 try:
                     client.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Dead client cleanup: %s", exc)
                 self._clients.remove(client)
                 logger.info("Audio stream client disconnected")
 
