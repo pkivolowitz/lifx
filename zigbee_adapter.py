@@ -110,6 +110,8 @@ class ZigbeeAdapter(MqttAdapterBase):
         self._glowup_prefix: str = config.get(
             "topic_prefix", DEFAULT_GLOWUP_PREFIX,
         )
+        # Optional power logger — set by server.py after construction.
+        self._power_logger: Any = None
 
     # --- Message handling --------------------------------------------------
 
@@ -160,6 +162,10 @@ class ZigbeeAdapter(MqttAdapterBase):
                     transport=TRANSPORT,
                 ))
             self._bus.write(signal_name, normalized)
+
+            # Log power readings if a power logger is attached.
+            if self._power_logger is not None:
+                self._power_logger.record(friendly_name, key, normalized)
 
             # Publish to GlowUp MQTT topic for remote subscribers.
             if self._client:

@@ -84,6 +84,8 @@ updates.
 | [Automation & Triggers](30-automation.md) | Sensor-driven rules, watchdog timeouts, CRUD API |
 | [Operators](31-operators.md) | Signal transformers: occupancy, motion gate, triggers |
 | [Kiosk Display](32-kiosk.md) | /home ambient display, setup_clock.sh, portrait mode |
+| [HDHomeRun Adapter](33-hdhr-adapter.md) | Network tuner integration, signal diagnostics, channel lineup |
+| [Power Monitoring](34-power-monitoring.md) | Smart plug power tracking, cost charts, anomaly detection, on/off control |
 
 **Back:** [Core](#core) | **Next:** [Remote Access](#remote-access) | [Database](#database) | [Distributed](#distributed)
 

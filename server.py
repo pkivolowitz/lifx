@@ -278,6 +278,14 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_home_printer", requires_auth=False),
     _Route("GET", ("api", "home", "soil"),
            "_handle_get_home_soil", requires_auth=False),
+    _Route("GET", ("power",),
+           "_handle_get_power_page", requires_auth=False),
+    _Route("GET", ("api", "power", "readings"),
+           "_handle_get_power_readings", requires_auth=False),
+    _Route("GET", ("api", "power", "summary"),
+           "_handle_get_power_summary", requires_auth=False),
+    _Route("GET", ("api", "power", "devices"),
+           "_handle_get_power_devices", requires_auth=False),
     _Route("GET", ("api", "operators"),
            "_handle_get_operators", requires_auth=True),
     _Route("GET", ("photos", "{filename}"),
@@ -533,6 +541,7 @@ class GlowUpRequestHandler(
     lock_manager: Optional[Any] = None
     ble_adapter: Optional[Any] = None
     signal_bus: Optional[SignalBus] = None
+    power_logger: Optional[Any] = None
 
     # Active /api/command/identify pulses: {ip: stop_event}.
     # Populated by _handle_post_command_identify; cleared when pulse ends.
@@ -1733,6 +1742,19 @@ def main() -> None:
                 ble_adpt.start()
                 GlowUpRequestHandler.ble_adapter = ble_adpt
 
+            # Power logger — SQLite storage for smart plug readings.
+            try:
+                from power_logger import PowerLogger
+                config_dir_local: str = os.path.dirname(
+                    GlowUpRequestHandler.config_path or "/etc/glowup/server.json"
+                )
+                power_db_path: str = os.path.join(config_dir_local, "power.db")
+                power_log = PowerLogger(db_path=power_db_path)
+                GlowUpRequestHandler.power_logger = power_log
+            except Exception as exc:
+                logging.warning("Power logger unavailable: %s", exc)
+                power_log = None
+
             # Zigbee adapter (for Z2M devices — motion, contact, temp).
             z_cfg: dict = config.get("zigbee", {})
             if z_cfg.get("enabled") and _MQTT_AVAILABLE and _HAS_ZIGBEE:
@@ -1746,6 +1768,9 @@ def main() -> None:
                     broker=z_broker,
                     port=z_port,
                 )
+                # Attach power logger so plug readings get stored.
+                if power_log is not None:
+                    zigbee_adapter._power_logger = power_log
                 zigbee_adapter.start()
 
             # Vivint adapter (for lock state — read-only cloud API).

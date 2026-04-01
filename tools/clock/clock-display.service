@@ -1,0 +1,26 @@
+# GlowUp standalone clock — Chromium kiosk display.
+# Points at local HTTP server (localhost:8080).
+# Restart=always recovers from Chromium crashes or OOM kills.
+# Requires graphical session (labwc/Wayland or X11).
+
+[Unit]
+Description=GlowUp Clock Display (Chromium Kiosk)
+After=clock-server.service graphical.target
+Wants=clock-server.service
+# Wait for display server — Chromium needs it.
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=simple
+# CHROMIUM_BIN is set by build_clock.sh during setup (chromium or chromium-browser).
+ExecStart=/bin/sh -c 'exec ${CHROMIUM_BIN:-chromium} --kiosk --noerrdialogs --disable-session-crashed-bubble --disable-infobars --disable-translate --password-store=basic --ozone-platform=wayland http://127.0.0.1:8080/'
+User=a
+Restart=always
+RestartSec=5
+Environment=DISPLAY=:0
+Environment=CHROMIUM_BIN=chromium
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target

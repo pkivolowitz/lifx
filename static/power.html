@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlowUp Power Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+:root {
+    --bg: #1a1410;
+    --card-bg: rgba(255,255,255,0.04);
+    --text: #c4b49a;
+    --label: #8a7a60;
+    --gold: #c4a44a;
+    --green: #6aaa90;
+    --red: #c45a3a;
+    --border: rgba(196,164,74,0.15);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "SF Mono", "Menlo", "Consolas", monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    padding: 24px;
+}
+h1 {
+    font-size: 1.8rem;
+    font-weight: 300;
+    color: var(--gold);
+    margin-bottom: 24px;
+}
+.stats-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+.stat-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 24px;
+    flex: 1;
+    min-width: 140px;
+}
+.stat-value {
+    font-family: var(--mono);
+    font-size: 2rem;
+    font-weight: 200;
+    color: var(--gold);
+}
+.stat-unit {
+    font-size: 0.9rem;
+    color: var(--label);
+    margin-left: 4px;
+}
+.stat-label {
+    font-size: 0.8rem;
+    color: var(--label);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+.chart-container {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 24px;
+}
+.chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+.chart-title {
+    font-size: 1.1rem;
+    color: var(--text);
+}
+.chart-controls {
+    display: flex;
+    gap: 8px;
+}
+.chart-btn {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    color: var(--label);
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+.chart-btn.active {
+    color: var(--gold);
+    border-color: var(--gold);
+}
+.device-select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    margin-bottom: 16px;
+}
+/* Device control switches. */
+.controls-row {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.control-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 24px;
+    flex: 1;
+    min-width: 160px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+.control-label {
+    font-size: 0.95rem;
+    color: var(--text);
+    font-weight: 500;
+}
+.control-power {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    color: var(--label);
+    margin-top: 2px;
+}
+/* Toggle switch. */
+.toggle {
+    position: relative;
+    width: 48px;
+    height: 26px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: #3a3020;
+    border-radius: 13px;
+    transition: background 0.3s ease;
+}
+.toggle-slider::before {
+    content: "";
+    position: absolute;
+    height: 20px;
+    width: 20px;
+    left: 3px;
+    bottom: 3px;
+    background: var(--label);
+    border-radius: 50%;
+    transition: transform 0.3s ease, background 0.3s ease;
+}
+.toggle input:checked + .toggle-slider {
+    background: rgba(106, 170, 144, 0.3);
+}
+.toggle input:checked + .toggle-slider::before {
+    transform: translateX(22px);
+    background: var(--green);
+}
+
+/* Anomaly list. */
+.anomaly-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.anomaly-item {
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.anomaly-item.warning {
+    background: rgba(212, 134, 74, 0.15);
+    border: 1px solid rgba(212, 134, 74, 0.3);
+    color: #d4864a;
+}
+.anomaly-item.alert {
+    background: rgba(196, 90, 58, 0.15);
+    border: 1px solid rgba(196, 90, 58, 0.3);
+    color: var(--red);
+}
+.anomaly-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.anomaly-item.warning .anomaly-dot { background: #d4864a; }
+.anomaly-item.alert .anomaly-dot { background: var(--red); }
+
+.cost-note {
+    font-size: 0.8rem;
+    color: var(--label);
+    margin-top: 8px;
+}
+</style>
+</head>
+<body>
+
+<h1>Power Monitor</h1>
+
+<div style="margin-bottom: 16px;">
+    <select id="deviceSelect" class="device-select">
+        <option value="">All Devices</option>
+    </select>
+</div>
+
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-value" id="currentWatts">--</div>
+        <div class="stat-label">Current Draw</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="voltage">--</div>
+        <div class="stat-label">Voltage</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="current">--</div>
+        <div class="stat-label">Current</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="avgWatts">--</div>
+        <div class="stat-label">7-Day Avg</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="peakWatts">--</div>
+        <div class="stat-label">7-Day Peak</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="totalKwh">--</div>
+        <div class="stat-label">7-Day Energy</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="totalCost">--</div>
+        <div class="stat-label">7-Day Cost</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="projectedCost">--</div>
+        <div class="stat-label">Projected 7-Day</div>
+    </div>
+</div>
+
+<div class="chart-container">
+    <div class="chart-header">
+        <div class="chart-title">Power Draw</div>
+        <div class="chart-controls">
+            <button class="chart-btn active" data-hours="1" data-res="10">1h</button>
+            <button class="chart-btn" data-hours="6" data-res="60">6h</button>
+            <button class="chart-btn" data-hours="24" data-res="300">24h</button>
+            <button class="chart-btn" data-hours="168" data-res="1800">7d</button>
+        </div>
+    </div>
+    <div style="position:relative;height:300px"><canvas id="powerChart"></canvas></div>
+</div>
+
+<!-- Device controls — on/off switches per plug. -->
+<div class="chart-container" id="controlsSection">
+    <div class="chart-header">
+        <div class="chart-title">Device Controls</div>
+    </div>
+    <div id="controlsRow" class="controls-row"></div>
+</div>
+
+<!-- Cost breakdown — daily bar chart. -->
+<div class="chart-container">
+    <div class="chart-header">
+        <div class="chart-title">Daily Cost</div>
+    </div>
+    <div style="position:relative;height:200px"><canvas id="costChart"></canvas></div>
+</div>
+
+<!-- Usage heatmap — hour-of-day vs day-of-week. -->
+<div class="chart-container" id="heatmapSection" style="display:none">
+    <div class="chart-header">
+        <div class="chart-title">Usage Pattern</div>
+    </div>
+    <canvas id="heatmapCanvas" width="720" height="200"></canvas>
+</div>
+
+<!-- Anomaly alerts. -->
+<div class="chart-container" id="anomalySection" style="display:none">
+    <div class="chart-header">
+        <div class="chart-title">Anomalies</div>
+    </div>
+    <div id="anomalyList" class="anomaly-list"></div>
+</div>
+
+<div class="cost-note">
+    Electricity rate: $0.171/kWh
+</div>
+
+<script>
+var RATE_PER_KWH = 0.171;
+var POLL_MS = 30000;
+var currentHours = 1;
+var currentRes = 10;
+var chart = null;
+
+var deviceSelect = document.getElementById("deviceSelect");
+
+function getDevice() {
+    return deviceSelect.value || null;
+}
+
+function initChart() {
+    var ctx = document.getElementById("powerChart").getContext("2d");
+    chart = new Chart(ctx, {
+        type: "line",
+        data: {
+            labels: [],
+            datasets: [{
+                label: "Power (W)",
+                data: [],
+                borderColor: "#c4a44a",
+                backgroundColor: "rgba(196,164,74,0.1)",
+                fill: true,
+                tension: 0.3,
+                pointRadius: 0,
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            scales: {
+                x: {
+                    ticks: { color: "#8a7a60", maxTicksLimit: 10 },
+                    grid: { color: "rgba(255,255,255,0.05)" }
+                },
+                y: {
+                    ticks: { color: "#8a7a60" },
+                    grid: { color: "rgba(255,255,255,0.05)" },
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: "Watts",
+                        color: "#8a7a60"
+                    }
+                }
+            },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            return ctx.parsed.y.toFixed(1) + " W";
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function formatTime(ts) {
+    var d = new Date(ts * 1000);
+    if (currentHours <= 6) {
+        return d.toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+    }
+    if (currentHours <= 24) {
+        return d.toLocaleTimeString([], {hour: "numeric"});
+    }
+    return d.toLocaleDateString([], {weekday: "short"}) + " " +
+        d.toLocaleTimeString([], {hour: "numeric"});
+}
+
+function fetchReadings() {
+    var url = "/api/power/readings?hours=" + currentHours + "&resolution=" + currentRes;
+    var dev = getDevice();
+    if (dev) url += "&device=" + encodeURIComponent(dev);
+
+    fetch(url)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var readings = data.readings || [];
+            var labels = [];
+            var values = [];
+            for (var i = 0; i < readings.length; i++) {
+                labels.push(formatTime(readings[i].bucket));
+                values.push(readings[i].power || 0);
+            }
+            chart.data.labels = labels;
+            chart.data.datasets[0].data = values;
+            chart.update();
+
+            /* Update current reading from last data point. */
+            if (readings.length > 0) {
+                var last = readings[readings.length - 1];
+                document.getElementById("currentWatts").innerHTML =
+                    (last.power || 0).toFixed(1) + '<span class="stat-unit">W</span>';
+                document.getElementById("voltage").innerHTML =
+                    (last.voltage || 0).toFixed(1) + '<span class="stat-unit">V</span>';
+                document.getElementById("current").innerHTML =
+                    (last.current_a || 0).toFixed(2) + '<span class="stat-unit">A</span>';
+            }
+        })
+        .catch(function() {});
+}
+
+function fetchSummary() {
+    var url = "/api/power/summary?days=7";
+    var dev = getDevice();
+    if (dev) url += "&device=" + encodeURIComponent(dev);
+
+    fetch(url)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            document.getElementById("avgWatts").innerHTML =
+                (data.avg_watts || 0).toFixed(1) + '<span class="stat-unit">W</span>';
+            document.getElementById("peakWatts").innerHTML =
+                (data.peak_watts || 0).toFixed(1) + '<span class="stat-unit">W</span>';
+            var kwh = data.total_kwh || 0;
+            document.getElementById("totalKwh").innerHTML =
+                kwh.toFixed(2) + '<span class="stat-unit">kWh</span>';
+            var cost = kwh * RATE_PER_KWH;
+            document.getElementById("totalCost").innerHTML =
+                "$" + cost.toFixed(2);
+
+            /* Projected 7-day cost from average watts. */
+            var avgW = data.avg_watts || 0;
+            var projectedKwh = (avgW / 1000) * 24 * 7;
+            var projectedCost = projectedKwh * RATE_PER_KWH;
+            document.getElementById("projectedCost").innerHTML =
+                "$" + projectedCost.toFixed(2);
+        })
+        .catch(function() {});
+}
+
+function fetchDevices() {
+    fetch("/api/power/devices")
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var devices = data.devices || [];
+            var select = document.getElementById("deviceSelect");
+            /* Keep existing selection. */
+            var current = select.value;
+            /* Clear all but the first "All" option. */
+            while (select.options.length > 1) select.remove(1);
+            for (var i = 0; i < devices.length; i++) {
+                var opt = document.createElement("option");
+                opt.value = devices[i];
+                opt.textContent = devices[i];
+                select.appendChild(opt);
+            }
+            select.value = current;
+        })
+        .catch(function() {});
+}
+
+/* Time range buttons. */
+document.querySelectorAll(".chart-btn").forEach(function(btn) {
+    btn.addEventListener("click", function() {
+        document.querySelectorAll(".chart-btn").forEach(function(b) {
+            b.classList.remove("active");
+        });
+        btn.classList.add("active");
+        currentHours = parseFloat(btn.dataset.hours);
+        currentRes = parseInt(btn.dataset.res);
+        fetchReadings();
+    });
+});
+
+/* Device selector. */
+deviceSelect.addEventListener("change", function() {
+    fetchReadings();
+    fetchSummary();
+});
+
+/* ------------------------------------------------------------------ */
+/* Device on/off controls                                              */
+/* ------------------------------------------------------------------ */
+
+var controlsRow = document.getElementById("controlsRow");
+var deviceStates = {};   /* device → { state: "ON"/"OFF", power: 0 } */
+
+function buildControlCard(device) {
+    var card = document.createElement("div");
+    card.className = "control-card";
+    card.id = "ctrl-" + device;
+
+    var info = document.createElement("div");
+    var label = document.createElement("div");
+    label.className = "control-label";
+    label.textContent = device;
+    var powerSpan = document.createElement("div");
+    powerSpan.className = "control-power";
+    powerSpan.id = "ctrl-power-" + device;
+    powerSpan.textContent = "-- W";
+    info.appendChild(label);
+    info.appendChild(powerSpan);
+
+    var toggle = document.createElement("label");
+    toggle.className = "toggle";
+    var input = document.createElement("input");
+    input.type = "checkbox";
+    input.id = "ctrl-check-" + device;
+    input.addEventListener("change", function () {
+        var newState = input.checked ? "ON" : "OFF";
+        setDeviceState(device, newState);
+    });
+    var slider = document.createElement("span");
+    slider.className = "toggle-slider";
+    toggle.appendChild(input);
+    toggle.appendChild(slider);
+
+    card.appendChild(info);
+    card.appendChild(toggle);
+    controlsRow.appendChild(card);
+}
+
+function setDeviceState(device, state) {
+    /* Publish via Z2M MQTT through GlowUp API. */
+    fetch("/api/zigbee/set", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device: device, payload: { state: state } })
+    }).catch(function () {});
+}
+
+function updateControls() {
+    /* Fetch latest readings for each device to get current state + power. */
+    fetch("/api/power/readings?hours=0.01&resolution=1")
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            var readings = data.readings || [];
+            /* Group by device, take the latest. */
+            var latest = {};
+            for (var i = 0; i < readings.length; i++) {
+                var r = readings[i];
+                if (!latest[r.device] || r.bucket > latest[r.device].bucket) {
+                    latest[r.device] = r;
+                }
+            }
+            for (var dev in latest) {
+                var el = document.getElementById("ctrl-power-" + dev);
+                if (el) {
+                    el.textContent = (latest[dev].power || 0).toFixed(1) + " W";
+                }
+                /* Infer state: power > 1W = ON. */
+                var chk = document.getElementById("ctrl-check-" + dev);
+                if (chk && !chk.matches(":focus")) {
+                    chk.checked = (latest[dev].power || 0) > 1;
+                }
+            }
+        })
+        .catch(function () {});
+}
+
+function fetchDeviceControls() {
+    fetch("/api/power/devices")
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            var devices = data.devices || [];
+            for (var i = 0; i < devices.length; i++) {
+                if (!document.getElementById("ctrl-" + devices[i])) {
+                    buildControlCard(devices[i]);
+                }
+            }
+            updateControls();
+        })
+        .catch(function () {});
+}
+
+/* ------------------------------------------------------------------ */
+/* Daily cost bar chart                                                */
+/* ------------------------------------------------------------------ */
+
+var costChart = null;
+
+function initCostChart() {
+    var ctx = document.getElementById("costChart").getContext("2d");
+    costChart = new Chart(ctx, {
+        type: "bar",
+        data: {
+            labels: [],
+            datasets: [{
+                label: "Cost ($)",
+                data: [],
+                backgroundColor: "rgba(196,164,74,0.4)",
+                borderColor: "#c4a44a",
+                borderWidth: 1,
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            scales: {
+                x: {
+                    ticks: { color: "#8a7a60" },
+                    grid: { color: "rgba(255,255,255,0.05)" }
+                },
+                y: {
+                    ticks: {
+                        color: "#8a7a60",
+                        callback: function (v) { return "$" + v.toFixed(2); }
+                    },
+                    grid: { color: "rgba(255,255,255,0.05)" },
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: "Cost ($)",
+                        color: "#8a7a60"
+                    }
+                }
+            },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function (ctx) {
+                            return "$" + ctx.parsed.y.toFixed(3);
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function fetchDailyCost() {
+    var dev = getDevice();
+    var url = "/api/power/readings?hours=168&resolution=86400";
+    if (dev) url += "&device=" + encodeURIComponent(dev);
+
+    fetch(url)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            var readings = data.readings || [];
+            var labels = [];
+            var costs = [];
+            var DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+            for (var i = 0; i < readings.length; i++) {
+                var d = new Date(readings[i].bucket * 1000);
+                labels.push(DAYS[d.getDay()] + " " + (d.getMonth() + 1) + "/" + d.getDate());
+                /* Average watts in this day bucket × 24 hours / 1000 × rate. */
+                var avgW = readings[i].power || 0;
+                var kwh = (avgW / 1000) * 24;
+                costs.push(kwh * RATE_PER_KWH);
+            }
+            costChart.data.labels = labels;
+            costChart.data.datasets[0].data = costs;
+            costChart.update();
+        })
+        .catch(function () {});
+}
+
+/* ------------------------------------------------------------------ */
+/* Anomaly detection — flag unusual power readings                     */
+/* ------------------------------------------------------------------ */
+
+var anomalySection = document.getElementById("anomalySection");
+var anomalyList = document.getElementById("anomalyList");
+
+/* Track rolling averages per device to detect anomalies. */
+var deviceAverages = {};
+/* Threshold: alert if current reading exceeds 2× the rolling average. */
+var ANOMALY_MULTIPLIER = 2.0;
+/* Minimum watts to consider (ignore noise below this). */
+var ANOMALY_MIN_WATTS = 10;
+
+function checkAnomalies() {
+    fetch("/api/power/readings?hours=0.5&resolution=10")
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            var readings = data.readings || [];
+            var anomalies = [];
+            /* Group by device. */
+            var byDevice = {};
+            for (var i = 0; i < readings.length; i++) {
+                var r = readings[i];
+                if (!byDevice[r.device]) byDevice[r.device] = [];
+                byDevice[r.device].push(r.power || 0);
+            }
+            for (var dev in byDevice) {
+                var vals = byDevice[dev];
+                if (vals.length < 3) continue;
+                /* Rolling average of all but the last value. */
+                var sum = 0;
+                for (var j = 0; j < vals.length - 1; j++) sum += vals[j];
+                var avg = sum / (vals.length - 1);
+                var current = vals[vals.length - 1];
+                deviceAverages[dev] = avg;
+
+                if (current > ANOMALY_MIN_WATTS && avg > ANOMALY_MIN_WATTS) {
+                    if (current > avg * ANOMALY_MULTIPLIER) {
+                        anomalies.push({
+                            device: dev,
+                            current: current,
+                            average: avg,
+                            severity: current > avg * 3 ? "alert" : "warning"
+                        });
+                    }
+                    /* Also flag if device that was drawing power suddenly drops to 0. */
+                    if (avg > 50 && current < 1) {
+                        anomalies.push({
+                            device: dev,
+                            current: current,
+                            average: avg,
+                            severity: "warning",
+                            message: dev + " went silent (was " + avg.toFixed(0) + "W)"
+                        });
+                    }
+                }
+            }
+
+            if (anomalies.length > 0) {
+                anomalySection.style.display = "";
+                anomalyList.innerHTML = "";
+                for (var k = 0; k < anomalies.length; k++) {
+                    var a = anomalies[k];
+                    var item = document.createElement("div");
+                    item.className = "anomaly-item " + a.severity;
+                    item.innerHTML =
+                        '<div class="anomaly-dot"></div>' +
+                        (a.message || (a.device + ": " + a.current.toFixed(0) +
+                         "W (avg " + a.average.toFixed(0) + "W)"));
+                    anomalyList.appendChild(item);
+                }
+            } else {
+                anomalySection.style.display = "none";
+            }
+        })
+        .catch(function () {});
+}
+
+/* ------------------------------------------------------------------ */
+/* Init                                                                */
+/* ------------------------------------------------------------------ */
+initChart();
+initCostChart();
+fetchDevices();
+fetchDeviceControls();
+fetchReadings();
+fetchSummary();
+fetchDailyCost();
+checkAnomalies();
+setInterval(fetchReadings, POLL_MS);
+setInterval(fetchSummary, 60000);
+setInterval(fetchDevices, 60000);
+setInterval(fetchDeviceControls, POLL_MS);
+setInterval(fetchDailyCost, 300000);  /* Every 5 minutes. */
+setInterval(checkAnomalies, POLL_MS);
+</script>
+</body>
+</html>

@@ -2069,8 +2069,13 @@ body.portrait .sensor-card {
     /* How long each camera is shown (ms). */
     var CAMERA_CYCLE_MS = 5000;
 
+    /* Camera list recovery: fast retries on startup (5s), then periodic
+       re-check (60s) so a transient NVR outage self-heals without a
+       page reload — critical for headless kiosk displays. */
+    var CAMERA_RETRY_FAST_MS = 5000;
+    var CAMERA_RETRY_SLOW_MS = 60000;
     var cameraRetries = 0;
-    var MAX_CAMERA_RETRIES = 6;
+    var CAMERA_FAST_RETRIES = 6;
 
     function loadCameraList() {
         fetch("/api/home/cameras")
@@ -2078,19 +2083,26 @@ body.portrait .sensor-card {
             .then(function (data) {
                 if (data.cameras && data.cameras.length > 0) {
                     cameraList = data.cameras;
+                    cameraRetries = 0;
                     cameraCard.style.display = "";
                     showNextCamera();
-                } else if (cameraRetries < MAX_CAMERA_RETRIES) {
-                    cameraRetries++;
-                    setTimeout(loadCameraList, 5000);
+                } else {
+                    cameraCard.style.display = "none";
+                    scheduleRetry();
                 }
             })
             .catch(function () {
-                if (cameraRetries < MAX_CAMERA_RETRIES) {
-                    cameraRetries++;
-                    setTimeout(loadCameraList, 5000);
-                }
+                cameraCard.style.display = "none";
+                scheduleRetry();
             });
+    }
+
+    function scheduleRetry() {
+        cameraRetries++;
+        /* Fast retries for initial load, then slow poll forever. */
+        var delay = (cameraRetries <= CAMERA_FAST_RETRIES)
+            ? CAMERA_RETRY_FAST_MS : CAMERA_RETRY_SLOW_MS;
+        setTimeout(loadCameraList, delay);
     }
 
     function showNextCamera() {
@@ -2099,13 +2111,19 @@ body.portrait .sensor-card {
         var cam = cameraList[cameraIndex];
         cameraIndex = (cameraIndex + 1) % cameraList.length;
 
-        /* Cache-bust with timestamp so the browser fetches a fresh snapshot. */
+        /* Cache-bust with timestamp so the browser fetches a fresh snapshot.
+           On load error (NVR returned 404 or network blip), hide the broken
+           image icon — the next cycle will retry automatically. */
+        cameraImg.onerror = function () { cameraImg.style.opacity = "0"; };
+        cameraImg.onload = function () { cameraImg.style.opacity = "1"; };
         cameraImg.src = "/api/home/camera/" + cam.id + "?t=" + Date.now();
         cameraLabel.textContent = cam.name || ("Channel " + cam.id);
     }
 
     loadCameraList();
     setInterval(showNextCamera, CAMERA_CYCLE_MS);
+    /* Re-check camera list every 60s so NVR recovery is automatic. */
+    setInterval(loadCameraList, CAMERA_RETRY_SLOW_MS);
 
     /* -------------------------------------------------------------- */
     /* Photo slideshow                                                */

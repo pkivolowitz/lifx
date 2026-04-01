@@ -621,6 +621,65 @@ class DashboardHandlerMixin:
                     key, exc, exc_info=True,
                 )
 
+    # -- Power monitoring ---------------------------------------------------
+
+    def _handle_get_power_page(self) -> None:
+        """GET /power — serve the power monitoring dashboard."""
+        static_dir: str = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "static",
+        )
+        path: str = os.path.join(static_dir, "power.html")
+        try:
+            with open(path, "rb") as f:
+                content: bytes = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+        except FileNotFoundError:
+            self._send_json(404, {"error": "power.html not found"})
+
+    def _handle_get_power_readings(self) -> None:
+        """GET /api/power/readings?device=X&hours=N&resolution=N"""
+        from urllib.parse import parse_qs, urlparse
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        device: str = params.get("device", [None])[0]
+        hours: float = float(params.get("hours", ["1"])[0])
+        resolution: int = int(params.get("resolution", ["60"])[0])
+
+        pl = self.power_logger
+        if pl is None:
+            self._send_json(200, {"readings": []})
+            return
+        readings = pl.query(device=device, hours=hours, resolution=resolution)
+        self._send_json(200, {"readings": readings})
+
+    def _handle_get_power_summary(self) -> None:
+        """GET /api/power/summary?device=X&days=N"""
+        from urllib.parse import parse_qs, urlparse
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        device: str = params.get("device", [None])[0]
+        days: int = int(params.get("days", ["7"])[0])
+
+        pl = self.power_logger
+        if pl is None:
+            self._send_json(200, {})
+            return
+        summary = pl.summary(device=device, days=days)
+        self._send_json(200, summary)
+
+    def _handle_get_power_devices(self) -> None:
+        """GET /api/power/devices"""
+        pl = self.power_logger
+        if pl is None:
+            self._send_json(200, {"devices": []})
+            return
+        self._send_json(200, {"devices": pl.devices()})
+
     # -- Helpers ------------------------------------------------------------
 
 
