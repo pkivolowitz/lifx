@@ -19,6 +19,10 @@ TOPIC_UTTERANCE: str = "glowup/voice/utterance"
 # Satellite → coordinator: heartbeat (JSON, every HEARTBEAT_INTERVAL_S).
 TOPIC_STATUS_PREFIX: str = "glowup/voice/status"
 
+# Coordinator → satellites: playback state (JSON with room + state).
+# Satellites suppress wake detection while their room is playing.
+TOPIC_PLAYBACK: str = "glowup/voice/playback"
+
 # ---------------------------------------------------------------------------
 # Audio format — all satellites must produce this format
 # ---------------------------------------------------------------------------
@@ -53,8 +57,9 @@ CHUNK_BYTES: int = CHUNK_SAMPLES * BYTES_PER_SAMPLE
 MAX_UTTERANCE_S: float = 5.0
 
 # Silence timeout (seconds).  Stop capturing after this much silence
-# following speech.
-SILENCE_TIMEOUT_S: float = 2.0
+# following speech.  1.0s is snappy for commands; increase for
+# conversational queries where the speaker pauses to think.
+SILENCE_TIMEOUT_S: float = 1.5
 
 # Minimum utterance duration (seconds).  Reject captures shorter than
 # this — likely accidental triggers.
@@ -74,7 +79,7 @@ PRE_WAKE_BUFFER_S: float = 0.2
 # ---------------------------------------------------------------------------
 
 # Default wake word confidence threshold (0.0 - 1.0).
-WAKE_THRESHOLD: float = 0.5
+WAKE_THRESHOLD: float = 0.35
 
 # VAD threshold for openWakeWord's built-in Silero VAD (0.0 - 1.0).
 # Set to 0 to disable.  0.5 is a good starting point.
@@ -82,11 +87,15 @@ VAD_THRESHOLD: float = 0.5
 
 # Number of consecutive above-threshold frames required to trigger.
 # Prevents transient spikes from firing the wake word.
-CONFIDENCE_WINDOW: int = 3
+CONFIDENCE_WINDOW: int = 2
 
 # Cooldown period after wake detection (seconds).  Prevents re-trigger
 # during utterance capture or response playback.
-COOLDOWN_S: float = 8.0
+# Short cooldown covers only the capture duration + MQTT transit.
+# The MQTT playback suppression flag handles the rest — the coordinator
+# sends "playing=true" at pipeline start and "playing=false" after
+# the last AirPlay stream finishes.
+COOLDOWN_S: float = 6.0
 
 # ---------------------------------------------------------------------------
 # Coordinator parameters

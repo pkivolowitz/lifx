@@ -37,6 +37,7 @@ __version__ = "1.1"
 
 import asyncio
 import logging
+import ipaddress
 import os
 import platform
 import random
@@ -147,7 +148,8 @@ def _read_arp_linux() -> dict[str, str]:
     """Read ``/proc/net/arp`` and return {IP: MAC} for LIFX devices.
 
     ``/proc/net/arp`` columns: IP, HW type, Flags, HW address, Mask, Device.
-    We filter on Flags != 0x0 (incomplete entries) and the LIFX OUI prefix.
+    We skip the header line, incomplete entries (Flags 0x0), and filter
+    on the LIFX OUI prefix.
 
     Returns:
         Mapping of IP address to lowercase MAC string for LIFX devices.
@@ -160,8 +162,14 @@ def _read_arp_linux() -> dict[str, str]:
                 if len(parts) < 4:
                     continue
                 ip: str = parts[0]
+                # Skip the header line.
+                if ip == "IP":
+                    continue
+                flags: str = parts[2]
+                # Skip incomplete ARP entries.
+                if flags == "0x0":
+                    continue
                 mac: str = parts[3].lower()
-                # Skip incomplete entries (MAC is 00:00:00:00:00:00)
                 if mac.startswith(LIFX_OUI):
                     result[ip] = mac
     except OSError as exc:
@@ -389,6 +397,8 @@ class BulbKeepAlive(threading.Thread):
         keepalive_interval: float = KEEPALIVE_INTERVAL,
         sweep_interval: float = SUBNET_SWEEP_INTERVAL,
         power_query_every_n: int = 2,
+        bind_ip: Optional[str] = None,
+        sweep_network: Optional[str] = None,
     ) -> None:
         super().__init__(daemon=True, name="bulb-keepalive")
         self._on_new_bulb: Optional[Callable[[str, str], None]] = on_new_bulb
@@ -398,6 +408,17 @@ class BulbKeepAlive(threading.Thread):
         self._arp_interval: float = arp_interval
         self._keepalive_interval: float = keepalive_interval
         self._sweep_interval: float = sweep_interval
+        # Bind address for LIFX UDP traffic.  On multi-homed hosts,
+        # set this to the IP of the interface where LIFX bulbs live
+        # (e.g., WiFi on lnet) so broadcasts go out the right NIC.
+        self._bind_ip: Optional[str] = bind_ip
+        # Explicit sweep network (e.g., "10.0.0.0/24").  Overrides
+        # auto-detection which fails under launchd on macOS (ifconfig
+        # not in restricted PATH).
+        self._sweep_network: Optional[ipaddress.IPv4Network] = (
+            ipaddress.IPv4Network(sweep_network, strict=False)
+            if sweep_network else None
+        )
         self._stop_event: threading.Event = threading.Event()
         # {IP: MAC} — currently-known LIFX bulbs.
         self._known: dict[str, str] = {}
@@ -481,6 +502,13 @@ class BulbKeepAlive(threading.Thread):
 
         sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        # Bind to a specific NIC so broadcasts reach the right subnet.
+        if self._bind_ip:
+            sock.bind((self._bind_ip, 0))
+            logger.info(
+                "Keepalive socket bound to %s (outbound NIC)",
+                self._bind_ip,
+            )
 
         next_arp: float = 0.0        # scan immediately on first tick
         next_ping: float = 0.0       # ping immediately on first tick
@@ -549,24 +577,34 @@ class BulbKeepAlive(threading.Thread):
         addresses in ``/proc/net/arp`` as replies arrive, making them visible
         on the next :meth:`_scan_arp` call.
 
+        On multi-homed hosts, if ``bind_ip`` is set, the sweep uses that
+        address as the source IP for pings (``-S`` on macOS, ``-I`` on
+        Linux), ensuring traffic goes out the correct NIC.
+
         The sweep is a no-op if ``lanscan`` is not importable.
         """
         if not _HAS_LANSCAN:
-            logger.debug("Subnet sweep skipped — lanscan not available")
+            logger.info("Subnet sweep skipped — lanscan not importable")
             return
         try:
-            network = get_local_network()
+            network = self._sweep_network or get_local_network()
             if network is None:
-                logger.debug("Subnet sweep: could not determine local network")
+                logger.info("Subnet sweep: could not determine local network")
                 return
             num_hosts: int = network.num_addresses - 2
             logger.debug(
-                "Subnet sweep: pinging %d hosts on %s", num_hosts, network,
+                "Subnet sweep: pinging %d hosts on %s (bind=%s)",
+                num_hosts, network, self._bind_ip or "default",
             )
-            asyncio.run(ping_sweep(network))
-            logger.debug("Subnet sweep complete")
+            alive: list[str] = asyncio.run(
+                ping_sweep(network, source_ip=self._bind_ip),
+            )
+            logger.info(
+                "Subnet sweep complete: %d/%d hosts responded",
+                len(alive), num_hosts,
+            )
         except Exception as exc:
-            logger.debug("Subnet sweep failed: %s", exc)
+            logger.info("Subnet sweep failed: %s", exc)
 
     def _scan_arp(self) -> None:
         """Read the ARP table, register new devices, and expire stale ones.

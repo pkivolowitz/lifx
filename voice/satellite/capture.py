@@ -14,7 +14,9 @@ import collections
 import logging
 import math
 import struct
-from typing import Optional
+from typing import Any, Optional
+
+from voice import constants as C
 
 logger: logging.Logger = logging.getLogger("glowup.voice.capture")
 
@@ -75,7 +77,8 @@ class UtteranceCapture:
         """Initialize the utterance capture."""
         self._sample_rate: int = sample_rate
         self._chunk_samples: int = chunk_samples
-        self._chunk_bytes: int = chunk_samples * 2  # 16-bit mono
+        self._chunk_bytes: int = chunk_samples * C.BYTES_PER_SAMPLE
+        self.chunk_bytes: int = self._chunk_bytes  # Public for ALSA reads.
         self._max_chunks: int = int(
             sample_rate / chunk_samples * max_seconds,
         )
@@ -106,7 +109,7 @@ class UtteranceCapture:
         """
         self._ring.append(chunk)
 
-    def capture(self, stream: "pyaudio.Stream") -> Optional[bytes]:
+    def capture(self, stream: Any, use_alsa: bool = False) -> Optional[bytes]:
         """Capture an utterance from the audio stream.
 
         Reads chunks until silence is detected or the maximum
@@ -114,7 +117,9 @@ class UtteranceCapture:
         contents.
 
         Args:
-            stream: An open PyAudio input stream.
+            stream: An open PyAudio stream or ALSA pipe (stdout).
+            use_alsa: If True, read raw bytes from pipe instead
+                      of calling stream.read(n_frames).
 
         Returns:
             Raw PCM bytes of the captured utterance, or None if
@@ -128,9 +133,14 @@ class UtteranceCapture:
 
         for _ in range(self._max_chunks):
             try:
-                data: bytes = stream.read(
-                    self._chunk_samples, exception_on_overflow=False,
-                )
+                if use_alsa:
+                    data = stream.read(self._chunk_bytes)
+                    if not data:
+                        break
+                else:
+                    data = stream.read(
+                        self._chunk_samples, exception_on_overflow=False,
+                    )
             except Exception as exc:
                 logger.warning("Audio read error during capture: %s", exc)
                 break
@@ -154,6 +164,6 @@ class UtteranceCapture:
             return None
 
         pcm: bytes = b"".join(frames)
-        duration: float = len(pcm) / (self._sample_rate * 2)
+        duration: float = len(pcm) / (self._sample_rate * C.BYTES_PER_SAMPLE)
         logger.info("Captured %.1fs utterance (%d bytes)", duration, len(pcm))
         return pcm

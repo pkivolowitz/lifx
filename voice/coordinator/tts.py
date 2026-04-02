@@ -127,7 +127,7 @@ class TextToSpeech:
     def _synthesize_say(self, text: str) -> tuple[bytes, int]:
         """Synthesize using macOS ``say`` command.
 
-        Generates AIFF, then converts to WAV via ffmpeg.
+        Generates AIFF, then converts to WAV via afconvert.
 
         Args:
             text: Text to speak.
@@ -135,30 +135,48 @@ class TextToSpeech:
         Returns:
             Tuple of (WAV bytes, sample_rate).
         """
-        aiff_path: str = tempfile.mktemp(suffix=".aiff")
+        # mkstemp avoids the race condition of mktemp (deprecated).
+        aiff_fd, aiff_path = tempfile.mkstemp(suffix=".aiff")
+        os.close(aiff_fd)
         wav_path: str = aiff_path.replace(".aiff", ".wav")
 
         try:
             # Generate AIFF via say.
-            subprocess.run(
+            say_result = subprocess.run(
                 ["say", "-o", aiff_path, text],
                 capture_output=True,
                 timeout=30,
             )
 
+            if say_result.returncode != 0:
+                logger.warning(
+                    "say exited with %d: %s",
+                    say_result.returncode, say_result.stderr[:200],
+                )
+                return b"", 0
+
             if not os.path.exists(aiff_path):
                 logger.warning("say produced no output")
                 return b"", 0
 
-            # Convert to WAV via ffmpeg.
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", aiff_path, wav_path],
+            # Convert AIFF to WAV via afconvert (native macOS, faster
+            # than ffmpeg — no codec loading overhead).
+            convert_result = subprocess.run(
+                ["afconvert", "-f", "WAVE", "-d", "LEI16",
+                 aiff_path, wav_path],
                 capture_output=True,
-                timeout=30,
+                timeout=10,
             )
 
+            if convert_result.returncode != 0:
+                logger.warning(
+                    "afconvert exited with %d: %s",
+                    convert_result.returncode, convert_result.stderr[:200],
+                )
+                return b"", 0
+
             if not os.path.exists(wav_path):
-                logger.warning("ffmpeg conversion failed")
+                logger.warning("afconvert produced no output")
                 return b"", 0
 
             with open(wav_path, "rb") as f:

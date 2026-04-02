@@ -1,0 +1,139 @@
+# Voice action definitions — config-driven intent dispatch.
+#
+# Each action defines how to translate a parsed voice intent into a
+# GlowUp API call and format a spoken confirmation.  Adding a new
+# voice command is a YAML entry, not a code change.
+#
+# Action types:
+#   command — POST to the GlowUp API, physical change is the feedback
+#   query   — GET from the GlowUp API, spoken response
+#   chat    — freeform conversation via Ollama (special case)
+#
+# Fields:
+#   label  — spoken in "Waiting on the {label}" before execution
+#   confirm — template for the result (commands say "Got it" after)
+#
+# Templates use {target} for the resolved device/group name and
+# {params.<key>} for intent parameters.  Queries with complex logic
+# use a named handler function.
+#
+# Perry Kivolowitz, 2026. MIT License.
+
+# ---------------------------------------------------------------------------
+# Commands — POST to API, says "Got it" after execution
+# ---------------------------------------------------------------------------
+
+power:
+  type: command
+  label: lights
+  method: POST
+  path: "/api/devices/{target}/power"
+  body:
+    "on": "param:on"
+  confirm: "{target} is {on_off}."
+  param_map:
+    "on": {"true": "on", "false": "off", "key": "on_off"}
+  speak: false
+
+brightness:
+  type: command
+  label: lights
+  method: POST
+  path: "/api/devices/{target}/brightness"
+  body:
+    brightness: "param:brightness"
+  confirm: "{target} brightness set to {brightness}%."
+  speak: false
+
+color:
+  type: command
+  label: lights
+  method: POST
+  path: "/api/devices/{target}/play"
+  body:
+    effect: "solid"
+    params:
+      color: "param:color"
+  confirm: "{target} set to {color}."
+  speak: false
+
+temperature:
+  type: command
+  label: lights
+  method: POST
+  path: "/api/devices/{target}/play"
+  body:
+    effect: "solid"
+    params:
+      kelvin: "param:temperature"
+  confirm: "{target} set to {temperature} Kelvin."
+  speak: false
+
+play_effect:
+  type: command
+  label: lights
+  method: POST
+  path: "/api/devices/{target}/play"
+  body:
+    effect: "param:effect"
+  confirm: "Playing {effect} on {target}."
+  speak: false
+
+stop:
+  type: command
+  label: lights
+  method: POST
+  path: "/api/devices/{target}/stop"
+  body: {}
+  confirm: "{target} stopped."
+  speak: false
+
+# ---------------------------------------------------------------------------
+# Queries — GET from API, spoken response
+# ---------------------------------------------------------------------------
+
+query_status:
+  type: query
+  label: lights
+  handler: power_state
+  speak: true
+
+query_sensor:
+  type: query
+  label: sensors
+  handler: sensor_reading
+  speak: true
+
+query_power:
+  type: query
+  label: power meter
+  handler: power_summary
+  speak: true
+
+query_soil:
+  type: query
+  label: water sensor
+  handler: soil_moisture
+  zones:
+    backyard:
+      sensors:
+        - {name: SBYRD, direction: south}
+    listening room:
+      sensors:
+        - {name: SLIS, direction: south}
+    front yard:
+      sensors:
+        - {name: SLIS, direction: south}
+        - {name: SFRNT, direction: center}
+        - {name: NFRNT, direction: north}
+  threshold: 40.0
+  speak: true
+
+# ---------------------------------------------------------------------------
+# Chat — freeform Ollama conversation (special handling in executor)
+# ---------------------------------------------------------------------------
+
+chat:
+  type: chat
+  label: assistant
+  speak: true

@@ -21,11 +21,14 @@ __version__ = "1.0"
 
 import asyncio
 import ipaddress
+import logging
 import re
 import socket
 import subprocess
 import sys
 from typing import Optional
+
+logger: logging.Logger = logging.getLogger("glowup.lanscan")
 
 # ---------------------------------------------------------------------------
 # Named constants — no magic numbers
@@ -291,7 +294,11 @@ def get_local_network() -> Optional[ipaddress.IPv4Network]:
     return _get_network_macos()
 
 
-async def ping_host(sem: asyncio.Semaphore, ip_str: str) -> Optional[str]:
+async def ping_host(
+    sem: asyncio.Semaphore,
+    ip_str: str,
+    source_ip: Optional[str] = None,
+) -> Optional[str]:
     """Ping a single host asynchronously.
 
     Sends a single ICMP echo request with a short timeout to determine
@@ -299,8 +306,11 @@ async def ping_host(sem: asyncio.Semaphore, ip_str: str) -> Optional[str]:
     run in parallel so the system does not exhaust file descriptors.
 
     Args:
-        sem: An asyncio semaphore to limit concurrency.
-        ip_str: The IPv4 address to ping as a dotted-quad string.
+        sem:       An asyncio semaphore to limit concurrency.
+        ip_str:    The IPv4 address to ping as a dotted-quad string.
+        source_ip: Source IP to bind to (``-S`` on macOS, ``-I`` on
+                   Linux).  Forces pings out a specific NIC on
+                   multi-homed hosts.
 
     Returns:
         The ``ip_str`` if the host responded, or ``None`` otherwise.
@@ -310,24 +320,28 @@ async def ping_host(sem: asyncio.Semaphore, ip_str: str) -> Optional[str]:
 
     async with sem:
         try:
-            # Linux: -W takes seconds, TTL via -t
-            # macOS: -W takes milliseconds, TTL via -m
+            # Linux: -W takes seconds, TTL via -t, source via -I
+            # macOS: -W takes milliseconds, TTL via -m, source via -S
             if sys.platform == "linux":
                 ping_args = [
                     "ping",
                     "-c", str(PING_COUNT),
                     "-W", str(PING_TIMEOUT_S),
                     "-t", str(PING_TTL),
-                    ip_str,
                 ]
+                if source_ip:
+                    ping_args.extend(["-I", source_ip])
+                ping_args.append(ip_str)
             else:
                 ping_args = [
                     "ping",
                     "-c", str(PING_COUNT),
                     "-W", str(PING_TIMEOUT_MS),
                     "-m", str(PING_TTL),
-                    ip_str,
                 ]
+                if source_ip:
+                    ping_args.extend(["-S", source_ip])
+                ping_args.append(ip_str)
             proc = await asyncio.create_subprocess_exec(
                 *ping_args,
                 stdout=asyncio.subprocess.DEVNULL,
@@ -341,14 +355,19 @@ async def ping_host(sem: asyncio.Semaphore, ip_str: str) -> Optional[str]:
             return None
 
 
-async def ping_sweep(network: ipaddress.IPv4Network) -> list[str]:
+async def ping_sweep(
+    network: ipaddress.IPv4Network,
+    source_ip: Optional[str] = None,
+) -> list[str]:
     """Ping all hosts in the network concurrently.
 
     Launches parallel ping tasks for every host address in the given
     network, throttled by a semaphore to avoid resource exhaustion.
 
     Args:
-        network: The IPv4 network whose hosts should be pinged.
+        network:   The IPv4 network whose hosts should be pinged.
+        source_ip: Source IP to bind pings to (forces specific NIC
+                   on multi-homed hosts).
 
     Returns:
         A sorted list of IP address strings for hosts that responded.
@@ -359,7 +378,7 @@ async def ping_sweep(network: ipaddress.IPv4Network) -> list[str]:
 
     sem = asyncio.Semaphore(PING_CONCURRENCY)
     hosts: list[str] = [str(ip) for ip in network.hosts()]
-    tasks = [ping_host(sem, ip) for ip in hosts]
+    tasks = [ping_host(sem, ip, source_ip=source_ip) for ip in hosts]
     results = await asyncio.gather(*tasks)
     return [ip for ip in results if ip is not None]
 
@@ -394,8 +413,8 @@ def _get_arp_linux() -> dict[str, str]:
                     continue
 
                 entries[ip] = mac
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.debug("Failed to read /proc/net/arp: %s", exc)
     return entries
 
 

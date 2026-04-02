@@ -3,14 +3,18 @@
 Orchestrates the full voice command flow from raw PCM audio to
 response playback.  Each step is a separate module; this function
 wires them together.
+
+Common phrases ("Got it.", "Waiting on the ___") are pre-generated
+at first use and cached so they play instantly without TTS latency.
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import logging
+import os
 import time
 from typing import Any, Optional, Protocol
 
@@ -34,6 +38,8 @@ class IntentLike(Protocol):
 class ExecutorLike(Protocol):
     """Anything with an execute(intent, room) -> dict method."""
     def execute(self, intent: dict[str, Any], room: str) -> dict[str, Any]: ...
+    def get_action_label(self, action: str) -> str: ...
+    def get_action_type(self, action: str) -> str: ...
 
 
 class TTSLike(Protocol):
@@ -44,6 +50,102 @@ class TTSLike(Protocol):
 class PlayerLike(Protocol):
     """Anything with a play(room, audio_bytes) -> bool method."""
     def play(self, room: str, audio_bytes: bytes) -> bool: ...
+
+
+class PlaybackNotifier(Protocol):
+    """Callback to notify satellites about playback state."""
+    def __call__(self, room: str, playing: bool) -> None: ...
+
+
+# ---------------------------------------------------------------------------
+# Phrase cache — pre-generate common TTS phrases on first use
+# ---------------------------------------------------------------------------
+
+# Disk-backed phrase cache for short TTS phrases.
+# Phrases of 2 words or fewer are saved to disk so they survive restarts.
+# Longer phrases are cached in memory only (session lifetime).
+_PHRASE_CACHE_DIR: str = os.path.join(
+    os.path.expanduser("~"), ".glowup_phrase_cache",
+)
+
+# In-memory cache: phrase → WAV bytes.
+_phrase_cache: dict[str, bytes] = {}
+
+# Maximum word count for disk persistence.
+# "Waiting on the water sensor." = 5 words. Cache all stock phrases.
+_DISK_CACHE_MAX_WORDS: int = 6
+
+
+def _phrase_cache_path(phrase: str) -> str:
+    """Get the disk cache path for a phrase.
+
+    Args:
+        phrase: Text to cache.
+
+    Returns:
+        File path for the cached WAV.
+    """
+    import hashlib
+    # Use hash to avoid filesystem issues with special characters.
+    key: str = hashlib.md5(phrase.encode()).hexdigest()
+    return os.path.join(_PHRASE_CACHE_DIR, f"{key}.wav")
+
+
+def _get_cached_phrase(
+    phrase: str, tts: "TTSLike",
+) -> Optional[bytes]:
+    """Get cached WAV bytes for a phrase, generating on first use.
+
+    Short phrases (2 words or fewer) are persisted to disk.
+    Longer phrases are cached in memory only.
+
+    Args:
+        phrase: Text to synthesize.
+        tts:    TTS engine.
+
+    Returns:
+        WAV bytes, or None on failure.
+    """
+    # Check memory cache first.
+    if phrase in _phrase_cache:
+        return _phrase_cache[phrase]
+
+    # Check disk cache for short phrases.
+    word_count: int = len(phrase.split())
+    disk_path: str = _phrase_cache_path(phrase)
+
+    if word_count <= _DISK_CACHE_MAX_WORDS and os.path.exists(disk_path):
+        try:
+            with open(disk_path, "rb") as f:
+                audio: bytes = f.read()
+            _phrase_cache[phrase] = audio
+            logger.info(
+                "Loaded cached phrase from disk: '%s' (%d bytes)",
+                phrase, len(audio),
+            )
+            return audio
+        except Exception as exc:
+            logger.warning("Failed to read phrase cache: %s", exc)
+
+    # Generate via TTS.
+    audio, sr = tts.synthesize(phrase)
+    if not audio:
+        return None
+
+    _phrase_cache[phrase] = audio
+    logger.info("Cached phrase: '%s' (%d bytes)", phrase, len(audio))
+
+    # Persist short phrases to disk.
+    if word_count <= _DISK_CACHE_MAX_WORDS:
+        try:
+            os.makedirs(_PHRASE_CACHE_DIR, exist_ok=True)
+            with open(disk_path, "wb") as f:
+                f.write(audio)
+            logger.info("Saved phrase to disk: '%s'", phrase)
+        except Exception as exc:
+            logger.warning("Failed to write phrase cache: %s", exc)
+
+    return audio
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +161,7 @@ def process_utterance(
     executor: ExecutorLike,
     tts: Optional[TTSLike] = None,
     player: Optional[PlayerLike] = None,
+    playback_notifier: Optional[PlaybackNotifier] = None,
 ) -> dict[str, Any]:
     """Process a voice utterance through the full pipeline.
 
@@ -93,7 +196,7 @@ def process_utterance(
         logger.info("[%s] Empty transcription — nothing heard", room)
         _speak(
             "Sorry, I didn't catch that.",
-            room, tts, player,
+            room, tts, player, playback_notifier,
         )
         return {
             "room": room,
@@ -107,18 +210,41 @@ def process_utterance(
 
     # Step 2: Intent parsing.
     intent: dict[str, Any] = intent_parser.parse(text)
+
+    # For chat actions, ensure the full transcription is passed as the
+    # message — the intent LLM sometimes truncates it.
+    if intent.get("action") == "chat":
+        intent.setdefault("params", {})["message"] = text
+
     logger.info("[%s] Intent: %s", room, intent)
+
+    # Step 2.5: Acknowledge — speak "Waiting on the {label}" for
+    # queries and chat (which may take seconds).  Skip for commands
+    # since the physical change is instant and the ack TTS + AirPlay
+    # would take longer than the command itself.
+    action_name: str = intent.get("action", "")
+    action_label: str = executor.get_action_label(action_name)
+    action_type: str = executor.get_action_type(action_name)
+    if action_label and action_type != "command":
+        _speak_cached(
+            f"Waiting on the {action_label}.",
+            room, tts, player, playback_notifier,
+        )
 
     # Step 3: Execute against GlowUp.
     result: dict[str, Any] = executor.execute(intent, room)
     logger.info("[%s] Result: %s", room, result)
 
-    # Step 4: Speak response (if applicable).
+    # Step 4: Speak response.
     confirmation: str = result.get("confirmation", "")
     should_speak: bool = result.get("speak", False)
 
     if should_speak and confirmation:
-        _speak(confirmation, room, tts, player)
+        # Queries and chat: speak the full result.
+        _speak(confirmation, room, tts, player, playback_notifier)
+    elif not should_speak and result.get("status") == "ok":
+        # Commands: physical change is the feedback, just say "Got it."
+        _speak_cached("Got it.", room, tts, player, playback_notifier)
 
     latency: float = _elapsed_ms(t0)
     logger.info(
@@ -136,19 +262,46 @@ def process_utterance(
     }
 
 
+def _play_audio(
+    audio: bytes,
+    room: str,
+    player: PlayerLike,
+    label: str,
+) -> None:
+    """Stream audio to a room's speaker.
+
+    The daemon-level notifier brackets the entire pipeline, so
+    individual speak calls do NOT send their own True/False — that
+    caused a momentary un-suppression gap between consecutive speaks.
+
+    Args:
+        audio:  WAV audio bytes.
+        room:   Target room.
+        player: Audio player.
+        label:  Descriptive label for logging.
+    """
+    player.play(room, audio)
+    logger.info("[%s] Spoke%s", room, f" ({label})" if label else "")
+
+
 def _speak(
     text: str,
     room: str,
     tts: Optional[TTSLike],
     player: Optional[PlayerLike],
+    notifier: Optional[PlaybackNotifier] = None,
 ) -> None:
     """Synthesize text and play it to the room's speaker.
 
     Args:
-        text:   Confirmation text to speak.
-        room:   Target room for audio playback.
-        tts:    TTS engine (optional — skipped if None).
-        player: Audio player (optional — skipped if None).
+        text:     Confirmation text to speak.
+        room:     Target room for audio playback.
+        tts:      TTS engine (optional — skipped if None).
+        player:   Audio player (optional — skipped if None).
+        notifier: Unused — kept for API compatibility.  The daemon
+                  brackets the entire pipeline with playback
+                  notifications; per-speak notification caused
+                  a True/False flicker between consecutive speaks.
     """
     if tts is None or player is None:
         logger.info("[%s] Would speak: '%s' (no TTS/player)", room, text)
@@ -157,10 +310,41 @@ def _speak(
     try:
         audio, sample_rate = tts.synthesize(text)
         if audio:
-            player.play(room, audio)
-            logger.info("[%s] Spoke: '%s'", room, text)
+            _play_audio(audio, room, player, text[:40])
     except Exception as exc:
         logger.error("[%s] TTS/playback failed: %s", room, exc)
+
+
+def _speak_cached(
+    text: str,
+    room: str,
+    tts: Optional[TTSLike],
+    player: Optional[PlayerLike],
+    notifier: Optional[PlaybackNotifier] = None,
+) -> None:
+    """Speak a cacheable phrase — skips TTS after first synthesis.
+
+    First call generates and caches the WAV. Subsequent calls
+    stream the cached bytes directly to AirPlay, eliminating
+    the 2-second TTS + afconvert overhead.
+
+    Args:
+        text:     Phrase to speak (used as cache key).
+        room:     Target room.
+        tts:      TTS engine (for first-time generation).
+        player:   Audio player.
+        notifier: Unused — see _speak docstring.
+    """
+    if tts is None or player is None:
+        logger.info("[%s] Would speak: '%s' (no TTS/player)", room, text)
+        return
+
+    try:
+        audio: Optional[bytes] = _get_cached_phrase(text, tts)
+        if audio:
+            _play_audio(audio, room, player, f"cached: {text[:30]}")
+    except Exception as exc:
+        logger.error("[%s] Cached playback failed: %s", room, exc)
 
 
 def _elapsed_ms(t0: float) -> float:

@@ -1,0 +1,106 @@
+# openWakeWord training config for "Hey Asshole" wake word.
+#
+# Tuned for low false positive rate in a home environment.
+# Trains on synthetic TTS data augmented with room acoustics and
+# background noise. Output is a ~400KB ONNX classifier.
+#
+# Perry Kivolowitz, 2026. MIT License.
+
+# --- Identity --------------------------------------------------------------
+
+model_name: "hey_asshole"
+
+target_phrase:
+  - "hey asshole"
+
+# --- Synthetic data generation ----------------------------------------------
+
+# Number of synthetic positive examples to generate via Piper TTS.
+# 10,000 provides good acoustic diversity across ~900 speaker embeddings.
+n_samples: 10000
+
+# Validation examples for early stopping.
+n_samples_val: 2000
+
+# TTS batch size — how many utterances to synthesize per Piper invocation.
+tts_batch_size: 50
+
+# Path to the cloned piper-sample-generator repo (inside container).
+piper_sample_generator_path: "/opt/piper-sample-generator"
+
+# Where training artifacts go inside the container.
+output_dir: "/workspace/my_custom_model"
+
+# --- Adversarial negatives --------------------------------------------------
+# Phonetically similar phrases that should NOT trigger.
+# The training pipeline generates TTS clips of these as hard negatives.
+custom_negative_phrases:
+  - "hey ask all"
+  - "hey as cold"
+  - "hey hassle"
+  - "hey castle"
+  - "hey rascal"
+  - "pay asshole"
+  - "say asshole"
+  - "hey a stroll"
+  - "hey at all"
+  - "hey i sold"
+
+# --- Augmentation -----------------------------------------------------------
+
+# Room impulse responses for reverb simulation.
+rir_paths:
+  - "/data/mit_rirs"
+
+# Background noise sources (music, environmental audio).
+background_paths:
+  - "/data/audioset_16k"
+
+# Relative duplication rates for background sources.
+background_paths_duplication_rate:
+  - 1
+
+# Number of augmentation passes over the synthetic data.
+# Each round applies different noise/reverb combinations.
+augmentation_rounds: 1
+
+# Batch size for augmentation processing.
+augmentation_batch_size: 16
+
+# --- Training ---------------------------------------------------------------
+
+# Pre-computed feature files for negative training data.
+# ACAV100M: 2000 hours of diverse speech/audio, pre-processed through
+# the openWakeWord embedding model. Saves recomputing features.
+feature_data_files:
+  "ACAV100M_sample": "/data/openwakeword_features_ACAV100M_2000_hrs_16bit.npy"
+
+# Batch composition per class per training step.
+batch_n_per_class:
+  "ACAV100M_sample": 1024
+  "adversarial_negative": 50
+  "positive": 50
+
+# Validation data for false positive rate estimation.
+false_positive_validation_data_path: "/data/validation_set_features.npy"
+
+# Network architecture.
+# "dnn" = fully-connected layers with layer norm + ReLU.
+# 32 units is small and fast — runs in real-time on a Pi 3B.
+model_type: "dnn"
+layer_size: 32
+
+# Training steps. 50,000 with cosine decay + checkpoint averaging
+# gives a well-converged model without overfitting.
+steps: 50000
+
+# Negative class weight schedule — ramps up to this ceiling.
+# Higher values push the model harder to reject false positives.
+# 1500 is aggressive but appropriate for a home assistant that
+# should almost never false-trigger.
+max_negative_weight: 1500
+
+# Target false positive rate (per hour of continuous audio).
+# 0.2 = one false trigger per 5 hours. Strict but achievable
+# with a 4-syllable, phonetically distinct phrase.
+target_false_positives_per_hour: 0.2

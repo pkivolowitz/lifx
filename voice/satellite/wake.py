@@ -50,8 +50,8 @@ class WakeDetector:
         model_path: str,
         threshold: float = 0.5,
         vad_threshold: float = 0.5,
-        confidence_window: int = 3,
-        cooldown: float = 8.0,
+        confidence_window: int = 2,
+        cooldown: float = 6.0,
     ) -> None:
         """Initialize the wake word detector."""
         if not _HAS_OWW:
@@ -73,11 +73,21 @@ class WakeDetector:
             os.path.basename(model_path),
         )[0]
 
-        self._model: "OWWModel" = OWWModel(
-            wakeword_models=[model_path],
-            inference_framework="onnx",
-            vad_threshold=vad_threshold,
-        )
+        # openWakeWord API varies by version:
+        # 0.4.x uses wakeword_model_paths, 0.6+ uses wakeword_models.
+        import inspect
+        params = inspect.signature(OWWModel.__init__).parameters
+        if "wakeword_model_paths" in params:
+            self._model = OWWModel(
+                wakeword_model_paths=[model_path],
+                vad_threshold=vad_threshold,
+            )
+        else:
+            self._model = OWWModel(
+                wakeword_models=[model_path],
+                inference_framework="onnx",
+                vad_threshold=vad_threshold,
+            )
 
         logger.info(
             "WakeDetector initialized: model=%s threshold=%.2f "

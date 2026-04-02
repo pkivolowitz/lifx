@@ -128,9 +128,15 @@ class CoordinatorDaemon:
     def _init_executor(self) -> None:
         """Initialize GlowUp API executor."""
         from voice.coordinator.executor import GlowUpExecutor
+        chat_cfg: dict[str, Any] = self._config.get("chat", {})
+        intent_cfg: dict[str, Any] = self._config.get("intent", {})
         self._executor = GlowUpExecutor(
             api_base=self._api_base,
             auth_token=self._auth_token,
+            chat_model=chat_cfg.get("model", "llama3.1:8b"),
+            ollama_host=intent_cfg.get(
+                "ollama_host", "http://localhost:11434",
+            ),
         )
 
     def _init_tts(self) -> None:
@@ -139,6 +145,46 @@ class CoordinatorDaemon:
         from voice.coordinator.tts import TextToSpeech
         self._tts = TextToSpeech(
             voice_model=tts_cfg.get("voice_model"),
+        )
+
+    def _init_player(self) -> None:
+        """Initialize AirPlay audio player for TTS responses."""
+        airplay_cfg: dict[str, Any] = self._config.get("airplay", {})
+        if not airplay_cfg.get("enabled", False):
+            logger.info("AirPlay player disabled (no config)")
+            return
+
+        try:
+            from voice.coordinator.airplay import AirPlayPlayer
+            self._player = AirPlayPlayer(
+                room_map=airplay_cfg.get("room_map", {}),
+                default_device=airplay_cfg.get("default_device"),
+            )
+        except ImportError:
+            logger.warning("pyatv not installed — AirPlay disabled")
+        except Exception as exc:
+            logger.error("AirPlay init failed: %s", exc)
+
+    def _notify_playback(self, room: str, playing: bool) -> None:
+        """Publish playback state so satellites suppress wake detection.
+
+        Args:
+            room:    Room name (satellites filter by their own room).
+            playing: True when TTS audio is about to play, False when done.
+        """
+        if self._mqtt_client is None:
+            return
+
+        payload: str = json.dumps({
+            "room": room,
+            "playing": playing,
+            "timestamp": time.time(),
+        })
+        self._mqtt_client.publish(
+            C.TOPIC_PLAYBACK, payload, qos=0,
+        )
+        logger.debug(
+            "[%s] Playback %s", room, "started" if playing else "stopped",
         )
 
     def _init_mqtt(self) -> None:
@@ -218,6 +264,11 @@ class CoordinatorDaemon:
             header.get("wake_score", 0),
         )
 
+        # Suppress wake detection for the entire pipeline duration,
+        # not just during TTS playback.  Prevents the satellite from
+        # re-triggering on its own HomePod output during slow queries.
+        self._notify_playback(room, True)
+
         # Refresh capabilities if stale.
         if (hasattr(self._intent, "should_refresh")
                 and self._intent.should_refresh()
@@ -226,16 +277,22 @@ class CoordinatorDaemon:
                 self._api_base, self._auth_token,
             )
 
-        result = process_utterance(
-            room=room,
-            pcm=pcm,
-            meta=header,
-            stt=self._stt,
-            intent_parser=self._intent,
-            executor=self._executor,
-            tts=self._tts,
-            player=self._player,
-        )
+        try:
+            result = process_utterance(
+                room=room,
+                pcm=pcm,
+                meta=header,
+                stt=self._stt,
+                intent_parser=self._intent,
+                executor=self._executor,
+                tts=self._tts,
+                player=self._player,
+                playback_notifier=self._notify_playback,
+            )
+        finally:
+            # Always re-enable wake detection after pipeline completes,
+            # even if the pipeline crashed.
+            self._notify_playback(room, False)
 
         logger.info(
             "[%s] Pipeline: '%s' → %s (%.0fms)",
@@ -258,6 +315,7 @@ class CoordinatorDaemon:
         self._init_intent()
         self._init_executor()
         self._init_tts()
+        self._init_player()
 
         # Worker pool.
         self._pool = concurrent.futures.ThreadPoolExecutor(
@@ -295,6 +353,14 @@ class CoordinatorDaemon:
             self._pool.shutdown(wait=True, cancel_futures=True)
             self._pool = None
 
+        # Close AirPlay connections cleanly so HomePods don't hold
+        # stale sessions.
+        if hasattr(self._player, "close"):
+            try:
+                self._player.close()
+            except Exception as exc:
+                logger.debug("Player close failed: %s", exc)
+
         logger.info("Coordinator stopped")
 
 
@@ -322,6 +388,10 @@ def main() -> None:
     parser.add_argument(
         "--token", type=str, default=None,
         help="GlowUp auth token",
+    )
+    parser.add_argument(
+        "--airplay-device", type=str, default=None,
+        help="Default AirPlay device name for TTS playback",
     )
     parser.add_argument(
         "--mock-stt", action="store_true",
@@ -357,6 +427,12 @@ def main() -> None:
         config["mock_stt"] = True
     if args.mock_intent:
         config["mock_intent"] = True
+    if args.airplay_device:
+        config["airplay"] = {
+            "enabled": True,
+            "default_device": args.airplay_device,
+            "room_map": {},
+        }
 
     # Signal handling.
     daemon = CoordinatorDaemon(config)

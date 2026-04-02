@@ -1,0 +1,62 @@
+# openWakeWord training config for "Hey Mashugenah" wake word.
+#
+# 5 syllables, Yiddish, extremely low false positive risk.
+# Perry's pronunciation: "hey mah-SHOO-gen-ah"
+#
+# Perry Kivolowitz, 2026. MIT License.
+
+model_name: "hey_mashugenah"
+
+target_phrase:
+  - "hey mashugenah"
+  - "hey meshuggenah"
+  - "hey mashugana"
+  - "hey meshugana"
+
+n_samples: 10000
+n_samples_val: 2000
+tts_batch_size: 50
+
+piper_sample_generator_path: "/opt/piper-sample-generator"
+output_dir: "/workspace/my_custom_model"
+
+custom_negative_phrases:
+  - "hey sugar"
+  - "hey michigan"
+  - "hey should you go"
+  - "hey mashup gonna"
+  - "pay mashugenah"
+  - "say mashugenah"
+  - "hey my sugar"
+  - "hey tissue gonna"
+  - "hey should gonna"
+  - "a shoe gonna"
+
+rir_paths:
+  - "/data/mit_rirs"
+
+background_paths:
+  - "/data/audioset_16k"
+
+background_paths_duplication_rate:
+  - 1
+
+augmentation_rounds: 1
+augmentation_batch_size: 16
+
+feature_data_files:
+  "ACAV100M_sample": "/data/openwakeword_features_ACAV100M_2000_hrs_16bit.npy"
+
+batch_n_per_class:
+  "ACAV100M_sample": 1024
+  "adversarial_negative": 50
+  "positive": 50
+
+false_positive_validation_data_path: "/data/validation_set_features.npy"
+
+model_type: "dnn"
+layer_size: 32
+
+steps: 50000
+max_negative_weight: 1500
+target_false_positives_per_hour: 0.2
