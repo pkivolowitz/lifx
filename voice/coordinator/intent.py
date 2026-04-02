@@ -1,0 +1,285 @@
+"""Intent parsing using Ollama (local LLM).
+
+Sends transcribed text to a local Ollama instance and extracts a
+structured JSON intent for the GlowUp voice command handler.
+
+The system prompt is dynamically constructed with the current list
+of available effects, groups, and devices — refreshed periodically
+from the GlowUp API.
+"""
+
+# Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+# Licensed under the MIT License. See LICENSE file in the project root.
+
+__version__ = "1.0"
+
+import json
+import logging
+import time
+import urllib.request
+from typing import Any, Optional
+
+from voice import constants as C
+
+logger: logging.Logger = logging.getLogger("glowup.voice.intent")
+
+# ---------------------------------------------------------------------------
+# System prompt template
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT_TEMPLATE: str = """You are the voice command parser for GlowUp, a home automation and sensor-fusion platform.
+
+Parse the user's spoken command into a JSON action. Think carefully about what they want.
+
+Available actions:
+- power: turn devices on or off (params: on=true/false)
+- brightness: set brightness level (params: brightness=0-100)
+- color: set light color by name (params: color="blue", "red", etc.)
+- temperature: set color temperature in Kelvin (params: temperature=2500-9000)
+- play_effect: start a lighting effect (params: effect="cylon", "breathe", etc.)
+- stop: stop current effect on a device or group
+- query_sensor: ask about sensor readings (params: sensor_type="temperature", "humidity", "motion")
+- query_power: ask about power consumption or electricity cost
+- query_status: ask what effect is currently playing
+- scene: activate a named scene or preset
+
+{capabilities}
+
+Respond with ONLY a JSON object. No explanation, no preamble.
+
+Schema:
+{{
+  "action": "<action>",
+  "target": "<device label, group name, or 'all'>",
+  "params": {{ ... action-specific parameters ... }}
+}}
+
+If you cannot determine the intent, respond: {{"action": "unknown"}}
+
+Examples:
+- "turn off the bedroom lights" -> {{"action": "power", "target": "bedroom", "params": {{"on": false}}}}
+- "play cylon on the living room" -> {{"action": "play_effect", "target": "living", "params": {{"effect": "cylon"}}}}
+- "what's the temperature in the bedroom?" -> {{"action": "query_sensor", "target": "bedroom", "params": {{"sensor_type": "temperature"}}}}
+- "how much power is the TV using?" -> {{"action": "query_power", "target": "LRTV", "params": {{}}}}
+- "set brightness to 50 percent" -> {{"action": "brightness", "target": "all", "params": {{"brightness": 50}}}}
+"""
+
+
+class IntentParser:
+    """Parse voice transcriptions into structured intents via Ollama.
+
+    Args:
+        model:        Ollama model name (e.g., ``llama3.2:3b``).
+        ollama_host:  Ollama API base URL.
+        timeout:      Request timeout in seconds.
+        max_retries:  Retries on invalid JSON response.
+    """
+
+    def __init__(
+        self,
+        model: str = "llama3.2:3b",
+        ollama_host: str = "http://localhost:11434",
+        timeout: float = C.INTENT_TIMEOUT_S,
+        max_retries: int = C.INTENT_MAX_RETRIES,
+    ) -> None:
+        """Initialize the intent parser."""
+        self._model: str = model
+        self._ollama_host: str = ollama_host
+        self._timeout: float = timeout
+        self._max_retries: int = max_retries
+        self._capabilities_text: str = ""
+        self._capabilities_last_refresh: float = 0.0
+
+    def refresh_capabilities(
+        self, api_base: str, auth_token: str,
+    ) -> None:
+        """Fetch available effects, groups, devices from GlowUp API.
+
+        Updates the system prompt with current capabilities so the
+        LLM knows what targets and effects are available.
+
+        Args:
+            api_base:   GlowUp server URL (e.g., ``http://localhost:8420``).
+            auth_token: Bearer token for GlowUp API.
+        """
+        parts: list[str] = []
+        headers: dict[str, str] = {
+            "Authorization": f"Bearer {auth_token}",
+        }
+
+        for endpoint, label in [
+            ("/api/effects", "Available effects"),
+            ("/api/groups", "Available groups"),
+            ("/api/devices", "Available devices"),
+        ]:
+            try:
+                req = urllib.request.Request(
+                    f"{api_base}{endpoint}", headers=headers,
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read())
+
+                if endpoint == "/api/effects":
+                    names = [e.get("name", "") for e in data if isinstance(e, dict)]
+                    if names:
+                        parts.append(f"{label}: {', '.join(names)}")
+                elif endpoint == "/api/groups":
+                    if isinstance(data, dict):
+                        parts.append(f"{label}: {', '.join(data.keys())}")
+                elif endpoint == "/api/devices":
+                    labels = [
+                        d.get("label", d.get("ip", ""))
+                        for d in data if isinstance(d, dict)
+                    ]
+                    if labels:
+                        parts.append(f"{label}: {', '.join(labels)}")
+
+            except Exception as exc:
+                logger.debug("Failed to fetch %s: %s", endpoint, exc)
+
+        self._capabilities_text = "\n".join(parts)
+        self._capabilities_last_refresh = time.time()
+        logger.info(
+            "Refreshed capabilities: %d chars", len(self._capabilities_text),
+        )
+
+    def _build_system_prompt(self) -> str:
+        """Build the full system prompt with current capabilities."""
+        return _SYSTEM_PROMPT_TEMPLATE.format(
+            capabilities=self._capabilities_text or "No capability data available yet.",
+        )
+
+    def _call_ollama(self, text: str) -> Optional[dict[str, Any]]:
+        """Send text to Ollama and parse the JSON response.
+
+        Args:
+            text: Transcribed voice command.
+
+        Returns:
+            Parsed intent dict, or None on failure.
+        """
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": self._build_system_prompt()},
+                {"role": "user", "content": text},
+            ],
+            "stream": False,
+            "options": {
+                "temperature": 0.1,  # Low temperature for deterministic output.
+            },
+        }
+
+        body: bytes = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self._ollama_host}/api/chat",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                result = json.loads(resp.read())
+                content: str = result.get("message", {}).get("content", "").strip()
+
+                # Strip markdown code fences if present.
+                if content.startswith("```"):
+                    lines = content.split("\n")
+                    # Remove first and last line (``` markers).
+                    content = "\n".join(lines[1:-1]).strip()
+
+                return json.loads(content)
+
+        except json.JSONDecodeError as exc:
+            logger.warning("Ollama returned invalid JSON: %s", exc)
+            return None
+        except Exception as exc:
+            logger.error("Ollama request failed: %s", exc)
+            return None
+
+    def parse(self, text: str) -> dict[str, Any]:
+        """Parse transcribed text into a structured intent.
+
+        Calls Ollama with the system prompt and user text.
+        Retries once on invalid JSON.
+
+        Args:
+            text: Transcribed voice command.
+
+        Returns:
+            Intent dict with ``action``, ``target``, ``params``.
+            Returns ``{"action": "unknown"}`` on failure.
+        """
+        if not text.strip():
+            return {"action": "unknown"}
+
+        t0: float = time.monotonic()
+
+        for attempt in range(1 + self._max_retries):
+            result = self._call_ollama(text)
+            if result is not None and isinstance(result, dict):
+                elapsed: float = time.monotonic() - t0
+                logger.info(
+                    "Intent parsed in %.2fs (attempt %d): %s",
+                    elapsed, attempt + 1, result,
+                )
+                return result
+
+            if attempt < self._max_retries:
+                logger.info("Retrying intent parse (attempt %d)...", attempt + 2)
+
+        logger.warning("Intent parsing failed after %d attempts", 1 + self._max_retries)
+        return {"action": "unknown"}
+
+    def should_refresh(self) -> bool:
+        """Check if capabilities should be refreshed.
+
+        Returns:
+            True if the refresh interval has elapsed.
+        """
+        return (
+            time.time() - self._capabilities_last_refresh
+            > C.CAPABILITIES_REFRESH_S
+        )
+
+
+class MockIntentParser:
+    """Mock intent parser for testing without Ollama.
+
+    Returns a fixed intent or prompts stdin.
+
+    Args:
+        intent: Fixed intent dict to return.  If None, prompts
+                stdin for JSON input.
+    """
+
+    def __init__(self, intent: Optional[dict[str, Any]] = None) -> None:
+        """Initialize the mock parser."""
+        self._intent: Optional[dict[str, Any]] = intent
+
+    def parse(self, text: str) -> dict[str, Any]:
+        """Return mock intent.
+
+        Args:
+            text: Ignored unless prompting.
+
+        Returns:
+            The pre-set intent or user input from stdin.
+        """
+        if self._intent is not None:
+            return self._intent
+
+        print(f"[MOCK INTENT] Heard: '{text}'")
+        try:
+            raw = input("[MOCK INTENT] Enter JSON intent: ").strip()
+            return json.loads(raw)
+        except (EOFError, json.JSONDecodeError):
+            return {"action": "unknown"}
+
+    def refresh_capabilities(self, api_base: str, auth_token: str) -> None:
+        """No-op for mock."""
+
+    def should_refresh(self) -> bool:
+        """Never refresh for mock."""
+        return False
