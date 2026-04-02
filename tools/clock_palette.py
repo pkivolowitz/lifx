@@ -1,15 +1,27 @@
 #!/usr/bin/env python3
-"""Clock palette explorer — generate pleasing color schemes from a wall photo.
+"""Clock palette explorer — generate pleasing color schemes from a wall photo or paint color.
 
-Given a JPG of the wall behind a kiosk clock, this tool extracts
-dominant colors, generates candidate palettes using color science
-(complementary, analogous, triadic, split-complementary, monochrome),
-and displays a grid of miniature clock mockups.  Click to accept or
-reject each palette.
+Given a JPG of the wall behind a kiosk clock OR a paint color ID
+(Sherwin-Williams, Benjamin Moore, Behr), this tool generates
+candidate palettes using color science and displays a grid of
+miniature clock mockups.  Click to accept or reject each palette.
 
 Usage::
 
-    python3 tools/clock_palette.py /path/to/wall_photo.jpg
+    # From a wall photo:
+    python3 tools/clock_palette.py wall_photo.jpg
+
+    # From a Sherwin-Williams paint color:
+    python3 tools/clock_palette.py --paint SW6001
+
+    # From a Benjamin Moore color:
+    python3 tools/clock_palette.py --paint "BM OC-17"
+
+    # From a Behr color:
+    python3 tools/clock_palette.py --paint "BEHR 100A-1"
+
+    # Search paint colors by name:
+    python3 tools/clock_palette.py --search "repose gray"
 
 Dependencies: tkinter, Pillow, numpy (no sklearn needed).
 
@@ -61,6 +73,126 @@ _STRATEGIES: list[str] = [
     "monochrome_dark",
     "accent",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Paint color catalog
+# ---------------------------------------------------------------------------
+
+# Directory containing paint color JSON files (adjacent to this module).
+_PAINT_DIR: str = os.path.join(os.path.dirname(__file__), "paint_colors")
+
+# Brand prefixes used in --paint argument.  Maps prefix → JSON filename.
+_PAINT_BRANDS: dict[str, str] = {
+    "SW": "sherwin-williams.json",
+    "BM": "benjamin-moore.json",
+    "BEHR": "behr.json",
+}
+
+
+def _load_paint_catalog(brand_file: str) -> list[dict[str, Any]]:
+    """Load a paint brand's color catalog from JSON.
+
+    Args:
+        brand_file: Filename in the paint_colors directory.
+
+    Returns:
+        List of dicts with 'name', 'label', 'hex' keys.
+    """
+    import json as _json
+    path: str = os.path.join(_PAINT_DIR, brand_file)
+    if not os.path.exists(path):
+        return []
+    with open(path, "r") as f:
+        return _json.load(f)
+
+
+def _hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
+    """Convert '#RRGGBB' to (R, G, B)."""
+    h: str = hex_str.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def lookup_paint(paint_id: str) -> tuple[str, tuple[int, int, int]] | None:
+    """Look up a paint color by brand-prefixed ID.
+
+    Supported formats:
+        SW6001, SW 6001        — Sherwin-Williams
+        BM OC-17, BM AF-5      — Benjamin Moore
+        BEHR 100A-1             — Behr
+
+    Args:
+        paint_id: Paint color identifier with brand prefix.
+
+    Returns:
+        Tuple of (display_name, (R, G, B)) or None if not found.
+    """
+    paint_id = paint_id.strip().upper()
+
+    # Parse brand prefix.
+    brand_prefix: str = ""
+    label_query: str = ""
+    for prefix in sorted(_PAINT_BRANDS.keys(), key=len, reverse=True):
+        if paint_id.startswith(prefix):
+            brand_prefix = prefix
+            label_query = paint_id[len(prefix):].strip().lstrip("#")
+            break
+
+    if not brand_prefix:
+        return None
+
+    catalog: list[dict[str, Any]] = _load_paint_catalog(
+        _PAINT_BRANDS[brand_prefix],
+    )
+    if not catalog:
+        return None
+
+    # SW labels are numeric ints in the JSON; normalize for comparison.
+    for entry in catalog:
+        entry_label: str = str(entry.get("label", "")).strip().upper()
+        if entry_label == label_query:
+            name: str = entry.get("name", "Unknown")
+            rgb: tuple[int, int, int] = _hex_to_rgb(entry["hex"])
+            brand_name: str = {
+                "SW": "Sherwin-Williams",
+                "BM": "Benjamin Moore",
+                "BEHR": "Behr",
+            }.get(brand_prefix, brand_prefix)
+            display: str = f"{brand_name} {entry_label} — {name}"
+            return display, rgb
+
+    return None
+
+
+def search_paint(query: str) -> list[tuple[str, str, str, tuple[int, int, int]]]:
+    """Search all paint catalogs by name substring.
+
+    Args:
+        query: Search string (case-insensitive).
+
+    Returns:
+        List of (brand, label, name, (R,G,B)) tuples, max 20 results.
+    """
+    query_lower: str = query.lower()
+    results: list[tuple[str, str, str, tuple[int, int, int]]] = []
+    brand_names: dict[str, str] = {
+        "SW": "SW",
+        "BM": "BM",
+        "BEHR": "BEHR",
+    }
+
+    for prefix, filename in _PAINT_BRANDS.items():
+        catalog = _load_paint_catalog(filename)
+        for entry in catalog:
+            name: str = entry.get("name", "")
+            if query_lower in name.lower():
+                rgb = _hex_to_rgb(entry["hex"])
+                label = str(entry.get("label", ""))
+                results.append((brand_names[prefix], label, name, rgb))
+                if len(results) >= 20:
+                    return results
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -426,20 +558,46 @@ class PaletteExplorer:
     the palette (prints to stdout). Right-click to reject it
     (removes from grid).
 
+    Accepts either a wall photo path OR a pre-resolved paint color.
+
     Args:
-        image_path: Path to the wall photo.
+        image_path: Path to the wall photo (or None if using paint_color).
+        paint_color: Tuple of (display_name, (R,G,B)) from paint lookup.
     """
 
-    def __init__(self, image_path: str) -> None:
+    def __init__(
+        self,
+        image_path: str | None = None,
+        paint_color: tuple[str, tuple[int, int, int]] | None = None,
+    ) -> None:
         """Initialize the palette explorer."""
-        self._image_path: str = image_path
         self._root: tk.Tk = tk.Tk()
-        self._root.title(f"Clock Palette Explorer \u2014 {os.path.basename(image_path)}")
         self._root.configure(bg="#1a1a1a")
 
-        # Extract colors and generate palettes.
-        print(f"Extracting colors from {image_path}...")
-        self._dominant: list[tuple[int, int, int]] = extract_dominant_colors(image_path)
+        if paint_color is not None:
+            # Paint color mode — use the single color as dominant.
+            display_name, rgb = paint_color
+            self._root.title(f"Clock Palette Explorer \u2014 {display_name}")
+            print(f"Paint color: {display_name} = #{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}")
+            # Generate a set of related colors by varying lightness.
+            h, s, l = _rgb_to_hsl(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)
+            self._dominant: list[tuple[int, int, int]] = [
+                rgb,
+                _hsl_to_rgb(h, max(s * 0.6, 0.1), max(l - 0.15, 0.05)),
+                _hsl_to_rgb(h, max(s * 0.4, 0.05), min(l + 0.15, 0.95)),
+                _hsl_to_rgb(_hue_shift(h, 30), s * 0.5, l),
+                _hsl_to_rgb(_hue_shift(h, -30), s * 0.5, l),
+            ]
+        elif image_path is not None:
+            # Photo mode — extract dominant colors.
+            self._root.title(
+                f"Clock Palette Explorer \u2014 {os.path.basename(image_path)}",
+            )
+            print(f"Extracting colors from {image_path}...")
+            self._dominant = extract_dominant_colors(image_path)
+        else:
+            raise ValueError("Either image_path or paint_color is required")
+
         print(f"Dominant colors: {self._dominant}")
         self._palettes: list[dict[str, Any]] = generate_palettes(self._dominant)
         print(f"Generated {len(self._palettes)} palettes")
@@ -572,19 +730,60 @@ class PaletteExplorer:
 def main() -> None:
     """Parse args and launch the palette explorer."""
     parser = argparse.ArgumentParser(
-        description="Generate clock color palettes from a wall photo",
+        description="Generate clock color palettes from a wall photo or paint color",
     )
     parser.add_argument(
-        "image", type=str,
+        "image", type=str, nargs="?", default=None,
         help="Path to a JPG/PNG photo of the wall behind the clock",
     )
+    parser.add_argument(
+        "--paint", type=str, default=None,
+        help=(
+            "Paint color ID instead of a photo. "
+            "Examples: SW6001, 'BM OC-17', 'BEHR 100A-1'"
+        ),
+    )
+    parser.add_argument(
+        "--search", type=str, default=None,
+        help="Search paint catalogs by name (e.g., 'repose gray')",
+    )
     args = parser.parse_args()
+
+    # Search mode — print results and exit.
+    if args.search is not None:
+        results = search_paint(args.search)
+        if not results:
+            print(f"No paint colors matching '{args.search}'")
+            sys.exit(1)
+        print(f"\nPaint colors matching '{args.search}':\n")
+        for brand, label, name, rgb in results:
+            hex_str: str = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+            print(f"  {brand} {label:>8s}  {hex_str}  {name}")
+        print(f"\nUse --paint to explore palettes, e.g.:")
+        print(f"  python3 tools/clock_palette.py --paint '{results[0][0]} {results[0][1]}'")
+        sys.exit(0)
+
+    # Paint mode — look up color and launch explorer.
+    if args.paint is not None:
+        result = lookup_paint(args.paint)
+        if result is None:
+            print(f"Error: paint color '{args.paint}' not found", file=sys.stderr)
+            print("Try --search to find colors by name", file=sys.stderr)
+            sys.exit(1)
+        explorer = PaletteExplorer(paint_color=result)
+        explorer.run()
+        return
+
+    # Photo mode — extract colors from image.
+    if args.image is None:
+        parser.print_help()
+        sys.exit(1)
 
     if not os.path.exists(args.image):
         print(f"Error: file not found: {args.image}", file=sys.stderr)
         sys.exit(1)
 
-    explorer = PaletteExplorer(args.image)
+    explorer = PaletteExplorer(image_path=args.image)
     explorer.run()
 
 
