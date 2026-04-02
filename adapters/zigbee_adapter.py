@@ -30,7 +30,7 @@ import json
 import logging
 from typing import Any, Optional
 
-from adapter_base import MqttAdapterBase
+from .adapter_base import MqttAdapterBase
 from media import SignalMeta
 
 logger: logging.Logger = logging.getLogger("glowup.zigbee")

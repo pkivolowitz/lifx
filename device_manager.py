@@ -33,7 +33,7 @@ from engine import Controller
 from media import SignalBus
 from media.source import AudioStreamServer
 from transport import LifxDevice, SendMode, SINGLE_ZONE_COUNT
-from bulb_keepalive import BulbKeepAlive
+from infrastructure.bulb_keepalive import BulbKeepAlive
 from device_registry import DeviceRegistry
 
 from server_constants import (

@@ -40,7 +40,7 @@ __version__ = "1.1"
 import logging
 from typing import Any, Optional
 
-from adapter_base import AdapterBase
+from .adapter_base import AdapterBase
 from media import SignalMeta
 
 logger: logging.Logger = logging.getLogger("glowup.sensor_adapter")

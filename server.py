@@ -99,43 +99,43 @@ from emitters.lifx import LifxEmitter
 from emitters.virtual import VirtualMultizoneEmitter
 from emitters.virtual_grid import VirtualGridEmitter
 from engine import Controller
-from mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
-from ble_trigger import BleTriggerManager
+from infrastructure.mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
+from infrastructure.ble_trigger import BleTriggerManager
 from automation import (
     AutomationManager, sensor_data as ble_sensor_data,
     validate_automation, migrate_ble_triggers,
 )
 from operators import OperatorManager
 try:
-    from lock_manager import LockManager
+    from infrastructure.lock_manager import LockManager
     _HAS_LOCK_MANAGER: bool = True
 except ImportError:
     _HAS_LOCK_MANAGER = False
 
 try:
-    from zigbee_adapter import ZigbeeAdapter
+    from adapters.zigbee_adapter import ZigbeeAdapter
     _HAS_ZIGBEE: bool = True
 except ImportError:
     _HAS_ZIGBEE = False
 
 try:
-    from vivint_adapter import VivintAdapter
+    from adapters.vivint_adapter import VivintAdapter
     _HAS_VIVINT: bool = True
 except ImportError:
     _HAS_VIVINT = False
 
 try:
-    from nvr_adapter import NvrAdapter
+    from adapters.nvr_adapter import NvrAdapter
     _HAS_NVR: bool = True
 except ImportError:
     _HAS_NVR = False
 try:
-    from printer_adapter import PrinterAdapter
+    from adapters.printer_adapter import PrinterAdapter
     _HAS_PRINTER: bool = True
 except ImportError:
     _HAS_PRINTER = False
 try:
-    from ble_adapter import BleAdapter
+    from adapters.ble_adapter import BleAdapter
     _HAS_BLE_ADAPTER: bool = True
 except ImportError:
     _HAS_BLE_ADAPTER = False
@@ -170,7 +170,7 @@ except ImportError:
     _HAS_STATE_STORE = False
 
 # ARP-based bulb discovery and keepalive daemon.
-from bulb_keepalive import BulbKeepAlive
+from infrastructure.bulb_keepalive import BulbKeepAlive
 
 # MAC-based device identity registry.
 from device_registry import DeviceRegistry
@@ -1511,7 +1511,15 @@ def main() -> None:
             # -- Step 1: Start the ARP-based bulb keepalive daemon --------
             # Must run BEFORE device loading so the ARP table is
             # populated for label/MAC → IP resolution.
-            keepalive = BulbKeepAlive()
+            # On multi-homed hosts (e.g., Daedalus with ethernet +
+            # WiFi/lnet), bind to the LIFX interface IP and specify
+            # the sweep network explicitly.  Auto-detection of the
+            # local network fails under launchd (ifconfig not in PATH).
+            lifx_cfg: dict = config.get("lifx", {})
+            keepalive = BulbKeepAlive(
+                bind_ip=lifx_cfg.get("bind_ip"),
+                sweep_network=lifx_cfg.get("sweep_network"),
+            )
             GlowUpRequestHandler.keepalive = keepalive
             keepalive.start()
 
@@ -1744,7 +1752,7 @@ def main() -> None:
 
             # Power logger — SQLite storage for smart plug readings.
             try:
-                from power_logger import PowerLogger
+                from infrastructure.power_logger import PowerLogger
                 config_dir_local: str = os.path.dirname(
                     GlowUpRequestHandler.config_path or "/etc/glowup/server.json"
                 )

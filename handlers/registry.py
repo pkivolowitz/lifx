@@ -22,7 +22,7 @@ from urllib.parse import unquote
 
 from server_constants import *  # All constants available
 from device_registry import DeviceRegistry
-from bulb_keepalive import BulbKeepAlive
+from infrastructure.bulb_keepalive import BulbKeepAlive
 
 
 class RegistryHandlerMixin:

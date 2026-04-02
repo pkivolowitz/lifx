@@ -34,7 +34,7 @@ import logging
 import threading
 from typing import Any, Optional
 
-from adapter_base import MqttAdapterBase
+from .adapter_base import MqttAdapterBase
 from media import SignalMeta
 
 logger: logging.Logger = logging.getLogger("glowup.ble_adapter")

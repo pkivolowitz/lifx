@@ -18,7 +18,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from power_logger import (
+from infrastructure.power_logger import (
     MIN_WRITE_INTERVAL,
     POWER_PROPERTIES,
     PRUNE_EVERY,

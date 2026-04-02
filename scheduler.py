@@ -40,7 +40,7 @@ from solar import SunTimes, sun_times
 # Falls back gracefully if the registry/keepalive modules aren't present.
 try:
     from device_registry import DeviceRegistry
-    from bulb_keepalive import _read_arp, LIFX_OUI
+    from infrastructure.bulb_keepalive import _read_arp, LIFX_OUI
     _HAS_RESOLUTION: bool = True
 except ImportError:
     _HAS_RESOLUTION = False

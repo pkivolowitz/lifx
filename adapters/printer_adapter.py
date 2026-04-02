@@ -39,7 +39,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Optional
 
-from adapter_base import PollingAdapterBase
+from .adapter_base import PollingAdapterBase
 from media import SignalMeta
 
 logger: logging.Logger = logging.getLogger("glowup.printer")

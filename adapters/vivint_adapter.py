@@ -43,7 +43,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from adapter_base import AsyncPollingAdapterBase
+from .adapter_base import AsyncPollingAdapterBase
 from media import SignalMeta
 
 logger: logging.Logger = logging.getLogger("glowup.vivint")
@@ -79,9 +79,13 @@ RECONNECT_DELAY: float = 300.0
 MAX_RECONNECT_DELAY: float = 3600.0
 
 # Refresh token file path — written by vivint_setup.py, read by this adapter.
-# Stored alongside server.json in /etc/glowup/ so it works regardless of
-# which user runs the service (root via systemd, pi via CLI).
-TOKEN_FILE: Path = Path("/etc/glowup/.vivint_token")
+# Token file — check home directory first (Daedalus/macOS), fall back to
+# /etc/glowup/ (Pi/systemd).  Adapter writes to whichever path is writable.
+_HOME_TOKEN: Path = Path.home() / ".vivint_token"
+_ETC_TOKEN: Path = Path("/etc/glowup/.vivint_token")
+TOKEN_FILE: Path = _HOME_TOKEN if _HOME_TOKEN.exists() else (
+    _ETC_TOKEN if _ETC_TOKEN.exists() else _HOME_TOKEN
+)
 
 # File permissions: owner read/write only.
 TOKEN_FILE_MODE: int = stat.S_IRUSR | stat.S_IWUSR
@@ -361,19 +365,27 @@ class VivintAdapter(AsyncPollingAdapterBase):
     def _load_token(self) -> Optional[str]:
         """Load saved refresh token from disk.
 
+        Checks multiple locations: home directory (Daedalus/macOS)
+        and /etc/glowup/ (Pi/systemd).
+
         Returns:
             The refresh token string, or ``None`` if not found.
         """
-        if not TOKEN_FILE.exists():
-            logger.debug("No saved Vivint token at %s", TOKEN_FILE)
-            return None
-        try:
-            token: str = TOKEN_FILE.read_text().strip()
-            if token:
-                logger.info("Loaded Vivint refresh token from %s", TOKEN_FILE)
-                return token
-        except Exception as exc:
-            logger.warning("Failed to read Vivint token file: %s", exc)
+        candidates: list[Path] = [
+            Path.home() / ".vivint_token",
+            Path("/etc/glowup/.vivint_token"),
+        ]
+        for path in candidates:
+            if path.exists():
+                try:
+                    token: str = path.read_text().strip()
+                    if token:
+                        logger.info("Loaded Vivint refresh token from %s", path)
+                        return token
+                except Exception as exc:
+                    logger.warning("Failed to read %s: %s", path, exc)
+
+        logger.debug("No saved Vivint token found")
         return None
 
     def _save_token(self) -> None:

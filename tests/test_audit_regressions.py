@@ -667,13 +667,13 @@ class TestBulbDBGetDsn(unittest.TestCase):
 
     def test_get_dsn_exists(self) -> None:
         """_BulbDB must have a _get_dsn static method."""
-        from bulb_keepalive import _BulbDB
+        from infrastructure.bulb_keepalive import _BulbDB
         self.assertTrue(hasattr(_BulbDB, "_get_dsn"))
         self.assertTrue(callable(_BulbDB._get_dsn))
 
     def test_env_var_overrides_default(self) -> None:
         """GLOWUP_DIAG_DSN env var must take precedence."""
-        from bulb_keepalive import _BulbDB
+        from infrastructure.bulb_keepalive import _BulbDB
         sentinel: str = "postgresql://test:test@testhost:5432/testdb"
         with patch.dict(os.environ, {"GLOWUP_DIAG_DSN": sentinel}):
             dsn: str = _BulbDB._get_dsn()
@@ -681,7 +681,7 @@ class TestBulbDBGetDsn(unittest.TestCase):
 
     def test_default_dsn_uses_network_config(self) -> None:
         """Without env var, DSN must use network_config.net.db_host."""
-        from bulb_keepalive import _BulbDB
+        from infrastructure.bulb_keepalive import _BulbDB
         # Remove env var if set so the default path is taken.
         env: dict[str, str] = os.environ.copy()
         env.pop("GLOWUP_DIAG_DSN", None)
@@ -696,7 +696,7 @@ class TestBulbDBGetDsn(unittest.TestCase):
     def test_connect_and_reconnect_no_duplicate_dsn_logic(self) -> None:
         """connect() and _reconnect() must not contain inline DSN construction."""
         import inspect
-        from bulb_keepalive import _BulbDB
+        from infrastructure.bulb_keepalive import _BulbDB
 
         for method_name in ("connect", "_reconnect"):
             source: str = inspect.getsource(getattr(_BulbDB, method_name))
@@ -715,7 +715,7 @@ class TestBulbDBGetDsn(unittest.TestCase):
 
     def test_reconnect_attempts_is_named_constant(self) -> None:
         """The retry count in record() must use a named constant."""
-        from bulb_keepalive import _BulbDB
+        from infrastructure.bulb_keepalive import _BulbDB
         self.assertTrue(
             hasattr(_BulbDB, "_RECONNECT_ATTEMPTS"),
             "_BulbDB missing _RECONNECT_ATTEMPTS constant",
@@ -976,7 +976,7 @@ class TestBulbDBCloseLogging(unittest.TestCase):
     def test_close_no_bare_except(self) -> None:
         """close() must not contain 'except Exception' + 'pass'."""
         import inspect
-        from bulb_keepalive import _BulbDB
+        from infrastructure.bulb_keepalive import _BulbDB
         source: str = inspect.getsource(_BulbDB.close)
         import re
         bare_excepts: list[str] = re.findall(
@@ -991,7 +991,7 @@ class TestBulbDBCloseLogging(unittest.TestCase):
     def test_close_logs_debug_on_failure(self) -> None:
         """close() should log at debug level if conn.close() fails."""
         import inspect
-        from bulb_keepalive import _BulbDB
+        from infrastructure.bulb_keepalive import _BulbDB
         source: str = inspect.getsource(_BulbDB.close)
         self.assertIn(
             "logger.debug",
@@ -1016,7 +1016,7 @@ class TestKeepAliveMacDedup(unittest.TestCase):
 
     def _make_daemon(self) -> "BulbKeepAlive":
         """Create a BulbKeepAlive with no network or DB dependencies."""
-        from bulb_keepalive import BulbKeepAlive
+        from infrastructure.bulb_keepalive import BulbKeepAlive
         daemon: BulbKeepAlive = BulbKeepAlive.__new__(BulbKeepAlive)
         daemon._known = {}
         daemon._misses = {}
@@ -1025,7 +1025,7 @@ class TestKeepAliveMacDedup(unittest.TestCase):
         daemon._on_new_bulb = None
         return daemon
 
-    @patch("bulb_keepalive._read_arp")
+    @patch("infrastructure.bulb_keepalive._read_arp")
     def test_mac_moves_to_new_ip(self, mock_arp: MagicMock) -> None:
         """When a MAC appears at a new IP, the old IP is evicted."""
         daemon = self._make_daemon()
@@ -1045,7 +1045,7 @@ class TestKeepAliveMacDedup(unittest.TestCase):
         self.assertIn("10.0.0.20", daemon._known)
         self.assertEqual(daemon._known["10.0.0.20"], "d0:73:d5:aa:bb:cc")
 
-    @patch("bulb_keepalive._read_arp")
+    @patch("infrastructure.bulb_keepalive._read_arp")
     def test_two_ips_same_mac_deduped(self, mock_arp: MagicMock) -> None:
         """If ARP returns two IPs for one MAC, only the latest survives."""
         daemon = self._make_daemon()
@@ -1071,7 +1071,7 @@ class TestKeepAliveMacDedup(unittest.TestCase):
             f"Expected 1 entry for MAC, got {len(mac_entries)}: {mac_entries}",
         )
 
-    @patch("bulb_keepalive._read_arp")
+    @patch("infrastructure.bulb_keepalive._read_arp")
     def test_different_macs_not_deduped(self, mock_arp: MagicMock) -> None:
         """Different MACs at different IPs are not deduped."""
         daemon = self._make_daemon()
@@ -1083,7 +1083,7 @@ class TestKeepAliveMacDedup(unittest.TestCase):
 
         self.assertEqual(len(daemon._known), 2)
 
-    @patch("bulb_keepalive._read_arp")
+    @patch("infrastructure.bulb_keepalive._read_arp")
     def test_dedup_cleans_miss_counter(self, mock_arp: MagicMock) -> None:
         """Evicting a stale IP also cleans its miss counter."""
         daemon = self._make_daemon()

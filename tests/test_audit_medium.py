@@ -148,7 +148,7 @@ class TestM8M9MqttBridge(unittest.TestCase):
     def test_cache_lock_exists(self) -> None:
         """Bridge should have _cache_lock attribute."""
         try:
-            from mqtt_bridge import MqttBridge
+            from infrastructure.mqtt_bridge import MqttBridge
             dm = MagicMock()
             bridge = MqttBridge(dm, {"mqtt": {"broker": "localhost"}})
             self.assertIsInstance(bridge._cache_lock, type(threading.Lock()))
@@ -159,7 +159,7 @@ class TestM8M9MqttBridge(unittest.TestCase):
         """stop() should join publisher threads before calling loop_stop."""
         import inspect
         try:
-            from mqtt_bridge import MqttBridge
+            from infrastructure.mqtt_bridge import MqttBridge
             src = inspect.getsource(MqttBridge.stop)
             # The actual .join() call must appear before .loop_stop()
             join_pos = src.find(".join(")

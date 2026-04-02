@@ -17,7 +17,7 @@ import unittest
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch, call
 
-from adapter_base import (
+from adapters.adapter_base import (
     AdapterBase,
     AsyncPollingAdapterBase,
     MqttAdapterBase,
@@ -316,36 +316,36 @@ class TestMqttAdapterBaseConstruction(unittest.TestCase):
 class TestMqttAdapterBaseStart(unittest.TestCase):
     """Tests for MqttAdapterBase.start()."""
 
-    @patch("adapter_base._HAS_PAHO", True)
-    @patch("adapter_base.mqtt")
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
     def test_start_creates_client(self, mock_mqtt: MagicMock) -> None:
         """start() creates a paho MQTT client."""
         mock_client = MagicMock()
         mock_mqtt.Client.return_value = mock_client
         # Simulate paho v1 (no CallbackAPIVersion).
         mock_mqtt.CallbackAPIVersion = None
-        with patch("adapter_base._PAHO_V2", False):
+        with patch("adapters.adapter_base._PAHO_V2", False):
             adapter = StubMqttAdapter()
             adapter.start()
         mock_mqtt.Client.assert_called_once()
         self.assertIs(adapter._client, mock_client)
 
-    @patch("adapter_base._HAS_PAHO", True)
-    @patch("adapter_base.mqtt")
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
     def test_start_sets_running(self, mock_mqtt: MagicMock) -> None:
         """start() sets running to True."""
         mock_mqtt.Client.return_value = MagicMock()
-        with patch("adapter_base._PAHO_V2", False):
+        with patch("adapters.adapter_base._PAHO_V2", False):
             adapter = StubMqttAdapter()
             adapter.start()
         self.assertTrue(adapter.running)
 
-    @patch("adapter_base._HAS_PAHO", True)
-    @patch("adapter_base.mqtt")
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
     def test_start_client_id_has_prefix(self, mock_mqtt: MagicMock) -> None:
         """Client ID starts with the configured prefix."""
         mock_mqtt.Client.return_value = MagicMock()
-        with patch("adapter_base._PAHO_V2", False):
+        with patch("adapters.adapter_base._PAHO_V2", False):
             adapter = StubMqttAdapter(client_id_prefix="glowup-ble")
             adapter.start()
         call_kwargs = mock_mqtt.Client.call_args
@@ -353,12 +353,12 @@ class TestMqttAdapterBaseStart(unittest.TestCase):
         client_id: str = call_kwargs[1]["client_id"]
         self.assertTrue(client_id.startswith("glowup-ble-"))
 
-    @patch("adapter_base._HAS_PAHO", True)
-    @patch("adapter_base.mqtt")
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
     def test_start_client_id_has_timestamp(self, mock_mqtt: MagicMock) -> None:
         """Client ID ends with a timestamp integer."""
         mock_mqtt.Client.return_value = MagicMock()
-        with patch("adapter_base._PAHO_V2", False):
+        with patch("adapters.adapter_base._PAHO_V2", False):
             adapter = StubMqttAdapter(client_id_prefix="test")
             adapter.start()
         call_kwargs = mock_mqtt.Client.call_args
@@ -367,13 +367,13 @@ class TestMqttAdapterBaseStart(unittest.TestCase):
         suffix: str = client_id.split("-", 1)[1]
         self.assertTrue(suffix.isdigit())
 
-    @patch("adapter_base._HAS_PAHO", True)
-    @patch("adapter_base.mqtt")
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
     def test_start_wires_on_connect(self, mock_mqtt: MagicMock) -> None:
         """start() wires _on_connect to the client."""
         mock_client = MagicMock()
         mock_mqtt.Client.return_value = mock_client
-        with patch("adapter_base._PAHO_V2", False):
+        with patch("adapters.adapter_base._PAHO_V2", False):
             adapter = StubMqttAdapter(subscribe_prefix="wire/test")
             adapter.start()
         # Verify the wired callback works — call it and check subscription.
@@ -382,13 +382,13 @@ class TestMqttAdapterBaseStart(unittest.TestCase):
         on_connect(sub_client, None, None, 0)
         sub_client.subscribe.assert_called_once_with("wire/test/#")
 
-    @patch("adapter_base._HAS_PAHO", True)
-    @patch("adapter_base.mqtt")
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
     def test_start_wires_on_message(self, mock_mqtt: MagicMock) -> None:
         """start() wires _on_message_dispatch to the client."""
         mock_client = MagicMock()
         mock_mqtt.Client.return_value = mock_client
-        with patch("adapter_base._PAHO_V2", False):
+        with patch("adapters.adapter_base._PAHO_V2", False):
             adapter = StubMqttAdapter()
             adapter.start()
         # Verify the wired callback dispatches to _handle_message.
@@ -400,41 +400,41 @@ class TestMqttAdapterBaseStart(unittest.TestCase):
         self.assertEqual(len(adapter.messages), 1)
         self.assertEqual(adapter.messages[0][0], "test/wire")
 
-    @patch("adapter_base._HAS_PAHO", True)
-    @patch("adapter_base.mqtt")
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
     def test_start_calls_connect_async(self, mock_mqtt: MagicMock) -> None:
         """start() calls connect_async with broker and port."""
         mock_client = MagicMock()
         mock_mqtt.Client.return_value = mock_client
-        with patch("adapter_base._PAHO_V2", False):
+        with patch("adapters.adapter_base._PAHO_V2", False):
             adapter = StubMqttAdapter(broker="10.0.0.5", port=1884)
             adapter.start()
         mock_client.connect_async.assert_called_once_with("10.0.0.5", 1884)
 
-    @patch("adapter_base._HAS_PAHO", True)
-    @patch("adapter_base.mqtt")
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
     def test_start_calls_loop_start(self, mock_mqtt: MagicMock) -> None:
         """start() calls loop_start on the client."""
         mock_client = MagicMock()
         mock_mqtt.Client.return_value = mock_client
-        with patch("adapter_base._PAHO_V2", False):
+        with patch("adapters.adapter_base._PAHO_V2", False):
             adapter = StubMqttAdapter()
             adapter.start()
         mock_client.loop_start.assert_called_once()
 
-    @patch("adapter_base._HAS_PAHO", True)
-    @patch("adapter_base.mqtt")
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
     def test_start_calls_on_started_hook(self, mock_mqtt: MagicMock) -> None:
         """start() calls the _on_started hook."""
         mock_mqtt.Client.return_value = MagicMock()
-        with patch("adapter_base._PAHO_V2", False):
+        with patch("adapters.adapter_base._PAHO_V2", False):
             adapter = StubMqttAdapter()
             adapter.start()
         self.assertTrue(adapter.started_hook_called)
 
-    @patch("adapter_base._HAS_PAHO", True)
-    @patch("adapter_base._PAHO_V2", True)
-    @patch("adapter_base.mqtt")
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base._PAHO_V2", True)
+    @patch("adapters.adapter_base.mqtt")
     def test_start_paho_v2_uses_callback_api(
         self, mock_mqtt: MagicMock,
     ) -> None:
@@ -447,7 +447,7 @@ class TestMqttAdapterBaseStart(unittest.TestCase):
             "V2", client_id=unittest.mock.ANY,
         )
 
-    @patch("adapter_base._HAS_PAHO", False)
+    @patch("adapters.adapter_base._HAS_PAHO", False)
     def test_start_without_paho_is_noop(self) -> None:
         """start() without paho-mqtt logs warning, stays stopped."""
         adapter = StubMqttAdapter()
@@ -455,7 +455,7 @@ class TestMqttAdapterBaseStart(unittest.TestCase):
         self.assertFalse(adapter.running)
         self.assertIsNone(adapter._client)
 
-    @patch("adapter_base._HAS_PAHO", False)
+    @patch("adapters.adapter_base._HAS_PAHO", False)
     def test_start_without_paho_does_not_call_hook(self) -> None:
         """start() without paho does not call _on_started."""
         adapter = StubMqttAdapter()
@@ -1053,19 +1053,19 @@ class TestPahoDetection(unittest.TestCase):
     @unittest.skipUnless(_HAS_PAHO, "paho-mqtt not installed")
     def test_paho_available_means_mqtt_not_none(self) -> None:
         """When paho is available, the mqtt module is importable."""
-        import adapter_base
+        import adapters.adapter_base as adapter_base
         self.assertIsNotNone(adapter_base.mqtt)
 
 
 class TestLogging(unittest.TestCase):
     """Verify that lifecycle events produce log output."""
 
-    @patch("adapter_base._HAS_PAHO", True)
-    @patch("adapter_base.mqtt")
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
     def test_mqtt_start_logs(self, mock_mqtt: MagicMock) -> None:
         """MqttAdapterBase start logs at INFO."""
         mock_mqtt.Client.return_value = MagicMock()
-        with patch("adapter_base._PAHO_V2", False):
+        with patch("adapters.adapter_base._PAHO_V2", False):
             adapter = StubMqttAdapter(
                 subscribe_prefix="test/log",
                 client_id_prefix="log-test",
@@ -1076,7 +1076,7 @@ class TestLogging(unittest.TestCase):
             any("log-test" in line and "test/log" in line for line in cm.output),
         )
 
-    @patch("adapter_base._HAS_PAHO", False)
+    @patch("adapters.adapter_base._HAS_PAHO", False)
     def test_mqtt_start_without_paho_logs_warning(self) -> None:
         """MqttAdapterBase start without paho logs WARNING."""
         adapter = StubMqttAdapter(client_id_prefix="no-paho-test")

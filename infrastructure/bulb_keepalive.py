@@ -123,7 +123,7 @@ logger: logging.Logger = logging.getLogger("glowup.bulb_keepalive")
 # ---------------------------------------------------------------------------
 
 try:
-    from lanscan import get_local_network, ping_sweep
+    from .lanscan import get_local_network, ping_sweep
     _HAS_LANSCAN: bool = True
 except ImportError:
     _HAS_LANSCAN = False

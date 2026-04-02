@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from bulb_keepalive import BulbKeepAlive
+    from infrastructure.bulb_keepalive import BulbKeepAlive
 
 # ---------------------------------------------------------------------------
 # Constants
