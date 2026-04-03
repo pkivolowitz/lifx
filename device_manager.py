@@ -708,8 +708,28 @@ class DeviceManager:
         # a new one, so replaced effects get a proper stop_reason.
         if self._diag is not None:
             self._diag.log_stop(ip, stop_reason="replaced")
-        ctrl.play(effect_name, bindings=bindings,
-                  signal_bus=signal_bus, **params)
+
+        # Transient effects (on, off) use execute() for a one-shot
+        # committed state write, NOT the render loop.  The render loop
+        # writes transient HSBK frames that don't update the bulb's
+        # persistent state — so the app reads stale brightness and the
+        # schedule's brightness=30 shows as 100 in the UI.
+        from effects import create_effect, Effect
+        effect_instance: Effect = create_effect(effect_name, **params)
+        if getattr(effect_instance, "is_transient", False) and em is not None:
+            effect_instance.execute(em)
+            # Mark as "running" so the scheduler doesn't restart it.
+            # Transient effects don't use the Engine render loop, so
+            # we set engine.running directly and store the effect ref
+            # so get_status() reports correctly.
+            ctrl._current_effect_name = effect_name
+            ctrl._last_effect_name = effect_name
+            ctrl._last_params = dict(params)
+            ctrl.engine.effect = effect_instance
+            ctrl.engine.running = True
+        else:
+            ctrl.play(effect_name, bindings=bindings,
+                      signal_bus=signal_bus, **params)
         # Track which client started this effect.
         if source:
             self._play_sources[ip] = source
