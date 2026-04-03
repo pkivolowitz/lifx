@@ -1,122 +1,84 @@
-"""Embedded schedule evaluator thread.
+"""Scheduler thread — thin dispatch loop around the pure evaluator.
 
-Background thread that checks schedule entries against the current
-time and sun position, starting and stopping effects on devices
-through the DeviceManager.
+Polls every SCHEDULER_POLL_SECONDS, snapshots config and device
+state under lock, calls the pure evaluator, then dispatches the
+resulting actions to the DeviceManager.  No scheduling logic lives
+here — it's all in ``evaluator.py``.
 
-Extracted from server.py.  Each class in its own file per project
-convention.
+The thread survives individual tick failures (logs and continues)
+and exits cleanly on stop_event.
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__: str = "1.0"
+__version__ = "2.0"
 
 import logging
 import threading
-import time as time_mod
-from datetime import date, datetime, time, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Optional
+from datetime import date, datetime, timezone
+from typing import Any, Optional
 
-from device_manager import DeviceManager
-from engine import Controller
-
-if TYPE_CHECKING:
-    from media import MediaManager
-    from state_store import SignalBus
-from schedule_utils import (
-    parse_time_spec as _parse_time_spec,
-    entry_runs_on_day as _entry_runs_on_day,
-    resolve_entries as _resolve_entries,
-    find_active_entry as _find_active_entry,
-)
-from server_constants import SCHEDULER_POLL_SECONDS, DEFAULT_FADE_MS
-from server_utils import group_id_from_name as _group_id_from_name
+from scheduling.evaluator import ScheduleAction, evaluate
+from server_constants import SCHEDULER_POLL_SECONDS
 from solar import SunTimes, sun_times
 
 logger: logging.Logger = logging.getLogger("glowup.scheduling")
 
 
-def _log_sun_times(sun: SunTimes, d: date) -> None:
-    """Log computed solar event times for a date.
-
-    Args:
-        sun: Computed solar event times.
-        d:   Calendar date.
-    """
-    fmt: str = "%H:%M"
-    logging.info("Sun times for %s:", d)
-    logging.info(
-        "  Dawn:    %s", sun.dawn.strftime(fmt) if sun.dawn else "N/A",
-    )
-    logging.info(
-        "  Sunrise: %s", sun.sunrise.strftime(fmt) if sun.sunrise else "N/A",
-    )
-    logging.info("  Noon:    %s", sun.noon.strftime(fmt))
-    logging.info(
-        "  Sunset:  %s", sun.sunset.strftime(fmt) if sun.sunset else "N/A",
-    )
-    logging.info(
-        "  Dusk:    %s", sun.dusk.strftime(fmt) if sun.dusk else "N/A",
-    )
-
-
 class SchedulerThread(threading.Thread):
     """Background thread that manages scheduled effects.
 
-    Replaces scheduler.py's subprocess-based approach with direct
-    :class:`Controller` calls through the :class:`DeviceManager`.
-    Respects phone overrides: skips devices that have been overridden
-    by the REST API, and clears overrides at schedule transitions.
+    Calls the pure ``evaluate()`` function each tick to determine
+    what actions to take, then dispatches them to the DeviceManager.
+    No lock is held during dispatch — only during the brief config
+    snapshot.
+
+    Args:
+        config:         Parsed server configuration dict.
+        device_manager: Shared DeviceManager instance.
     """
 
     def __init__(
         self,
         config: dict[str, Any],
-        device_manager: DeviceManager,
-        media_manager: Any = None,
+        device_manager: Any,
     ) -> None:
         """Initialize the scheduler thread.
 
         Args:
-            config:         Parsed server configuration dict.
-            device_manager: Shared :class:`DeviceManager` instance.
-            media_manager:  Optional :class:`MediaManager` for signal bindings.
+            config:         Full server config with ``location``, ``schedule``.
+            device_manager: DeviceManager for play/stop/override calls.
         """
         super().__init__(daemon=True, name="scheduler")
         self._config: dict[str, Any] = config
-        self._dm: DeviceManager = device_manager
-        self._media_manager: Any = media_manager
+        self._dm: Any = device_manager
         self._stop_event: threading.Event = threading.Event()
 
-        # Per-group state: tracks which schedule entry is currently active.
-        self._group_entries: dict[str, Optional[str]] = {}
+        # Per-group state: group name → active entry name (or None).
+        # Passed to evaluate() each tick and updated with the result.
+        self._state: dict[str, Optional[str]] = {}
+
+        # Location — extracted once at startup.
+        self._lat: float = config["location"]["latitude"]
+        self._lon: float = config["location"]["longitude"]
+
+        # Track date for once-per-day sun time logging.
+        self._last_logged_date: Optional[date] = None
 
     def run(self) -> None:
-        """Scheduler main loop — poll for schedule transitions.
-
-        Groups and schedule entries are re-read each iteration so
-        that runtime changes (group rename/create/delete, schedule
-        edits) take effect without a server restart.
-        """
-        lat: float = self._config["location"]["latitude"]
-        lon: float = self._config["location"]["longitude"]
-
-        # Initial snapshot for the startup log line.
-        with self._dm._lock:
-            groups: dict[str, list[str]] = dict(self._dm._group_config)
+        """Scheduler main loop — poll, evaluate, dispatch."""
         specs: list[dict[str, Any]] = self._config.get("schedule", [])
 
         if not specs:
             logging.info("No schedule entries — scheduler idle")
             return
 
-        # Initialize per-group state.
+        # Initialize state for all groups.
+        with self._dm._lock:
+            groups: dict[str, list[str]] = dict(self._dm._group_config)
         for group_name in groups:
-            self._group_entries[group_name] = None
-
-        self._last_logged_date: Optional[date] = None
+            self._state[group_name] = None
 
         total_devices: int = sum(len(ips) for ips in groups.values())
         logging.info(
@@ -126,204 +88,119 @@ class SchedulerThread(threading.Thread):
 
         while not self._stop_event.is_set():
             try:
-                self._tick(lat, lon, specs)
+                self._tick()
             except Exception as exc:
-                logging.error("Scheduler tick failed: %s", exc, exc_info=True)
-            # Sleep until next poll, checking for stop every second.
+                logging.error(
+                    "Scheduler tick failed: %s", exc, exc_info=True,
+                )
             self._stop_event.wait(SCHEDULER_POLL_SECONDS)
 
         logging.info("Scheduler stopped")
 
-    def _tick(
-        self,
-        lat: float,
-        lon: float,
-        specs: list[dict[str, Any]],
-    ) -> None:
-        """Execute one scheduler evaluation cycle."""
+    def _tick(self) -> None:
+        """Execute one scheduler cycle: snapshot → evaluate → dispatch."""
         now: datetime = datetime.now(timezone.utc).astimezone()
         today: date = now.date()
 
-        # Re-read groups and schedule entries each iteration so
-        # runtime API changes (rename, create, delete) are picked
-        # up without restarting.  Snapshot under lock.
+        # --- Snapshot under lock (brief) ---
         with self._dm._lock:
-            groups = dict(self._dm._group_config)
-        specs = self._config.get("schedule", [])
+            groups: dict[str, list[str]] = dict(self._dm._group_config)
+            overrides: dict[str, Optional[str]] = dict(self._dm._overrides)
+        specs: list[dict[str, Any]] = self._config.get("schedule", [])
 
-        # Initialize tracking for newly-appeared groups and
-        # clean up entries for groups that were deleted.
-        for group_name in groups:
-            if group_name not in self._group_entries:
-                self._group_entries[group_name] = None
-        stale_groups: list[str] = [
-            g for g in self._group_entries if g not in groups
-        ]
-        for g in stale_groups:
-            del self._group_entries[g]
-
-        # Log sun times once per day.
+        # --- Log sun times once per day ---
         if today != self._last_logged_date:
-            utc_offset: timedelta = now.utcoffset()
-            sun: SunTimes = sun_times(lat, lon, today, utc_offset)
-            _log_sun_times(sun, today)
+            self._log_sun_times(now, today)
             self._last_logged_date = today
 
-        # Per-group scheduling.
-        for group_name, ips in groups.items():
-            active: Optional[dict[str, Any]] = _find_active_entry(
-                specs, lat, lon, now, group_name,
-            )
-            active_name: Optional[str] = (
-                active.get("name") if active else None
-            )
-            prev_name: Optional[str] = self._group_entries.get(
-                group_name,
-            )
+        # --- Evaluate (pure, no side effects) ---
+        actions, new_state = evaluate(
+            groups=groups,
+            schedule=specs,
+            prev_state=self._state,
+            overrides=overrides,
+            lat=self._lat,
+            lon=self._lon,
+            now=now,
+        )
+        self._state = new_state
 
-            # Device ID for this group: virtual device for multi-IP
-            # groups, individual IP for single-device groups.
-            if not ips:
-                continue  # Empty group — skip.
-            if len(ips) >= 2:
-                device_id: str = _group_id_from_name(group_name)
-            else:
-                device_id = ips[0]
-
-            if active_name != prev_name:
-                # Schedule transition — clear overrides only if
-                # the override was set against the outgoing entry.
-                if self._dm.is_overridden(device_id):
-                    override_entry: Optional[str] = (
-                        self._dm.get_override_entry(device_id)
-                    )
-                    if override_entry == prev_name:
-                        logging.info(
-                            "[%s] Clearing phone override on "
-                            "%s (schedule transition from "
-                            "'%s' to '%s')",
-                            group_name, device_id,
-                            prev_name, active_name,
-                        )
-                        self._dm.clear_override(device_id)
-                    else:
-                        logging.info(
-                            "[%s] Preserving phone override "
-                            "on %s (override entry '%s' != "
-                            "outgoing '%s')",
-                            group_name, device_id,
-                            override_entry, prev_name,
-                        )
-
-                # Stop previous effect if not overridden.
-                # Use is_overridden_or_member so that an override
-                # on an individual member device (e.g. 192.0.2.62)
-                # prevents the scheduler from clobbering it when
-                # the group (e.g. group:porch) transitions.
-                if prev_name is not None:
-                    if not self._dm.is_overridden_or_member(
-                        device_id,
-                    ):
-                        logging.info(
-                            "[%s] Stopping '%s'",
-                            group_name, prev_name,
-                        )
-                        try:
-                            self._dm.stop(device_id)
-                        except (KeyError, Exception) as exc:
-                            logging.warning(
-                                "[%s] Error stopping %s: %s",
-                                group_name, device_id, exc,
-                            )
-
-                # Start new effect if not overridden.
-                if active is not None:
-                    if not self._dm.is_overridden_or_member(
-                        device_id,
-                    ):
-                        effect: str = active["effect"]
-                        params: dict[str, Any] = active.get(
-                            "params", {},
-                        )
-                        # Pass bindings from schedule entry if present.
-                        sched_bindings: Optional[dict] = active.get(
-                            "bindings",
-                        )
-                        sched_bus: Optional[SignalBus] = None
-                        mm: Optional[MediaManager] = (
-                            self._media_manager
-                        )
-                        if sched_bindings and mm is not None:
-                            sched_bus = mm.bus
-                        logging.info(
-                            "[%s] Starting '%s' (%s)",
-                            group_name, active_name, effect,
-                        )
-                        try:
-                            self._dm.play(
-                                device_id, effect, params,
-                                bindings=sched_bindings,
-                                signal_bus=sched_bus,
-                                source="scheduler",
-                                entry=active_name,
-                            )
-                        except (KeyError, ValueError, Exception) as exc:
-                            logging.warning(
-                                "[%s] Error starting %s on %s: %s",
-                                group_name, effect, device_id, exc,
-                            )
-                else:
-                    logging.info(
-                        "[%s] No active entry — idle", group_name,
-                    )
-
-                self._group_entries[group_name] = active_name
-
-            elif active is not None:
-                # Same entry still active — ensure running
-                # (restart if crashed).  Check members too so
-                # an individual device override isn't clobbered.
-                if self._dm.is_overridden_or_member(device_id):
-                    continue
-                ctrl: Optional[Controller] = (
-                    self._dm.get_or_create_controller(device_id)
+        # --- Dispatch actions (no lock held) ---
+        for action in actions:
+            try:
+                self._dispatch(action)
+            except Exception as exc:
+                logging.warning(
+                    "[%s] %s failed on %s: %s",
+                    action.group, action.action,
+                    action.device_id, exc,
                 )
-                if ctrl is not None:
-                    status: dict[str, Any] = ctrl.get_status()
-                    if not status.get("running"):
-                        effect_name: str = active["effect"]
-                        params_restart: dict = active.get(
-                            "params", {},
-                        )
-                        restart_bindings: Optional[dict] = (
-                            active.get("bindings")
-                        )
-                        restart_bus: Optional[SignalBus] = None
-                        rmm: Optional[MediaManager] = (
-                            self._media_manager
-                        )
-                        if restart_bindings and rmm is not None:
-                            restart_bus = rmm.bus
-                        logging.info(
-                            "[%s] Restarting '%s' on %s",
-                            group_name, active_name, device_id,
-                        )
-                        try:
-                            self._dm.play(
-                                device_id, effect_name,
-                                params_restart,
-                                bindings=restart_bindings,
-                                signal_bus=restart_bus,
-                                source="scheduler",
-                                entry=active_name,
-                            )
-                        except Exception as exc:
-                            logging.warning(
-                                "[%s] Restart error on %s: %s",
-                                group_name, device_id, exc,
-                            )
+
+    def _dispatch(self, action: ScheduleAction) -> None:
+        """Execute a single schedule action.
+
+        Args:
+            action: The action to execute.
+        """
+        if action.action == "start":
+            logging.info(
+                "[%s] Starting '%s' (%s)",
+                action.group, action.entry_name, action.effect,
+            )
+            self._dm.play(
+                action.device_id,
+                action.effect,
+                action.params,
+                source="scheduler",
+                entry=action.entry_name,
+            )
+
+        elif action.action == "stop":
+            logging.info(
+                "[%s] Stopping '%s'",
+                action.group, action.entry_name,
+            )
+            self._dm.stop(action.device_id)
+
+        elif action.action == "clear_override":
+            logging.info(
+                "[%s] Clearing phone override on %s "
+                "(schedule transition from '%s')",
+                action.group, action.device_id, action.entry_name,
+            )
+            self._dm.clear_override(action.device_id)
+
+    def _log_sun_times(self, now: datetime, today: date) -> None:
+        """Log solar event times for the current date.
+
+        Args:
+            now:   Current timezone-aware datetime.
+            today: Current date.
+        """
+        utc_offset = now.utcoffset()
+        sun: SunTimes = sun_times(
+            self._lat, self._lon, today, utc_offset,
+        )
+        fmt: str = "%H:%M"
+        logging.info("Sun times for %s:", today)
+        logging.info(
+            "  Dawn:    %s",
+            sun.dawn.strftime(fmt) if sun.dawn else "N/A",
+        )
+        logging.info(
+            "  Sunrise: %s",
+            sun.sunrise.strftime(fmt) if sun.sunrise else "N/A",
+        )
+        logging.info("  Noon:    %s", sun.noon.strftime(fmt))
+        logging.info(
+            "  Sunset:  %s",
+            sun.sunset.strftime(fmt) if sun.sunset else "N/A",
+        )
+        logging.info(
+            "  Dusk:    %s",
+            sun.dusk.strftime(fmt) if sun.dusk else "N/A",
+        )
 
     def stop(self) -> None:
         """Signal the scheduler to stop."""
         self._stop_event.set()
-
