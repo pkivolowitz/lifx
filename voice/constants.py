@@ -79,7 +79,7 @@ PRE_WAKE_BUFFER_S: float = 0.2
 # ---------------------------------------------------------------------------
 
 # Default wake word confidence threshold (0.0 - 1.0).
-WAKE_THRESHOLD: float = 0.35
+WAKE_THRESHOLD: float = 0.20
 
 # VAD threshold for openWakeWord's built-in Silero VAD (0.0 - 1.0).
 # Set to 0 to disable.  0.5 is a good starting point.

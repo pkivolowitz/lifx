@@ -9,13 +9,12 @@
 /* Design tokens — warm, cheerful, light palette                      */
 /* ------------------------------------------------------------------ */
 :root {
-    /* Background — dark loam and weathered leather. */
-    --bg-from:       #3a2e24;
-    --bg-to:         #2c2218;
+    /* Background — dark loam. */
+    --bg:            #2c2218;
 
     /* Clock. */
-    --clock-color:   #d4c4a8;
-    --date-color:    #9a8870;
+    --clock-color:   #ffffff;
+    --date-color:    #ffffff;
 
     /* Sensor card. */
     --card-bg:       rgba(62, 50, 38, 0.8);
@@ -23,16 +22,13 @@
     --card-shadow:   0 4px 24px rgba(0, 0, 0, 0.25);
 
     /* Readings. */
-    --temp-color:    #d4864a;
-    --humid-color:   #6aaa90;
-    --motion-on:     #7ab06a;
-    --motion-off:    #6a5e50;
-    --label-color:   #9a8870;
-    --stale-color:   #c45a3a;
-    --text-color:    #c4b49a;
-
-    /* Photo overlay. */
-    --photo-opacity: 0.12;
+    --temp-color:    #ffffff;
+    --humid-color:   #ffffff;
+    --motion-on:     #ffffff;
+    --motion-off:    #ffffff;
+    --label-color:   #ffffff;
+    --stale-color:   #ffffff;
+    --text-color:    #ffffff;
 
     /* Typography — system fonts, no external deps. */
     --font-clock:    "SF Mono", "Menlo", "Consolas", monospace;
@@ -40,15 +36,15 @@
                      Helvetica, Arial, sans-serif;
 
     /* Locks. */
-    --lock-locked:   #7ab06a;
-    --lock-unlocked: #c45a3a;
-    --lock-unknown:  #6a5e50;
+    --lock-locked:   #ffffff;
+    --lock-unlocked: #ffffff;
+    --lock-unknown:  #ffffff;
     --lock-size:     clamp(36px, 5vw, 60px);
 
     /* Soil. */
-    --soil-wet:      #4a9a7a;
-    --soil-dry:      #c4864a;
-    --soil-critical: #c45a3a;
+    --soil-wet:      #ffffff;
+    --soil-dry:      #ffffff;
+    --soil-critical: #ffffff;
 
     /* Layout. */
     --max-width:     1400px;
@@ -60,8 +56,7 @@
 /* Dark mode — activated when room lights are off at night.           */
 /* ------------------------------------------------------------------ */
 body.dark-mode {
-    --bg-from:       #0a0a0c;
-    --bg-to:         #12111a;
+    --bg:            #080808;
     --clock-color:   rgba(255, 255, 255, 0.6);
     --date-color:    rgba(255, 255, 255, 0.25);
     --card-bg:       rgba(255, 255, 255, 0.04);
@@ -74,7 +69,6 @@ body.dark-mode {
     --label-color:   rgba(255, 255, 255, 0.3);
     --text-color:    rgba(255, 255, 255, 0.5);
     --stale-color:   #e55;
-    --photo-opacity: 0.05;
     --lock-locked:   #2a6b3a;
     --lock-unlocked: #8b3030;
     --lock-unknown:  rgba(255, 255, 255, 0.10);
@@ -82,13 +76,6 @@ body.dark-mode {
 body.dark-mode .sensor-card,
 body.dark-mode .locks-card {
     border-color: rgba(255, 255, 255, 0.08);
-}
-body.dark-mode img,
-body.dark-mode .photo-bg {
-    filter: grayscale(100%) brightness(0.4);
-}
-body.dark-mode {
-    opacity: 0.65;
 }
 
 /* ------------------------------------------------------------------ */
@@ -101,7 +88,7 @@ html, body {
     overflow: hidden;
     font-family: var(--font-body);
     color: var(--text-color);
-    background: linear-gradient(160deg, var(--bg-from), var(--bg-to));
+    background: var(--bg);
 }
 
 body {
@@ -112,20 +99,8 @@ body {
     position: relative;
 }
 
-/* ------------------------------------------------------------------ */
-/* Photo background — crossfade slideshow                             */
-/* ------------------------------------------------------------------ */
-.photo-bg {
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    opacity: var(--photo-opacity);
-    background-size: cover;
-    background-position: center;
-    transition: opacity 2s ease;
-    filter: blur(4px) saturate(0.8);
+/* Photo background removed — single solid color now. */
 }
-.photo-bg.hidden { opacity: 0; }
 
 /* Everything else sits above the photo. */
 .content { position: relative; z-index: 1; width: 100%; max-width: var(--max-width); }
@@ -625,12 +600,12 @@ body.portrait .sensor-card {
     line-height: 1.4;
 }
 /* AQI color coding. */
-.aqi-good       { color: #6aaa90; }
-.aqi-moderate   { color: #d4c44a; }
-.aqi-sensitive  { color: #d4864a; }
-.aqi-unhealthy  { color: #c45a3a; }
-.aqi-very-bad   { color: #8b3060; }
-.aqi-hazardous  { color: #6b2040; }
+.aqi-good       { color: #ffffff; }
+.aqi-moderate   { color: #ffffff; }
+.aqi-sensitive  { color: #ffffff; }
+.aqi-unhealthy  { color: #ffffff; }
+.aqi-very-bad   { color: #ffffff; }
+.aqi-hazardous  { color: #ffffff; }
 
 /* ------------------------------------------------------------------ */
 /* UV index card                                                      */
@@ -659,11 +634,11 @@ body.portrait .sensor-card {
     margin-top: 6px;
 }
 /* UV color coding. */
-.uv-low      { color: #6aaa90; }
-.uv-moderate { color: #d4c44a; }
-.uv-high     { color: #d4864a; }
-.uv-veryhigh { color: #c45a3a; }
-.uv-extreme  { color: #8b3060; }
+.uv-low      { color: #ffffff; }
+.uv-moderate { color: #ffffff; }
+.uv-high     { color: #ffffff; }
+.uv-veryhigh { color: #ffffff; }
+.uv-extreme  { color: #ffffff; }
 
 /* ------------------------------------------------------------------ */
 /* NWS alerts card                                                    */
@@ -673,10 +648,10 @@ body.portrait .sensor-card {
     flex-direction: column;
 }
 .alerts-card .sensor-location {
-    color: #6aaa90;
+    color: #ffffff;
 }
 .alerts-card.has-alerts .sensor-location {
-    color: #c45a3a;
+    color: #ffffff;
     animation: blink-3-1 2s step-end infinite;
 }
 .alerts-list {
@@ -690,12 +665,12 @@ body.portrait .sensor-card {
 }
 .alert-item {
     margin-bottom: 6px;
-    color: #d4864a;
+    color: #ffffff;
 }
-.alert-item.warning { color: #c45a3a; }
-.alert-item.watch   { color: #d4c44a; }
+.alert-item.warning { color: #ffffff; }
+.alert-item.watch   { color: #ffffff; }
 .alerts-clear {
-    color: #6aaa90;
+    color: #ffffff;
     font-size: clamp(1rem, 2vw, 1.4rem);
     text-align: center;
     flex: 1;
@@ -932,9 +907,6 @@ body.portrait .sensor-card {
 </head>
 <body>
 
-<!-- Photo background layer — two elements for crossfade. -->
-<div class="photo-bg hidden" id="photoBgA"></div>
-<div class="photo-bg hidden" id="photoBgB"></div>
 
 <div class="content">
     <!-- Clock. -->
@@ -1042,12 +1014,6 @@ body.portrait .sensor-card {
     /* Seconds before a sensor reading is considered stale. */
     const STALE_THRESHOLD_S = 120;
 
-    /* Photo rotation interval (ms). */
-    const PHOTO_ROTATE_MS = 30000;
-
-    /* How often to refresh the photo list (ms). */
-    const PHOTO_LIST_REFRESH_MS = 300000;
-
     const DAYS = [
         "Sunday", "Monday", "Tuesday", "Wednesday",
         "Thursday", "Friday", "Saturday"
@@ -1061,9 +1027,6 @@ body.portrait .sensor-card {
     /* State                                                          */
     /* -------------------------------------------------------------- */
 
-    let photos = [];
-    let photoIndex = 0;
-    let activePhotoBg = "A";
 
     /* -------------------------------------------------------------- */
     /* Clock                                                          */
@@ -2124,61 +2087,6 @@ body.portrait .sensor-card {
     setInterval(showNextCamera, CAMERA_CYCLE_MS);
     /* Re-check camera list every 60s so NVR recovery is automatic. */
     setInterval(loadCameraList, CAMERA_RETRY_SLOW_MS);
-
-    /* -------------------------------------------------------------- */
-    /* Photo slideshow                                                */
-    /* -------------------------------------------------------------- */
-
-    const photoBgA = document.getElementById("photoBgA");
-    const photoBgB = document.getElementById("photoBgB");
-
-    function loadPhotoList() {
-        fetch("/api/home/photos")
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                if (data.photos && data.photos.length > 0) {
-                    photos = data.photos;
-                    for (var i = photos.length - 1; i > 0; i--) {
-                        var j = Math.floor(Math.random() * (i + 1));
-                        var tmp = photos[i];
-                        photos[i] = photos[j];
-                        photos[j] = tmp;
-                    }
-                    showNextPhoto();
-                }
-            })
-            .catch(function () { /* no photos */ });
-    }
-
-    function showNextPhoto() {
-        if (photos.length === 0) return;
-
-        var url = "/photos/" + encodeURIComponent(photos[photoIndex]);
-        photoIndex = (photoIndex + 1) % photos.length;
-
-        var incoming, outgoing;
-        if (activePhotoBg === "A") {
-            incoming = photoBgB;
-            outgoing = photoBgA;
-            activePhotoBg = "B";
-        } else {
-            incoming = photoBgA;
-            outgoing = photoBgB;
-            activePhotoBg = "A";
-        }
-
-        var img = new Image();
-        img.onload = function () {
-            incoming.style.backgroundImage = 'url("' + url + '")';
-            incoming.classList.remove("hidden");
-            outgoing.classList.add("hidden");
-        };
-        img.src = url;
-    }
-
-    loadPhotoList();
-    setInterval(showNextPhoto, PHOTO_ROTATE_MS);
-    setInterval(loadPhotoList, PHOTO_LIST_REFRESH_MS);
 
 })();
 </script>

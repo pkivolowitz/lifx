@@ -44,10 +44,20 @@ class TextToSpeech:
                      falls back to ``say`` on macOS.
     """
 
-    def __init__(self, voice_model: Optional[str] = None) -> None:
-        """Initialize TTS engine."""
+    def __init__(
+        self,
+        voice_model: Optional[str] = None,
+        voice_name: Optional[str] = None,
+    ) -> None:
+        """Initialize TTS engine.
+
+        Args:
+            voice_model: Path to a Piper .onnx voice model.
+            voice_name:  macOS ``say`` voice name (e.g., "Samantha").
+        """
         self._piper: Optional["PiperVoice"] = None
         self._sample_rate: int = 22050  # Piper default.
+        self._voice_name: Optional[str] = voice_name
 
         if voice_model and _HAS_PIPER and os.path.exists(voice_model):
             try:
@@ -71,6 +81,50 @@ class TextToSpeech:
                 logger.info("Using macOS 'say' for TTS")
             else:
                 logger.warning("No TTS engine available")
+
+    @property
+    def voice_name(self) -> Optional[str]:
+        """Current macOS say voice name."""
+        return self._voice_name
+
+    @voice_name.setter
+    def voice_name(self, name: Optional[str]) -> None:
+        """Change the macOS say voice at runtime."""
+        self._voice_name = name
+        logger.info("TTS voice changed to: %s", name or "(system default)")
+
+    def speak_direct(self, text: str) -> bool:
+        """Speak text directly through macOS speakers.
+
+        Bypasses the WAV pipeline and AirPlay entirely — just calls
+        ``say`` with no ``-o`` flag so audio goes straight to the
+        default output device.
+
+        Args:
+            text: Text to speak.
+
+        Returns:
+            True if say exited successfully.
+        """
+        if not text.strip():
+            return False
+        cmd: list[str] = ["say"]
+        if self._voice_name:
+            cmd.extend(["-v", self._voice_name])
+        cmd.append(text)
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=30)
+            if result.returncode == 0:
+                logger.debug("say direct: '%s'", text[:50])
+                return True
+            logger.warning(
+                "say direct failed (%d): %s",
+                result.returncode, result.stderr[:200],
+            )
+            return False
+        except Exception as exc:
+            logger.error("say direct error: %s", exc)
+            return False
 
     def synthesize(self, text: str) -> tuple[bytes, int]:
         """Convert text to WAV audio.
@@ -142,8 +196,12 @@ class TextToSpeech:
 
         try:
             # Generate AIFF via say.
+            say_cmd: list[str] = ["say"]
+            if self._voice_name:
+                say_cmd.extend(["-v", self._voice_name])
+            say_cmd.extend(["-o", aiff_path, text])
             say_result = subprocess.run(
-                ["say", "-o", aiff_path, text],
+                say_cmd,
                 capture_output=True,
                 timeout=30,
             )

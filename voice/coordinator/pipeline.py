@@ -218,14 +218,14 @@ def process_utterance(
 
     logger.info("[%s] Intent: %s", room, intent)
 
-    # Step 2.5: Acknowledge — speak "Waiting on the {label}" for
-    # queries and chat (which may take seconds).  Skip for commands
-    # since the physical change is instant and the ack TTS + AirPlay
-    # would take longer than the command itself.
+    # Step 2.5: Acknowledge — speak "Waiting on the {label}" only for
+    # slow actions (chat, weather).  Commands are instant (physical change
+    # is the feedback).  Queries hit local APIs and return in milliseconds
+    # — the "Waiting" TTS + AirPlay takes longer than the query itself.
+    _SLOW_ACTIONS: set[str] = {"chat", "query_weather"}
     action_name: str = intent.get("action", "")
     action_label: str = executor.get_action_label(action_name)
-    action_type: str = executor.get_action_type(action_name)
-    if action_label and action_type != "command":
+    if action_name in _SLOW_ACTIONS and action_label:
         _speak_cached(
             f"Waiting on the {action_label}.",
             room, tts, player, playback_notifier,
@@ -293,21 +293,28 @@ def _speak(
 ) -> None:
     """Synthesize text and play it to the room's speaker.
 
+    If no player is configured, tries ``tts.speak_direct()`` to
+    output through the local speakers (macOS ``say`` with no file).
+
     Args:
         text:     Confirmation text to speak.
         room:     Target room for audio playback.
         tts:      TTS engine (optional — skipped if None).
         player:   Audio player (optional — skipped if None).
-        notifier: Unused — kept for API compatibility.  The daemon
-                  brackets the entire pipeline with playback
-                  notifications; per-speak notification caused
-                  a True/False flicker between consecutive speaks.
+        notifier: Unused — kept for API compatibility.
     """
-    if tts is None or player is None:
-        logger.info("[%s] Would speak: '%s' (no TTS/player)", room, text)
+    if tts is None:
+        logger.info("[%s] Would speak: '%s' (no TTS)", room, text)
         return
 
     try:
+        if player is None:
+            # No AirPlay — speak directly through Mac speakers.
+            if hasattr(tts, "speak_direct"):
+                tts.speak_direct(text)
+                logger.info("[%s] Spoke (direct: %s)", room, text[:40])
+            return
+
         audio, sample_rate = tts.synthesize(text)
         if audio:
             _play_audio(audio, room, player, text[:40])
@@ -326,7 +333,8 @@ def _speak_cached(
 
     First call generates and caches the WAV. Subsequent calls
     stream the cached bytes directly to AirPlay, eliminating
-    the 2-second TTS + afconvert overhead.
+    the 2-second TTS + afconvert overhead.  If no player is
+    configured, uses ``tts.speak_direct()`` for local speakers.
 
     Args:
         text:     Phrase to speak (used as cache key).
@@ -335,8 +343,14 @@ def _speak_cached(
         player:   Audio player.
         notifier: Unused — see _speak docstring.
     """
-    if tts is None or player is None:
-        logger.info("[%s] Would speak: '%s' (no TTS/player)", room, text)
+    if tts is None:
+        logger.info("[%s] Would speak: '%s' (no TTS)", room, text)
+        return
+
+    if player is None:
+        if hasattr(tts, "speak_direct"):
+            tts.speak_direct(text)
+            logger.info("[%s] Spoke (direct cached: %s)", room, text[:30])
         return
 
     try:

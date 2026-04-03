@@ -36,6 +36,12 @@ logger: logging.Logger = logging.getLogger("glowup.voice.executor")
 # Mobile, AL residential electricity rate ($/kWh).
 _ELECTRICITY_RATE_PER_KWH: float = 0.171
 
+# Repair hints for adapters that need special onboarding beyond a restart.
+_REPAIR_HINTS: dict[str, str] = {
+    "vivint": "Run vivint setup in the adapters directory to re-authenticate.",
+    "nvr": "Try saying repair NVR, or reboot the NVR hardware.",
+}
+
 # ---------------------------------------------------------------------------
 # Chat constants
 # ---------------------------------------------------------------------------
@@ -48,11 +54,14 @@ _CHAT_HISTORY_TTL_S: float = 1800.0
 
 # System prompt for freeform chat — concise spoken responses.
 _CHAT_SYSTEM_PROMPT: str = (
-    "You are GlowUp, a home assistant built on the Gemma 2 language "
+    "You are GlowUp, a home assistant built on the Gemma 3 language "
     "model running locally via Ollama on a Mac Studio. Your responses "
     "are spoken aloud via text-to-speech. Be straightforward, polite, "
-    "and factual. No humor, no sarcasm, no personality. Just answer "
-    "the question. Every response MUST be 1-2 sentences maximum."
+    "and factual. Every response MUST be 1-2 sentences maximum. "
+    "You have a warm personality. Occasionally — not every time, maybe "
+    "one in four responses — sprinkle in a Yiddish word or expression "
+    "naturally (e.g., schlep, mensch, chutzpah, oy vey, nosh, kvetch, "
+    "bashert, maven, schmuck, bubbe). Don't force it."
 )
 
 # ---------------------------------------------------------------------------
@@ -80,7 +89,7 @@ class GlowUpExecutor:
         self,
         api_base: str = "http://localhost:8420",
         auth_token: str = "",
-        chat_model: str = "gemma2:27b",
+        chat_model: str = "gemma3:27b",
         ollama_host: str = "http://localhost:11434",
     ) -> None:
         """Initialize the executor."""
@@ -104,7 +113,13 @@ class GlowUpExecutor:
             "sensor_reading": self._handle_sensor_reading,
             "power_summary": self._handle_power_summary,
             "soil_moisture": self._handle_soil_moisture,
+            "weather": self._handle_weather,
+            "system_status": self._handle_system_status,
+            "set_voice": self._handle_set_voice,
         }
+
+        # TTS reference — set after init by the coordinator daemon.
+        self._tts: Any = None
 
         logger.info(
             "Loaded %d action definitions from %s",
@@ -764,6 +779,220 @@ class GlowUpExecutor:
                 ),
                 "speak": True,
             }
+
+    # ------------------------------------------------------------------
+    # Weather — Open-Meteo API (free, no key required)
+    # ------------------------------------------------------------------
+
+    # Mobile, AL coordinates — same as the /home dashboard uses.
+    _WEATHER_LAT: float = 30.69
+    _WEATHER_LON: float = -88.04
+    _WEATHER_URL: str = (
+        "https://api.open-meteo.com/v1/forecast"
+        "?latitude={lat}&longitude={lon}"
+        "&current=temperature_2m,relative_humidity_2m,weather_code,"
+        "wind_speed_10m"
+        "&temperature_unit=fahrenheit&wind_speed_unit=mph"
+    )
+
+    # WMO weather interpretation codes → plain English.
+    _WMO_CODES: dict[int, str] = {
+        0: "clear sky", 1: "mainly clear", 2: "partly cloudy",
+        3: "overcast", 45: "foggy", 48: "depositing rime fog",
+        51: "light drizzle", 53: "moderate drizzle", 55: "dense drizzle",
+        61: "slight rain", 63: "moderate rain", 65: "heavy rain",
+        66: "light freezing rain", 67: "heavy freezing rain",
+        71: "slight snow", 73: "moderate snow", 75: "heavy snow",
+        77: "snow grains", 80: "slight rain showers",
+        81: "moderate rain showers", 82: "violent rain showers",
+        85: "slight snow showers", 86: "heavy snow showers",
+        95: "thunderstorm", 96: "thunderstorm with slight hail",
+        99: "thunderstorm with heavy hail",
+    }
+
+    def _handle_weather(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Query current weather from Open-Meteo (free, no API key)."""
+        url: str = self._WEATHER_URL.format(
+            lat=self._WEATHER_LAT, lon=self._WEATHER_LON,
+        )
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data: dict[str, Any] = json.loads(resp.read())
+
+            current: dict[str, Any] = data.get("current", {})
+            temp: float = current.get("temperature_2m", 0)
+            humidity: float = current.get("relative_humidity_2m", 0)
+            wind: float = current.get("wind_speed_10m", 0)
+            code: int = current.get("weather_code", 0)
+            condition: str = self._WMO_CODES.get(code, "unknown conditions")
+
+            return {
+                "status": "ok",
+                "confirmation": (
+                    f"It is currently {temp:.0f} degrees with {condition}. "
+                    f"Humidity is {humidity:.0f}% and "
+                    f"wind is {wind:.0f} miles per hour."
+                ),
+                "speak": True,
+            }
+        except Exception as exc:
+            logger.error("Weather query failed: %s", exc)
+            return {
+                "status": "error",
+                "confirmation": "I couldn't get the weather right now.",
+                "speak": True,
+            }
+
+    # ------------------------------------------------------------------
+    # System status — comprehensive health check
+    # ------------------------------------------------------------------
+
+    def _handle_system_status(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Check overall system health and verbalize the result.
+
+        Queries server status, device count, adapter states, and
+        schedule.  If everything is healthy, responds with
+        "All is well."  Otherwise enumerates problems.
+        """
+        problems: list[str] = []
+
+        # 1. Server status + adapter health (single API call).
+        adapters: dict[str, dict[str, Any]] = {}
+        try:
+            status_data: dict[str, Any] = self._request(
+                "GET", "/api/status",
+            )
+            if not status_data.get("ready", False):
+                problems.append("server is still loading")
+            adapters = status_data.get("adapters", {})
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "The server is not responding.",
+                "speak": True,
+            }
+
+        # 2. Check each adapter/daemon.
+        adapter_ok: list[str] = []
+        adapter_bad: list[str] = []
+        for name, info in adapters.items():
+            # Adapters report health differently:
+            #   - threads: {"running": bool}
+            #   - network adapters: {"connected": bool}
+            #   - printer: {"status": "ok"/"error"}
+            # An adapter is healthy if ANY positive indicator is present.
+            healthy: bool = (
+                info.get("running", False)
+                or info.get("connected", False)
+                or info.get("status") == "ok"
+            )
+            if healthy:
+                adapter_ok.append(name)
+            else:
+                adapter_bad.append(name)
+                hint: str = _REPAIR_HINTS.get(name, "")
+                if hint:
+                    problems.append(f"{name} is down. {hint}")
+                else:
+                    problems.append(f"{name} is down")
+
+        # 3. Device count.
+        total: int = 0
+        powered_on: int = 0
+        try:
+            dev_data: dict[str, Any] = self._request(
+                "GET", "/api/devices",
+            )
+            devices: list[dict[str, Any]] = dev_data.get("devices", [])
+            total = len(devices)
+            powered_on = sum(
+                1 for d in devices if d.get("power", False)
+            )
+            if total == 0:
+                problems.append("no devices discovered")
+        except Exception:
+            problems.append("cannot read device list")
+
+        # 4. Schedule.
+        schedule_count: int = 0
+        try:
+            sched_data: dict[str, Any] = self._request(
+                "GET", "/api/schedule",
+            )
+            entries: list = sched_data.get("entries", [])
+            schedule_count = sum(
+                1 for e in entries if e.get("enabled", True)
+            )
+        except Exception:
+            pass  # Non-critical.
+
+        # 5. Build spoken response — keep it short to avoid
+        # audio breakup on long TTS playback.
+        if not problems:
+            confirmation: str = (
+                f"All is well. {total} devices, {powered_on} on, "
+                f"{len(adapter_ok)} adapters healthy."
+            )
+        else:
+            confirmation = ". ".join(
+                p.capitalize() for p in problems
+            ) + "."
+
+        return {
+            "status": "ok",
+            "confirmation": confirmation,
+            "speak": True,
+        }
+
+    # ------------------------------------------------------------------
+    # TTS voice management
+    # ------------------------------------------------------------------
+
+    def set_tts(self, tts: Any) -> None:
+        """Set the TTS engine reference for voice-change commands.
+
+        Args:
+            tts: TextToSpeech instance from the coordinator.
+        """
+        self._tts = tts
+
+    def _handle_set_voice(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Change the macOS say voice at runtime."""
+        voice: str = params.get("voice_name", display_target)
+        if self._tts is None:
+            return {
+                "status": "error",
+                "confirmation": "Voice engine is not available.",
+                "speak": True,
+            }
+        self._tts.voice_name = voice
+        return {
+            "status": "ok",
+            "confirmation": f"Voice changed to {voice}.",
+            "speak": True,
+        }
 
     # ------------------------------------------------------------------
     # Chat — freeform Ollama conversation (the one special case)

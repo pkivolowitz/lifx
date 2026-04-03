@@ -206,10 +206,26 @@ class AirPlayPlayer:
                 len(audio_bytes), device_name,
             )
             return True
-        except Exception:
-            # Connection may have gone stale — drop cache and re-raise.
+        except Exception as first_exc:
+            # Connection may have gone stale — drop cache, reconnect,
+            # and retry once.  This handles AirPlay sessions that go
+            # idle and get torn down by the receiver.
+            logger.warning(
+                "AirPlay play failed on '%s': %s — reconnecting",
+                device_name, first_exc,
+            )
             self._connections.pop(device_name, None)
-            raise
+            try:
+                atv = await self._get_connection(device_name)
+                await atv.stream.stream_file(tmp_path)
+                logger.info(
+                    "Played %d bytes on '%s' (after reconnect)",
+                    len(audio_bytes), device_name,
+                )
+                return True
+            except Exception:
+                self._connections.pop(device_name, None)
+                raise
         finally:
             os.unlink(tmp_path)
 

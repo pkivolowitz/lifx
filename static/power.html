@@ -220,7 +220,6 @@ h1 {
 
 <div style="margin-bottom: 16px;">
     <select id="deviceSelect" class="device-select">
-        <option value="">All Devices</option>
     </select>
 </div>
 
@@ -446,26 +445,6 @@ function fetchSummary() {
         .catch(function() {});
 }
 
-function fetchDevices() {
-    fetch("/api/power/devices")
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            var devices = data.devices || [];
-            var select = document.getElementById("deviceSelect");
-            /* Keep existing selection. */
-            var current = select.value;
-            /* Clear all but the first "All" option. */
-            while (select.options.length > 1) select.remove(1);
-            for (var i = 0; i < devices.length; i++) {
-                var opt = document.createElement("option");
-                opt.value = devices[i];
-                opt.textContent = devices[i];
-                select.appendChild(opt);
-            }
-            select.value = current;
-        })
-        .catch(function() {});
-}
 
 /* Time range buttons. */
 document.querySelectorAll(".chart-btn").forEach(function(btn) {
@@ -480,11 +459,33 @@ document.querySelectorAll(".chart-btn").forEach(function(btn) {
     });
 });
 
-/* Device selector. */
+/* Device selector — populated from server, no "All Devices" option. */
 deviceSelect.addEventListener("change", function() {
     fetchReadings();
     fetchSummary();
 });
+
+function fetchDevices() {
+    fetch("/api/power/devices")
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var devices = data.devices || [];
+            var select = document.getElementById("deviceSelect");
+            var current = select.value;
+            select.innerHTML = "";
+            for (var i = 0; i < devices.length; i++) {
+                var opt = document.createElement("option");
+                opt.value = devices[i];
+                opt.textContent = devices[i];
+                select.appendChild(opt);
+            }
+            /* Restore previous selection, or default to first device. */
+            if (current && devices.indexOf(current) >= 0) {
+                select.value = current;
+            }
+        })
+        .catch(function() {});
+}
 
 /* ------------------------------------------------------------------ */
 /* Device on/off controls                                              */

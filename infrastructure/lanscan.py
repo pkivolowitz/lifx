@@ -349,9 +349,16 @@ async def ping_host(
             )
             await asyncio.wait_for(proc.wait(), timeout=PROC_TIMEOUT)
             return ip_str if proc.returncode == 0 else None
-        except (asyncio.TimeoutError, OSError):
-            # TimeoutError: process did not finish in time
-            # OSError: system could not spawn the subprocess
+        except asyncio.TimeoutError:
+            # Process did not finish in time — kill it to reclaim fds.
+            try:
+                proc.kill()
+                await proc.wait()
+            except (OSError, ProcessLookupError):
+                pass
+            return None
+        except OSError:
+            # System could not spawn the subprocess.
             return None
 
 

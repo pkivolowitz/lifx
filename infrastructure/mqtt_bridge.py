@@ -522,6 +522,21 @@ class MqttBridge:
 
     # -- State publishing ---------------------------------------------------
 
+    def _hb(self, activity: str) -> None:
+        """Record heartbeat and honor single-step gate.
+
+        No-op unless GLOWUP_TRACE=1 is set in the environment.
+        """
+        try:
+            from server import TRACING_ENABLED, _thread_heartbeats, _gate
+            if TRACING_ENABLED:
+                _thread_heartbeats["mqtt-state"] = (
+                    activity, time.monotonic(),
+                )
+                _gate("mqtt-state")
+        except ImportError:
+            pass
+
     def _state_publisher_loop(self) -> None:
         """Poll DeviceManager and publish state changes as retained messages.
 
@@ -531,8 +546,10 @@ class MqttBridge:
         """
         while not self._stop_event.is_set():
             try:
+                self._hb("publishing")
                 self._publish_device_list()
                 self._publish_device_states()
+                self._hb("idle")
             except Exception:
                 logger.exception("Error in MQTT state publisher")
             self._stop_event.wait(STATE_POLL_INTERVAL)

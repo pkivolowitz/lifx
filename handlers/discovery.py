@@ -181,6 +181,67 @@ class DiscoveryHandlerMixin:
             "unresolved": len(unresolved),
         })
 
+    # -- Adapter restart -----------------------------------------------------
+
+    # Adapter attribute names on the server object, keyed by the
+    # user-facing name used in the REST API and voice commands.
+    _ADAPTER_ATTRS: dict[str, str] = {
+        "zigbee": "_zigbee_adapter",
+        "vivint": "_vivint_adapter",
+        "nvr": "_nvr_adapter",
+        "printer": "_printer_adapter",
+        "mqtt": "_mqtt_bridge",
+        "matter": "_matter_adapter",
+    }
+
+    def _handle_post_adapter_restart(self, name: str) -> None:
+        """POST /api/adapters/{name}/restart — stop and start an adapter.
+
+        Restarts a named adapter daemon thread.  Used by the voice
+        "repair" command and the dashboard.  Adapters that are not
+        present (not configured or import failed) return 404.
+
+        Args:
+            name: Adapter name (zigbee, vivint, nvr, printer, mqtt).
+        """
+        attr: Optional[str] = self._ADAPTER_ATTRS.get(name)
+
+        if attr is None:
+            self._send_json(404, {
+                "error": f"Unknown adapter: {name}",
+                "available": list(self._ADAPTER_ATTRS.keys()),
+            })
+            return
+
+        adapter: Any = getattr(self.server, attr, None)
+        if adapter is None:
+            self._send_json(404, {
+                "error": f"Adapter '{name}' is not configured or not loaded",
+            })
+            return
+
+        try:
+            # Stop the adapter (graceful shutdown).
+            if hasattr(adapter, "stop"):
+                adapter.stop()
+            # Start it again.
+            if hasattr(adapter, "start"):
+                adapter.start()
+            logging.info("API: restarted adapter '%s'", name)
+            self._send_json(200, {
+                "adapter": name,
+                "restarted": True,
+            })
+        except Exception as exc:
+            logging.error(
+                "API: failed to restart adapter '%s': %s", name, exc,
+            )
+            self._send_json(500, {
+                "adapter": name,
+                "restarted": False,
+                "error": str(exc),
+            })
+
     # -- Registry handlers ---------------------------------------------------
 
 

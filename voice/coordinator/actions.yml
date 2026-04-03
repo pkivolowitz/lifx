@@ -129,6 +129,33 @@ query_soil:
   threshold: 40.0
   speak: true
 
+query_weather:
+  type: query
+  label: weather
+  handler: weather
+  speak: true
+
+system_status:
+  type: query
+  label: system
+  handler: system_status
+  speak: true
+
+set_voice:
+  type: query
+  label: voice
+  handler: set_voice
+  speak: true
+
+repair:
+  type: command
+  label: system
+  method: POST
+  path: "/api/adapters/{target}/restart"
+  body: {}
+  confirm: "{target} has been restarted."
+  speak: true
+
 # ---------------------------------------------------------------------------
 # Chat — freeform Ollama conversation (special handling in executor)
 # ---------------------------------------------------------------------------

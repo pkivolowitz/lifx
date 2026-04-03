@@ -63,8 +63,11 @@ async def main() -> int:
         print("Install with: pip install vivintpy")
         return 1
 
-    # Load config.
-    config_path: Path = Path(__file__).parent / CONFIG_FILE
+    # Load config — check /etc/glowup/ first (Pi deployment), then
+    # fall back to the script's own directory (dev machine).
+    config_path: Path = Path("/etc/glowup") / CONFIG_FILE
+    if not config_path.exists():
+        config_path = Path(__file__).parent / CONFIG_FILE
     if not config_path.exists():
         print(f"ERROR: {config_path} not found")
         return 1

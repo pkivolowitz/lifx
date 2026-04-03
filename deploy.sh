@@ -2,7 +2,7 @@
 # deploy.sh — Deploy GlowUp working tree to a target device
 #
 # Usage:   ./deploy.sh <target> [--dry-run]
-# Targets: pi, judy
+# Targets: daedalus, pi, judy
 #
 # Deploys the current working tree (including uncommitted changes) to the
 # target device via rsync. A clean git state is NOT required — deploy freely
@@ -20,11 +20,17 @@ set -euo pipefail
 # Targets
 # ---------------------------------------------------------------------------
 
+DAEDALUS_HOST="perrykivolowitz@10.0.0.191"
+DAEDALUS_DEST="/Users/perrykivolowitz/lifx"
+
 PI_HOST="pi@10.0.0.48"
 PI_DEST="/home/pi/lifx"
 
 JUDY_HOST="a@10.0.0.63"
 JUDY_DEST="/home/a/lifx"
+
+GLOWUP_HOST="a@10.0.0.214"
+GLOWUP_DEST="/home/a/lifx"
 
 # ---------------------------------------------------------------------------
 # Rsync exclusions — dev artifacts, docs, test suite, deploy templates.
@@ -78,6 +84,47 @@ write_deployed() {
     stamp="$(version_stamp) deployed from $(hostname -s) at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     $dry_run && { echo "[dry-run] DEPLOYED would contain: $stamp"; return; }
     ssh "$host" "echo '$stamp' > '$dest/DEPLOYED'"
+}
+
+# ---------------------------------------------------------------------------
+# Daedalus (Mac Studio — production GlowUp server)
+# ---------------------------------------------------------------------------
+
+deploy_daedalus() {
+    echo "==> daedalus: syncing to $DAEDALUS_HOST:$DAEDALUS_DEST"
+    do_rsync "$DAEDALUS_HOST" "$DAEDALUS_DEST"
+    write_deployed "$DAEDALUS_HOST" "$DAEDALUS_DEST"
+
+    if $dry_run; then
+        echo "[dry-run] would restart server on Daedalus"
+        return
+    fi
+
+    # Kill the running server; it will be restarted by the launchd/nohup
+    # wrapper.  If no server is running, that's fine — just deploy files.
+    ssh "$DAEDALUS_HOST" \
+        "pkill -f 'server.py.*server.json' || true"
+
+    # Give the old process a moment to release the port.
+    sleep 2
+
+    # Start the server.
+    ssh "$DAEDALUS_HOST" \
+        "cd '$DAEDALUS_DEST' && nohup ~/venv/bin/python server.py ~/glowup_config/server.json > ~/glowup_config/server.log 2>&1 &"
+
+    sleep 3
+
+    # Verify it came up.
+    local status
+    status=$(ssh "$DAEDALUS_HOST" "curl -s -o /dev/null -w '%{http_code}' http://localhost:8420/api/status" 2>/dev/null || echo "000")
+    if [ "$status" = "401" ] || [ "$status" = "200" ]; then
+        echo "==> daedalus: server running (HTTP $status)"
+    else
+        echo "==> daedalus: WARNING — server may not have started (HTTP $status)"
+    fi
+
+    echo "==> daedalus: $(ssh "$DAEDALUS_HOST" "cat '$DAEDALUS_DEST/DEPLOYED'")"
+    echo "==> daedalus: deploy complete"
 }
 
 # ---------------------------------------------------------------------------
@@ -137,15 +184,55 @@ deploy_judy() {
 }
 
 # ---------------------------------------------------------------------------
+# GlowUp (Pi 5 — primary server when Daedalus retires)
+# ---------------------------------------------------------------------------
+
+deploy_glowup() {
+    echo "==> glowup: syncing to $GLOWUP_HOST:$GLOWUP_DEST"
+    ssh "$GLOWUP_HOST" "mkdir -p '$GLOWUP_DEST'"
+    do_rsync "$GLOWUP_HOST" "$GLOWUP_DEST"
+    write_deployed "$GLOWUP_HOST" "$GLOWUP_DEST"
+
+    if $dry_run; then
+        echo "[dry-run] would restart: glowup-server glowup-satellite"
+        return
+    fi
+
+    ssh "$GLOWUP_HOST" "sudo systemctl restart glowup-server"
+
+    # Satellite may not be enabled yet (needs mic hardware).
+    ssh "$GLOWUP_HOST" \
+        "systemctl is-enabled --quiet glowup-satellite \
+         && sudo systemctl restart glowup-satellite \
+         || true"
+
+    sleep 3
+
+    # Verify server came up.
+    local status
+    status=$(ssh "$GLOWUP_HOST" "curl -s -o /dev/null -w '%{http_code}' http://localhost:8420/api/status" 2>/dev/null || echo "000")
+    if [ "$status" = "401" ] || [ "$status" = "200" ]; then
+        echo "==> glowup: server running (HTTP $status)"
+    else
+        echo "==> glowup: WARNING — server may not have started (HTTP $status)"
+    fi
+
+    echo "==> glowup: $(ssh "$GLOWUP_HOST" "cat '$GLOWUP_DEST/DEPLOYED'")"
+    echo "==> glowup: deploy complete"
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 case "${1:-}" in
-    pi)   deploy_pi   ;;
-    judy) deploy_judy ;;
+    daedalus) deploy_daedalus ;;
+    pi)       deploy_pi       ;;
+    judy)     deploy_judy     ;;
+    glowup)   deploy_glowup   ;;
     *)
         echo "Usage: $0 <target> [--dry-run]"
-        echo "Targets: pi, judy"
+        echo "Targets: daedalus, pi, judy, glowup"
         exit 1
         ;;
 esac

@@ -82,9 +82,11 @@ import math
 import os
 import re
 import signal
+import socket
 import socketserver
 import sys
 import threading
+import time
 import time as time_mod
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -134,6 +136,11 @@ try:
     _HAS_PRINTER: bool = True
 except ImportError:
     _HAS_PRINTER = False
+try:
+    from adapters.matter_adapter import MatterAdapter
+    _HAS_MATTER: bool = True
+except ImportError:
+    _HAS_MATTER = False
 try:
     from adapters.ble_adapter import BleAdapter
     _HAS_BLE_ADAPTER: bool = True
@@ -187,7 +194,7 @@ from server_constants import (
     CALIBRATION_PULSE_DELAY_SECONDS, AUTH_HEADER, BEARER_PREFIX,
     DEFAULT_CONFIG_PATH, EFFECT_DEFAULTS_FILENAME,
     GROUP_PREFIX, GRID_PREFIX, LOG_FORMAT, LOG_DATE_FORMAT,
-    API_PREFIX, AUTH_RATE_LIMIT, AUTH_RATE_WINDOW, SSE_TIMEOUT_SECONDS,
+    API_PREFIX, AUTH_RATE_LIMIT, AUTH_RATE_WINDOW,
     IDENTIFY_DURATION_SECONDS, IDENTIFY_CYCLE_SECONDS,
     IDENTIFY_FRAME_INTERVAL, IDENTIFY_MIN_BRI,
     COMMAND_DISCOVER_TIMEOUT_SECONDS, COMMAND_IDENTIFY_MAX_DURATION,
@@ -403,6 +410,9 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_post_server_power_off_all"),
     _Route("POST", ("api", "server", "rediscover"),
            "_handle_post_server_rediscover"),
+    _Route("POST", ("api", "adapters", "{name}", "restart"),
+           "_handle_post_adapter_restart",
+           unquote_params=("name",)),
 
     # -- DELETE --------------------------------------------------------------
     _Route("DELETE", ("api", "registry", "device", "{mac}"),
@@ -880,23 +890,180 @@ class GlowUpRequestHandler(
 
     # -- Helpers ------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Thread heartbeat registry — each daemon thread writes its current
+# activity here.  The watchdog reads them all on hang detection.
+# Key = thread name, value = (description, monotonic timestamp).
+#
+# Gated by GLOWUP_TRACE env var.  Set GLOWUP_TRACE=1 to activate.
+# When inactive, _hb() calls in adapters and infrastructure are no-ops.
+# ---------------------------------------------------------------------------
+
+TRACING_ENABLED: bool = os.environ.get("GLOWUP_TRACE", "") == "1"
+
+_thread_heartbeats: dict[str, tuple[str, float]] = {}
+
+# ---------------------------------------------------------------------------
+# Single-step debugger — semaphore-gated thread stepping.
+#
+# When _debug_stepping is True, instrumented threads block on their
+# semaphore before each operation.  The inspector releases the
+# semaphore one click at a time, reads _thread_heartbeats to see
+# what the thread did, then releases again.
+#
+# Activate:  set _debug_stepping = True (via watchdog or external probe)
+# Step:      _debug_gates["thread-name"].release()
+# Inspect:   _thread_heartbeats["thread-name"]
+# Deactivate: set _debug_stepping = False (threads resume free-running)
+# ---------------------------------------------------------------------------
+
+_debug_stepping: bool = False
+_debug_gates: dict[str, threading.Semaphore] = {}
+
+
+def _gate(thread_name: str) -> None:
+    """Block if single-step debugging is active.
+
+    Called before each operation in instrumented threads.
+    When ``_debug_stepping`` is False, returns immediately.
+    When True, blocks until the inspector releases the semaphore.
+
+    Args:
+        thread_name: Name of the calling thread (used as gate key).
+    """
+    if not _debug_stepping:
+        return
+    if thread_name not in _debug_gates:
+        _debug_gates[thread_name] = threading.Semaphore(0)
+    _debug_gates[thread_name].acquire()
+
+
+def _heartbeat(activity: str) -> None:
+    """Record what the current thread is doing right now.
+
+    No-op unless GLOWUP_TRACE=1 is set in the environment.
+
+    Args:
+        activity: Short description of current operation.
+    """
+    if TRACING_ENABLED:
+        _thread_heartbeats[threading.current_thread().name] = (
+            activity, time.monotonic(),
+        )
+
+
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     """HTTP server that handles each request in a new thread.
 
     Required for SSE: long-lived streaming connections must not block
-    other requests from being served.
+    other requests from being served.  SSE threads detect client
+    disconnect via select() on the socket — no timeout guessing.
 
-    Socket timeout prevents abandoned connections from holding threads
-    indefinitely.  Was unbounded — server hung every ~7 hours from
-    accumulated dead threads.
+    daemon_threads ensures all handler threads die with the process.
+
+    Overrides ``serve_forever()`` with instrumentation to diagnose
+    a bug where ``selector.select()`` stops returning readiness on
+    the listening socket.  Logs every transition between responsive
+    and unresponsive states.
     """
 
     daemon_threads: bool = True
     allow_reuse_address: bool = True
-    # Kill connections that go silent for >60 seconds.
-    # SSE writes every SSE_POLL_INTERVAL (~0.25s), so 60s of silence
-    # means the client is gone.  Normal requests complete in <10s.
-    timeout: int = 60
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initialize with service_actions instrumentation state."""
+        super().__init__(*args, **kwargs)
+        self._last_request_time: float = time.monotonic()
+        self._stall_logged: bool = False
+
+    def service_actions(self) -> None:
+        """Called every poll cycle by the stdlib serve_forever().
+
+        Tracks time since last accepted request. Logs when the
+        server goes silent (no requests accepted) for too long,
+        and when it recovers. This instruments the stdlib loop
+        without replacing the selector.
+        """
+        # _handle_request_noblock sets this via our get_request override.
+        now: float = time.monotonic()
+        idle: float = now - self._last_request_time
+
+        # Log stall after 10 seconds of no accepted requests.
+        if idle > 10.0 and not self._stall_logged:
+            self._stall_logged = True
+            last_step: str = getattr(self, "_last_step", "none")
+            accept_seq: int = getattr(self, "_accept_seq", 0)
+            try:
+                fd: int = self.socket.fileno()
+                listening: int = self.socket.getsockopt(
+                    socket.SOL_SOCKET, socket.SO_ACCEPTCONN,
+                )
+                bound: tuple = self.socket.getsockname()
+                sock_err: int = self.socket.getsockopt(
+                    socket.SOL_SOCKET, socket.SO_ERROR,
+                )
+                logging.warning(
+                    "SERVICE STALL: no requests accepted for %.1fs. "
+                    "fd=%d, bound=%s, listening=%d, so_error=%d, "
+                    "threads=%d, last_step='%s', total_accepts=%d",
+                    idle, fd, bound, listening, sock_err,
+                    threading.active_count(), last_step, accept_seq,
+                )
+            except Exception as exc:
+                logging.warning(
+                    "SERVICE STALL: %.1fs idle, last_step='%s', "
+                    "socket check failed: %s",
+                    idle, last_step, exc,
+                )
+
+    def get_request(self) -> tuple:
+        """Override to timestamp accepted connections for stall detection."""
+        result = super().get_request()
+        conn, addr = result
+        now: float = time.monotonic()
+        idle: float = now - self._last_request_time
+        if self._stall_logged:
+            logging.warning(
+                "SERVICE RECOVERED after %.1fs stall. "
+                "Accepted from %s:%d, fd=%d",
+                idle, addr[0], addr[1], conn.fileno(),
+            )
+            self._stall_logged = False
+        self._last_request_time = now
+        return result
+
+    def _handle_request_noblock(self) -> None:
+        """Override to instrument each step of the accept cycle.
+
+        Logs a monotonic sequence number at each step so we know
+        exactly which step the server last completed before a hang.
+        Written to a rotating counter in an instance variable —
+        the watchdog reads it to report the last completed step.
+        """
+        self._accept_seq = getattr(self, "_accept_seq", 0) + 1
+        seq: int = self._accept_seq
+        self._last_step = f"#{seq} poll→accept"
+
+        try:
+            request, client_address = self.get_request()
+        except OSError:
+            self._last_step = f"#{seq} accept failed (OSError)"
+            return
+
+        self._last_step = f"#{seq} accept→verify"
+
+        if self.verify_request(request, client_address):
+            try:
+                self._last_step = f"#{seq} verify→spawn"
+                self.process_request(request, client_address)
+                self._last_step = f"#{seq} spawn→done"
+            except Exception:
+                self.handle_error(request, client_address)
+                self.shutdown_request(request)
+                self._last_step = f"#{seq} spawn failed"
+        else:
+            self.shutdown_request(request)
+            self._last_step = f"#{seq} verify rejected"
 
 
 # ---------------------------------------------------------------------------
@@ -1468,12 +1635,227 @@ def main() -> None:
         server.shutdown()
 
     watcher: threading.Thread = threading.Thread(
-        target=_shutdown_watcher, daemon=True,
+        target=_shutdown_watcher, daemon=True, name="Thread-1 (_shutdown_watcher)",
     )
     watcher.start()
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
+
+    # -- Self-health watchdog -------------------------------------------------
+    # The server has a recurring bug where poll() on the listening socket
+    # stops firing — HTTP dies while internal threads keep running.
+    # Not fd exhaustion (verified).  This watchdog detects the condition,
+    # logs diagnostic data for post-mortem, and forces a restart via
+    # launchd KeepAlive.
+    _WATCHDOG_INTERVAL: int = 30       # Check every 30 seconds.
+    _WATCHDOG_MAX_FAILURES: int = 5    # 5 consecutive failures = hung (2.5 min).
+    _WATCHDOG_TIMEOUT: float = 10.0    # Per-check connect timeout.
+
+    # Minimum uptime before the watchdog is allowed to kill the
+    # process.  Device loading can take 30-40 seconds (query-silent
+    # bulbs timeout at 15s each).  Killing during startup creates a
+    # crash loop that leaks NVR sessions and prevents adapters from
+    # ever connecting.
+    _WATCHDOG_GRACE_PERIOD: float = 120.0  # 2 minutes after start.
+
+    def _watchdog() -> None:
+        """Background thread: periodically verify HTTP is responsive."""
+        import resource
+        start_time: float = time.monotonic()
+        consecutive_failures: int = 0
+        while not shutdown_event.is_set():
+            shutdown_event.wait(_WATCHDOG_INTERVAL)
+            if shutdown_event.is_set():
+                return
+
+            # Don't count failures during the startup grace period.
+            uptime: float = time.monotonic() - start_time
+            in_grace: bool = uptime < _WATCHDOG_GRACE_PERIOD
+
+            # Try connecting to our own listening socket.
+            # Both sides of this connection are ours — instrument fully.
+            t0: float = time.monotonic()
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(_WATCHDOG_TIMEOUT)
+                t_connect: float = time.monotonic()
+                sock.connect(("127.0.0.1", port))
+                t_connected: float = time.monotonic()
+                # Send minimal HTTP request.
+                sock.sendall(b"GET /api/status HTTP/1.0\r\n\r\n")
+                t_sent: float = time.monotonic()
+                data = sock.recv(128)
+                t_recv: float = time.monotonic()
+                sock.close()
+                if data:
+                    consecutive_failures = 0
+                    continue
+                # Connected, sent, but no data back.
+                logging.warning(
+                    "WATCHDOG: connect OK (%.3fs), send OK, "
+                    "recv empty (%.3fs wait). Server accepted "
+                    "but did not respond.",
+                    t_connected - t_connect,
+                    t_recv - t_sent,
+                )
+            except socket.timeout:
+                t_fail: float = time.monotonic()
+                logging.warning(
+                    "WATCHDOG: timeout after %.3fs. "
+                    "connect=%.3fs",
+                    t_fail - t0,
+                    t_fail - t_connect if 't_connect' in dir() else -1,
+                )
+            except ConnectionRefusedError:
+                logging.warning(
+                    "WATCHDOG: connection REFUSED after %.3fs. "
+                    "Socket not listening?",
+                    time.monotonic() - t0,
+                )
+            except Exception as exc:
+                logging.warning(
+                    "WATCHDOG: probe failed after %.3fs: %s (%s)",
+                    time.monotonic() - t0,
+                    type(exc).__name__, exc,
+                )
+
+            if in_grace:
+                # Log but don't count — server is still starting up.
+                logging.info(
+                    "WATCHDOG: HTTP unresponsive during startup "
+                    "(%.0fs uptime, grace period %.0fs). Not counting.",
+                    uptime, _WATCHDOG_GRACE_PERIOD,
+                )
+                continue
+
+            consecutive_failures += 1
+            soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+            thread_count: int = threading.active_count()
+            thread_names: str = ", ".join(
+                t.name for t in threading.enumerate()
+            )
+            logging.error(
+                "WATCHDOG: HTTP unresponsive (%d/%d failures). "
+                "threads=%d fds_limit=%d names=[%s]",
+                consecutive_failures, _WATCHDOG_MAX_FAILURES,
+                thread_count, soft, thread_names,
+            )
+            if consecutive_failures >= _WATCHDOG_MAX_FAILURES:
+                import os as _os
+                import sys as _sys
+                import traceback as _tb
+
+                # Count open fds.
+                fd_count: int = 0
+                fd_types: list[str] = []
+                for fd in range(min(_os.sysconf("SC_OPEN_MAX"), 1024)):
+                    try:
+                        st = _os.fstat(fd)
+                        fd_count += 1
+                    except OSError:
+                        pass
+
+                # Dump every thread's Python call stack — this is
+                # the smoking gun for diagnosing GIL contention,
+                # deadlocks, or stuck system calls.
+                _last = getattr(server, "_last_step", "none")
+                _seq = getattr(server, "_accept_seq", 0)
+                logging.critical(
+                    "WATCHDOG: Server hung — %d open fds, %d threads. "
+                    "last_step='%s', total_accepts=%d. "
+                    "Dumping all thread stacks.",
+                    fd_count, thread_count, _last, _seq,
+                )
+                frames = _sys._current_frames()
+                for thread in threading.enumerate():
+                    frame = frames.get(thread.ident)
+                    if frame is not None:
+                        stack = "".join(_tb.format_stack(frame))
+                        logging.critical(
+                            "WATCHDOG STACK [%s (id=%d)]:\n%s",
+                            thread.name, thread.ident, stack,
+                        )
+
+                # Check listening socket state — is it still alive?
+                try:
+                    fileno: int = server.socket.fileno()
+                    # fileno() returns -1 if closed.
+                    bound_addr = server.socket.getsockname()
+                    # SO_ACCEPTCONN: is the socket still listening?
+                    listening: int = server.socket.getsockopt(
+                        socket.SOL_SOCKET, socket.SO_ACCEPTCONN,
+                    )
+                    # SO_ERROR: pending socket error (0 = no error).
+                    sock_err: int = server.socket.getsockopt(
+                        socket.SOL_SOCKET, socket.SO_ERROR,
+                    )
+                    logging.critical(
+                        "WATCHDOG: Listening socket fd=%d, "
+                        "family=%s, type=%s, bound=%s, "
+                        "listening=%d, so_error=%d",
+                        fileno, server.socket.family,
+                        server.socket.type, bound_addr,
+                        listening, sock_err,
+                    )
+                    if fileno == -1:
+                        logging.critical(
+                            "WATCHDOG: Socket fd is -1 — "
+                            "SOCKET HAS BEEN CLOSED",
+                        )
+                    if not listening:
+                        logging.critical(
+                            "WATCHDOG: SO_ACCEPTCONN=0 — "
+                            "SOCKET IS NOT LISTENING",
+                        )
+                    if sock_err != 0:
+                        logging.critical(
+                            "WATCHDOG: SO_ERROR=%d — "
+                            "SOCKET HAS A PENDING ERROR",
+                            sock_err,
+                        )
+                except Exception as sock_exc:
+                    logging.critical(
+                        "WATCHDOG: Listening socket inspection "
+                        "failed: %s", sock_exc,
+                    )
+
+                # Dump thread heartbeats (if tracing was enabled).
+                now_mono: float = time.monotonic()
+                if _thread_heartbeats:
+                    for tname, (act, ts) in sorted(
+                        _thread_heartbeats.items()
+                    ):
+                        age: float = now_mono - ts
+                        logging.critical(
+                            "WATCHDOG HEARTBEAT [%s]: '%s' "
+                            "(%.1fs ago)",
+                            tname, act, age,
+                        )
+
+                # Check platform.
+                logging.critical(
+                    "WATCHDOG: platform=%s python=%s",
+                    _sys.platform, _sys.version,
+                )
+
+                # Do NOT kill the server — leave threads alive so
+                # they can be inspected from outside (ps, /proc,
+                # or a follow-up watchdog probe).  The diagnostics
+                # above are logged; killing destroys evidence.
+                # Reset failure counter so the watchdog keeps
+                # dumping diagnostics every cycle if it stays hung.
+                logging.critical(
+                    "WATCHDOG: diagnostics logged. Server left alive "
+                    "for inspection. Next dump in %ds.",
+                    _WATCHDOG_INTERVAL * _WATCHDOG_MAX_FAILURES,
+                )
+                consecutive_failures = 0
+
+    watchdog_thread: threading.Thread = threading.Thread(
+        target=_watchdog, daemon=True, name="watchdog",
+    )
+    watchdog_thread.start()
 
     logging.info("GlowUp server v%s listening on port %d", __version__, port)
     logging.info(
@@ -1619,13 +2001,52 @@ def main() -> None:
             # Wire keepalive → DeviceManager power state queries.
             # Every 2nd ARP cycle (~2 min), query all device power states.
             keepalive._on_power_query = dm.query_all_power_states
-            # On new bulb discovery, query that device's power state.
+
+            # Track unresolved group members so we can re-resolve them
+            # when keepalive discovers new devices on the network.
+            _pending_unresolved: list[tuple[str, str]] = list(unresolved)
             _existing_on_new: Optional[Callable] = keepalive._on_new_bulb
 
             def _on_new_with_power(ip: str, mac: str) -> None:
                 if _existing_on_new is not None:
                     _existing_on_new(ip, mac)
                 dm.query_power_state(ip)
+
+                # Re-resolve any previously unresolved group members.
+                # A device that was offline at startup may now be reachable.
+                if not _pending_unresolved:
+                    return
+                still_unresolved: list[tuple[str, str]] = []
+                for group_name, ident in _pending_unresolved:
+                    resolved_ip: Optional[str] = device_reg.resolve_to_ip(
+                        ident, keepalive,
+                    )
+                    if resolved_ip is not None:
+                        with dm._lock:
+                            members: list[str] = dm._group_config.get(
+                                group_name, [],
+                            )
+                            if resolved_ip not in members:
+                                members.append(resolved_ip)
+                                dm._group_config[group_name] = members
+                        # Add the IP to the device list and reload all
+                        # devices so it gets an emitter and controller.
+                        if resolved_ip not in dm._device_ips:
+                            dm._device_ips.append(resolved_ip)
+                        try:
+                            dm.load_devices()
+                        except Exception as exc:
+                            logging.warning(
+                                "Late resolve reload failed: %s", exc,
+                            )
+                        logging.info(
+                            "Late resolve: '%s' → %s (group '%s')",
+                            ident, resolved_ip, group_name,
+                        )
+                    else:
+                        still_unresolved.append((group_name, ident))
+                _pending_unresolved.clear()
+                _pending_unresolved.extend(still_unresolved)
 
             keepalive._on_new_bulb = _on_new_with_power
 
@@ -1651,6 +2072,7 @@ def main() -> None:
                         dm, config, scheduler=sched,
                     )
                     mqtt_bridge.start()
+                    server._mqtt_bridge = mqtt_bridge
 
             # Auto-migrate ble_triggers → automations if needed.
             if migrate_ble_triggers(config):
@@ -1788,6 +2210,7 @@ def main() -> None:
                 if power_log is not None:
                     zigbee_adapter._power_logger = power_log
                 zigbee_adapter.start()
+                server._zigbee_adapter = zigbee_adapter
 
             # Vivint adapter (for lock state — read-only cloud API).
             v_cfg: dict = config.get("vivint", {})
@@ -1808,6 +2231,20 @@ def main() -> None:
                 nvr_adapter = NvrAdapter(nvr_cfg)
                 nvr_adapter.start()
                 server._nvr_adapter = nvr_adapter
+
+            # Matter adapter (Linkind smart plugs via python-matter-server).
+            matter_cfg: dict = config.get("matter", {})
+            if matter_cfg.get("enabled") and _HAS_MATTER:
+                matter_url: str = matter_cfg.get(
+                    "server_url", "ws://localhost:5580/ws",
+                )
+                matter_adapter = MatterAdapter(
+                    config=matter_cfg,
+                    bus=signal_bus,
+                    server_url=matter_url,
+                )
+                matter_adapter.start()
+                server._matter_adapter = matter_adapter
 
             # Printer monitor (Brother CSV endpoint).
             printer_cfg: dict = config.get("printer", {})

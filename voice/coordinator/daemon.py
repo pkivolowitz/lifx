@@ -145,6 +145,7 @@ class CoordinatorDaemon:
         from voice.coordinator.tts import TextToSpeech
         self._tts = TextToSpeech(
             voice_model=tts_cfg.get("voice_model"),
+            voice_name=tts_cfg.get("voice_name"),
         )
 
     def _init_player(self) -> None:
@@ -316,6 +317,9 @@ class CoordinatorDaemon:
         self._init_executor()
         self._init_tts()
         self._init_player()
+
+        # Give executor access to TTS for voice-change commands.
+        self._executor.set_tts(self._tts)
 
         # Worker pool.
         self._pool = concurrent.futures.ThreadPoolExecutor(

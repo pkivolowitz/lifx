@@ -198,6 +198,8 @@ class NvrAdapter(AsyncPollingAdapterBase):
                 if not self._running:
                     break
                 ch_id: int = ch_cfg["id"]
+                ch_name: str = ch_cfg.get("name", str(ch_id))
+                self._hb(f"snapshot:{ch_name}")
                 try:
                     jpeg: Optional[bytes] = await self._host.get_snapshot(ch_id)
                     if jpeg:

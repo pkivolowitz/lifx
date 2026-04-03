@@ -57,22 +57,33 @@ _CLOCK_W: int = 200
 _CLOCK_H: int = 280
 
 # Grid layout.
+# 4 columns: pairs of day/night across two harmony rows.
 _COLS: int = 4
 
 # Minimum contrast ratio (WCAG AA) for text on background.
 _MIN_CONTRAST: float = 4.5
 
-# Palette generation strategies.
-_STRATEGIES: list[str] = [
-    "complementary",
-    "analogous_warm",
-    "analogous_cool",
-    "triadic",
-    "split_complementary",
-    "monochrome_light",
-    "monochrome_dark",
-    "accent",
-]
+# Standard color theory harmonies — each produces a day + night pair.
+# Canonical names and degree relationships per color theory literature.
+# Each entry: (text_hue_offset, accent_hue_offset) in degrees from base.
+#
+# "Split" harmonies shift the secondary colors symmetrically from their
+# canonical positions — same concept as split-complementary applied to
+# other harmony types.  The offset is ±30° from the canonical position.
+_HARMONIES: dict[str, tuple[float, float]] = {
+    "Complementary":        (180, 180),     # Opposite on color wheel
+    "Split Complementary":  (150, 210),     # Complement split ±30°
+    "Analogous":            (30, -30),      # Adjacent hues (±30°)
+    "Triadic":              (120, 240),     # Three equidistant (120° apart)
+    "Split Triadic":        (105, 255),     # Triadic positions shifted ±15°
+    "Tetradic Rectangle":   (60, 180),      # Two complementary pairs
+    "Tetradic Square":      (90, 270),      # Four equidistant (90° apart)
+    "Monochromatic":        (0, 0),         # Same hue, varied saturation/lightness
+}
+
+# Minimum saturation forced on accent/text hue shifts so they remain
+# visually distinct even when the source color is nearly grey.
+_MIN_ACCENT_SAT: float = 0.35
 
 
 # ---------------------------------------------------------------------------
@@ -335,8 +346,13 @@ def generate_palettes(
 ) -> list[dict[str, Any]]:
     """Generate candidate palettes from dominant wall colors.
 
+    Each strategy produces a DAY palette (wall color as background)
+    and a NIGHT palette (dark background).  Accent hues are forced
+    to a minimum saturation so they remain visually distinct even
+    when the source color is nearly grey.
+
     Each palette dict has:
-        name:       Strategy name.
+        name:       Strategy name (includes Day/Night suffix).
         background: RGB tuple for clock background.
         text:       RGB tuple for primary text (time, date).
         accent:     RGB tuple for secondary elements.
@@ -346,101 +362,59 @@ def generate_palettes(
         dominant: List of dominant RGB colors from the wall.
 
     Returns:
-        List of palette dicts.
+        List of palette dicts, ordered as day/night pairs.
     """
     palettes: list[dict[str, Any]] = []
     base: tuple[int, int, int] = dominant[0]
     r, g, b = base
     h, s, l = _rgb_to_hsl(r / 255, g / 255, b / 255)
 
-    for strategy in _STRATEGIES:
-        bg: tuple[int, int, int]
-        text: tuple[int, int, int]
-        accent: tuple[int, int, int]
-        dim: tuple[int, int, int]
+    for harmony_name, (text_offset, accent_offset) in _HARMONIES.items():
+        # Force saturation on shifted hues so desaturated paints
+        # still produce visibly different accent colors.
+        text_sat: float = max(s * 0.7, _MIN_ACCENT_SAT)
+        accent_sat: float = max(s, _MIN_ACCENT_SAT + 0.1)
 
-        if strategy == "complementary":
-            bg = base
-            comp_h: float = _hue_shift(h, 180)
-            text = _hsl_to_rgb(comp_h, min(s * 0.8, 0.6), 0.9)
-            accent = _hsl_to_rgb(comp_h, min(s, 0.7), 0.6)
-            dim = _hsl_to_rgb(h, s * 0.3, 0.6)
+        text_h: float = _hue_shift(h, text_offset)
+        accent_h: float = _hue_shift(h, accent_offset)
 
-        elif strategy == "analogous_warm":
-            bg = base
-            text = _hsl_to_rgb(_hue_shift(h, 30), min(s * 0.7, 0.5), 0.85)
-            accent = _hsl_to_rgb(_hue_shift(h, 60), min(s, 0.6), 0.65)
-            dim = _hsl_to_rgb(_hue_shift(h, 15), s * 0.3, 0.55)
+        # Monochromatic: differentiate via lightness, not hue.
+        if harmony_name == "Monochromatic":
+            text_sat = max(s * 0.4, 0.1)
+            accent_sat = max(s * 0.6, 0.15)
 
-        elif strategy == "analogous_cool":
-            bg = base
-            text = _hsl_to_rgb(_hue_shift(h, -30), min(s * 0.7, 0.5), 0.85)
-            accent = _hsl_to_rgb(_hue_shift(h, -60), min(s, 0.6), 0.65)
-            dim = _hsl_to_rgb(_hue_shift(h, -15), s * 0.3, 0.55)
+        # --- Day palette: wall color as background ---
+        day_bg: tuple[int, int, int] = base
+        day_text: tuple[int, int, int] = _hsl_to_rgb(text_h, text_sat, 0.88)
+        day_accent: tuple[int, int, int] = _hsl_to_rgb(accent_h, accent_sat, 0.6)
+        day_dim: tuple[int, int, int] = _hsl_to_rgb(h, max(s * 0.3, 0.1), 0.6)
 
-        elif strategy == "triadic":
-            bg = base
-            text = _hsl_to_rgb(_hue_shift(h, 120), min(s * 0.6, 0.5), 0.85)
-            accent = _hsl_to_rgb(_hue_shift(h, 240), min(s, 0.6), 0.6)
-            dim = _hsl_to_rgb(h, s * 0.2, 0.6)
-
-        elif strategy == "split_complementary":
-            bg = base
-            text = _hsl_to_rgb(_hue_shift(h, 150), min(s * 0.7, 0.5), 0.85)
-            accent = _hsl_to_rgb(_hue_shift(h, 210), min(s, 0.6), 0.6)
-            dim = _hsl_to_rgb(h, s * 0.25, 0.55)
-
-        elif strategy == "monochrome_light":
-            bg = _hsl_to_rgb(h, s * 0.15, 0.12)
-            text = _hsl_to_rgb(h, s * 0.3, 0.92)
-            accent = _hsl_to_rgb(h, min(s, 0.5), 0.65)
-            dim = _hsl_to_rgb(h, s * 0.2, 0.45)
-
-        elif strategy == "monochrome_dark":
-            bg = _hsl_to_rgb(h, s * 0.2, 0.08)
-            text = _hsl_to_rgb(h, s * 0.4, 0.85)
-            accent = _hsl_to_rgb(h, min(s * 0.8, 0.6), 0.55)
-            dim = _hsl_to_rgb(h, s * 0.15, 0.4)
-
-        elif strategy == "accent":
-            # Use secondary dominant color as accent.
-            sec: tuple[int, int, int] = dominant[1] if len(dominant) > 1 else base
-            bg = _hsl_to_rgb(h, s * 0.15, 0.1)
-            text = (230, 230, 230)
-            accent = sec
-            dim = _hsl_to_rgb(h, s * 0.1, 0.4)
-
-        else:
-            continue
-
-        # Ensure text is readable on background.
-        text = _ensure_contrast(text, bg)
-        accent = _ensure_contrast(accent, bg, min_ratio=3.0)
+        day_text = _ensure_contrast(day_text, day_bg)
+        day_accent = _ensure_contrast(day_accent, day_bg, min_ratio=3.0)
 
         palettes.append({
-            "name": strategy.replace("_", " ").title(),
-            "background": bg,
-            "text": text,
-            "accent": accent,
-            "dim": dim,
+            "name": f"{harmony_name} — Day",
+            "background": day_bg,
+            "text": day_text,
+            "accent": day_accent,
+            "dim": day_dim,
         })
 
-    # Generate palettes from each secondary dominant color too.
-    for i, color in enumerate(dominant[1:3], start=1):
-        cr, cg, cb = color
-        ch, cs, cl = _rgb_to_hsl(cr / 255, cg / 255, cb / 255)
-        bg = _hsl_to_rgb(ch, cs * 0.15, 0.1)
-        text = _hsl_to_rgb(ch, cs * 0.3, 0.9)
-        accent = color
-        dim = _hsl_to_rgb(ch, cs * 0.2, 0.45)
-        text = _ensure_contrast(text, bg)
-        accent = _ensure_contrast(accent, bg, min_ratio=3.0)
+        # --- Night palette: dark background, same accent hue ---
+        night_bg: tuple[int, int, int] = _hsl_to_rgb(h, s * 0.15, 0.06)
+        night_text: tuple[int, int, int] = _hsl_to_rgb(text_h, text_sat * 0.6, 0.8)
+        night_accent: tuple[int, int, int] = _hsl_to_rgb(accent_h, accent_sat * 0.7, 0.5)
+        night_dim: tuple[int, int, int] = _hsl_to_rgb(h, max(s * 0.15, 0.05), 0.35)
+
+        night_text = _ensure_contrast(night_text, night_bg)
+        night_accent = _ensure_contrast(night_accent, night_bg, min_ratio=3.0)
+
         palettes.append({
-            "name": f"Wall Color {i + 1}",
-            "background": bg,
-            "text": text,
-            "accent": accent,
-            "dim": dim,
+            "name": f"{harmony_name} — Night",
+            "background": night_bg,
+            "text": night_text,
+            "accent": night_accent,
+            "dim": night_dim,
         })
 
     return palettes
@@ -652,6 +626,14 @@ class PaletteExplorer:
 
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Mousewheel scrolling (macOS + Linux).
+        canvas.bind_all("<MouseWheel>",
+                        lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+        canvas.bind_all("<Button-4>",
+                        lambda e: canvas.yview_scroll(-1, "units"))
+        canvas.bind_all("<Button-5>",
+                        lambda e: canvas.yview_scroll(1, "units"))
 
         # Render mockups into grid.
         for i, palette in enumerate(self._palettes):

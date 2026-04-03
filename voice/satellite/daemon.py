@@ -401,7 +401,7 @@ class SatelliteDaemon:
             wake_cfg: dict[str, Any] = self._config.get("wake", {})
             self._wake = WakeDetector(
                 model_path=wake_cfg.get(
-                    "model_path", "/home/pi/models/hey_asshole.onnx",
+                    "model_path", "/home/pi/models/hey_mashugenah.onnx",
                 ),
                 threshold=wake_cfg.get("threshold", C.WAKE_THRESHOLD),
                 vad_threshold=wake_cfg.get(

@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import os
+import select
 import socket
 import struct
 import threading
@@ -101,12 +102,15 @@ class DeviceHandlerMixin:
         except (BrokenPipeError, ConnectionResetError):
             return
 
-        stream_start: float = time_mod.time()
+        sock: socket.socket = self.connection
         try:
             while True:
-                # Enforce maximum stream lifetime to prevent resource
-                # exhaustion from abandoned connections.
-                if time_mod.time() - stream_start > SSE_TIMEOUT_SECONDS:
+                # Detect client disconnect without guessing a timeout.
+                # SSE is server-push only — the client never sends data.
+                # A readable socket means the client sent FIN (gone).
+                readable, _, _ = select.select([sock], [], [], 0)
+                if readable:
+                    # Client sent FIN or RST — connection is dead.
                     break
 
                 # Read colors from the engine's in-memory frame buffer.

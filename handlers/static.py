@@ -27,19 +27,49 @@ class StaticHandlerMixin:
     """Static read-only endpoint handlers (status, devices, effects, groups)."""
 
     def _handle_get_status(self) -> None:
-        """GET /api/status — server readiness and version.
+        """GET /api/status — server readiness, version, and adapter health.
 
         Returns a status object indicating whether initial device
-        loading has completed.  Clients can poll this endpoint on
-        connect and show a "loading devices" message until
-        ``ready`` becomes ``true``.
+        loading has completed, plus the running/connected state of
+        every adapter and daemon thread.  Clients can poll this
+        endpoint on connect and show a "loading devices" message
+        until ``ready`` becomes ``true``.
         """
         ready: bool = self.device_manager.ready
         status: str = "ready" if ready else "loading"
+
+        # Adapter/daemon health — each reports running/connected.
+        adapters: dict[str, dict[str, Any]] = {}
+        for attr, label in [
+            ("_zigbee_adapter", "zigbee"),
+            ("_vivint_adapter", "vivint"),
+            ("_nvr_adapter", "nvr"),
+            ("_printer_adapter", "printer"),
+            ("_mqtt_bridge", "mqtt"),
+            ("_matter_adapter", "matter"),
+        ]:
+            obj: Any = getattr(self.server, attr, None)
+            if obj is not None:
+                try:
+                    adapters[label] = obj.get_status()
+                except Exception:
+                    adapters[label] = {"running": True}
+
+        # Keepalive thread (class attribute on the handler).
+        ka: Any = getattr(self.__class__, "keepalive", None)
+        if ka is not None:
+            adapters["keepalive"] = {"running": ka.is_alive()}
+
+        # Scheduler thread (class attribute on the handler).
+        sched: Any = getattr(self.__class__, "scheduler", None)
+        if sched is not None:
+            adapters["scheduler"] = {"running": sched.is_alive()}
+
         self._send_json(200, {
             "status": status,
             "ready": ready,
             "version": __version__,
+            "adapters": adapters,
         })
 
 

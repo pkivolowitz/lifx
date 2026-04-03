@@ -489,6 +489,21 @@ class BulbKeepAlive(threading.Thread):
 
     # -- Thread body -------------------------------------------------------
 
+    def _hb(self, activity: str) -> None:
+        """Record heartbeat and honor single-step gate.
+
+        No-op unless GLOWUP_TRACE=1 is set in the environment.
+        """
+        try:
+            from server import TRACING_ENABLED, _thread_heartbeats, _gate
+            if TRACING_ENABLED:
+                _thread_heartbeats["bulb-keepalive"] = (
+                    activity, time.monotonic(),
+                )
+                _gate("bulb-keepalive")
+        except ImportError:
+            pass
+
     def run(self) -> None:
         """Main loop: interleave ARP scans and keepalive pings."""
         # Try to connect to DB — if it fails, we just skip persistence.
@@ -520,11 +535,13 @@ class BulbKeepAlive(threading.Thread):
 
                 # --- Subnet sweep (populate ARP cache before reading it) ---
                 if now >= next_sweep:
+                    self._hb("sweep:ping_sweep")
                     self._sweep_subnet()
                     next_sweep = now + self._sweep_interval
 
                 # --- ARP scan ---
                 if now >= next_arp:
+                    self._hb("arp:read_table")
                     self._scan_arp()
                     next_arp = now + self._arp_interval
                     self._arp_cycle_count += 1
@@ -539,6 +556,7 @@ class BulbKeepAlive(threading.Thread):
                     # Periodic power state query every Nth ARP cycle.
                     if (self._on_power_query is not None
                             and self._arp_cycle_count % self._power_query_every_n == 0):
+                        self._hb("arp:power_query")
                         try:
                             self._on_power_query()
                         except Exception:
@@ -549,9 +567,11 @@ class BulbKeepAlive(threading.Thread):
 
                 # --- Keepalive ping ---
                 if now >= next_ping:
+                    self._hb("ping_all")
                     self._ping_all(sock)
                     next_ping = now + self._keepalive_interval
 
+                self._hb("idle")
                 # Sleep until the next event, but wake on stop.
                 sleep_for: float = (
                     min(next_arp, next_ping, next_sweep) - time.monotonic()
@@ -680,6 +700,7 @@ class BulbKeepAlive(threading.Thread):
             return
 
         for ip in targets:
+            self._hb(f"ping:{ip}")
             for _ in range(KEEPALIVE_BURST):
                 try:
                     sock.sendto(self._packet, (ip, LIFX_PORT))

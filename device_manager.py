@@ -199,6 +199,14 @@ class DeviceManager:
         with self._lock:
             ips: list[str] = list(self._devices.keys())
         for ip in ips:
+            try:
+                from server import TRACING_ENABLED, _thread_heartbeats
+                if TRACING_ENABLED:
+                    _thread_heartbeats[threading.current_thread().name] = (
+                        f"power_query:{ip}", time.monotonic(),
+                    )
+            except ImportError:
+                pass
             self.query_power_state(ip)
         logging.info(
             "Power state queried: %d on, %d off",

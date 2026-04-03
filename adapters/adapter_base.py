@@ -480,6 +480,26 @@ class AsyncPollingAdapterBase(AdapterBase):
             self._thread.join(timeout=THREAD_JOIN_TIMEOUT)
         self._on_stopped()
 
+    def _hb(self, activity: str) -> None:
+        """Record a heartbeat and honor single-step gate.
+
+        No-op unless GLOWUP_TRACE=1 is set in the environment.
+        When single-step debugging is active, blocks until the
+        inspector releases the gate.
+
+        Args:
+            activity: Short description of current operation.
+        """
+        try:
+            from server import TRACING_ENABLED, _thread_heartbeats, _gate
+            if TRACING_ENABLED:
+                _thread_heartbeats[self._thread_name] = (
+                    activity, time.monotonic(),
+                )
+                _gate(self._thread_name)
+        except ImportError:
+            pass
+
     def _run_loop(self) -> None:
         """Background thread entry point — create and run the event loop."""
         self._loop = asyncio.new_event_loop()
@@ -502,17 +522,31 @@ class AsyncPollingAdapterBase(AdapterBase):
         delay: float = self._initial_reconnect_delay
         while self._running:
             try:
+                self._hb("connecting")
                 await self._connect()
                 # Reset backoff after successful connection.
                 delay = self._initial_reconnect_delay
+                self._hb("running")
                 await self._run_cycle()
             except Exception as exc:
                 if not self._running:
                     break
+                self._hb(f"error: {type(exc).__name__}")
                 logger.error(
                     "%s: connection error: %s — retrying in %.0fs",
                     self._thread_name, exc, delay,
                 )
+            finally:
+                # Always release the session so the remote service
+                # does not accumulate stale connections (e.g., NVR
+                # "max session" error from leaked logins).
+                self._hb("disconnecting")
+                try:
+                    await self._disconnect()
+                except Exception:
+                    pass
+            if self._running:
+                self._hb(f"backoff {delay:.0f}s")
                 await asyncio.sleep(delay)
                 # Exponential backoff, capped.
                 delay = min(delay * 2.0, self._max_reconnect_delay)
