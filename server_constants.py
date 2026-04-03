@@ -37,8 +37,10 @@ DEVICE_WAKEUP_DELAY_SECONDS: float = 0.1
 # HTTP Strict-Transport-Security max-age (seconds in one year).
 HSTS_MAX_AGE_SECONDS: int = 365 * 24 * 60 * 60  # 31536000
 
-# SSE stream timeout — close idle connections after this many seconds.
-SSE_TIMEOUT_SECONDS: float = 3600.0
+# SSE stream lifetime limit (seconds).  Prevents thread exhaustion
+# from abandoned connections.  iOS app and dashboard auto-reconnect.
+# Was 3600s — server hung every ~7 hours from accumulated dead threads.
+SSE_TIMEOUT_SECONDS: float = 300.0
 
 # API path prefix.
 API_PREFIX: str = "/api"

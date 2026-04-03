@@ -885,10 +885,18 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
     Required for SSE: long-lived streaming connections must not block
     other requests from being served.
+
+    Socket timeout prevents abandoned connections from holding threads
+    indefinitely.  Was unbounded — server hung every ~7 hours from
+    accumulated dead threads.
     """
 
     daemon_threads: bool = True
     allow_reuse_address: bool = True
+    # Kill connections that go silent for >60 seconds.
+    # SSE writes every SSE_POLL_INTERVAL (~0.25s), so 60s of silence
+    # means the client is gone.  Normal requests complete in <10s.
+    timeout: int = 60
 
 
 # ---------------------------------------------------------------------------
