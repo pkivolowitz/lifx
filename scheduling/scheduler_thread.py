@@ -16,7 +16,7 @@ __version__: str = "1.0"
 import logging
 import threading
 import time as time_mod
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 
 from device_manager import DeviceManager
@@ -30,6 +30,30 @@ from server_constants import SCHEDULER_POLL_SECONDS, DEFAULT_FADE_MS
 from solar import SunTimes, sun_times
 
 logger: logging.Logger = logging.getLogger("glowup.scheduling")
+
+
+def _log_sun_times(sun: SunTimes, d: date) -> None:
+    """Log computed solar event times for a date.
+
+    Args:
+        sun: Computed solar event times.
+        d:   Calendar date.
+    """
+    fmt: str = "%H:%M"
+    logging.info("Sun times for %s:", d)
+    logging.info(
+        "  Dawn:    %s", sun.dawn.strftime(fmt) if sun.dawn else "N/A",
+    )
+    logging.info(
+        "  Sunrise: %s", sun.sunrise.strftime(fmt) if sun.sunrise else "N/A",
+    )
+    logging.info("  Noon:    %s", sun.noon.strftime(fmt))
+    logging.info(
+        "  Sunset:  %s", sun.sunset.strftime(fmt) if sun.sunset else "N/A",
+    )
+    logging.info(
+        "  Dusk:    %s", sun.dusk.strftime(fmt) if sun.dusk else "N/A",
+    )
 
 
 class SchedulerThread(threading.Thread):

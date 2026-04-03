@@ -350,7 +350,12 @@ class DashboardHandlerMixin:
         self.send_header("Content-Length", str(len(jpeg)))
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
-        self.wfile.write(jpeg)
+        try:
+            self.wfile.write(jpeg)
+        except BrokenPipeError:
+            # Client disconnected before receiving the snapshot —
+            # common with kiosk polling.  Not an error.
+            pass
 
 
     def _handle_get_home_occupancy(self) -> None:
