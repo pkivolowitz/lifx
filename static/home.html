@@ -116,6 +116,55 @@ body.dark-mode .webcam-card img,
 body.dark-mode .moon-card canvas {
     filter: sepia(1) saturate(3) hue-rotate(-15deg) brightness(0.4);
 }
+/* Night layout — hide non-essential tiles, enlarge clock. */
+body.dark-mode .clock-ampm {
+    display: none !important;
+}
+/* Night layout — only locks, security (doors), and alerts visible. */
+body.dark-mode .sensor-card:not(.locks-card):not(.security-card):not(.alerts-card) {
+    display: none !important;
+}
+/* Night layout — single column, full-width tiles. */
+body.dark-mode .sensor-grid {
+    grid-template-columns: 1fr !important;
+}
+body.dark-mode .sensor-card {
+    aspect-ratio: auto;
+    padding: clamp(20px, 4vw, 40px);
+}
+/* Scale up lock circles and labels. */
+body.dark-mode .locks-card {
+    --lock-size: clamp(60px, 10vw, 100px);
+}
+body.dark-mode .lock-circle {
+    font-size: clamp(1.2rem, 3vw, 2rem);
+}
+body.dark-mode .lock-name {
+    font-size: clamp(0.8rem, 1.6vw, 1.1rem);
+}
+/* Scale up alarm state and door labels. */
+body.dark-mode .alarm-state {
+    font-size: clamp(1.6rem, 3.5vw, 2.4rem);
+}
+body.dark-mode .door-status {
+    font-size: clamp(1.6rem, 3.5vw, 2.4rem);
+}
+body.dark-mode .door-name {
+    font-size: clamp(0.8rem, 1.6vw, 1.1rem);
+}
+/* Scale up alert text. */
+body.dark-mode .alerts-card .sensor-location {
+    font-size: clamp(1.2rem, 2.5vw, 1.8rem);
+}
+body.dark-mode .alerts-list {
+    font-size: clamp(1rem, 2vw, 1.4rem);
+}
+body.dark-mode .alerts-clear {
+    font-size: clamp(1.4rem, 3vw, 2rem);
+}
+body.dark-mode .clock-time {
+    font-size: clamp(11rem, 30vw, 26rem);
+}
 
 /* ------------------------------------------------------------------ */
 /* Reset & base                                                       */
