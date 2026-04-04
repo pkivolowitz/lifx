@@ -429,6 +429,12 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_delete_group",
            unquote_params=("name",)),
     # BLE sensor data — no auth, read-only ambient data for displays.
+    # Matter device control.
+    _Route("GET", ("api", "matter", "devices"),
+           "_handle_get_matter_devices"),
+    _Route("POST", ("api", "matter", "{name}", "power"),
+           "_handle_post_matter_power",
+           unquote_params=("name",)),
     _Route("GET", ("api", "ble", "sensors"),
            "_handle_get_ble_sensors", requires_auth=False),
     _Route("GET", ("api", "ble", "sensors", "{label}"),
@@ -2245,6 +2251,10 @@ def main() -> None:
                 )
                 matter_adapter.start()
                 server._matter_adapter = matter_adapter
+                # Wire Matter into the scheduler so matter: groups
+                # can be scheduled alongside LIFX groups.
+                if sched is not None:
+                    sched.set_matter_adapter(matter_adapter)
 
             # Printer monitor (Brother CSV endpoint).
             printer_cfg: dict = config.get("printer", {})

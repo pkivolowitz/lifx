@@ -53,6 +53,7 @@ class SchedulerThread(threading.Thread):
         super().__init__(daemon=True, name="scheduler")
         self._config: dict[str, Any] = config
         self._dm: Any = device_manager
+        self._matter: Any = None  # Set via set_matter_adapter().
         self._stop_event: threading.Event = threading.Event()
 
         # Per-group state: group name → active entry name (or None).
@@ -108,6 +109,13 @@ class SchedulerThread(threading.Thread):
             overrides: dict[str, Optional[str]] = dict(self._dm._overrides)
         specs: list[dict[str, Any]] = self._config.get("schedule", [])
 
+        # Inject Matter devices as virtual groups so the evaluator
+        # can schedule them.  Each Matter device appears as a group
+        # named "matter:<DeviceName>" with a placeholder IP.
+        if self._matter is not None:
+            for name in self._matter.get_device_names():
+                groups[f"matter:{name}"] = [f"matter:{name}"]
+
         # --- Log sun times once per day ---
         if today != self._last_logged_date:
             self._log_sun_times(now, today)
@@ -136,12 +144,86 @@ class SchedulerThread(threading.Thread):
                     action.device_id, exc,
                 )
 
+    def set_matter_adapter(self, adapter: Any) -> None:
+        """Set the Matter adapter for scheduling Matter devices.
+
+        Args:
+            adapter: MatterAdapter instance, or None.
+        """
+        self._matter = adapter
+
+    def _is_matter_group(self, group_name: str) -> bool:
+        """Check if a group name refers to a Matter device.
+
+        Matter groups are prefixed with ``matter:`` in the schedule
+        config.
+
+        Args:
+            group_name: Group name from the schedule entry.
+
+        Returns:
+            True if this is a Matter device group.
+        """
+        return group_name.startswith("matter:")
+
+    def _dispatch_matter(self, action: ScheduleAction) -> None:
+        """Dispatch an action to the Matter adapter.
+
+        Args:
+            action: The schedule action to execute.
+        """
+        if self._matter is None:
+            logging.warning(
+                "[%s] Matter adapter not available — skipping",
+                action.group,
+            )
+            return
+
+        # Strip the "matter:" prefix to get the device name.
+        device_name: str = action.group[7:]
+
+        if action.action == "start":
+            effect: str = action.effect or "on"
+            if effect == "on":
+                self._matter.power_on(device_name)
+                logging.info(
+                    "[matter:%s] Power on (schedule '%s')",
+                    device_name, action.entry_name,
+                )
+            elif effect == "off":
+                self._matter.power_off(device_name)
+                logging.info(
+                    "[matter:%s] Power off (schedule '%s')",
+                    device_name, action.entry_name,
+                )
+            else:
+                logging.warning(
+                    "[matter:%s] Unsupported effect '%s' — "
+                    "Matter devices only support on/off",
+                    device_name, effect,
+                )
+
+        elif action.action == "stop":
+            self._matter.power_off(device_name)
+            logging.info(
+                "[matter:%s] Power off (schedule stop '%s')",
+                device_name, action.entry_name,
+            )
+
     def _dispatch(self, action: ScheduleAction) -> None:
         """Execute a single schedule action.
+
+        Routes to the Matter adapter for ``matter:`` groups,
+        otherwise dispatches to the DeviceManager (LIFX).
 
         Args:
             action: The action to execute.
         """
+        # Route Matter devices to the Matter adapter.
+        if self._is_matter_group(action.group):
+            self._dispatch_matter(action)
+            return
+
         if action.action == "start":
             logging.info(
                 "[%s] Starting '%s' (%s)",

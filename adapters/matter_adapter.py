@@ -97,6 +97,13 @@ class MatterAdapter:
         self._running: bool = False
         self._thread: Optional[threading.Thread] = None
         self._client: Optional[Any] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+        # Command queue: (node_id, command, result_future).
+        # HTTP/scheduler threads put commands here; the background
+        # loop picks them up and executes in its own async context.
+        import queue
+        self._cmd_queue: "queue.Queue[tuple]" = queue.Queue()
 
         # Node ID → friendly name mapping from config.
         self._devices: dict[int, str] = {}
@@ -153,10 +160,12 @@ class MatterAdapter:
 
     def _run_loop(self) -> None:
         """Background thread: connect, subscribe, reconnect on failure."""
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
         delay: float = RECONNECT_DELAY
         while self._running:
             try:
-                asyncio.run(self._run_async())
+                self._loop.run_until_complete(self._run_async())
                 delay = RECONNECT_DELAY  # Reset on clean exit.
             except Exception as exc:
                 logger.warning(
@@ -174,18 +183,45 @@ class MatterAdapter:
         async with aiohttp.ClientSession() as session:
             self._client = MatterClient(self._server_url, session)
             await self._client.connect()
+
+            # start_listening() is REQUIRED — it runs the WebSocket
+            # receive loop that delivers node updates and command
+            # responses.  Without it, send_device_command hangs
+            # forever waiting for a response no one reads.
+            listen_task = asyncio.create_task(
+                self._client.start_listening(),
+            )
+
+            # Wait for node data to arrive from the server.
+            await asyncio.sleep(2.0)
             logger.info("Connected to Matter server")
 
             # Initial state sync.
             await self._sync_state()
 
-            # Poll state periodically while running.
-            while self._running:
-                await asyncio.sleep(5.0)
-                await self._sync_state()
+            # Poll state and drain command queue while running.
+            try:
+                while self._running:
+                    # Drain pending commands from HTTP/scheduler threads.
+                    while not self._cmd_queue.empty():
+                        try:
+                            node_id, command, future = (
+                                self._cmd_queue.get_nowait()
+                            )
+                            try:
+                                await self._send_command(node_id, command)
+                                future.set_result(True)
+                            except Exception as exc:
+                                future.set_exception(exc)
+                        except Exception:
+                            break
 
-            await self._client.disconnect()
-            self._client = None
+                    await asyncio.sleep(1.0)
+                    await self._sync_state()
+            finally:
+                listen_task.cancel()
+                await self._client.disconnect()
+                self._client = None
 
     async def _sync_state(self) -> None:
         """Read on/off state of all configured devices and publish to bus."""
@@ -269,8 +305,9 @@ class MatterAdapter:
     def _power_command(self, device_name: str, command: Any) -> bool:
         """Execute a power command by device name.
 
-        Runs the async command on a new event loop since this is called
-        from HTTP handler threads.
+        Puts the command on the queue for the background loop to
+        execute in its own async context (where the MatterClient
+        and aiohttp session live).
 
         Args:
             device_name: Friendly name from config.
@@ -284,19 +321,29 @@ class MatterAdapter:
             logger.warning("Unknown Matter device: %s", device_name)
             return False
 
+        if self._client is None:
+            logger.error(
+                "Matter command failed for %s: Not connected",
+                device_name,
+            )
+            return False
+
+        import concurrent.futures
+        future: concurrent.futures.Future = concurrent.futures.Future()
+        self._cmd_queue.put((node_id, command, future))
+
         try:
-            loop = asyncio.new_event_loop()
-            try:
-                loop.run_until_complete(
-                    self._send_command(node_id, command),
-                )
-            finally:
-                loop.close()
+            future.result(timeout=10.0)
             logger.info(
                 "Matter command sent: %s → %s",
                 device_name, type(command).__name__,
             )
             return True
+        except concurrent.futures.TimeoutError:
+            logger.error(
+                "Matter command timed out for %s", device_name,
+            )
+            return False
         except Exception as exc:
             logger.error(
                 "Matter command failed for %s: %s",

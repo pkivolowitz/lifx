@@ -695,16 +695,17 @@ async function refresh() {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
-    const [devices, schedule, discovered, configGroups, automationsResp, stateResp] = await Promise.all([
+    const [devices, schedule, discovered, configGroups, automationsResp, stateResp, matterResp] = await Promise.all([
       api('/api/devices'),
       api('/api/schedule'),
       api('/api/discovered_bulbs'),
       api('/api/groups'),
       api('/api/automations'),
       api('/api/state'),
+      api('/api/matter/devices'),
     ]);
 
-    const results = [devices, schedule, discovered, configGroups, automationsResp, stateResp];
+    const results = [devices, schedule, discovered, configGroups, automationsResp, stateResp, matterResp];
 
     // Any 401 → back to login.
     if (results.some(r => r && r._authFailed)) {
@@ -932,7 +933,19 @@ async function refresh() {
       }).join('');
     }
 
-    // Physical Devices.
+    // Physical Devices + Matter switches (merged into one list).
+    const matterDevices = (matterResp && matterResp.devices) || [];
+    matterDevices.forEach(md => {
+      physical.push({
+        _matter: true,
+        ip: 'matter:' + md.name,
+        label: 'matter: ' + md.name,
+        product: 'Matter Switch',
+        zones: 1,
+        node_id: md.node_id,
+      });
+    });
+
     const dEl = document.getElementById('devices');
     if (physical.length === 0) {
       dEl.innerHTML =
@@ -958,10 +971,17 @@ async function refresh() {
           ? (d.width + '\u00d7' + d.height + ' matrix')
           : ((d.zones || 1) + ' zones');
         const powerOn = d.power !== false;
-        const powerBtn = `<button class="btn-power ${powerOn ? 'is-on' : 'is-off'}" onclick="togglePower('${esc(d.ip).replace(/'/g, "\\'")}', ${powerOn})">${powerOn ? 'ON' : 'OFF'}</button>`;
-        const reintroBtn = (d.is_multizone || d.is_matrix)
-          ? `<button class="btn-reintro" onclick="reintrospect('${esc(d.ip).replace(/'/g, "\\'")}')" title="Re-query zone count">Recount</button>`
-          : '';
+        let powerBtn, reintroBtn = '';
+        if (d._matter) {
+          // Matter switch — toggle button, route to Matter API.
+          const mName = d.ip.substring(7); // strip "matter:" prefix
+          powerBtn = `<button class="btn-power is-off" onclick="matterToggle('${esc(mName).replace(/'/g, "\\'")}')">TOGGLE</button>`;
+        } else {
+          powerBtn = `<button class="btn-power ${powerOn ? 'is-on' : 'is-off'}" onclick="togglePower('${esc(d.ip).replace(/'/g, "\\'")}', ${powerOn})">${powerOn ? 'ON' : 'OFF'}</button>`;
+          reintroBtn = (d.is_multizone || d.is_matrix)
+            ? `<button class="btn-reintro" onclick="reintrospect('${esc(d.ip).replace(/'/g, "\\'")}')" title="Re-query zone count">Recount</button>`
+            : '';
+        }
         return `
           <div class="device-row">
             <div>
@@ -1086,6 +1106,25 @@ async function rediscover() {
     refresh();
   } catch (e) {
     console.error('Rediscover request failed:', e);
+  }
+}
+
+async function matterToggle(name) {
+  try {
+    const resp = await fetch(BASE + '/api/matter/' + encodeURIComponent(name) + '/power', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + TOKEN,
+      },
+      body: JSON.stringify({ action: 'toggle' }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      console.error('Matter toggle failed:', err.error || resp.status);
+    }
+  } catch (e) {
+    console.error('Matter toggle request failed:', e);
   }
 }
 

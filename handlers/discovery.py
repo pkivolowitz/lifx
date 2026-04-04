@@ -242,6 +242,55 @@ class DiscoveryHandlerMixin:
                 "error": str(exc),
             })
 
+    # -- Matter device endpoints ---------------------------------------------
+
+    def _handle_get_matter_devices(self) -> None:
+        """GET /api/matter/devices — list Matter devices with state."""
+        adapter: Any = getattr(self.server, "_matter_adapter", None)
+        if adapter is None:
+            self._send_json(200, {"devices": []})
+            return
+
+        status: dict[str, Any] = adapter.get_status()
+        devices: list[dict[str, Any]] = []
+        for name, info in status.get("devices", {}).items():
+            devices.append({
+                "name": name,
+                "node_id": info.get("node_id"),
+                "type": "switch",
+            })
+        self._send_json(200, {"devices": devices})
+
+    def _handle_post_matter_power(self, name: str) -> None:
+        """POST /api/matter/{name}/power — on, off, or toggle a Matter device.
+
+        Body: {"on": true/false} or {"action": "toggle"}
+
+        Args:
+            name: Matter device friendly name.
+        """
+        adapter: Any = getattr(self.server, "_matter_adapter", None)
+        if adapter is None:
+            self._send_json(503, {"error": "Matter adapter not running"})
+            return
+
+        body: dict[str, Any] = self._read_json_body() or {}
+        action: str = body.get("action", "")
+
+        if action == "toggle":
+            ok: bool = adapter.toggle(name)
+        elif body.get("on", True):
+            ok = adapter.power_on(name)
+        else:
+            ok = adapter.power_off(name)
+
+        if ok:
+            self._send_json(200, {"device": name, "ok": True})
+        else:
+            self._send_json(400, {
+                "error": f"Failed to control '{name}'",
+            })
+
     # -- Registry handlers ---------------------------------------------------
 
 
