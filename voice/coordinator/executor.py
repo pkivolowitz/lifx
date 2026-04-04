@@ -13,7 +13,7 @@ special case that lives in code rather than config.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "2.0"
+__version__ = "2.1"
 
 import json
 import logging
@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -116,6 +117,7 @@ class GlowUpExecutor:
             "weather": self._handle_weather,
             "system_status": self._handle_system_status,
             "set_voice": self._handle_set_voice,
+            "tell_time": self._handle_tell_time,
         }
 
         # TTS reference — set after init by the coordinator daemon.
@@ -991,6 +993,44 @@ class GlowUpExecutor:
         return {
             "status": "ok",
             "confirmation": f"Voice changed to {voice}.",
+            "speak": True,
+        }
+
+    # ------------------------------------------------------------------
+    # Tell time — local clock, no API call
+    # ------------------------------------------------------------------
+
+    def _handle_tell_time(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Speak the current local time.
+
+        Formats the time in 12-hour spoken form (e.g., "It is 3:45 PM").
+        No API call required — reads the system clock directly.
+        """
+        now: datetime = datetime.now()
+        hour: int = now.hour
+        minute: int = now.minute
+        period: str = "AM" if hour < 12 else "PM"
+
+        # Convert to 12-hour format.
+        display_hour: int = hour % 12
+        if display_hour == 0:
+            display_hour = 12
+
+        if minute == 0:
+            time_str: str = f"{display_hour} {period}"
+        else:
+            time_str = f"{display_hour}:{minute:02d} {period}"
+
+        return {
+            "status": "ok",
+            "confirmation": f"It is {time_str}.",
             "speak": True,
         }
 

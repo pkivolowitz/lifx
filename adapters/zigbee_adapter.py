@@ -225,6 +225,41 @@ class ZigbeeAdapter(MqttAdapterBase):
         # Non-numeric, non-boolean values (strings, objects) — skip.
         return None
 
+    # --- Command interface -------------------------------------------------
+
+    def send_command(
+        self, device: str, payload: dict[str, Any],
+    ) -> bool:
+        """Publish a command to a Zigbee device via Z2M.
+
+        Publishes JSON to ``zigbee2mqtt/{device}/set`` which Z2M
+        translates into the appropriate Zigbee cluster command.
+
+        Args:
+            device:  Zigbee2MQTT friendly name (e.g., "LRTV").
+            payload: Command payload (e.g., ``{"state": "ON"}``).
+
+        Returns:
+            True if the MQTT publish succeeded.
+        """
+        if self._client is None:
+            logger.warning("Cannot send command — MQTT not connected")
+            return False
+
+        topic: str = f"{self._subscribe_prefix}/{device}/set"
+        data: str = json.dumps(payload)
+        result = self._client.publish(topic, data, qos=1)
+
+        if result.rc == 0:
+            logger.info("Zigbee command: %s → %s", topic, data)
+            return True
+
+        logger.warning(
+            "Zigbee publish failed (rc=%d): %s → %s",
+            result.rc, topic, data,
+        )
+        return False
+
     # --- Introspection -----------------------------------------------------
 
     def get_status(self) -> dict[str, Any]:

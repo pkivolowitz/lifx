@@ -50,6 +50,7 @@ Available actions:
 - system_status: ask about overall system health, whether the system is working, or "what is your status?" Use when someone asks "what's your status?", "how are you doing?", "are you working?", "system check", or "status report".
 - set_voice: change the speaking voice. Target is the voice name. Use when someone says "switch to Samantha", "use the Daniel voice", "change voice to Karen", etc. (params: voice_name="Samantha")
 - repair: restart a specific adapter or subsystem. Target is the adapter name: zigbee, vivint, nvr, printer, or mqtt. Use when someone says "repair NVR", "restart vivint", "fix the printer adapter", etc.
+- tell_time: ask for the current time. Use when someone says "what time is it?", "tell me the time", "what's the time?", "got the time?", etc.
 - scene: activate a named scene or preset
 - chat: general conversation, questions, or anything NOT related to controlling devices or querying sensors (params: message=<the user's full message>)
 
@@ -91,6 +92,8 @@ Examples:
 - "fix the printer" -> {{"action": "repair", "target": "printer", "params": {{}}}}
 - "switch to Samantha" -> {{"action": "set_voice", "target": "all", "params": {{"voice_name": "Samantha"}}}}
 - "use the Daniel voice" -> {{"action": "set_voice", "target": "all", "params": {{"voice_name": "Daniel"}}}}
+- "what time is it?" -> {{"action": "tell_time", "target": "all", "params": {{}}}}
+- "tell me the time" -> {{"action": "tell_time", "target": "all", "params": {{}}}}
 - "tell me about the battle of Gettysburg" -> {{"action": "chat", "target": "all", "params": {{"message": "tell me about the battle of Gettysburg"}}}}
 """
 

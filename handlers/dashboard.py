@@ -685,6 +685,41 @@ class DashboardHandlerMixin:
             return
         self._send_json(200, {"devices": pl.devices()})
 
+    def _handle_post_zigbee_set(self) -> None:
+        """POST /api/zigbee/set — send a command to a Zigbee device.
+
+        Publishes a payload to zigbee2mqtt/{device}/set via the
+        Zigbee adapter's MQTT connection.
+
+        Request body::
+
+            {"device": "LRTV", "payload": {"state": "ON"}}
+        """
+        body: dict[str, Any] = self._read_json_body()
+        if not body:
+            self._send_json(400, {"error": "missing JSON body"})
+            return
+
+        device: str = body.get("device", "")
+        payload: dict[str, Any] = body.get("payload", {})
+
+        if not device or not payload:
+            self._send_json(400, {"error": "device and payload required"})
+            return
+
+        adapter: Any = getattr(self.server, "_zigbee_adapter", None)
+        if adapter is None:
+            self._send_json(503, {"error": "Zigbee adapter not available"})
+            return
+
+        ok: bool = adapter.send_command(device, payload)
+        if ok:
+            self._send_json(200, {"status": "ok", "device": device})
+        else:
+            self._send_json(
+                502, {"error": f"failed to send command to {device}"},
+            )
+
     # -- Helpers ------------------------------------------------------------
 
 

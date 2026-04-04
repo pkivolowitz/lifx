@@ -147,6 +147,12 @@ set_voice:
   handler: set_voice
   speak: true
 
+tell_time:
+  type: query
+  label: clock
+  handler: tell_time
+  speak: true
+
 repair:
   type: command
   label: system

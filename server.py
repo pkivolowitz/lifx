@@ -293,6 +293,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_power_summary", requires_auth=False),
     _Route("GET", ("api", "power", "devices"),
            "_handle_get_power_devices", requires_auth=False),
+    _Route("POST", ("api", "zigbee", "set"),
+           "_handle_post_zigbee_set", requires_auth=False),
     _Route("GET", ("api", "operators"),
            "_handle_get_operators", requires_auth=True),
     _Route("GET", ("photos", "{filename}"),
