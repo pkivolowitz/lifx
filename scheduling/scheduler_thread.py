@@ -153,21 +153,32 @@ class SchedulerThread(threading.Thread):
         self._matter = adapter
 
     def _is_matter_group(self, group_name: str) -> bool:
-        """Check if a group name refers to a Matter device.
+        """Check if a group is Matter-only (all members are matter: prefixed).
 
-        Matter groups are prefixed with ``matter:`` in the schedule
-        config.
+        Checks both the ``matter:`` prefix convention (for inline
+        schedule entries) and the actual group config (for groups
+        created via the dashboard).
 
         Args:
             group_name: Group name from the schedule entry.
 
         Returns:
-            True if this is a Matter device group.
+            True if this group should be routed to the Matter adapter.
         """
-        return group_name.startswith("matter:")
+        if group_name.startswith("matter:"):
+            return True
+        # Check if all members of the group are matter: devices.
+        with self._dm._lock:
+            members: list[str] = self._dm._group_config.get(group_name, [])
+        return bool(members) and all(
+            m.startswith("matter:") for m in members
+        )
 
     def _dispatch_matter(self, action: ScheduleAction) -> None:
         """Dispatch an action to the Matter adapter.
+
+        Handles both ``matter:DeviceName`` single-device groups
+        and regular groups whose members are all ``matter:`` devices.
 
         Args:
             action: The schedule action to execute.
@@ -179,36 +190,46 @@ class SchedulerThread(threading.Thread):
             )
             return
 
-        # Strip the "matter:" prefix to get the device name.
-        device_name: str = action.group[7:]
+        # Build list of Matter device names to control.
+        device_names: list[str] = []
+        if action.group.startswith("matter:"):
+            device_names.append(action.group[7:])
+        else:
+            # Regular group name — look up members.
+            with self._dm._lock:
+                members: list[str] = self._dm._group_config.get(
+                    action.group, [],
+                )
+            for m in members:
+                if m.startswith("matter:"):
+                    device_names.append(m[7:])
 
-        if action.action == "start":
-            effect: str = action.effect or "on"
-            if effect == "on":
-                self._matter.power_on(device_name)
-                logging.info(
-                    "[matter:%s] Power on (schedule '%s')",
-                    device_name, action.entry_name,
-                )
-            elif effect == "off":
-                self._matter.power_off(device_name)
-                logging.info(
-                    "[matter:%s] Power off (schedule '%s')",
-                    device_name, action.entry_name,
-                )
-            else:
-                logging.warning(
-                    "[matter:%s] Unsupported effect '%s' — "
-                    "Matter devices only support on/off",
-                    device_name, effect,
-                )
-
-        elif action.action == "stop":
-            self._matter.power_off(device_name)
-            logging.info(
-                "[matter:%s] Power off (schedule stop '%s')",
-                device_name, action.entry_name,
+        if not device_names:
+            logging.warning(
+                "[%s] No Matter devices found in group", action.group,
             )
+            return
+
+        for device_name in device_names:
+            if action.action == "start":
+                effect: str = action.effect or "on"
+                if effect in ("on", "off"):
+                    if effect == "on":
+                        self._matter.power_on(device_name)
+                    else:
+                        self._matter.power_off(device_name)
+                else:
+                    # Any effect → power on for switches.
+                    self._matter.power_on(device_name)
+
+            elif action.action == "stop":
+                self._matter.power_off(device_name)
+
+        logging.info(
+            "[%s] Matter %s on %d device(s) (schedule '%s')",
+            action.group, action.action,
+            len(device_names), action.entry_name,
+        )
 
     def _dispatch(self, action: ScheduleAction) -> None:
         """Execute a single schedule action.

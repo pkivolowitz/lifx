@@ -258,6 +258,7 @@ class DiscoveryHandlerMixin:
                 "name": name,
                 "node_id": info.get("node_id"),
                 "type": "switch",
+                "power": adapter.get_power_state(name),
             })
         self._send_json(200, {"devices": devices})
 

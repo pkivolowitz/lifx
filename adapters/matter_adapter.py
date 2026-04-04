@@ -117,6 +117,9 @@ class MatterAdapter:
             v: k for k, v in self._devices.items()
         }
 
+        # Cached power state: device name → bool (True = on).
+        self._power_states: dict[str, bool] = {}
+
     @property
     def running(self) -> bool:
         """Whether the adapter is running."""
@@ -233,13 +236,18 @@ class MatterAdapter:
                 node = self._client.get_node(node_id)
                 if node is None or not node.available:
                     continue
-                # On/Off cluster, attribute 0 = OnOff state.
-                on_off = node.attributes.get(f"{ONOFF_ENDPOINT}/6/0")
-                if on_off is not None and self._bus is not None:
-                    self._bus.publish(
-                        f"matter:{name}:state",
-                        "on" if on_off else "off",
-                    )
+                # Read OnOff attribute via the proper API.
+                on_off = node.get_attribute_value(
+                    ONOFF_ENDPOINT, None,
+                    clusters.OnOff.Attributes.OnOff,
+                )
+                if on_off is not None:
+                    self._power_states[name] = bool(on_off)
+                    if self._bus is not None:
+                        self._bus.publish(
+                            f"matter:{name}:state",
+                            "on" if on_off else "off",
+                        )
             except Exception as exc:
                 logger.debug(
                     "State read failed for %s (node %d): %s",
@@ -354,6 +362,17 @@ class MatterAdapter:
     def get_device_names(self) -> list[str]:
         """Return list of configured Matter device names."""
         return list(self._name_to_node.keys())
+
+    def get_power_state(self, device_name: str) -> Optional[bool]:
+        """Return cached power state for a device.
+
+        Args:
+            device_name: Friendly name from config.
+
+        Returns:
+            True if on, False if off, None if unknown.
+        """
+        return self._power_states.get(device_name)
 
     def get_status(self) -> dict[str, Any]:
         """Return adapter status for API responses."""

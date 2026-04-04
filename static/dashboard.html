@@ -943,6 +943,7 @@ async function refresh() {
         product: 'Matter Switch',
         zones: 1,
         node_id: md.node_id,
+        power: md.power,
       });
     });
 
@@ -973,9 +974,10 @@ async function refresh() {
         const powerOn = d.power !== false;
         let powerBtn, reintroBtn = '';
         if (d._matter) {
-          // Matter switch — toggle button, route to Matter API.
-          const mName = d.ip.substring(7); // strip "matter:" prefix
-          powerBtn = `<button class="btn-power is-off" onclick="matterToggle('${esc(mName).replace(/'/g, "\\'")}')">TOGGLE</button>`;
+          // Matter switch — use real power state for toggle.
+          const mName = d.ip.substring(7);
+          const mOn = d.power === true;
+          powerBtn = `<button class="btn-power ${mOn ? 'is-on' : 'is-off'}" onclick="matterToggle('${esc(mName).replace(/'/g, "\\'")}')">` + (mOn ? 'ON' : 'OFF') + `</button>`;
         } else {
           powerBtn = `<button class="btn-power ${powerOn ? 'is-on' : 'is-off'}" onclick="togglePower('${esc(d.ip).replace(/'/g, "\\'")}', ${powerOn})">${powerOn ? 'ON' : 'OFF'}</button>`;
           reintroBtn = (d.is_multizone || d.is_matrix)
@@ -1110,6 +1112,16 @@ async function rediscover() {
 }
 
 async function matterToggle(name) {
+  // Optimistic UI — flip the button immediately.
+  const btns = document.querySelectorAll('.btn-power');
+  btns.forEach(b => {
+    if (b.onclick && b.onclick.toString().includes(name)) {
+      const wasOn = b.classList.contains('is-on');
+      b.classList.toggle('is-on', !wasOn);
+      b.classList.toggle('is-off', wasOn);
+      b.textContent = wasOn ? 'OFF' : 'ON';
+    }
+  });
   try {
     const resp = await fetch(BASE + '/api/matter/' + encodeURIComponent(name) + '/power', {
       method: 'POST',
