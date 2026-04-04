@@ -403,8 +403,20 @@ class DeviceHandlerMixin:
                     self._send_json(404, {"error": "Group not found"})
                     return
                 succeeded: int = 0
+                matter: Any = getattr(self.server, "_matter_adapter", None)
                 for mip in member_ips:
                     try:
+                        if mip.startswith("matter:"):
+                            # Route to Matter adapter.
+                            mname: str = mip[7:]
+                            if matter is not None:
+                                ok: bool = (
+                                    matter.power_on(mname) if on
+                                    else matter.power_off(mname)
+                                )
+                                if ok:
+                                    succeeded += 1
+                            continue
                         dev: LifxDevice = LifxDevice(mip)
                         try:
                             if on:

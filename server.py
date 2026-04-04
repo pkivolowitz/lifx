@@ -1333,6 +1333,11 @@ def _resolve_config_groups(
     for group_name, entries in raw_groups.items():
         resolved: list[str] = []
         for ident in entries:
+            # matter: prefixed identifiers pass through unchanged —
+            # they are not LIFX devices and have no IP to resolve.
+            if ident.startswith("matter:"):
+                resolved.append(ident)
+                continue
             ip: Optional[str] = registry.resolve_to_ip(ident, keepalive)
             if ip is not None:
                 resolved.append(ip)

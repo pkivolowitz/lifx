@@ -1254,12 +1254,14 @@ async function _populateGroupDeviceList(selectedIps) {
   listEl.innerHTML = '<span style="color:var(--dim)">Loading devices...</span>';
 
   try {
-    const [devData, discData] = await Promise.all([
+    const [devData, discData, matterData] = await Promise.all([
       api('/api/devices'),
       api('/api/discovered_bulbs'),
+      api('/api/matter/devices'),
     ]);
     const devices = ((devData && devData.devices) || []).filter(d => !d.is_group);
     const bulbs = (discData && discData.discovered_bulbs) || [];
+    const matterDevs = (matterData && matterData.devices) || [];
 
     const devByIp = {};
     devices.forEach(d => { devByIp[d.ip] = d; });
@@ -1280,6 +1282,15 @@ async function _populateGroupDeviceList(selectedIps) {
           meta: 'Discovered (not configured)',
         });
       }
+    });
+    // Matter devices — use "matter:Name" as the identifier.
+    matterDevs.forEach(md => {
+      const matterId = 'matter:' + md.name;
+      _groupAllDevices.push({
+        ip: matterId,
+        name: 'matter: ' + md.name,
+        meta: 'Matter switch \u00b7 node ' + md.node_id,
+      });
     });
 
     // Preserve the order from selectedIps (group member order).
