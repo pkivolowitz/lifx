@@ -697,37 +697,52 @@ body.portrait .sensor-card {
 .aqi-hazardous  { color: #ffffff; }
 
 /* ------------------------------------------------------------------ */
-/* UV index card                                                      */
+/* System health scroller                                             */
 /* ------------------------------------------------------------------ */
-.uv-card {
-    text-align: center;
+.health-card {
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    position: relative;
+}
+.health-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow-y: auto;
+    flex: 1;
+    scrollbar-width: none;
+}
+.health-scroll::-webkit-scrollbar { display: none; }
+.health-row {
+    display: flex;
+    justify-content: space-between;
     align-items: center;
-    justify-content: center;
+    font-size: clamp(0.9rem, 1.7vw, 1.2rem);
+    padding: 2px 0;
+    line-height: 1.4;
 }
-.uv-value {
-    font-family: var(--font-clock);
-    font-size: clamp(2.5rem, 6vw, 4rem);
-    font-weight: 200;
-    line-height: 1.1;
-}
-.uv-label {
-    font-size: clamp(1rem, 2vw, 1.4rem);
-    font-weight: 600;
-    margin-top: 2px;
-}
-.uv-details {
-    font-size: clamp(0.7rem, 1.2vw, 1rem);
+.health-name {
     color: var(--label-color);
-    margin-top: 6px;
+    opacity: 0.8;
 }
-/* UV color coding. */
-.uv-low      { color: #ffffff; }
-.uv-moderate { color: #ffffff; }
-.uv-high     { color: #ffffff; }
-.uv-veryhigh { color: #ffffff; }
-.uv-extreme  { color: #ffffff; }
+.health-ok {
+    color: #66bb6a;
+    font-weight: 600;
+}
+.health-bad {
+    color: #ef5350;
+    font-weight: 600;
+}
+.health-summary {
+    font-size: clamp(0.8rem, 1.5vw, 1.05rem);
+    color: var(--label-color);
+    opacity: 0.6;
+    margin-top: 2px;
+    text-align: center;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    padding-top: 2px;
+}
 
 /* ------------------------------------------------------------------ */
 /* NWS alerts card                                                    */
@@ -1054,12 +1069,11 @@ body.portrait .sensor-card {
             <div class="aqi-label" id="aqiLabel"></div>
             <div class="aqi-details" id="aqiDetails"></div>
         </div>
-        <!-- UV index card — Open-Meteo. -->
-        <div class="uv-card sensor-card" id="uvCard" style="display:none">
-            <div class="sensor-location">UV Index</div>
-            <div class="uv-value" id="uvValue"></div>
-            <div class="uv-label" id="uvLabel"></div>
-            <div class="uv-details" id="uvDetails"></div>
+        <!-- System health scroller — polls /api/status. -->
+        <div class="health-card sensor-card" id="healthCard" style="display:none">
+            <div class="sensor-location">System Health</div>
+            <div class="health-scroll" id="healthScroll"></div>
+            <div class="health-summary" id="healthSummary"></div>
         </div>
         <!-- NWS severe weather alerts. -->
         <div class="alerts-card sensor-card" id="alertsCard" style="display:none">
@@ -1869,57 +1883,101 @@ body.portrait .sensor-card {
     setInterval(pollAqi, WEATHER_POLL_MS);
 
     /* -------------------------------------------------------------- */
-    /* UV Index — Open-Meteo                                          */
+    /* System Health — polls /api/home/health, pages 4 rows at a time */
     /* -------------------------------------------------------------- */
 
-    var uvCard = document.getElementById("uvCard");
-    var uvValue = document.getElementById("uvValue");
-    var uvLabel = document.getElementById("uvLabel");
-    var uvDetails = document.getElementById("uvDetails");
+    var healthCard = document.getElementById("healthCard");
+    var healthScroll = document.getElementById("healthScroll");
+    var healthSummary = document.getElementById("healthSummary");
 
-    var UV_URL = "https://api.open-meteo.com/v1/forecast" +
-        "?latitude=30.69&longitude=-88.04" +
-        "&current=uv_index&daily=uv_index_max" +
-        "&temperature_unit=fahrenheit&timezone=America/Chicago&forecast_days=1";
+    /* Poll interval — 30 seconds. Page cycle — 4 seconds. */
+    var HEALTH_POLL_MS = 30000;
+    var HEALTH_CYCLE_MS = 4000;
+    var HEALTH_PAGE_SIZE = 4;
 
-    function uvCategory(uv) {
-        if (uv < 3)  return ["Low", "uv-low"];
-        if (uv < 6)  return ["Moderate", "uv-moderate"];
-        if (uv < 8)  return ["High", "uv-high"];
-        if (uv < 11) return ["Very High", "uv-veryhigh"];
-        return ["Extreme", "uv-extreme"];
+    var healthRows = [];
+    var healthPage = 0;
+    var healthMeta = {};
+
+    function renderHealthPage(page) {
+        if (healthRows.length === 0) return;
+        var totalPages = Math.ceil(healthRows.length / HEALTH_PAGE_SIZE);
+        page = page % totalPages;
+        var start = page * HEALTH_PAGE_SIZE;
+        var end = Math.min(start + HEALTH_PAGE_SIZE, healthRows.length);
+
+        var html = "";
+        for (var i = start; i < end; i++) {
+            var r = healthRows[i];
+            html += '<div class="health-row">' +
+                '<span class="health-name">' + r.name + '</span>' +
+                '<span class="' + (r.ok ? "health-ok" : "health-bad") + '">' +
+                (r.ok ? "OK" : "DOWN") + '</span></div>';
+        }
+
+        healthScroll.innerHTML = html;
+
+        /* Summary: device count + schedule count + dots. */
+        var parts = [];
+        if (healthMeta.devices != null) {
+            parts.push(healthMeta.devices + " devices");
+        }
+        if (healthMeta.schedules != null) {
+            parts.push(healthMeta.schedules + " sched");
+        }
+        if (healthMeta.downCount > 0) {
+            parts.push(healthMeta.downCount + " down");
+        }
+
+        var dots = "";
+        if (totalPages > 1) {
+            for (var p = 0; p < totalPages; p++) {
+                dots += '<span class="soil-dot' +
+                    (p === page ? " active" : "") + '"></span>';
+            }
+        }
+
+        healthSummary.innerHTML = parts.join(" · ") +
+            (dots ? '<div class="soil-dots" style="display:flex;justify-content:center;margin-top:2px">' + dots + '</div>' : "");
     }
 
-    function pollUv() {
-        fetch(UV_URL)
+    function pollHealth() {
+        fetch("/api/home/health")
             .then(function (r) { return r.json(); })
             .then(function (data) {
-                if (!data.current) return;
-                var uv = data.current.uv_index;
-                var cat = uvCategory(uv);
-                var maxUv = (data.daily && data.daily.uv_index_max)
-                    ? data.daily.uv_index_max[0] : null;
+                var adapters = data.adapters || {};
+                var rows = [];
+                var downCount = 0;
+                var keys = Object.keys(adapters);
 
-                uvValue.textContent = uv.toFixed(1);
-                uvValue.className = "uv-value " + cat[1];
-                uvLabel.textContent = cat[0];
-                uvLabel.className = "uv-label " + cat[1];
-
-                if (maxUv != null) {
-                    var maxCat = uvCategory(maxUv);
-                    uvDetails.innerHTML = "Today's peak: " +
-                        '<span class="' + maxCat[1] + '">' +
-                        maxUv.toFixed(1) + " (" + maxCat[0] + ")</span>";
-                } else {
-                    uvDetails.textContent = "";
+                for (var i = 0; i < keys.length; i++) {
+                    var ok = adapters[keys[i]];
+                    rows.push({ name: keys[i], ok: ok });
+                    if (!ok) downCount++;
                 }
-                uvCard.style.display = "";
+
+                healthRows = rows;
+                healthMeta = {
+                    devices: data.devices,
+                    schedules: data.schedules,
+                    downCount: downCount
+                };
+                renderHealthPage(healthPage);
+                healthCard.style.display = "";
             })
             .catch(function () {});
     }
 
-    pollUv();
-    setInterval(pollUv, WEATHER_POLL_MS);
+    function cycleHealth() {
+        if (healthRows.length > HEALTH_PAGE_SIZE) {
+            healthPage++;
+            renderHealthPage(healthPage);
+        }
+    }
+
+    pollHealth();
+    setInterval(pollHealth, HEALTH_POLL_MS);
+    setInterval(cycleHealth, HEALTH_CYCLE_MS);
 
     /* -------------------------------------------------------------- */
     /* NWS Severe Weather Alerts                                      */

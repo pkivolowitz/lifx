@@ -285,6 +285,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_home_printer", requires_auth=False),
     _Route("GET", ("api", "home", "soil"),
            "_handle_get_home_soil", requires_auth=False),
+    _Route("GET", ("api", "home", "health"),
+           "_handle_get_home_health", requires_auth=False),
     _Route("GET", ("power",),
            "_handle_get_power_page", requires_auth=False),
     _Route("GET", ("api", "power", "readings"),

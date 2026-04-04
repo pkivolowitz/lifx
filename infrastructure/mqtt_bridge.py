@@ -268,6 +268,18 @@ class MqttBridge:
             self.broker, self.port, self.topic_prefix,
         )
 
+    def get_status(self) -> dict[str, Any]:
+        """Return bridge status for API responses.
+
+        Returns:
+            Dict with running state and thread health.
+        """
+        state_alive: bool = (
+            self._state_thread is not None
+            and self._state_thread.is_alive()
+        )
+        return {"running": state_alive or not self._stop_event.is_set()}
+
     def stop(self) -> None:
         """Disconnect from the broker and stop publisher threads."""
         self._stop_event.set()

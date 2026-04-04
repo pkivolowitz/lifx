@@ -539,6 +539,86 @@ class DashboardHandlerMixin:
         )
         self._send_json(200, {"sensors": result})
 
+    def _handle_get_home_health(self) -> None:
+        """GET /api/home/health — system health for the /home dashboard.
+
+        Returns adapter status, device count, and schedule count
+        in a compact format for the health scroller tile. Auth-free
+        so the kiosk clock can poll it.
+
+        Response::
+
+            {
+              "ready": true,
+              "adapters": {"zigbee": true, "vivint": true, ...},
+              "devices": 17,
+              "schedules": 5
+            }
+        """
+        # Adapter health — reuse the same logic as /api/status.
+        adapter_health: dict[str, bool] = {}
+        for attr, label in [
+            ("_zigbee_adapter", "zigbee"),
+            ("_vivint_adapter", "vivint"),
+            ("_nvr_adapter", "nvr"),
+            ("_printer_adapter", "printer"),
+            ("_mqtt_bridge", "mqtt"),
+            ("_matter_adapter", "matter"),
+        ]:
+            obj: Any = getattr(self.server, attr, None)
+            if obj is not None:
+                try:
+                    info: dict[str, Any] = obj.get_status()
+                    healthy: bool = (
+                        info.get("running", False)
+                        or info.get("connected", False)
+                        or info.get("status") == "ok"
+                    )
+                    adapter_health[label] = healthy
+                except Exception:
+                    adapter_health[label] = False
+
+        # Keepalive thread.
+        ka: Any = getattr(self.__class__, "keepalive", None)
+        if ka is not None:
+            adapter_health["keepalive"] = ka.is_alive()
+
+        # Scheduler thread.
+        sched: Any = getattr(self.__class__, "scheduler", None)
+        if sched is not None:
+            adapter_health["scheduler"] = sched.is_alive()
+
+        # Device count.
+        device_count: int = 0
+        try:
+            dm: Any = self.device_manager
+            devices: list = dm.devices_as_list()
+            # Exclude groups — count physical devices only.
+            device_count = sum(
+                1 for d in devices if not d.get("is_group", False)
+            )
+        except Exception:
+            pass
+
+        # Schedule count — read from scheduler's config.
+        schedule_count: int = 0
+        sched_obj: Any = getattr(self.__class__, "scheduler", None)
+        if sched_obj is not None:
+            try:
+                specs: list = sched_obj._config.get("schedule", [])
+                schedule_count = sum(
+                    1 for s in specs if s.get("enabled", True)
+                )
+            except Exception:
+                pass
+
+        self._send_json(200, {
+            "ready": getattr(self.device_manager, "ready", False),
+            "adapters": adapter_health,
+            "devices": device_count,
+            "schedules": schedule_count,
+        })
+
     def _handle_get_photo(self, filename: str) -> None:
         """GET /photos/{filename} — serve a photo from static/photos/.
 
