@@ -56,26 +56,65 @@
 /* Dark mode — activated when room lights are off at night.           */
 /* ------------------------------------------------------------------ */
 body.dark-mode {
-    --bg:            #080808;
-    --clock-color:   rgba(255, 255, 255, 0.6);
-    --date-color:    rgba(255, 255, 255, 0.25);
-    --card-bg:       rgba(255, 255, 255, 0.04);
-    --card-border:   rgba(255, 255, 255, 0.08);
+    --bg:            #000000;
+    --clock-color:   rgba(180, 60, 40, 0.5);
+    --date-color:    rgba(180, 60, 40, 0.25);
+    --card-bg:       rgba(80, 20, 10, 0.08);
+    --card-border:   rgba(120, 40, 20, 0.12);
     --card-shadow:   none;
-    --temp-color:    #e07840;
-    --humid-color:   #4aa8d4;
-    --motion-on:     #2a6b3a;
-    --motion-off:    rgba(255, 255, 255, 0.10);
-    --label-color:   rgba(255, 255, 255, 0.3);
-    --text-color:    rgba(255, 255, 255, 0.5);
-    --stale-color:   #e55;
-    --lock-locked:   #2a6b3a;
-    --lock-unlocked: #8b3030;
-    --lock-unknown:  rgba(255, 255, 255, 0.10);
+    --temp-color:    rgba(180, 80, 40, 0.5);
+    --humid-color:   rgba(140, 60, 50, 0.5);
+    --motion-on:     rgba(120, 50, 20, 0.5);
+    --motion-off:    rgba(80, 20, 10, 0.15);
+    --label-color:   rgba(180, 60, 40, 0.25);
+    --text-color:    rgba(180, 60, 40, 0.35);
+    --stale-color:   rgba(200, 40, 30, 0.5);
+    --lock-locked:   rgba(100, 50, 20, 0.5);
+    --lock-unlocked: rgba(140, 30, 20, 0.5);
+    --lock-unknown:  rgba(80, 20, 10, 0.15);
+    --soil-wet:      rgba(140, 60, 30, 0.5);
+    --soil-dry:      rgba(180, 60, 40, 0.4);
+    --soil-critical: rgba(200, 40, 30, 0.5);
+    /* Uniform dim — cuts emitted light. */
+    filter:          brightness(0.7);
 }
 body.dark-mode .sensor-card,
 body.dark-mode .locks-card {
-    border-color: rgba(255, 255, 255, 0.08);
+    border-color: rgba(120, 40, 20, 0.12);
+}
+/* Red-shift hardcoded white text in alerts, soil, moon. */
+body.dark-mode .alerts-card .sensor-location,
+body.dark-mode .alert-item,
+body.dark-mode .alert-item.warning,
+body.dark-mode .alert-item.watch,
+body.dark-mode .alerts-clear {
+    color: rgba(180, 60, 40, 0.5);
+}
+body.dark-mode .soil-card .sensor-location,
+body.dark-mode .soil-moisture-unit,
+body.dark-mode .soil-details,
+body.dark-mode .soil-name {
+    color: rgba(180, 60, 40, 0.35);
+}
+/* Lock text — override hardcoded #fff. */
+body.dark-mode .lock-circle.locked {
+    color: rgba(180, 60, 40, 0.6);
+    box-shadow: none;
+}
+body.dark-mode .lock-circle.unlocked {
+    box-shadow: none;
+}
+body.dark-mode .occupancy-badge.home {
+    color: rgba(180, 60, 40, 0.6);
+}
+body.dark-mode .lock-item.battery-critical .lock-circle.locked {
+    color: rgba(180, 60, 40, 0.6);
+}
+/* Red-shift images and canvas (NVR, webcam, moon). */
+body.dark-mode .camera-card img,
+body.dark-mode .webcam-card img,
+body.dark-mode .moon-card canvas {
+    filter: sepia(1) saturate(3) hue-rotate(-15deg) brightness(0.4);
 }
 
 /* ------------------------------------------------------------------ */
