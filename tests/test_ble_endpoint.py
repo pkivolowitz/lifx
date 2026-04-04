@@ -34,6 +34,7 @@ class _FakeHandler:
     signal_bus: Optional[SignalBus] = None
     ble_adapter: Optional[Any] = None
     lock_manager = None
+    automation_manager = None
 
     def __init__(self) -> None:
         """Initialize with empty response capture."""

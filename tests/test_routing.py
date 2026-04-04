@@ -281,6 +281,7 @@ class TestRouteFlags(unittest.TestCase):
         AUTH_FREE_PATTERNS: set[tuple[str, ...]] = {
             ("dashboard",),
             ("home",),
+            ("power",),
             ("api", "home", "photos"),
             ("api", "home", "lights"),
             ("api", "home", "locks"),
@@ -291,6 +292,10 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "home", "mode"),
             ("api", "home", "printer"),
             ("api", "home", "soil"),
+            ("api", "power", "readings"),
+            ("api", "power", "summary"),
+            ("api", "power", "devices"),
+            ("api", "zigbee", "set"),
             ("photos", "{filename}"),
             ("api", "media", "stream", "{source_name}"),
             ("api", "calibrate", "time_sync"),
@@ -318,16 +323,16 @@ class TestRouteCount(unittest.TestCase):
         """GET routes should match the expected count."""
         get_routes: list[_Route] = [r for r in _ROUTES if r.method == "GET"]
         self.assertEqual(
-            len(get_routes), 37,
-            f"Expected 37 GET routes, got {len(get_routes)}",
+            len(get_routes), 42,
+            f"Expected 42 GET routes, got {len(get_routes)}",
         )
 
     def test_post_route_count(self) -> None:
         """POST routes should match the expected count."""
         post_routes: list[_Route] = [r for r in _ROUTES if r.method == "POST"]
         self.assertEqual(
-            len(post_routes), 28,
-            f"Expected 28 POST routes, got {len(post_routes)}",
+            len(post_routes), 31,
+            f"Expected 31 POST routes, got {len(post_routes)}",
         )
 
     def test_put_route_count(self) -> None:

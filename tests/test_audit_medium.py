@@ -241,7 +241,7 @@ class TestM13OvernightStopEqualsStart(unittest.TestCase):
 
     def test_zero_duration_entry_not_matched(self) -> None:
         """An entry with stop==start should not match as active."""
-        from scheduler import _find_active_entry
+        from schedule_utils import find_active_entry as _find_active_entry
         specs = [{
             "name": "test",
             "group": "test_group",
@@ -257,16 +257,9 @@ class TestM13OvernightStopEqualsStart(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# M14: scheduler.py — procs as dict keyed by IP
+# M14: REMOVED — GroupState was part of the old monolithic scheduler.py,
+# replaced by scheduling/evaluator.py which uses plain dicts for state.
 # ---------------------------------------------------------------------------
-
-class TestM14ProcsDict(unittest.TestCase):
-    """GroupState.procs must be a dict, not a list."""
-
-    def test_procs_is_dict(self) -> None:
-        from scheduler import GroupState
-        state = GroupState()
-        self.assertIsInstance(state.procs, dict)
 
 
 # ---------------------------------------------------------------------------
