@@ -113,12 +113,20 @@ class StaticHandlerMixin:
             devices.append({
                 "ip": f"group:{gname}",
                 "label": gname,
+                "nickname": None,
                 "product": "Matter Group",
                 "zones": len(matter_members),
+                "is_multizone": True,
+                "is_matrix": False,
+                "current_effect": None,
+                "source": None,
+                "overridden": False,
                 "is_group": True,
+                "is_grid": False,
+                "mac": "",
+                "group": gname,
                 "member_ips": members,
                 "power": group_power,
-                "current_effect": None,
             })
 
         self._send_json(200, {"devices": devices})
