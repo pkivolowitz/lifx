@@ -1108,9 +1108,6 @@ async function rediscover() {
   const origText = btn ? btn.textContent : '';
   if (btn) { btn.textContent = 'Scanning\u2026'; btn.disabled = true; }
   try {
-    const beforeResp = await api('/api/discovered_bulbs');
-    const beforeCount = (beforeResp && beforeResp.discovered_bulbs || []).length;
-
     const resp = await fetch(BASE + '/api/server/rediscover', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + TOKEN },
@@ -1120,17 +1117,15 @@ async function rediscover() {
       alert('Rediscover failed: ' + (err.error || resp.status));
       return;
     }
+    const result = await resp.json();
     await refresh();
-
-    const afterResp = await api('/api/discovered_bulbs');
-    const afterCount = (afterResp && afterResp.discovered_bulbs || []).length;
-    const diff = afterCount - beforeCount;
-
-    if (diff > 0) {
-      alert(diff + ' new device' + (diff > 1 ? 's' : '') + ' found.');
-    } else {
-      alert('No new devices found. ' + afterCount + ' device' + (afterCount !== 1 ? 's' : '') + ' on network.');
+    const n = result.devices || 0;
+    const u = result.unresolved || 0;
+    let msg = n + ' device' + (n !== 1 ? 's' : '') + ' loaded.';
+    if (u > 0) {
+      msg += ' ' + u + ' unresolved.';
     }
+    alert(msg);
   } catch (e) {
     alert('Rediscover request failed.');
   } finally {
