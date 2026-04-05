@@ -266,7 +266,9 @@ class _BulbDB:
         dsn: str = self._get_dsn()
 
         try:
-            self._conn = psycopg2.connect(dsn)
+            from infrastructure.timed_io import timed_io, IOClass
+            with timed_io("bulb_keepalive.pg_connect", IOClass.FAST):
+                self._conn = psycopg2.connect(dsn, connect_timeout=5)
             self._conn.autocommit = True
             # Ensure the table exists.
             with self._conn.cursor() as cur:
@@ -320,7 +322,9 @@ class _BulbDB:
         """Re-establish the database connection after a failure."""
         dsn: str = self._get_dsn()
         try:
-            self._conn = psycopg2.connect(dsn)
+            from infrastructure.timed_io import timed_io, IOClass
+            with timed_io("bulb_keepalive.pg_reconnect", IOClass.FAST):
+                self._conn = psycopg2.connect(dsn, connect_timeout=5)
             self._conn.autocommit = True
             logger.info("BulbDB reconnected")
             return True

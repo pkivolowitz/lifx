@@ -139,71 +139,34 @@ class DataPoller:
     def _run(self) -> None:
         """Main poll loop — runs until stopped."""
         # Initial poll of everything.
-        self._poll_all()
+        self._poll_bundled()
+        self._poll_weather()
+        self._poll_aqi()
+        self._poll_alerts()
 
         while not self._stop.is_set():
-            # Fast sources.
-            if self._due("health", POLL_FAST):
-                self._poll_health()
-            if self._due("locks", POLL_FAST):
-                self._poll_locks()
-            if self._due("security", POLL_FAST):
-                self._poll_security()
+            # Bundled GlowUp data — single request for all local tiles.
+            if self._due("bundled", POLL_FAST):
+                self._poll_bundled()
 
-            # Medium sources.
-            if self._due("cameras", POLL_MEDIUM):
-                self._poll_cameras()
-
-            # Slow sources.
+            # External APIs — separate, slower intervals.
             if self._due("weather", POLL_SLOW):
                 self._poll_weather()
             if self._due("aqi", POLL_SLOW):
                 self._poll_aqi()
-            if self._due("soil", POLL_SLOW):
-                self._poll_soil()
-
-            # Alerts.
             if self._due("alerts", POLL_ALERTS):
                 self._poll_alerts()
 
             self._stop.wait(1.0)
 
-    def _poll_all(self) -> None:
-        """Poll everything once at startup."""
-        for source in self._last_poll:
-            self._last_poll[source] = 0.0
-        self._poll_health()
-        self._poll_locks()
-        self._poll_security()
-        self._poll_cameras()
-        self._poll_weather()
-        self._poll_aqi()
-        self._poll_soil()
-        self._poll_alerts()
-
-    def _poll_health(self) -> None:
-        """Poll /api/home/health."""
-        data = self._api_get("/api/home/health")
+    def _poll_bundled(self) -> None:
+        """Poll /api/home/all — single request for all GlowUp tile data."""
+        data = self._api_get("/api/home/all")
         if data is not None:
-            self._set("health", data)
-
-    def _poll_locks(self) -> None:
-        """Poll /api/home/locks."""
-        data = self._api_get("/api/home/locks")
-        if data is not None:
-            self._set("locks", data)
-
-    def _poll_security(self) -> None:
-        """Poll /api/home/security."""
-        data = self._api_get("/api/home/security")
-        if data is not None:
-            self._set("security", data)
-
-    def _poll_cameras(self) -> None:
-        """Poll /api/home/cameras."""
-        data = self._api_get("/api/home/cameras")
-        if data is not None:
-            self._set("cameras", data)
+            for key in ("locks", "security", "health", "cameras",
+                        "printer", "soil"):
+                if key in data:
+                    self._set(key, data[key])
 
     def _poll_weather(self) -> None:
         """Poll Open-Meteo weather."""
@@ -218,12 +181,6 @@ class DataPoller:
         data = self._fetch_json(url)
         if data is not None:
             self._set("aqi", data)
-
-    def _poll_soil(self) -> None:
-        """Poll /api/home/soil."""
-        data = self._api_get("/api/home/soil")
-        if data is not None:
-            self._set("soil", data)
 
     def _poll_alerts(self) -> None:
         """Poll NWS severe weather alerts."""

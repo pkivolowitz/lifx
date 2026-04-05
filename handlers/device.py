@@ -35,6 +35,15 @@ from server_utils import (
     get_groups as _get_groups,
 )
 
+# Background worker for slow power operations (group fan-out).
+# Prevents handler threads from blocking on sequential LIFX ack waits.
+import concurrent.futures
+_power_executor: concurrent.futures.ThreadPoolExecutor = (
+    concurrent.futures.ThreadPoolExecutor(
+        max_workers=4, thread_name_prefix="power-worker",
+    )
+)
+
 
 class DeviceHandlerMixin:
     """Device control handlers (play, stop, power, identify, etc)."""
@@ -392,7 +401,8 @@ class DeviceHandlerMixin:
 
             # If this is a group without a virtual emitter (members were
             # unreachable at startup), fall back to direct per-member
-            # power commands using the group config.
+            # power commands dispatched to a background worker so the
+            # handler thread is freed immediately.
             em: Optional[Emitter] = self.device_manager.get_emitter(ip)
             if em is None and _is_group_id(ip):
                 group_name: str = _group_name_from_id(ip)
@@ -402,47 +412,67 @@ class DeviceHandlerMixin:
                 if not member_ips:
                     self._send_json(404, {"error": "Group not found"})
                     return
-                succeeded: int = 0
-                matter: Any = getattr(self.server, "_matter_adapter", None)
-                for mip in member_ips:
-                    try:
-                        if mip.startswith("matter:"):
-                            # Route to Matter adapter.
-                            mname: str = mip[7:]
-                            if matter is not None:
-                                ok: bool = (
-                                    matter.power_on(mname) if on
-                                    else matter.power_off(mname)
-                                )
-                                if ok:
-                                    succeeded += 1
-                            continue
-                        dev: LifxDevice = LifxDevice(mip)
+
+                # Capture references the worker needs — the handler
+                # object won't be valid after we return.
+                dm = self.device_manager
+                server = self.server
+                matter: Any = getattr(server, "_matter_adapter", None)
+
+                def _power_group_worker(
+                    gname: str, members: list[str],
+                    power_on: bool, dm_ref: Any, matter_ref: Any,
+                    group_id: str,
+                ) -> None:
+                    """Background worker: fan out power to group members."""
+                    succeeded: int = 0
+                    for mip in members:
                         try:
-                            if on:
-                                dev.set_power(True, duration_ms=DEFAULT_FADE_MS)
-                            else:
-                                dev.set_power(False, duration_ms=DEFAULT_FADE_MS)
-                            with self.device_manager._lock:
-                                self.device_manager._power_states[mip] = on
-                            succeeded += 1
-                        finally:
-                            dev.close()
-                    except Exception as exc:
-                        logging.warning(
-                            "API: power %s failed for group member %s: %s",
-                            "on" if on else "off", mip, exc,
-                        )
-                with self.device_manager._lock:
-                    self.device_manager._power_states[ip] = on
-                logging.info(
-                    "API: power %s on group %s (%d/%d members)",
-                    "on" if on else "off", group_name,
-                    succeeded, len(member_ips),
+                            if mip.startswith("matter:"):
+                                mname: str = mip[7:]
+                                if matter_ref is not None:
+                                    ok: bool = (
+                                        matter_ref.power_on(mname)
+                                        if power_on
+                                        else matter_ref.power_off(mname)
+                                    )
+                                    if ok:
+                                        succeeded += 1
+                                continue
+                            dev: LifxDevice = LifxDevice(mip)
+                            try:
+                                dev.set_power(
+                                    power_on,
+                                    duration_ms=DEFAULT_FADE_MS,
+                                )
+                                with dm_ref._lock:
+                                    dm_ref._power_states[mip] = power_on
+                                succeeded += 1
+                            finally:
+                                dev.close()
+                        except Exception as exc:
+                            logging.warning(
+                                "BG power %s failed for %s: %s",
+                                "on" if power_on else "off", mip, exc,
+                            )
+                    with dm_ref._lock:
+                        dm_ref._power_states[group_id] = power_on
+                    logging.info(
+                        "BG power %s on group %s (%d/%d members)",
+                        "on" if power_on else "off", gname,
+                        succeeded, len(members),
+                    )
+
+                _power_executor.submit(
+                    _power_group_worker,
+                    group_name, member_ips, on, dm, matter, ip,
                 )
-                self._send_json(200, {
-                    "ip": ip, "power": "on" if on else "off",
-                    "members_reached": succeeded,
+
+                # Respond immediately — work continues in background.
+                self._send_json(202, {
+                    "status": "accepted",
+                    "ip": ip,
+                    "power": "on" if on else "off",
                     "members_total": len(member_ips),
                 })
                 return

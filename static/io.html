@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GlowUp I/O Timing</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --border: #0f3460;
+    --text: #e0e0e0;
+    --dim: #888;
+    --green: #4ecca3;
+    --yellow: #f5a623;
+    --orange: #e67e22;
+    --red: #e94560;
+    --blue: #5dade2;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 16px;
+  }
+
+  /* Nav bar — matches other pages. */
+  .nav { display: flex; gap: 24px; padding: 8px 16px; margin-bottom: 16px;
+         border-bottom: 1px solid var(--border); font-size: 14px; }
+  .nav a { color: var(--dim); text-decoration: none; }
+  .nav a:hover { color: var(--text); }
+  .nav a.active { color: var(--text); font-weight: 600; }
+
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .subtitle { color: var(--dim); font-size: 0.85rem; margin-bottom: 16px; }
+
+  /* Mode toggle. */
+  .mode-toggle { display: flex; gap: 8px; margin-bottom: 16px; }
+  .mode-toggle button {
+    padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface); color: var(--dim); cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .mode-toggle button.active {
+    background: var(--border); color: var(--text); font-weight: 600;
+  }
+
+  /* Table. */
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th {
+    text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--border);
+    color: var(--dim); font-weight: 600; position: sticky; top: 0;
+    background: var(--bg); cursor: pointer; user-select: none;
+  }
+  th:hover { color: var(--text); }
+  th .sort-arrow { font-size: 0.7rem; margin-left: 4px; }
+  td { padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  tr:hover { background: rgba(255,255,255,0.03); }
+
+  /* Class badges. */
+  .class-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 0.75rem; font-weight: 600;
+  }
+  .class-INSTANT  { background: rgba(78,204,163,0.2); color: var(--green); }
+  .class-FAST     { background: rgba(78,204,163,0.15); color: var(--green); }
+  .class-MEDIUM   { background: rgba(245,166,35,0.2); color: var(--yellow); }
+  .class-SLOW     { background: rgba(230,126,34,0.2); color: var(--orange); }
+  .class-BLOCKING { background: rgba(233,69,96,0.2); color: var(--red); }
+  .class-DEFAULT  { background: rgba(93,173,226,0.2); color: var(--blue); }
+
+  /* Exceeded highlight. */
+  .exceeded { color: var(--red); font-weight: 600; }
+  .zero-exceeded { color: var(--green); }
+
+  /* Number alignment. */
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* Auto-refresh indicator. */
+  .refresh-bar {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--dim); font-size: 0.75rem; margin-bottom: 8px;
+  }
+  .refresh-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .empty-state { color: var(--dim); text-align: center; padding: 40px; }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <a href="/home">Home</a>
+  <a href="/dashboard">Dashboard</a>
+  <a href="/power">Power</a>
+  <a href="http://10.0.0.123:8099" target="_blank">Zigbee</a>
+  <a href="/io" class="active">I/O</a>
+</div>
+
+<h1>I/O Timing Dashboard</h1>
+<p class="subtitle">Classified blocking I/O — 30-second sliding window + lifetime stats</p>
+
+<div class="mode-toggle">
+  <button id="btn-window" class="active" onclick="setMode('window')">Window (30s)</button>
+  <button id="btn-lifetime" onclick="setMode('lifetime')">Lifetime</button>
+</div>
+
+<div class="refresh-bar">
+  <div class="refresh-dot"></div>
+  <span>Auto-refresh every 5s</span>
+  <span id="lastUpdate"></span>
+</div>
+
+<div id="content">
+  <p class="empty-state">Loading...</p>
+</div>
+
+<script>
+var mode = "window";
+var sortCol = "exceeded";
+var sortAsc = false;
+var data = null;
+
+function setMode(m) {
+  mode = m;
+  document.getElementById("btn-window").className = m === "window" ? "active" : "";
+  document.getElementById("btn-lifetime").className = m === "lifetime" ? "active" : "";
+  render();
+}
+
+function setSort(col) {
+  if (sortCol === col) {
+    sortAsc = !sortAsc;
+  } else {
+    sortCol = col;
+    sortAsc = false;
+  }
+  render();
+}
+
+function fetch_stats() {
+  fetch("/api/io/stats")
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      data = d.labels || {};
+      document.getElementById("lastUpdate").textContent =
+        "Updated " + new Date().toLocaleTimeString();
+      render();
+    })
+    .catch(function() {});
+}
+
+function render() {
+  if (!data || Object.keys(data).length === 0) {
+    document.getElementById("content").innerHTML =
+      '<p class="empty-state">No I/O data yet — waiting for operations.</p>';
+    return;
+  }
+
+  /* Build rows. */
+  var rows = [];
+  var labels = Object.keys(data);
+  for (var i = 0; i < labels.length; i++) {
+    var label = labels[i];
+    var d = data[label];
+    var s = mode === "window" ? d.window : d.lifetime;
+    rows.push({
+      label: label,
+      cls: d["class"],
+      count: s.count,
+      exceeded: s.exceeded,
+      min_ms: s.min_ms,
+      max_ms: s.max_ms,
+      avg_ms: s.avg_ms,
+      stddev_ms: s.stddev_ms,
+      p50_ms: s.p50_ms != null ? s.p50_ms : null,
+      p95_ms: s.p95_ms != null ? s.p95_ms : null,
+      p99_ms: s.p99_ms != null ? s.p99_ms : null,
+    });
+  }
+
+  /* Sort. */
+  rows.sort(function(a, b) {
+    var va = a[sortCol], vb = b[sortCol];
+    if (typeof va === "string") {
+      va = va.toLowerCase(); vb = (vb || "").toLowerCase();
+    }
+    if (va < vb) return sortAsc ? -1 : 1;
+    if (va > vb) return sortAsc ? 1 : -1;
+    return 0;
+  });
+
+  /* Column definitions. */
+  var cols = [
+    { key: "label", label: "Label", num: false },
+    { key: "cls", label: "Class", num: false },
+    { key: "count", label: "Calls", num: true },
+    { key: "exceeded", label: "Exceeded", num: true },
+    { key: "avg_ms", label: "Avg", num: true },
+    { key: "stddev_ms", label: "StdDev", num: true },
+    { key: "min_ms", label: "Min", num: true },
+    { key: "max_ms", label: "Max", num: true },
+  ];
+
+  /* Add percentile columns only in window mode. */
+  if (mode === "window") {
+    cols.push({ key: "p50_ms", label: "p50", num: true });
+    cols.push({ key: "p95_ms", label: "p95", num: true });
+    cols.push({ key: "p99_ms", label: "p99", num: true });
+  }
+
+  /* Build table. */
+  var html = "<table><thead><tr>";
+  for (var c = 0; c < cols.length; c++) {
+    var arrow = sortCol === cols[c].key ? (sortAsc ? " \u25B2" : " \u25BC") : "";
+    html += '<th onclick="setSort(\'' + cols[c].key + '\')">' +
+            cols[c].label + '<span class="sort-arrow">' + arrow + '</span></th>';
+  }
+  html += "</tr></thead><tbody>";
+
+  for (var r = 0; r < rows.length; r++) {
+    var row = rows[r];
+    html += "<tr>";
+    for (var c = 0; c < cols.length; c++) {
+      var key = cols[c].key;
+      var val = row[key];
+      var cls = cols[c].num ? ' class="num"' : '';
+
+      if (key === "cls") {
+        html += '<td><span class="class-badge class-' + val + '">' + val + '</span></td>';
+      } else if (key === "exceeded") {
+        var ecls = val > 0 ? "exceeded" : "zero-exceeded";
+        html += '<td class="num ' + ecls + '">' + val + '</td>';
+      } else if (cols[c].num && val != null) {
+        html += '<td' + cls + '>' + fmtMs(val) + '</td>';
+      } else {
+        html += '<td' + cls + '>' + (val != null ? val : '-') + '</td>';
+      }
+    }
+    html += "</tr>";
+  }
+
+  html += "</tbody></table>";
+  document.getElementById("content").innerHTML = html;
+}
+
+function fmtMs(v) {
+  if (v == null) return "-";
+  if (v < 1) return v.toFixed(2) + " ms";
+  if (v < 1000) return v.toFixed(1) + " ms";
+  return (v / 1000).toFixed(2) + " s";
+}
+
+fetch_stats();
+setInterval(fetch_stats, 5000);
+</script>
+</body>
+</html>

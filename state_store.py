@@ -79,9 +79,11 @@ class StateStore:
         # check_same_thread=False — server uses a thread pool.
         # _lock above prevents concurrent writes; SQLite WAL handles
         # cross-process write serialisation.
-        self._conn: sqlite3.Connection = sqlite3.connect(
-            db_path, check_same_thread=False,
-        )
+        from infrastructure.timed_io import timed_io, IOClass
+        with timed_io("state_store.connect", IOClass.INSTANT):
+            self._conn: sqlite3.Connection = sqlite3.connect(
+                db_path, check_same_thread=False, timeout=5,
+            )
         self._conn.row_factory = sqlite3.Row
         # WAL allows readers to run concurrently with a single writer.
         self._conn.execute("PRAGMA journal_mode=WAL")

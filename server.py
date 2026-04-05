@@ -287,6 +287,12 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_home_soil", requires_auth=False),
     _Route("GET", ("api", "home", "health"),
            "_handle_get_home_health", requires_auth=False),
+    _Route("GET", ("api", "home", "all"),
+           "_handle_get_home_all", requires_auth=False),
+    _Route("GET", ("api", "io", "stats"),
+           "_handle_get_io_stats", requires_auth=False),
+    _Route("GET", ("io",),
+           "_handle_get_io_page", requires_auth=False),
     _Route("GET", ("power",),
            "_handle_get_power_page", requires_auth=False),
     _Route("GET", ("api", "power", "readings"),
@@ -645,8 +651,6 @@ class GlowUpRequestHandler(
         if auth is None or not auth.startswith(BEARER_PREFIX):
             _rate_limiter.record_failure(client_ip)
             self._send_json(401, {"error": "Missing or invalid token"})
-            self.send_header("WWW-Authenticate", "Bearer")
-            self.end_headers()
             return False
 
         token: str = auth[len(BEARER_PREFIX):]
@@ -701,17 +705,24 @@ class GlowUpRequestHandler(
     def _send_json(self, code: int, data: Any) -> None:
         """Send a JSON response with security headers.
 
+        Catches ConnectionResetError and BrokenPipeError so a
+        disconnected client does not kill the handler thread.
+
         Args:
             code: HTTP status code.
             data: JSON-serializable response data.
         """
         body: bytes = json.dumps(data, indent=2).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self._send_security_headers()
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self._send_security_headers()
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            # Client disconnected mid-response — nothing to do.
+            pass
 
     def _send_sse_headers(self) -> None:
         """Send HTTP headers for a Server-Sent Events stream."""
@@ -853,8 +864,9 @@ class GlowUpRequestHandler(
                 if pat.startswith(_PARAM_OPEN) and pat.endswith(_PARAM_CLOSE)
             ]
 
-            # Dispatch with error boundary — return 500 JSON on crash.
+            # Dispatch with error boundary and deadline logging.
             handler_fn: Callable = getattr(self, route.handler)
+            t_handler: float = time.monotonic()
             try:
                 handler_fn(*handler_args)
             except Exception as exc:
@@ -867,6 +879,14 @@ class GlowUpRequestHandler(
                     })
                 except Exception:
                     pass  # Response already started or connection dead.
+            finally:
+                elapsed_s: float = time.monotonic() - t_handler
+                if elapsed_s > HANDLER_DEADLINE_S:
+                    logging.warning(
+                        "SLOW HANDLER: %s took %.1fs from %s:%d",
+                        route.handler, elapsed_s,
+                        self.client_address[0], self.client_address[1],
+                    )
             return
 
         # No route matched.
@@ -962,29 +982,123 @@ def _heartbeat(activity: str) -> None:
         )
 
 
-class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
-    """HTTP server that handles each request in a new thread.
+# ---------------------------------------------------------------------------
+# Thread pool and timeout constants — data-driven from production logs.
+# ---------------------------------------------------------------------------
 
-    Required for SSE: long-lived streaming connections must not block
-    other requests from being served.  SSE threads detect client
-    disconnect via select() on the socket — no timeout guessing.
+# Maximum concurrent handler threads.  Observed steady-state: ~15,
+# peak: ~25 (24 during the stall).  48 provides headroom for bursts
+# without allowing unbounded growth.
+MAX_HANDLER_THREADS: int = 48
+
+# Socket timeout for accepted HTTP connections (seconds).  A dead
+# client (TCP RST lost, keepalive expired) can hold a handler thread
+# hostage until the OS kills the connection.  15 seconds is generous
+# for any single HTTP request/response cycle on a LAN.
+HANDLER_SOCKET_TIMEOUT_S: float = 15.0
+
+# Handler deadline — log a warning if any handler takes longer than
+# this.  Does not kill the handler, just records the data so we can
+# identify which handlers are slow and why.
+HANDLER_DEADLINE_S: float = 5.0
+
+# Listen backlog — how many TCP connections the kernel queues while
+# all handler threads are busy.  Default is 5, which drops the 6th
+# waiting connection.  16 keeps connections alive during brief bursts.
+LISTEN_BACKLOG: int = 16
+
+
+class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    """HTTP server with bounded thread pool and request timeouts.
+
+    Each request gets its own thread (required for SSE long-lived
+    streams).  Thread count is capped at MAX_HANDLER_THREADS.
+    Every accepted socket gets a timeout so a hung client cannot
+    hold a thread forever.  Thread usage is tracked and logged
+    in SERVICE STALL diagnostics.
 
     daemon_threads ensures all handler threads die with the process.
-
-    Overrides ``serve_forever()`` with instrumentation to diagnose
-    a bug where ``selector.select()`` stops returning readiness on
-    the listening socket.  Logs every transition between responsive
-    and unresponsive states.
     """
 
     daemon_threads: bool = True
     allow_reuse_address: bool = True
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize with service_actions instrumentation state."""
+        """Initialize with thread tracking and stall detection."""
         super().__init__(*args, **kwargs)
         self._last_request_time: float = time.monotonic()
         self._stall_logged: bool = False
+        self._active_threads: int = 0
+        self._thread_lock: threading.Lock = threading.Lock()
+        self._thread_high_water: int = 0
+
+    def server_activate(self) -> None:
+        """Increase listen backlog from the default 5."""
+        self.socket.listen(LISTEN_BACKLOG)
+
+    def process_request(
+        self, request: socket.socket, client_address: tuple,
+    ) -> None:
+        """Apply socket timeout and thread cap before dispatching.
+
+        Args:
+            request:        The accepted socket.
+            client_address: (ip, port) tuple.
+        """
+        # Socket timeout — dead clients can't hold threads forever.
+        request.settimeout(HANDLER_SOCKET_TIMEOUT_S)
+
+        # Thread cap — reject with 503 if pool is full.
+        with self._thread_lock:
+            if self._active_threads >= MAX_HANDLER_THREADS:
+                logging.warning(
+                    "THREAD POOL FULL (%d/%d): rejecting %s:%d",
+                    self._active_threads, MAX_HANDLER_THREADS,
+                    client_address[0], client_address[1],
+                )
+                try:
+                    request.sendall(
+                        b"HTTP/1.1 503 Service Unavailable\r\n"
+                        b"Content-Length: 0\r\n\r\n"
+                    )
+                except Exception:
+                    pass
+                try:
+                    request.close()
+                except Exception:
+                    pass
+                return
+            self._active_threads += 1
+            if self._active_threads > self._thread_high_water:
+                self._thread_high_water = self._active_threads
+
+        super().process_request(request, client_address)
+
+    def process_request_thread(
+        self, request: socket.socket, client_address: tuple,
+    ) -> None:
+        """Handle request with cleanup and timeout logging.
+
+        Args:
+            request:        The accepted socket.
+            client_address: (ip, port) tuple.
+        """
+        try:
+            super().process_request_thread(request, client_address)
+        except socket.timeout:
+            logging.warning(
+                "HANDLER TIMEOUT (%.0fs): %s:%d — thread freed",
+                HANDLER_SOCKET_TIMEOUT_S,
+                client_address[0], client_address[1],
+            )
+        except Exception as exc:
+            logging.debug(
+                "Handler exception for %s:%d: %s",
+                client_address[0], client_address[1], exc,
+            )
+        finally:
+            with self._thread_lock:
+                self._active_threads -= 1
 
     def service_actions(self) -> None:
         """Called every poll cycle by the stdlib serve_forever().
@@ -1015,9 +1129,13 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
                 logging.warning(
                     "SERVICE STALL: no requests accepted for %.1fs. "
                     "fd=%d, bound=%s, listening=%d, so_error=%d, "
-                    "threads=%d, last_step='%s', total_accepts=%d",
+                    "os_threads=%d, handler=%d/%d (hwm=%d), "
+                    "last_step='%s', total_accepts=%d",
                     idle, fd, bound, listening, sock_err,
-                    threading.active_count(), last_step, accept_seq,
+                    threading.active_count(),
+                    self._active_threads, MAX_HANDLER_THREADS,
+                    self._thread_high_water,
+                    last_step, accept_seq,
                 )
             except Exception as exc:
                 logging.warning(

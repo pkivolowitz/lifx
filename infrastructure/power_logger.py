@@ -95,10 +95,13 @@ class PowerLogger:
     def _open(self) -> None:
         """Open the database and create tables if needed."""
         try:
-            self._conn = sqlite3.connect(
-                self._db_path,
-                check_same_thread=False,
-            )
+            from infrastructure.timed_io import timed_io, IOClass
+            with timed_io("power_logger.connect", IOClass.INSTANT):
+                self._conn = sqlite3.connect(
+                    self._db_path,
+                    check_same_thread=False,
+                    timeout=5,
+                )
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("""

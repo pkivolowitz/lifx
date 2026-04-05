@@ -619,6 +619,251 @@ class DashboardHandlerMixin:
             "schedules": schedule_count,
         })
 
+    def _handle_get_io_page(self) -> None:
+        """GET /io — serve the I/O timing dashboard."""
+        static_dir: str = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "static",
+        )
+        path: str = os.path.join(static_dir, "io.html")
+        try:
+            with open(path, "rb") as f:
+                content: bytes = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(content)
+        except FileNotFoundError:
+            self._send_json(404, {"error": "io.html not found"})
+
+    def _handle_get_io_stats(self) -> None:
+        """GET /api/io/stats — timed I/O histogram data per label.
+
+        Returns per-label statistics: call count, timeout count,
+        min/max/avg/p50/p95/p99 in milliseconds, and the assigned
+        IO class.  Used by the IO dashboard to visualize blocking
+        operation performance.
+
+        Response::
+
+            {
+              "labels": {
+                "lanscan.arp": {
+                  "class": "FAST",
+                  "count": 342,
+                  "timeouts": 2,
+                  "min_ms": 0.1,
+                  "max_ms": 1800.0,
+                  "avg_ms": 12.3,
+                  "p50_ms": 8.1,
+                  "p95_ms": 45.2,
+                  "p99_ms": 180.0
+                }
+              }
+            }
+        """
+        from infrastructure.timed_io import get_all_stats, WINDOW_SECONDS
+        all_stats = get_all_stats()
+        result: dict[str, dict[str, Any]] = {}
+        for label, stats in all_stats.items():
+            result[label] = {
+                "class": stats.io_class.name,
+                "window": {
+                    "seconds": WINDOW_SECONDS,
+                    "count": stats.window_count(),
+                    "exceeded": stats.window_exceeded(),
+                    "min_ms": round(stats.window_min_ms(), 1),
+                    "max_ms": round(stats.window_max_ms(), 1),
+                    "avg_ms": round(stats.window_avg_ms(), 1),
+                    "stddev_ms": round(stats.window_stddev_ms(), 1),
+                    "p50_ms": round(stats.window_percentile(0.50), 1),
+                    "p95_ms": round(stats.window_percentile(0.95), 1),
+                    "p99_ms": round(stats.window_percentile(0.99), 1),
+                },
+                "lifetime": {
+                    "count": stats.count,
+                    "exceeded": stats.timeout_count,
+                    "min_ms": round(stats.min_ms, 1)
+                        if stats.min_ms != float("inf") else 0.0,
+                    "max_ms": round(stats.max_ms, 1),
+                    "avg_ms": round(stats.avg_ms(), 1),
+                    "stddev_ms": round(stats.stddev_ms(), 1),
+                },
+            }
+        self._send_json(200, {"labels": result})
+
+    def _handle_get_home_all(self) -> None:
+        """GET /api/home/all — bundled response for the /home dashboard.
+
+        Returns all tile data in a single JSON response, eliminating
+        the need for 6+ separate HTTP requests per poll cycle.
+        One connection, one thread, one response.
+
+        Response::
+
+            {
+              "locks": { ... },
+              "security": { ... },
+              "health": { ... },
+              "cameras": { ... },
+              "printer": { ... },
+              "soil": { ... },
+              "occupancy": { ... }
+            }
+        """
+        result: dict[str, Any] = {}
+
+        # Locks.
+        lock_defs: list[dict[str, Any]] = self.config.get("locks", [])
+        lock_state: dict[str, bool] = getattr(
+            self.server, "_lock_state", {},
+        )
+        lm: Optional[Any] = self.lock_manager
+        locks: list[dict[str, Any]] = []
+        for lock in lock_defs:
+            abbr: str = lock.get("abbr", "?")
+            entry: dict[str, Any] = {
+                "abbr": abbr,
+                "name": lock.get("name", abbr),
+                "locked": lock_state.get(abbr),
+            }
+            if lm is not None:
+                battery: Optional[int] = lm.get_battery(abbr)
+                if battery is not None:
+                    entry["battery"] = battery
+                updated_at: Optional[float] = lm.get_updated_at(abbr)
+                if updated_at is not None:
+                    entry["updated_at"] = updated_at
+            locks.append(entry)
+        occupancy: str = "UNKNOWN"
+        if lm is not None:
+            occupancy = lm.get_occupancy_state()
+        result["locks"] = {"locks": locks, "occupancy": occupancy}
+
+        # Security.
+        va: Any = getattr(self.server, "_vivint_adapter", None)
+        if va is not None:
+            status: dict[str, Any] = va.get_status()
+            alarm_state: str = status.get("alarm_state") or "unknown"
+            all_sensors: dict[str, Any] = status.get("sensors", {})
+            DOOR_SENSOR_TYPES: set[str] = {"exit_entry_1", "1"}
+            doors: list[dict[str, Any]] = []
+            for _key, sdata in sorted(all_sensors.items()):
+                stype: str = str(sdata.get("sensor_type", ""))
+                if stype in DOOR_SENSOR_TYPES:
+                    doors.append({
+                        "name": sdata.get("name", _key),
+                        "open": sdata.get("is_on", False),
+                        "battery": sdata.get("battery"),
+                    })
+            result["security"] = {
+                "alarm": alarm_state, "doors": doors,
+                "sensors": all_sensors,
+            }
+        else:
+            result["security"] = {
+                "alarm": "unknown", "doors": [], "sensors": {},
+            }
+
+        # Health.
+        adapter_health: dict[str, bool] = {}
+        for attr, label in [
+            ("_zigbee_adapter", "zigbee"),
+            ("_vivint_adapter", "vivint"),
+            ("_nvr_adapter", "nvr"),
+            ("_printer_adapter", "printer"),
+            ("_mqtt_bridge", "mqtt"),
+            ("_matter_adapter", "matter"),
+        ]:
+            obj: Any = getattr(self.server, attr, None)
+            if obj is not None:
+                try:
+                    info: dict[str, Any] = obj.get_status()
+                    healthy: bool = (
+                        info.get("running", False)
+                        or info.get("connected", False)
+                        or info.get("status") == "ok"
+                    )
+                    adapter_health[label] = healthy
+                except Exception:
+                    adapter_health[label] = False
+        ka: Any = getattr(self.__class__, "keepalive", None)
+        if ka is not None:
+            adapter_health["keepalive"] = ka.is_alive()
+        sched: Any = getattr(self.__class__, "scheduler", None)
+        if sched is not None:
+            adapter_health["scheduler"] = sched.is_alive()
+        device_count: int = 0
+        try:
+            dm: Any = self.device_manager
+            devs: list = dm.devices_as_list()
+            device_count = sum(
+                1 for d in devs if not d.get("is_group", False)
+            )
+        except Exception:
+            pass
+        schedule_count: int = 0
+        if sched is not None:
+            try:
+                specs: list = sched._config.get("schedule", [])
+                schedule_count = sum(
+                    1 for s in specs if s.get("enabled", True)
+                )
+            except Exception:
+                pass
+        result["health"] = {
+            "ready": getattr(self.device_manager, "ready", False),
+            "adapters": adapter_health,
+            "devices": device_count,
+            "schedules": schedule_count,
+        }
+
+        # Cameras.
+        nvr: Any = getattr(self.server, "_nvr_adapter", None)
+        if nvr is not None:
+            result["cameras"] = {"cameras": nvr.get_channels()}
+        else:
+            result["cameras"] = {"cameras": []}
+
+        # Printer.
+        pa: Any = getattr(self.server, "_printer_adapter", None)
+        if pa is not None:
+            pstate: dict[str, Any] = pa.get_status()
+            result["printer"] = {
+                "status": pstate.get("status", "unknown"),
+                "name": pstate.get("name", ""),
+                "alerts": pstate.get("details", {}).get("alerts", []),
+                "details": pstate.get("details", {}),
+                "last_poll": pstate.get("last_poll", 0),
+            }
+        else:
+            result["printer"] = {"status": "unconfigured", "alerts": []}
+
+        # Soil.
+        bus: Any = self.signal_bus
+        if bus is not None:
+            try:
+                all_signals: dict[str, Any] = bus.snapshot()
+            except Exception:
+                all_signals = {}
+            sensors_map: dict[str, dict[str, Any]] = {}
+            for signal_name in all_signals:
+                parts: list[str] = signal_name.split(":")
+                if len(parts) == 2 and parts[1] == "soil_moisture":
+                    sensors_map[parts[0]] = {"name": parts[0]}
+            for signal_name, meta in all_signals.items():
+                parts = signal_name.split(":")
+                if len(parts) == 2 and parts[0] in sensors_map:
+                    sensors_map[parts[0]][parts[1]] = meta.value
+            soil_list: list[dict[str, Any]] = list(sensors_map.values())
+            result["soil"] = {"sensors": soil_list}
+        else:
+            result["soil"] = {"sensors": []}
+
+        self._send_json(200, result)
+
     def _handle_get_photo(self, filename: str) -> None:
         """GET /photos/{filename} — serve a photo from static/photos/.
 

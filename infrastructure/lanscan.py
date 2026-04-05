@@ -219,13 +219,15 @@ def _get_network_linux() -> Optional[ipaddress.IPv4Network]:
     Parses CIDR-notation addresses from ``ip -4 addr show`` output.
     Returns the first non-loopback IPv4 network found, or ``None``.
     """
+    from infrastructure.timed_io import timed_io, IOClass
     try:
-        result = subprocess.run(
-            ["ip", "-4", "addr", "show"],
-            capture_output=True,
-            text=True,
-            timeout=IFCONFIG_TIMEOUT,
-        )
+        with timed_io("lanscan.ip_addr_show", IOClass.FAST):
+            result = subprocess.run(
+                ["ip", "-4", "addr", "show"],
+                capture_output=True,
+                text=True,
+                timeout=IFCONFIG_TIMEOUT,
+            )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
 
@@ -246,13 +248,15 @@ def _get_network_macos() -> Optional[ipaddress.IPv4Network]:
     Parses hex-encoded netmasks from ``ifconfig`` output.
     Returns the first non-loopback IPv4 network found, or ``None``.
     """
+    from infrastructure.timed_io import timed_io, IOClass
     try:
-        result = subprocess.run(
-            ["ifconfig"],
-            capture_output=True,
-            text=True,
-            timeout=IFCONFIG_TIMEOUT,
-        )
+        with timed_io("lanscan.ifconfig", IOClass.FAST):
+            result = subprocess.run(
+                ["ifconfig"],
+                capture_output=True,
+                text=True,
+                timeout=IFCONFIG_TIMEOUT,
+            )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
 
@@ -435,13 +439,15 @@ def _get_arp_macos() -> dict[str, str]:
         A dictionary mapping IP address strings to normalized MAC
         address strings (lowercase, zero-padded).
     """
+    from infrastructure.timed_io import timed_io, IOClass
     try:
-        result = subprocess.run(
-            ["arp", "-an"],
-            capture_output=True,
-            text=True,
-            timeout=ARP_TIMEOUT,
-        )
+        with timed_io("lanscan.arp", IOClass.FAST):
+            result = subprocess.run(
+                ["arp", "-an"],
+                capture_output=True,
+                text=True,
+                timeout=ARP_TIMEOUT,
+            )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return {}
 

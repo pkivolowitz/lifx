@@ -266,8 +266,10 @@ class PrinterAdapter(PollingAdapterBase):
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         try:
-            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-                text: str = resp.read().decode("utf-8", errors="replace")
+            from infrastructure.timed_io import timed_io, IOClass
+            with timed_io("printer.csv_fetch", IOClass.MEDIUM):
+                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+                    text: str = resp.read().decode("utf-8", errors="replace")
         except Exception as exc:
             logger.warning("Printer CSV fetch failed (%s): %s", self._host, exc)
             return None
@@ -292,8 +294,10 @@ class PrinterAdapter(PollingAdapterBase):
         """
         url: str = f"http://{self._host}{STATUS_ENDPOINT}"
         try:
-            with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT) as resp:
-                html: str = resp.read().decode("utf-8", errors="replace")
+            from infrastructure.timed_io import timed_io, IOClass
+            with timed_io("printer.status_fetch", IOClass.MEDIUM):
+                with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT) as resp:
+                    html: str = resp.read().decode("utf-8", errors="replace")
         except Exception:
             return "unknown"
 
