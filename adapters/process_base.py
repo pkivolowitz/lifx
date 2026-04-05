@@ -31,11 +31,12 @@ Usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__: str = "1.0"
+__version__: str = "1.1"
 
 import json
 import logging
 import os
+import resource
 import signal
 import threading
 import time
@@ -311,12 +312,23 @@ class ProcessAdapterBase:
     def _publish_heartbeat(self) -> None:
         """Publish a heartbeat message and schedule the next one."""
         uptime_s: float = time.monotonic() - self._start_time
+        # Resource usage — maxrss is in kilobytes on Linux,
+        # bytes on macOS.  Normalize to megabytes.
+        usage: resource.struct_rusage = resource.getrusage(
+            resource.RUSAGE_SELF,
+        )
+        # macOS reports bytes; Linux reports kilobytes.
+        rss_mb: float = usage.ru_maxrss / (1024.0 * 1024.0)
+        if os.uname().sysname == "Linux":
+            # Linux ru_maxrss is in KB, not bytes.
+            rss_mb = usage.ru_maxrss / 1024.0
         heartbeat: dict[str, Any] = {
             "adapter": self._adapter_id,
             "pid": os.getpid(),
             "uptime_s": round(uptime_s, 1),
             "ts": time.time(),
             "state": "running",
+            "rss_mb": round(rss_mb, 1),
             "detail": self.get_status_detail(),
         }
 
@@ -358,3 +370,164 @@ class ProcessAdapterBase:
         self._client.loop_stop()
         self._client.disconnect()
         logger.info("[%s] Adapter stopped", self._adapter_id)
+
+
+# ---------------------------------------------------------------------------
+# MqttSignalBus — drop-in SignalBus for process-isolated adapters
+# ---------------------------------------------------------------------------
+
+# Sentinel for detecting first-write (None could be a valid signal value).
+_SENTINEL: object = object()
+
+
+
+class MqttSignalBus:
+    """Drop-in replacement for :class:`media.SignalBus` in adapter processes.
+
+    Adapters call ``bus.write(name, value)`` to publish signal values.
+    In the monolithic server this writes to an in-process dict.  Here
+    it publishes to the MQTT topic ``glowup/signals/{name}`` so the
+    server (and other subscribers) receive the value.
+
+    A local cache is maintained so adapters that call ``bus.read()``
+    (e.g. to read-back their own last-written value) get consistent
+    results without a round-trip.
+
+    Args:
+        adapter: The :class:`ProcessAdapterBase` whose MQTT client
+                 is used for publishing.
+    """
+
+    def __init__(self, adapter: ProcessAdapterBase) -> None:
+        """Initialize the MQTT-backed signal bus."""
+        self._adapter: ProcessAdapterBase = adapter
+        self._cache: dict[str, Any] = {}
+        self._timestamps: dict[str, float] = {}
+        self._lock: threading.Lock = threading.Lock()
+
+    def write(self, name: str, value: Any) -> None:
+        """Write a signal value and publish it via MQTT.
+
+        Deduplicates: only publishes to MQTT if the value has
+        actually changed since the last write.  This prevents
+        high-frequency adapters (e.g. Vivint PubNub) from flooding
+        the broker with thousands of identical messages per second.
+
+        Args:
+            name:  Signal name (e.g. ``"Office Motion:occupancy"``).
+            value: Signal value (JSON-serializable).
+        """
+        now: float = time.monotonic()
+        with self._lock:
+            prev: Any = self._cache.get(name, _SENTINEL)
+            self._cache[name] = value
+            self._timestamps[name] = now
+            changed: bool = prev is _SENTINEL or prev != value
+        if changed:
+            self._adapter.publish_signal(name, value)
+
+    def read(self, name: str, default: Any = 0.0) -> Any:
+        """Read the last-written value of a signal from local cache.
+
+        Args:
+            name:    Signal name.
+            default: Returned if the signal has never been written.
+
+        Returns:
+            The signal value, or *default*.
+        """
+        with self._lock:
+            return self._cache.get(name, default)
+
+    def read_timestamp(self, name: str) -> Optional[float]:
+        """Read the monotonic timestamp of a signal's last write.
+
+        Args:
+            name: Signal name.
+
+        Returns:
+            Monotonic timestamp, or ``None`` if never written.
+        """
+        with self._lock:
+            return self._timestamps.get(name)
+
+    def read_with_timestamp(
+        self, name: str, default: Any = 0.0,
+    ) -> tuple[Any, Optional[float]]:
+        """Read a signal value and its write timestamp atomically.
+
+        Args:
+            name:    Signal name.
+            default: Returned if never written.
+
+        Returns:
+            ``(value, timestamp)`` tuple.
+        """
+        with self._lock:
+            return (
+                self._cache.get(name, default),
+                self._timestamps.get(name),
+            )
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return a copy of all cached signal values.
+
+        Returns:
+            Dict of signal name to value.
+        """
+        with self._lock:
+            return dict(self._cache)
+
+    def register(self, name: str, meta: Any = None) -> None:
+        """No-op in process mode — signals are registered server-side.
+
+        Provided for API compatibility with :class:`media.SignalBus`.
+        """
+
+    def unregister(self, name: str) -> None:
+        """No-op in process mode.
+
+        Provided for API compatibility with :class:`media.SignalBus`.
+        """
+
+    def signal_names(self) -> list[str]:
+        """Return sorted list of all signal names in local cache.
+
+        Returns:
+            Sorted list of signal name strings.
+        """
+        with self._lock:
+            return sorted(self._cache.keys())
+
+    def signals_by_prefix(
+        self, prefix: str,
+    ) -> dict[str, tuple[Any, Optional[float]]]:
+        """Return all signals matching a prefix with timestamps.
+
+        Args:
+            prefix: Signal name prefix.
+
+        Returns:
+            Dict of name to ``(value, timestamp)`` for matching signals.
+        """
+        with self._lock:
+            return {
+                k: (v, self._timestamps.get(k))
+                for k, v in self._cache.items()
+                if k.startswith(prefix)
+            }
+
+    def read_many(
+        self, names: list[str], default: Any = 0.0,
+    ) -> dict[str, Any]:
+        """Read multiple signal values atomically.
+
+        Args:
+            names:   List of signal names.
+            default: Value for signals not yet written.
+
+        Returns:
+            Dict of name to value.
+        """
+        with self._lock:
+            return {n: self._cache.get(n, default) for n in names}

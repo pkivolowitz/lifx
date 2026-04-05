@@ -73,15 +73,21 @@ class SensorHandlerMixin:
                     grouped[label]["last_update"] = wall_ts
 
         # Enrich with location and status blobs.
-        adapter: Optional[Any] = self.ble_adapter
+        ble_proxy: Optional[Any] = self.ble_adapter
         for lbl, readings in grouped.items():
             loc: str = locations.get(lbl, "")
             if loc:
                 readings["location"] = loc
-            if adapter is not None:
-                status: Optional[dict] = adapter.get_status_blob(lbl)
-                if status is not None:
-                    readings["status"] = status
+            if ble_proxy is not None and hasattr(ble_proxy, "send_command"):
+                try:
+                    result: dict = ble_proxy.send_command(
+                        "get_status_blob", {"label": lbl},
+                    )
+                    blob: Optional[dict] = result.get("blob")
+                    if blob is not None:
+                        readings["status"] = blob
+                except (TimeoutError, Exception):
+                    pass
 
         # Enrich with watchdog countdown data from automations.
         auto_mgr: Optional[Any] = self.automation_manager
@@ -128,11 +134,17 @@ class SensorHandlerMixin:
         loc: str = locations.get(label, "")
         if loc:
             data["location"] = loc
-        adapter: Optional[Any] = self.ble_adapter
-        if adapter is not None:
-            status: Optional[dict] = adapter.get_status_blob(label)
-            if status is not None:
-                data["status"] = status
+        ble_proxy2: Optional[Any] = self.ble_adapter
+        if ble_proxy2 is not None and hasattr(ble_proxy2, "send_command"):
+            try:
+                res: dict = ble_proxy2.send_command(
+                    "get_status_blob", {"label": label},
+                )
+                blob2: Optional[dict] = res.get("blob")
+                if blob2 is not None:
+                    data["status"] = blob2
+            except (TimeoutError, Exception):
+                pass
         self._send_json(200, data)
 
 

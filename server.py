@@ -179,6 +179,9 @@ except ImportError:
 # ARP-based bulb discovery and keepalive daemon.
 from infrastructure.bulb_keepalive import BulbKeepAlive
 
+# Server-side proxy for out-of-process adapters.
+from infrastructure.adapter_proxy import AdapterProxy, MatterProxyWrapper
+
 # MAC-based device identity registry.
 from device_registry import DeviceRegistry
 
@@ -2007,11 +2010,16 @@ def main() -> None:
     # Orchestrator reference — set by _background_startup if configured.
     orch: Optional[Any] = None
     keepalive: Optional[BulbKeepAlive] = None
-    # Zigbee/Vivint/Operator/Lock references — set by _background_startup.
-    zigbee_adapter: Optional[Any] = None
-    vivint_adapter: Optional[Any] = None
-    nvr_adapter: Optional[Any] = None
-    ble_adpt: Optional[Any] = None
+    # Adapter proxies — out-of-process adapters communicate via MQTT.
+    # Set by _background_startup.
+    zigbee_proxy: Optional[AdapterProxy] = None
+    vivint_proxy: Optional[AdapterProxy] = None
+    nvr_proxy: Optional[AdapterProxy] = None
+    ble_proxy: Optional[AdapterProxy] = None
+    printer_proxy: Optional[AdapterProxy] = None
+    matter_proxy: Optional[AdapterProxy] = None
+    # Process communication MQTT client — used by all AdapterProxy instances.
+    proc_mqtt: Any = None
     operator_mgr: Optional[OperatorManager] = None
     lock_mgr: Optional[Any] = None
 
@@ -2028,7 +2036,8 @@ def main() -> None:
         6. Start scheduler, MQTT, orchestrator, media pipeline.
         """
         nonlocal mqtt_bridge, media_mgr, orch, keepalive, ble_trigger_mgr, automation_mgr
-        nonlocal zigbee_adapter, vivint_adapter, nvr_adapter, ble_adpt, operator_mgr, lock_mgr
+        nonlocal zigbee_proxy, vivint_proxy, nvr_proxy, ble_proxy, printer_proxy, matter_proxy
+        nonlocal proc_mqtt, operator_mgr, lock_mgr
 
         try:
             # -- Step 1: Start the ARP-based bulb keepalive daemon --------
@@ -2297,23 +2306,89 @@ def main() -> None:
             broker_addr: str = mqtt_cfg.get("broker", "localhost")
             broker_port: int = mqtt_cfg.get("port", 1883)
 
-            # BLE adapter (bridges glowup/ble/# MQTT → SignalBus).
-            # BLE sensor daemon runs on broker-2 — use its MQTT broker
-            # if configured, otherwise fall back to global MQTT broker.
-            if _MQTT_AVAILABLE and _HAS_BLE_ADAPTER:
-                ble_cfg: dict = config.get("ble", {})
-                ble_broker: str = ble_cfg.get("broker", broker_addr)
-                ble_port: int = ble_cfg.get("port", broker_port)
-                ble_adpt = BleAdapter(
-                    bus=signal_bus,
-                    broker=ble_broker,
-                    port=ble_port,
-                    config=ble_cfg,
+            # -- Adapter proxies (out-of-process adapters) --------------------
+            # Adapters run as separate processes via run_adapter.py.
+            # The server creates AdapterProxy instances that subscribe
+            # to MQTT heartbeats, status, and command responses.
+            # A single MQTT client handles all process communication.
+            if _MQTT_AVAILABLE:
+                import paho.mqtt.client as _paho
+                _paho_v2: bool = hasattr(_paho, "CallbackAPIVersion")
+                _proc_id: str = f"glowup-server-proc-{int(time.time())}"
+                if _paho_v2:
+                    proc_mqtt = _paho.Client(
+                        _paho.CallbackAPIVersion.VERSION2,
+                        client_id=_proc_id,
+                    )
+                else:
+                    proc_mqtt = _paho.Client(client_id=_proc_id)
+                proc_mqtt.connect(broker_addr, broker_port)
+                proc_mqtt.loop_start()
+                logging.info(
+                    "Process comm MQTT client connected to %s:%d",
+                    broker_addr, broker_port,
                 )
-                ble_adpt.start()
-                GlowUpRequestHandler.ble_adapter = ble_adpt
+
+                # Create proxies for each adapter type.
+                zigbee_proxy = AdapterProxy("zigbee", proc_mqtt)
+                vivint_proxy = AdapterProxy("vivint", proc_mqtt)
+                nvr_proxy = AdapterProxy("nvr", proc_mqtt)
+                ble_proxy = AdapterProxy("ble", proc_mqtt)
+                printer_proxy = AdapterProxy("printer", proc_mqtt)
+                matter_proxy = AdapterProxy("matter", proc_mqtt)
+
+                # Store on server for handler access.
+                server._zigbee_adapter = zigbee_proxy
+                server._vivint_adapter = vivint_proxy
+                server._nvr_adapter = nvr_proxy
+                server._matter_adapter = matter_proxy
+                server._printer_adapter = printer_proxy
+                GlowUpRequestHandler.ble_adapter = ble_proxy
+
+                # Subscribe to signals from adapter processes.
+                # Adapter processes publish to glowup/signals/{name};
+                # we feed those into the local SignalBus so operators
+                # and automations continue to work.
+                def _on_remote_signal(
+                    client: Any, userdata: Any, message: Any,
+                ) -> None:
+                    # topic: glowup/signals/{signal_name}
+                    # Use write_local — NOT write — to avoid
+                    # republishing back to MQTT (infinite loop).
+                    parts: list[str] = message.topic.split("/", 2)
+                    if len(parts) < 3:
+                        return
+                    sig_name: str = parts[2]
+                    try:
+                        sig_value: Any = json.loads(message.payload)
+                    except (json.JSONDecodeError, ValueError):
+                        return
+                    if signal_bus is not None:
+                        signal_bus.write_local(sig_name, sig_value)
+
+                proc_mqtt.subscribe("glowup/signals/#", qos=0)
+                proc_mqtt.message_callback_add(
+                    "glowup/signals/#", _on_remote_signal,
+                )
+                logging.info(
+                    "Subscribed to remote signals — adapter processes "
+                    "feed into local SignalBus",
+                )
+
+                # Wire Matter proxy into scheduler for matter: groups.
+                # MatterProxyWrapper provides the adapter-compatible
+                # interface (power_on/off, get_device_names) that the
+                # scheduler expects, translating to proxy commands.
+                matter_wrapper: MatterProxyWrapper = MatterProxyWrapper(
+                    matter_proxy,
+                )
+                server._matter_adapter = matter_wrapper
+                if sched is not None:
+                    sched.set_matter_adapter(matter_wrapper)
 
             # Power logger — SQLite storage for smart plug readings.
+            # Power logger receives readings from signals via MQTT
+            # now — the zigbee adapter publishes from its own process.
             try:
                 from infrastructure.power_logger import PowerLogger
                 config_dir_local: str = os.path.dirname(
@@ -2325,74 +2400,6 @@ def main() -> None:
             except Exception as exc:
                 logging.warning("Power logger unavailable: %s", exc)
                 power_log = None
-
-            # Zigbee adapter (for Z2M devices — motion, contact, temp).
-            z_cfg: dict = config.get("zigbee", {})
-            if z_cfg.get("enabled") and _MQTT_AVAILABLE and _HAS_ZIGBEE:
-                # Zigbee adapter connects to the Z2M MQTT broker,
-                # which may be on a different machine (e.g., broker-2).
-                z_broker: str = z_cfg.get("broker", broker_addr)
-                z_port: int = z_cfg.get("port", broker_port)
-                zigbee_adapter = ZigbeeAdapter(
-                    config=z_cfg,
-                    bus=signal_bus,
-                    broker=z_broker,
-                    port=z_port,
-                )
-                # Attach power logger so plug readings get stored.
-                if power_log is not None:
-                    zigbee_adapter._power_logger = power_log
-                zigbee_adapter.start()
-                server._zigbee_adapter = zigbee_adapter
-
-            # Vivint adapter (for lock state — read-only cloud API).
-            v_cfg: dict = config.get("vivint", {})
-            if v_cfg.get("enabled") and _HAS_VIVINT:
-                vivint_adapter = VivintAdapter(
-                    config=v_cfg,
-                    bus=signal_bus,
-                    mqtt_client=(
-                        mqtt_bridge._client if mqtt_bridge else None
-                    ),
-                )
-                vivint_adapter.start()
-                server._vivint_adapter = vivint_adapter
-
-            # NVR camera adapter (Reolink snapshot proxy).
-            nvr_cfg: dict = config.get("nvr", {})
-            if nvr_cfg.get("host") and _HAS_NVR:
-                nvr_adapter = NvrAdapter(nvr_cfg)
-                nvr_adapter.start()
-                server._nvr_adapter = nvr_adapter
-
-            # Matter adapter (Linkind smart plugs via python-matter-server).
-            matter_cfg: dict = config.get("matter", {})
-            if matter_cfg.get("enabled") and _HAS_MATTER:
-                matter_url: str = matter_cfg.get(
-                    "server_url", "ws://localhost:5580/ws",
-                )
-                matter_adapter = MatterAdapter(
-                    config=matter_cfg,
-                    bus=signal_bus,
-                    server_url=matter_url,
-                )
-                matter_adapter.start()
-                server._matter_adapter = matter_adapter
-                # Wire Matter into the scheduler so matter: groups
-                # can be scheduled alongside LIFX groups.
-                if sched is not None:
-                    sched.set_matter_adapter(matter_adapter)
-
-            # Printer monitor (Brother CSV endpoint).
-            printer_cfg: dict = config.get("printer", {})
-            if printer_cfg.get("host") and _HAS_PRINTER:
-                printer_adapter = PrinterAdapter(
-                    config=printer_cfg,
-                    bus=signal_bus,
-                    mqtt_client=(mqtt_bridge._client if mqtt_bridge else None),
-                )
-                printer_adapter.start()
-                server._printer_adapter = printer_adapter
 
             # Auto-migrate automations[] → trigger operators in operators[].
             config["_config_path"] = GlowUpRequestHandler.config_path
@@ -2441,14 +2448,8 @@ def main() -> None:
             lock_mgr.stop()
         if operator_mgr is not None:
             operator_mgr.stop()
-        if nvr_adapter is not None:
-            nvr_adapter.stop()
-        if vivint_adapter is not None:
-            vivint_adapter.stop()
-        if ble_adpt is not None:
-            ble_adpt.stop()
-        if zigbee_adapter is not None:
-            zigbee_adapter.stop()
+        # Adapters run as separate processes — no stop() calls needed.
+        # Just disconnect the process communication MQTT client.
         if media_mgr is not None:
             media_mgr.shutdown()
         if orch is not None:
@@ -2459,6 +2460,9 @@ def main() -> None:
             ble_trigger_mgr.stop()
         if mqtt_bridge is not None:
             mqtt_bridge.stop()
+        if proc_mqtt is not None:
+            proc_mqtt.loop_stop()
+            proc_mqtt.disconnect()
         if keepalive is not None:
             keepalive.stop()
             keepalive.join(timeout=3.0)

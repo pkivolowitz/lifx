@@ -1,0 +1,40 @@
+# Systemd unit for GlowUp keepalive process.
+#
+# ARP-based bulb discovery, UDP keepalive, and power state queries.
+# Publishes discoveries and power states to MQTT so the server
+# receives device state without doing network I/O.
+#
+# Note: keepalive stays in-process for Phase 1 of process isolation.
+# This service file is prepared for Phase 2 when the keepalive moves
+# out of the server process.
+#
+# Install:
+#   sudo cp services/glowup-keepalive.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable glowup-keepalive
+#   sudo systemctl start glowup-keepalive
+#
+# Logs:
+#   journalctl -u glowup-keepalive -f
+
+[Unit]
+Description=GlowUp Keepalive Daemon
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=a
+WorkingDirectory=/home/a/lifx
+ExecStart=/home/a/venv/bin/python -m infrastructure.keepalive_process --config /etc/glowup/server.json
+Restart=on-failure
+RestartSec=5
+# Keepalive needs raw socket access for ARP reads on Linux.
+# Running as user 'a' is sufficient since /proc/net/arp is world-readable
+# and ping uses subprocess.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glowup-keepalive
+
+[Install]
+WantedBy=multi-user.target

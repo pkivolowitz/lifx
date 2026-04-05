@@ -316,7 +316,9 @@ class DashboardHandlerMixin:
         if nvr is None:
             self._send_json(200, {"cameras": []})
             return
-        self._send_json(200, {"cameras": nvr.get_channels()})
+        # Channel list is in the proxy's cached heartbeat status.
+        status: dict[str, Any] = nvr.get_status()
+        self._send_json(200, {"cameras": status.get("channels", [])})
 
 
     def _handle_get_home_camera_snapshot(self, channel_str: str) -> None:
@@ -340,8 +342,19 @@ class DashboardHandlerMixin:
             self._send_json(503, {"error": "NVR adapter not running"})
             return
 
-        jpeg: Optional[bytes] = nvr.get_snapshot(channel)
-        if jpeg is None:
+        # Fetch snapshot from the NVR process's HTTP sidecar.
+        # The sidecar port is in the proxy's heartbeat status.
+        nvr_status: dict[str, Any] = nvr.get_status()
+        sidecar_port: int = nvr_status.get("sidecar_port", 8421)
+        sidecar_url: str = (
+            f"http://localhost:{sidecar_port}/snapshot/{channel}"
+        )
+        try:
+            import urllib.request
+            req: urllib.request.Request = urllib.request.Request(sidecar_url)
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                jpeg: bytes = resp.read()
+        except Exception:
             self._send_json(404, {"error": "no snapshot available"})
             return
 
@@ -823,7 +836,8 @@ class DashboardHandlerMixin:
         # Cameras.
         nvr: Any = getattr(self.server, "_nvr_adapter", None)
         if nvr is not None:
-            result["cameras"] = {"cameras": nvr.get_channels()}
+            nvr_st: dict[str, Any] = nvr.get_status()
+            result["cameras"] = {"cameras": nvr_st.get("channels", [])}
         else:
             result["cameras"] = {"cameras": []}
 
@@ -1032,18 +1046,23 @@ class DashboardHandlerMixin:
             self._send_json(400, {"error": "device and payload required"})
             return
 
-        adapter: Any = getattr(self.server, "_zigbee_adapter", None)
-        if adapter is None:
+        proxy: Any = getattr(self.server, "_zigbee_adapter", None)
+        if proxy is None or not hasattr(proxy, "send_command"):
             self._send_json(503, {"error": "Zigbee adapter not available"})
             return
 
-        ok: bool = adapter.send_command(device, payload)
-        if ok:
-            self._send_json(200, {"status": "ok", "device": device})
-        else:
-            self._send_json(
-                502, {"error": f"failed to send command to {device}"},
+        try:
+            result: dict[str, Any] = proxy.send_command(
+                "send", {"device": device, "payload": payload},
             )
+            if result.get("status") == "ok":
+                self._send_json(200, {"status": "ok", "device": device})
+            else:
+                self._send_json(502, {
+                    "error": result.get("error", f"failed to send to {device}"),
+                })
+        except TimeoutError:
+            self._send_json(504, {"error": "Zigbee adapter timed out"})
 
     # -- Helpers ------------------------------------------------------------
 

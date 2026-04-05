@@ -19,7 +19,7 @@ Usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__: str = "1.0"
+__version__: str = "1.1"
 
 import concurrent.futures
 import json
@@ -270,3 +270,91 @@ class AdapterProxy:
         return (
             time.monotonic() - self._last_heartbeat_ts > HEARTBEAT_STALE_S
         )
+
+
+# ---------------------------------------------------------------------------
+# MatterProxyWrapper — adapter-compatible interface for scheduler/handlers
+# ---------------------------------------------------------------------------
+
+class MatterProxyWrapper:
+    """Adapter-compatible wrapper translating method calls to proxy commands.
+
+    The scheduler and handlers call ``power_on(name)``,
+    ``get_device_names()``, etc.  This wrapper translates each call
+    into a :meth:`AdapterProxy.send_command` invocation so existing
+    code does not need to know about the proxy protocol.
+
+    Args:
+        proxy: The underlying :class:`AdapterProxy` for the Matter adapter.
+    """
+
+    def __init__(self, proxy: AdapterProxy) -> None:
+        """Initialize with the Matter proxy."""
+        self._proxy: AdapterProxy = proxy
+
+    def get_device_names(self) -> list[str]:
+        """Return list of configured Matter device names."""
+        try:
+            result: dict[str, Any] = self._proxy.send_command(
+                "get_devices", {},
+            )
+            return result.get("devices", [])
+        except TimeoutError:
+            return []
+
+    def power_on(self, device_name: str) -> bool:
+        """Turn a Matter device on."""
+        try:
+            result: dict[str, Any] = self._proxy.send_command(
+                "power_on", {"device_name": device_name},
+            )
+            return result.get("status") == "ok"
+        except TimeoutError:
+            return False
+
+    def power_off(self, device_name: str) -> bool:
+        """Turn a Matter device off."""
+        try:
+            result: dict[str, Any] = self._proxy.send_command(
+                "power_off", {"device_name": device_name},
+            )
+            return result.get("status") == "ok"
+        except TimeoutError:
+            return False
+
+    def toggle(self, device_name: str) -> bool:
+        """Toggle a Matter device."""
+        try:
+            result: dict[str, Any] = self._proxy.send_command(
+                "toggle", {"device_name": device_name},
+            )
+            return result.get("status") == "ok"
+        except TimeoutError:
+            return False
+
+    def get_power_state(self, device_name: str) -> Optional[bool]:
+        """Return cached power state for a device.
+
+        Returns:
+            ``True`` (on), ``False`` (off), or ``None`` if unknown.
+        """
+        try:
+            result: dict[str, Any] = self._proxy.send_command(
+                "get_power_state", {"device_name": device_name},
+            )
+            return result.get("power")
+        except TimeoutError:
+            return None
+
+    def get_status(self) -> dict[str, Any]:
+        """Return adapter status from cached heartbeat."""
+        return self._proxy.get_status()
+
+    def is_alive(self) -> bool:
+        """Check if the Matter adapter process is alive."""
+        return self._proxy.is_alive()
+
+    @property
+    def running(self) -> bool:
+        """Whether the adapter process is alive."""
+        return self._proxy.is_alive()

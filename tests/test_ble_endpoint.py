@@ -155,13 +155,16 @@ class TestBleSensorEndpoint(unittest.TestCase):
         self.assertEqual(sensor["location"], "Living Room")
 
     def test_status_blob_from_adapter(self) -> None:
-        """BLE adapter status blobs are included in the response."""
+        """BLE adapter proxy status blobs are included in the response."""
         bus = SignalBus()
         bus.register("onvis_motion:motion", SignalMeta(transport="ble"))
         bus.write("onvis_motion:motion", 0.0)
 
+        # Mock the proxy interface — handler calls send_command().
         adapter = MagicMock()
-        adapter.get_status_blob.return_value = {"state": "monitoring"}
+        adapter.send_command.return_value = {
+            "status": "ok", "blob": {"state": "monitoring"},
+        }
 
         handler = self._make_handler(bus, adapter=adapter)
         self._call_get_ble_sensors(handler)

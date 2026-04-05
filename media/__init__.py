@@ -164,6 +164,21 @@ class SignalBus:
     # Core read/write
     # ------------------------------------------------------------------
 
+    def write_local(self, name: str, value: SignalValue) -> None:
+        """Update a signal value in the local cache only — no MQTT publish.
+
+        Used by MQTT receive handlers to merge incoming remote signals
+        without republishing them back to the broker (which would
+        create an infinite loop).
+
+        Args:
+            name:  Signal name.
+            value: Signal value.
+        """
+        with self._lock:
+            self._signals[name] = value
+            self._timestamps[name] = time.monotonic()
+
     def write(self, name: str, value: SignalValue) -> None:
         """Atomically update a signal value.
 
