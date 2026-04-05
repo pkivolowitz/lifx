@@ -134,7 +134,7 @@ class DiscoveryHandlerMixin:
         Use this after powering on new bulbs, adding devices to
         groups, or changing the device registry.
         """
-        config: dict[str, Any] = self.server.config
+        config: dict[str, Any] = self.config
         keepalive = self.keepalive
         device_reg: DeviceRegistry = self.registry
         dm: DeviceManager = self.device_manager
