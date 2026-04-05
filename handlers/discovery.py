@@ -139,6 +139,10 @@ class DiscoveryHandlerMixin:
         device_reg: DeviceRegistry = self.registry
         dm: DeviceManager = self.device_manager
 
+        # Lazy import — server.py imports this mixin, so top-level
+        # import would be circular.
+        from server import _get_groups, _resolve_config_groups
+
         # Re-resolve groups from config (picks up any API changes).
         raw_groups: dict[str, list[str]] = _get_groups(config)
         resolved_groups: dict[str, list[str]]
