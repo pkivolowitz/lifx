@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 import pygame
+import pygame.gfxdraw
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -64,6 +65,7 @@ HEBCAL_POLL_SECONDS: int = 15 * 60
 HTTP_TIMEOUT_SECONDS: float = 10.0
 DATE_FORMAT: str = "%b %d, %Y"
 QR_ASSET_DIR: str = os.path.join(os.path.dirname(__file__), "assets")
+MAHOGANY_PATH: str = os.path.join(QR_ASSET_DIR, "mahogany.jpeg")
 QR_CODES: tuple[tuple[str, str], ...] = (
     ("Zelle", os.path.join(QR_ASSET_DIR, "donation_zelle.jpeg")),
     ("Cash App", os.path.join(QR_ASSET_DIR, "donation_cashapp.jpeg")),
@@ -131,6 +133,14 @@ DEFAULT_SNAPSHOT: HebcalSnapshot = HebcalSnapshot(
 
 _snapshot_lock = threading.Lock()
 _snapshot: HebcalSnapshot = DEFAULT_SNAPSHOT
+
+# Cached radial-gradient clock face surface (expensive to render, static).
+_face_cache: pygame.Surface | None = None
+_face_cache_radius: int = 0
+
+# Cached mahogany background texture, keyed by (width, height).
+_wood_cache: pygame.Surface | None = None
+_wood_cache_size: tuple[int, int] = (0, 0)
 
 
 class FontProxy:
@@ -345,24 +355,35 @@ def _current_snapshot() -> HebcalSnapshot:
         return _snapshot
 
 
+def _load_wood_texture(width: int, height: int) -> pygame.Surface:
+    """Load and cache the mahogany background texture at the given size."""
+    global _wood_cache, _wood_cache_size
+    if _wood_cache is not None and _wood_cache_size == (width, height):
+        return _wood_cache
+    try:
+        img = Image.open(MAHOGANY_PATH).convert("RGB")
+        img = img.resize((width, height), Image.Resampling.LANCZOS)
+        _wood_cache = pygame.image.fromstring(img.tobytes(), img.size, "RGB")
+    except Exception:
+        # Fallback: solid dark wood color.
+        _wood_cache = pygame.Surface((width, height))
+        _wood_cache.fill(BACKGROUND_TOP)
+    _wood_cache_size = (width, height)
+    return _wood_cache
+
+
 def _draw_frame(surface: pygame.Surface, rect: pygame.Rect) -> None:
-    """Draw the clock enclosure and wood-toned interior."""
-    pygame.draw.rect(surface, FRAME_OUTER, rect, border_radius=32)
-    inner = rect.inflate(-26, -26)
-    pygame.draw.rect(surface, FRAME_INNER, inner, border_radius=24)
-    content = inner.inflate(-18, -18)
-    _fill_vertical_gradient(surface, content, BACKGROUND_TOP, BACKGROUND_BOTTOM)
+    """Draw the clock enclosure — mahogany edge-to-edge."""
+    # Real mahogany texture fills the entire rect.
+    wood = _load_wood_texture(rect.width, rect.height)
+    surface.blit(wood, rect.topleft)
 
-    stripe_top = pygame.Rect(content.left, content.top + 44, content.width, 26)
+    # Brass accent band at top — tall enough for text with padding.
+    stripe_top = pygame.Rect(rect.left, rect.top + 46, rect.width, 36)
     _fill_vertical_gradient(surface, stripe_top, BRASS_LIGHT, BRASS_DARK)
-    footer = pygame.Rect(content.left, content.bottom - 40, content.width, 18)
+    # Bottom brass band only (no brown overlay).
+    footer = pygame.Rect(rect.left, rect.bottom - 36, rect.width, 36)
     _fill_vertical_gradient(surface, footer, BRASS_DARK, BRASS_LIGHT)
-
-    for y in range(content.top + 90, content.bottom - 55, 48):
-        alpha = 24 if (y // 48) % 2 == 0 else 12
-        stripe = pygame.Surface((content.width, WOOD_STRIPE_HEIGHT), pygame.SRCALPHA)
-        stripe.fill((255, 255, 255, alpha))
-        surface.blit(stripe, (content.left, y))
 
 
 def _draw_header(
@@ -370,7 +391,7 @@ def _draw_header(
     snapshot: HebcalSnapshot,
 ) -> None:
     """Draw the top name/date/time band."""
-    title_font = _font(max(20, rect.height // 17), bold=True)
+    title_font = _font(max(18, rect.height // 20), bold=True)
     date_font = _font(max(13, rect.height // 34), bold=True)
     time_font = _font(max(17, rect.height // 24), bold=True)
 
@@ -379,11 +400,11 @@ def _draw_header(
     center_text = now.strftime("%-I:%M:%S %p").lower()
     right_text = snapshot.hebrew_date
 
-    title = title_font.render(congregation_name.upper(), BRASS_LIGHT)
-    title_rect = title.get_rect(center=(rect.centerx, rect.top + 18))
+    title = title_font.render(congregation_name, BRASS_LIGHT)
+    title_rect = title.get_rect(center=(rect.centerx, rect.top + 22))
     surface.blit(title, title_rect)
 
-    band_rect = pygame.Rect(rect.left, rect.top + 44, rect.width, 26)
+    band_rect = pygame.Rect(rect.left, rect.top + 46, rect.width, 36)
     date_band_y = band_rect.centery
     left = date_font.render(left_text, HAND_COLOR)
     center = time_font.render(center_text, HAND_COLOR)
@@ -415,9 +436,9 @@ def _draw_panel(
     row_font = _font(max(12 if compact else 14, rect.width // (22 if compact else 19)), bold=True)
 
     title_surf = title_font.render(title, BRASS_LIGHT)
-    surface.blit(title_surf, title_surf.get_rect(center=(rect.centerx, rect.top + 48)))
+    surface.blit(title_surf, title_surf.get_rect(center=(rect.centerx, rect.top + 56)))
 
-    start_y = rect.top + 92
+    start_y = rect.top + 100
     row_height = max(16 if compact else 22, (rect.height - 118) // max(1, len(entries) + (2 if compact else 0)))
     label_x = rect.left + 20
     time_x = rect.right - 20
@@ -452,9 +473,9 @@ def _draw_right_panel(
     title_font = _font(max(18, rect.width // 13), bold=True)
     row_font = _font(max(12, rect.width // 22), bold=True)
     title_surf = title_font.render(title, BRASS_LIGHT)
-    surface.blit(title_surf, title_surf.get_rect(center=(rect.centerx, rect.top + 48)))
+    surface.blit(title_surf, title_surf.get_rect(center=(rect.centerx, rect.top + 56)))
 
-    start_y = rect.top + 92
+    start_y = rect.top + 100
     upper_region_bottom = rect.top + int(rect.height * 0.42)
     row_height = max(20, (upper_region_bottom - start_y) // max(1, len(entries)))
     label_x = rect.left + 20
@@ -516,10 +537,15 @@ def _draw_engraved_divider(surface: pygame.Surface, rect: pygame.Rect) -> None:
 
 def _draw_donation_section(surface: pygame.Surface, rect: pygame.Rect) -> None:
     """Draw the donation QR row."""
-    title_font = _font(max(12, rect.height // 13), bold=True)
-    label_font = _font(max(10, rect.height // 17), bold=True)
-    title = title_font.render("Support Chabad of Mobile", TEXT_GOLD)
-    surface.blit(title, title.get_rect(center=(rect.centerx, rect.top + 12)))
+    title_font = _font(max(16, rect.height // 8), bold=True)
+    label_font = _font(max(13, rect.height // 13), bold=True)
+    line1 = title_font.render("Support", TEXT_GOLD)
+    line2 = title_font.render("Chabad of Mobile", TEXT_GOLD)
+    line_gap: int = 4
+    total_h: int = line1.get_height() + line_gap + line2.get_height()
+    top_y: int = rect.top + 8
+    surface.blit(line1, line1.get_rect(center=(rect.centerx, top_y + line1.get_height() // 2)))
+    surface.blit(line2, line2.get_rect(center=(rect.centerx, top_y + line1.get_height() + line_gap + line2.get_height() // 2)))
 
     qr_size = min(82, int(rect.height * 0.58), (rect.width - 40) // 3)
     gap = (rect.width - 3 * qr_size) // 4
@@ -547,126 +573,120 @@ def _draw_detail_lines(
 
     for index, line in enumerate(lines):
         surf = value_font.render(line, TEXT_SUBDUED if not stale else TEXT_AMBER)
-        surface.blit(surf, surf.get_rect(center=(rect.centerx, rect.bottom + 34 + index * 14)))
+        surface.blit(surf, surf.get_rect(center=(rect.centerx, rect.bottom + 40 + index * 16)))
+
+
+def _draw_tapered_hand(
+    surface: pygame.Surface, center: tuple[int, int], angle: float,
+    length: float, base_width: float, color: tuple[int, int, int],
+) -> None:
+    """Draw a tapered clock hand as a filled polygon.
+
+    The hand is widest at the hub and tapers to a point, matching the
+    classic spade-style hands in the Beth Sholom reference.
+    """
+    # Perpendicular direction for the base width.
+    perp_angle: float = angle + math.pi / 2
+    half_base: float = base_width / 2.0
+
+    # Tail stub extends slightly behind center for counterweight.
+    tail_len: float = length * 0.12
+
+    tip = (center[0] + math.cos(angle) * length,
+           center[1] + math.sin(angle) * length)
+    tail = (center[0] - math.cos(angle) * tail_len,
+            center[1] - math.sin(angle) * tail_len)
+    base_l = (center[0] + math.cos(perp_angle) * half_base,
+              center[1] + math.sin(perp_angle) * half_base)
+    base_r = (center[0] - math.cos(perp_angle) * half_base,
+              center[1] - math.sin(perp_angle) * half_base)
+
+    # Integer points for gfxdraw AA polygon.
+    int_points = [(int(p[0]), int(p[1])) for p in (tail, base_l, tip, base_r)]
+    px = [p[0] for p in int_points]
+    py = [p[1] for p in int_points]
+    pygame.gfxdraw.aapolygon(surface, int_points, color)
+    pygame.gfxdraw.filled_polygon(surface, int_points, color)
 
 
 def _draw_analog_clock(surface: pygame.Surface, rect: pygame.Rect) -> None:
-    """Draw the ornate center analog clock."""
+    """Draw an analog clock directly on the wood — no bezel, no face.
+
+    Gold numerals and tick marks float over the mahogany background.
+    """
     center = rect.center
-    radius = min(rect.width, rect.height) // 2 - 10
+    radius = min(rect.width, rect.height) // 2 - 6
 
-    # Outer shadow behind the bezel.
-    pygame.draw.circle(surface, (45, 20, 10), (center[0] + 6, center[1] + 10), radius + 24)
+    # --- Minute tick marks (60 total) in gold ---
+    for tick in range(60):
+        tick_angle: float = math.radians(tick * 6 - 90)
+        if tick % 5 == 0:
+            outer_r: float = radius - 2
+            inner_r: float = radius - max(14, radius // 7)
+            tick_w: int = 3
+        else:
+            outer_r = radius - 4
+            inner_r = radius - max(10, radius // 11)
+            tick_w = 1
+        ox: float = center[0] + math.cos(tick_angle) * outer_r
+        oy: float = center[1] + math.sin(tick_angle) * outer_r
+        ix: float = center[0] + math.cos(tick_angle) * inner_r
+        iy: float = center[1] + math.sin(tick_angle) * inner_r
+        if tick_w <= 1:
+            pygame.draw.aaline(surface, BRASS_LIGHT, (ix, iy), (ox, oy))
+        else:
+            perp: float = tick_angle + math.pi / 2
+            hw: float = tick_w / 2.0
+            pts = [
+                (int(ix + math.cos(perp) * hw), int(iy + math.sin(perp) * hw)),
+                (int(ox + math.cos(perp) * hw), int(oy + math.sin(perp) * hw)),
+                (int(ox - math.cos(perp) * hw), int(oy - math.sin(perp) * hw)),
+                (int(ix - math.cos(perp) * hw), int(iy - math.sin(perp) * hw)),
+            ]
+            pygame.gfxdraw.aapolygon(surface, pts, BRASS_LIGHT)
+            pygame.gfxdraw.filled_polygon(surface, pts, BRASS_LIGHT)
 
-    # Raised outer bezel: darker at the base, bright highlight toward the top.
-    for offset in range(18, -1, -1):
-        ring_radius = radius + 18 - offset
-        blend = offset / 18.0
-        ring_color = (
-            int(BRASS_DARK[0] * (1 - blend) + BRASS_LIGHT[0] * blend),
-            int(BRASS_DARK[1] * (1 - blend) + BRASS_LIGHT[1] * blend),
-            int(BRASS_DARK[2] * (1 - blend) + BRASS_LIGHT[2] * blend),
-        )
-        pygame.draw.circle(surface, ring_color, center, ring_radius)
+    # --- All 12 Arabic numerals in gold ---
+    numeral_font = _font(max(28, radius // 4), bold=True)
+    numeral_radius: float = radius - max(30, radius // 3)
+    for hour in range(1, 13):
+        angle: float = math.radians(hour * 30 - 90)
+        nx: float = center[0] + math.cos(angle) * numeral_radius
+        ny: float = center[1] + math.sin(angle) * numeral_radius
+        numeral = numeral_font.render(str(hour), BRASS_LIGHT)
+        surface.blit(numeral, numeral.get_rect(center=(nx, ny)))
 
-    # Warm mahogany shoulder inside the domed brass.
-    pygame.draw.circle(surface, (108, 46, 23), center, radius + 4)
-
-    # Inner brass lip that turns inward toward the recessed face.
-    for offset in range(10):
-        ring_radius = radius - 2 - offset
-        blend = offset / 9.0
-        ring_color = (
-            int(BRASS_LIGHT[0] * (1 - blend) + BRASS_DARK[0] * blend),
-            int(BRASS_LIGHT[1] * (1 - blend) + BRASS_DARK[1] * blend),
-            int(BRASS_LIGHT[2] * (1 - blend) + BRASS_DARK[2] * blend),
-        )
-        pygame.draw.circle(surface, ring_color, center, ring_radius, width=2)
-
-    # Recess shadow well.
-    recessed_center = (center[0], center[1] + 4)
-    pygame.draw.circle(surface, (122, 77, 33), recessed_center, radius - 24)
-    pygame.draw.circle(surface, (88, 49, 20), recessed_center, radius - 26, width=5)
-
-    # Recessed face with subtle vertical dome lighting.
-    face_radius = radius - 32
-    for y_offset in range(-face_radius, face_radius + 1):
-        norm = (y_offset + face_radius) / max(1, 2 * face_radius)
-        top_glow = 1.0 - norm
-        color = (
-            int(CLOCK_FACE_DARK[0] * (1 - top_glow * 0.55) + CLOCK_FACE[0] * (top_glow * 0.55)),
-            int(CLOCK_FACE_DARK[1] * (1 - top_glow * 0.55) + CLOCK_FACE[1] * (top_glow * 0.55)),
-            int(CLOCK_FACE_DARK[2] * (1 - top_glow * 0.55) + CLOCK_FACE[2] * (top_glow * 0.55)),
-        )
-        half_width = int((face_radius * face_radius - y_offset * y_offset) ** 0.5)
-        pygame.draw.line(
-            surface,
-            color,
-            (recessed_center[0] - half_width, recessed_center[1] + y_offset),
-            (recessed_center[0] + half_width, recessed_center[1] + y_offset),
-        )
-
-    # Inner face rim and soft upper highlight to sell the glass dome.
-    pygame.draw.circle(surface, BRASS_DARK, recessed_center, face_radius + 2, width=2)
-    pygame.draw.arc(
-        surface,
-        (255, 248, 220),
-        (recessed_center[0] - face_radius + 8, recessed_center[1] - face_radius + 4,
-         (face_radius - 8) * 2, (face_radius - 12) * 2),
-        math.radians(210),
-        math.radians(330),
-        3,
-    )
-    pygame.draw.arc(
-        surface,
-        (150, 90, 30),
-        (recessed_center[0] - face_radius + 6, recessed_center[1] - face_radius + 10,
-         (face_radius - 6) * 2, (face_radius - 10) * 2),
-        math.radians(20),
-        math.radians(150),
-        2,
-    )
-
-    numeral_font = _font(max(34, radius // 4), bold=False)
-    for idx in range(CLOCK_TICK_COUNT):
-        angle = math.radians((idx / CLOCK_TICK_COUNT) * 360 - 60)
-        outer_x = center[0] + math.cos(angle) * (radius - 10)
-        outer_y = center[1] + math.sin(angle) * (radius - 10)
-        inner_x = center[0] + math.cos(angle) * (radius - 42)
-        inner_y = center[1] + math.sin(angle) * (radius - 42)
-        pygame.draw.line(
-            surface,
-            TEXT_IVORY,
-            (inner_x, inner_y),
-            (outer_x, outer_y),
-            3,
-        )
-
-    numerals = {0: "12", 3: "3", 6: "6", 9: "9"}
-    for position, text in numerals.items():
-        angle = math.radians((position / CLOCK_TICK_COUNT) * 360 - 90)
-        x = center[0] + math.cos(angle) * (radius - 62)
-        y = center[1] + math.sin(angle) * (radius - 62) + 2
-        numeral = numeral_font.render(text, BRASS_LIGHT)
-        surface.blit(numeral, numeral.get_rect(center=(x, y)))
-
+    # --- Hands ---
     now = datetime.now()
-    hour_angle = math.radians(((now.hour % 12) + now.minute / 60.0) * 30 - 90)
-    minute_angle = math.radians((now.minute + now.second / 60.0) * 6 - 90)
-    second_angle = math.radians(now.second * 6 - 90)
+    hour_angle: float = math.radians(
+        ((now.hour % 12) + now.minute / 60.0) * 30 - 90)
+    minute_angle: float = math.radians(
+        (now.minute + now.second / 60.0) * 6 - 90)
+    second_angle: float = math.radians(now.second * 6 - 90)
 
-    _draw_hand(surface, center, hour_angle, radius * 0.42, 8, HAND_COLOR)
-    _draw_hand(surface, center, minute_angle, radius * 0.64, 5, HAND_COLOR)
-    _draw_hand(surface, center, second_angle, radius * 0.70, 2, BRASS_DARK)
-    pygame.draw.circle(surface, BRASS_DARK, center, 9)
-    pygame.draw.circle(surface, BRASS_LIGHT, center, 4)
+    # Tapered gold hands.
+    _draw_tapered_hand(surface, center, hour_angle,
+                       radius * 0.48, max(10, radius // 10), BRASS_MID)
+    _draw_tapered_hand(surface, center, minute_angle,
+                       radius * 0.70, max(7, radius // 14), BRASS_MID)
+    # Thin second hand.
+    _draw_tapered_hand(surface, center, second_angle,
+                       radius * 0.76, max(3, radius // 28), BRASS_LIGHT)
+
+    # Center hub cap.
+    hub_r: int = max(8, radius // 14)
+    pip_r: int = max(4, radius // 26)
+    pygame.gfxdraw.aacircle(surface, center[0], center[1], hub_r, BRASS_MID)
+    pygame.gfxdraw.filled_circle(surface, center[0], center[1], hub_r, BRASS_MID)
+    pygame.gfxdraw.aacircle(surface, center[0], center[1], pip_r, BRASS_LIGHT)
+    pygame.gfxdraw.filled_circle(surface, center[0], center[1], pip_r, BRASS_LIGHT)
 
 
 def _draw_hand(
     surface: pygame.Surface, center: tuple[int, int], angle: float,
     length: float, width: int, color: tuple[int, int, int],
 ) -> None:
-    """Draw one clock hand."""
+    """Draw one clock hand (legacy — kept for any non-analog callers)."""
     end = (
         center[0] + math.cos(angle) * length,
         center[1] + math.sin(angle) * length,
@@ -675,49 +695,54 @@ def _draw_hand(
 
 
 def _draw_footer(surface: pygame.Surface, rect: pygame.Rect, name: str) -> None:
-    """Draw the mock footer plaque."""
-    pygame.draw.rect(surface, FOOTER_BG, rect, border_radius=12)
-    message_font = _font(max(22, rect.height // 2), bold=True)
-    small_font = _font(max(12, rect.height // 3))
+    """Draw the footer text directly on the brass band — no brown overlay."""
+    message_font = _font(max(18, rect.height * 2 // 3), bold=True)
+    small_font = _font(max(11, rect.height // 3))
 
-    hebrew = message_font.render("משיב הרוח  •  נותן ברכה", TEXT_IVORY)
-    surface.blit(hebrew, hebrew.get_rect(center=(rect.centerx, rect.centery - 2)))
+    hebrew = message_font.render("משיב הרוח  •  נותן ברכה", HAND_COLOR)
+    surface.blit(hebrew, hebrew.get_rect(center=(rect.centerx, rect.centery)))
 
-    badge = small_font.render(f"Mock for {name}", BRASS_LIGHT)
-    surface.blit(badge, (rect.right - badge.get_width() - 12, rect.bottom - badge.get_height() - 4))
+    badge = small_font.render(f"Mock for {name}", BRASS_DARK)
+    surface.blit(badge, (rect.right - badge.get_width() - 12, rect.centery - badge.get_height() // 2))
 
 
 def _render(surface: pygame.Surface, name: str) -> None:
     """Render the entire bespoke clock scene."""
     snapshot = _current_snapshot()
-    frame_rect = pygame.Rect(16, 16, surface.get_width() - 32, surface.get_height() - 32)
+    frame_rect = pygame.Rect(0, 0, surface.get_width(), surface.get_height())
     _draw_frame(surface, frame_rect)
 
-    content = frame_rect.inflate(-44, -44)
+    content = frame_rect.inflate(-24, -12)
     _draw_header(surface, content, "Chabad of Mobile", snapshot)
 
-    body_top = content.top + 92
-    body_bottom = content.bottom - 56
+    body_top = content.top + 86
+    body_bottom = content.bottom - 42
     body_height = body_bottom - body_top
-    panel_width = int(content.width * 0.28)
-    clock_size = min(int(content.width * 0.34), int(body_height * 0.82))
-    gap = int(content.width * 0.035)
 
-    left_rect = pygame.Rect(content.left + PANEL_INSET, body_top, panel_width, body_height - 22)
-    right_rect = pygame.Rect(content.right - PANEL_INSET - panel_width, body_top, panel_width, body_height - 22)
+    # Clock fills the vertical space; panels and gaps split the remainder
+    # symmetrically so nothing is lopsided.
+    clock_size = min(int(content.width * 0.38), body_height - 12)
+    gap = int(content.width * 0.018)
+    panel_width = (content.width - clock_size - 4 * gap) // 2
+
+    left_rect = pygame.Rect(
+        content.left + gap, body_top, panel_width, body_height - 22)
     clock_rect = pygame.Rect(
         left_rect.right + gap,
-        body_top + (body_height - clock_size) // 2 - 12,
+        body_top + (body_height - clock_size) // 2 - 6,
         clock_size,
         clock_size,
     )
+    right_rect = pygame.Rect(
+        clock_rect.right + gap, body_top, panel_width, body_height - 22)
 
     _draw_panel(surface, left_rect, "Daily Zmanim", snapshot.left_panel)
     _draw_right_panel(surface, right_rect, "Shabbat / Weekly", snapshot.right_panel)
     _draw_analog_clock(surface, clock_rect)
     _draw_detail_lines(surface, clock_rect, snapshot.detail_lines, snapshot.stale)
 
-    footer_rect = pygame.Rect(content.left + 120, content.bottom - 34, content.width - 240, 24)
+    # Footer text sits on the bottom brass band drawn by _draw_frame.
+    footer_rect = pygame.Rect(0, surface.get_height() - 36, surface.get_width(), 36)
     _draw_footer(surface, footer_rect, name)
 
 
