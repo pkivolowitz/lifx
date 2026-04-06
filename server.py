@@ -308,6 +308,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_post_zigbee_set", requires_auth=False),
     _Route("GET", ("api", "operators"),
            "_handle_get_operators", requires_auth=True),
+    _Route("GET", ("api", "config", "nav"),
+           "_handle_get_nav_config", requires_auth=False),
     _Route("GET", ("shopping",),
            "_handle_get_shopping_page", requires_auth=False),
     _Route("GET", ("api", "shopping"),

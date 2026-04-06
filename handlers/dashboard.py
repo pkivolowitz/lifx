@@ -490,6 +490,31 @@ class DashboardHandlerMixin:
         })
 
 
+    def _handle_get_nav_config(self) -> None:
+        """GET /api/config/nav — navigation links for the site nav bar.
+
+        Returns the list of nav links from server.json ``nav_links``.
+        Pages build the nav bar dynamically from this endpoint so
+        no internal IPs are hardcoded in HTML.
+
+        Default links (Home, Dashboard, Power, I/O, Shopping) are
+        always included.  External links (e.g., Zigbee2MQTT) come
+        from config.
+        """
+        # Built-in pages — always present.
+        links: list[dict[str, str]] = [
+            {"label": "Home", "href": "/home"},
+            {"label": "Dashboard", "href": "/dashboard"},
+            {"label": "Power", "href": "/power"},
+            {"label": "I/O", "href": "/io"},
+            {"label": "Shopping", "href": "/shopping"},
+        ]
+        # External links from config.
+        extra: list[dict[str, str]] = self.config.get("nav_links", [])
+        links.extend(extra)
+        self._send_json(200, {"links": links})
+
+
     def _handle_get_home_soil(self) -> None:
         """GET /api/home/soil — soil moisture sensor data.
 

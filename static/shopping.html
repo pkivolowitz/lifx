@@ -183,13 +183,14 @@ h1 {
 </head>
 <body>
 
-<nav>
-  <a href="/home">Home</a>
-  <a href="/dashboard">Dashboard</a>
-  <a href="/power">Power</a>
-  <a href="http://10.0.0.123:8099">Zigbee</a>
-  <a href="/shopping" class="active">Shopping</a>
-</nav>
+<nav id="siteNav"></nav>
+<script>
+(function(){var n=document.getElementById("siteNav"),p=location.pathname;
+fetch("/api/config/nav").then(function(r){return r.json()}).then(function(d){
+(d.links||[]).forEach(function(l){var a=document.createElement("a");a.href=l.href;
+a.textContent=l.label;if(l.href===p)a.className="active";
+n.appendChild(a)})}).catch(function(){})})();
+</script>
 
 <div class="container">
     <h1>Shopping List</h1>

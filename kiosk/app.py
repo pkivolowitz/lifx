@@ -6,7 +6,7 @@ Supports day and night color themes.
 
 Usage::
 
-    python -m kiosk --api http://10.0.0.214:8420
+    python -m kiosk --api http://localhost:8420
     python -m kiosk --night          # force night mode
     python -m kiosk --windowed       # debug in a window
 
@@ -113,7 +113,7 @@ def main() -> None:
         description="GlowUp Kiosk — native Pi dashboard",
     )
     parser.add_argument(
-        "--api", type=str, default="http://10.0.0.214:8420",
+        "--api", type=str, default="http://localhost:8420",
         help="GlowUp server URL",
     )
     parser.add_argument(

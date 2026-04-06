@@ -96,13 +96,14 @@
 </head>
 <body>
 
-<div class="nav">
-  <a href="/home">Home</a>
-  <a href="/dashboard">Dashboard</a>
-  <a href="/power">Power</a>
-  <a href="http://10.0.0.123:8099" target="_blank">Zigbee</a>
-  <a href="/io" class="active">I/O</a>
-</div>
+<div class="nav" id="siteNav"></div>
+<script>
+(function(){var n=document.getElementById("siteNav"),p=location.pathname;
+fetch("/api/config/nav").then(function(r){return r.json()}).then(function(d){
+(d.links||[]).forEach(function(l){var a=document.createElement("a");a.href=l.href;
+a.textContent=l.label;if(l.href===p)a.className="active";
+n.appendChild(a)})}).catch(function(){})})();
+</script>
 
 <h1>I/O Timing Dashboard</h1>
 <p class="subtitle">Classified blocking I/O — 30-second sliding window + lifetime stats</p>

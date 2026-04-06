@@ -61,10 +61,10 @@ class DataPoller:
     """Background data poller for all kiosk data sources.
 
     Args:
-        api_base: GlowUp server URL (e.g., ``http://10.0.0.214:8420``).
+        api_base: GlowUp server URL (e.g., ``http://localhost:8420``).
     """
 
-    def __init__(self, api_base: str = "http://10.0.0.214:8420") -> None:
+    def __init__(self, api_base: str = "http://localhost:8420") -> None:
         """Initialize the poller."""
         self._api: str = api_base.rstrip("/")
         self._stop: threading.Event = threading.Event()

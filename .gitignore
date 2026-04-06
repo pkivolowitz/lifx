@@ -10,3 +10,5 @@ AUDIT_REPORT.md
 state.db
 state.db-wal
 state.db-shm
+deploy/scripts/
+shopping.json

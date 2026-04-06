@@ -447,14 +447,17 @@
 </head>
 <body>
 
-<!-- Site nav — shared across all pages. -->
-<nav style="display:flex;gap:18px;padding:6px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:0.8rem;letter-spacing:0.04em;">
-  <a href="/home" style="color:rgba(255,255,255,0.35);text-decoration:none;">Home</a>
-  <a href="/dashboard" style="color:rgba(255,255,255,0.7);text-decoration:none;font-weight:600;">Dashboard</a>
-  <a href="/power" style="color:rgba(255,255,255,0.35);text-decoration:none;">Power</a>
-  <a href="http://10.0.0.123:8099" style="color:rgba(255,255,255,0.35);text-decoration:none;">Zigbee</a>
-  <a href="/io" style="color:rgba(255,255,255,0.35);text-decoration:none;">I/O</a>
-</nav>
+<!-- Site nav — built dynamically from /api/config/nav. -->
+<nav id="siteNav" style="display:flex;gap:18px;padding:6px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:0.8rem;letter-spacing:0.04em;"></nav>
+<script>
+(function(){var n=document.getElementById("siteNav"),p=location.pathname;
+fetch("/api/config/nav").then(function(r){return r.json()}).then(function(d){
+(d.links||[]).forEach(function(l){var a=document.createElement("a");a.href=l.href;
+a.textContent=l.label;a.style.textDecoration="none";
+var active=l.href===p||(p==="/"&&l.href==="/home");
+a.style.color=active?"rgba(255,255,255,0.7)":"rgba(255,255,255,0.35)";
+if(active)a.style.fontWeight="600";n.appendChild(a)})}).catch(function(){})})();
+</script>
 
 <div id="auth-form">
   <h1>GlowUp Dashboard</h1>

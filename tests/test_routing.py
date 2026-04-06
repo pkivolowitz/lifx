@@ -305,6 +305,7 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "calibrate", "time_sync"),
             ("api", "ble", "sensors"),
             ("api", "ble", "sensors", "{label}"),
+            ("api", "config", "nav"),
             ("shopping",),
             ("api", "shopping"),
             ("api", "shopping", "{id}", "check"),
@@ -332,8 +333,8 @@ class TestRouteCount(unittest.TestCase):
         """GET routes should match the expected count."""
         get_routes: list[_Route] = [r for r in _ROUTES if r.method == "GET"]
         self.assertEqual(
-            len(get_routes), 48,
-            f"Expected 48 GET routes, got {len(get_routes)}",
+            len(get_routes), 49,
+            f"Expected 49 GET routes, got {len(get_routes)}",
         )
 
     def test_post_route_count(self) -> None:
