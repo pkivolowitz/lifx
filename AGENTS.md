@@ -31,6 +31,7 @@ Required sequence:
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_project_state_note.md`
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_network.md`
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_pi_infrastructure.md`
+  - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/taxonomy.md`
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_broker2.md`
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/feedback_session_startup.md`
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/feedback_debugging_methodology.md`
