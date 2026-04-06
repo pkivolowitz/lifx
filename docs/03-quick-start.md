@@ -3,14 +3,16 @@
 > Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 > Licensed under the [MIT License](../LICENSE).
 
-GlowUp is **server-preferred**: when a GlowUp server is reachable, it
-handles device resolution, effect execution, and packet delivery.  This
-gives you label-based device addressing, ARP-based discovery, keepalive,
-and scheduling — features unavailable in standalone mode.  If the server
-is unreachable, the CLI falls back to direct UDP.
+GlowUp is **server-preferred**: when a coordinator is reachable, it
+handles device resolution, effect execution, packet delivery, and the
+shared control plane.  This gives you label-based device addressing,
+ARP-based discovery, keepalive, operator/runtime services, and
+scheduling.  If the server is unreachable, the CLI falls back to
+direct UDP for standalone device control.
 
-If you want label addressing, groups, scheduling, and remote control —
-install the server (see [REST API Server](11-rest-api.md)).  Without the
+If you want label addressing, groups, scheduling, operators, remote
+control, and a foundation for distributed sensors or voice — install
+the server (see [REST API Server](11-rest-api.md)).  Without the
 server, `--ip` still works for direct device control.
 
 ### With a Server (recommended)
@@ -25,7 +27,7 @@ python3 glowup.py effects
 # 3. Run an effect by device label (server resolves label → IP)
 python3 glowup.py play cylon --device "PORCH STRING LIGHTS"
 
-# 4. Or animate a group of bulbs as a virtual multizone
+# 4. Or animate a group of bulbs as a virtual multizone surface
 python3 glowup.py play aurora --group porch
 
 # 5. Preview an effect in the simulator (fetches real geometry from server)
@@ -33,6 +35,9 @@ python3 glowup.py play cylon --device "PORCH STRING LIGHTS" --sim-only
 
 # 6. Press Ctrl+C to stop (fades to black gracefully)
 ```
+
+From there, you can add sensors, operators, MQTT, distributed workers,
+or voice components without changing the core model.
 
 ### Standalone (no server)
 

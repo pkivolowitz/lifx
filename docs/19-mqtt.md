@@ -3,14 +3,16 @@
 > Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 > Licensed under the [MIT License](../LICENSE).
 
-GlowUp includes a native MQTT bridge that connects the server to any
-MQTT broker (Mosquitto, EMQX, HiveMQ, etc.).  Once enabled, any MQTT
-client can control your lights and subscribe to real-time state
-updates — no HTTP required.
+GlowUp includes native MQTT support for both the control plane and the
+distributed signal fabric.  With MQTT enabled, the server, adapters,
+worker nodes, voice components, and external clients can exchange
+signals, commands, health, and state over a common broker.
 
 Unlike the Home Assistant, Apple Shortcuts, and Node-RED integrations
-(which call the REST API from the outside), the MQTT bridge runs
-*inside* `server.py` and publishes state changes automatically.
+(which call the REST API from the outside), the MQTT bridge and related
+MQTT components are part of GlowUp's internal architecture.  MQTT is
+not just "another API"; it is one of the ways a decentralized GlowUp
+deployment moves signals and coordinates work.
 
 ### Prerequisites
 
@@ -64,7 +66,7 @@ Device IDs are the same identifiers used in the REST API: IP addresses
 for individual devices (e.g., `192.0.2.62`) and `group:name` for
 virtual multizone groups (e.g., `group:porch`).
 
-#### Published by GlowUp (state)
+#### Published by GlowUp (device state)
 
 | Topic | Retained | QoS | Payload |
 |-------|----------|-----|---------|
@@ -78,7 +80,7 @@ seconds).  Color topics are published at `color_interval` rate
 regardless of change, since zone colors shift continuously during
 effects.
 
-#### Subscribed by GlowUp (commands)
+#### Subscribed by GlowUp (device commands)
 
 | Topic | Payload | Action |
 |-------|---------|--------|
@@ -150,7 +152,7 @@ this topic to detect when GlowUp is unreachable.
   [GitHub repo](https://github.com/pkivolowitz/lifx/issues) with
   any corrections or suggestions.
 
-### Adapter MQTT Topics
+### Adapter and Signal Topics
 
 Adapters publish sensor data to MQTT using the following topic patterns:
 
@@ -160,3 +162,14 @@ Adapters publish sensor data to MQTT using the following topic patterns:
 | `glowup/zigbee/{device}/{property}` | Zigbee2MQTT adapter | Normalized Zigbee device signals |
 | `glowup/vivint/{device}/{property}` | Vivint adapter | Lock and sensor states |
 | `glowup/printer/{property}` | Printer adapter | Printer status and details |
+
+The broader distributed system also uses MQTT for:
+
+- signal publication and subscription across nodes
+- adapter lifecycle topics (heartbeat, status, command, response)
+- worker capability and health reporting
+- orchestrator work assignments
+- voice and media coordination where low-latency UDP is not required
+
+In other words: MQTT is both a user-facing integration surface and an
+internal transport for decentralized GlowUp deployments.

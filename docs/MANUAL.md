@@ -11,25 +11,26 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
 
 ## How to Read This Manual
 
-GlowUp scales from a single laptop running light effects to a
-distributed multi-machine platform.  You don't need all of it.
+GlowUp scales from a single laptop driving one emitter surface to a
+distributed, multi-machine home-control system.  You don't need all of it.
 
 **Start with Part I.  Stop when you have what you need.**
 
 | Part | What You Get | Prerequisites |
 |------|-------------|---------------|
-| **[I. Getting Started](#part-i--getting-started)** | Pretty lights from the command line | Python, LIFX bulbs |
-| **[II. Server](#part-ii--server)** | Always-on daemon, REST API, scheduling, sensors | Part I + a Pi |
+| **[I. Getting Started](#part-i--getting-started)** | First contact: CLI, one emitter, local control | Python, usually a LIFX device |
+| **[II. Server](#part-ii--server)** | Always-on coordinator, API host, scheduling, sensors | Part I + a Pi |
 | **[III. Integrations](#part-iii--integrations)** | iOS app, remote access, Home Assistant, Node-RED | Part II |
-| **[IV. Distributed](#part-iv--distributed)** | Multi-machine MQTT bus, audio-reactive, MIDI | Part II + MQTT |
-| **[V. Developer](#part-v--developer)** | Write effects, sensors, operators, emitters | Part I |
+| **[IV. Distributed](#part-iv--distributed)** | Multi-machine SOE graph, MQTT/UDP transports, remote workers | Part II + MQTT |
+| **[V. Developer](#part-v--developer)** | Write effects, sensors, operators, emitters, adapters | Part I |
 
 ---
 
 ## Part I — Getting Started
 
-Pretty lights on your LIFX devices from the command line.  No server,
-no Pi, no network services.  Just a Mac or Linux box and some bulbs.
+The smallest useful GlowUp setup: local control from the command line,
+usually with a LIFX device as the first emitter.  No server, no Pi,
+no distributed services required.
 
 - [Overview](01-overview.md) — What GlowUp is, what it does
 - [Requirements](02-requirements.md) — Hardware, software, network
@@ -43,8 +44,9 @@ no Pi, no network services.  Just a Mac or Linux box and some bulbs.
 
 ## Part II — Server
 
-An always-on server (typically a Raspberry Pi) that runs effects on a
-schedule and exposes a REST API.
+An always-on coordinator (typically a Raspberry Pi) that runs schedules,
+hosts the API, manages devices and operators, and anchors the local
+SOE graph.
 
 **Core server:**
 
@@ -71,8 +73,7 @@ schedule and exposes a REST API.
 
 ## Part III — Integrations
 
-Control GlowUp from your phone, from outside your house, or from
-home automation platforms.
+Connect GlowUp to phones, remote access, and external control systems.
 
 > **Caveat emptor:** The GlowUp iOS app has not undergone Apple App
 > Store review.  You build and install it yourself via Xcode.
@@ -88,10 +89,11 @@ home automation platforms.
 
 ## Part IV — Distributed
 
-Multiple machines working together via MQTT.  Sensors on one machine,
-compute on another, output on a third.
+Multiple machines working together as one SOE system.  Sensors on one
+machine, compute on another, emitters on a third, voice satellites
+somewhere else.
 
-- [MQTT](19-mqtt.md) — Broker setup and signal bus
+- [MQTT](19-mqtt.md) — Broker setup, signal transport, and control plane
 - [SOE Pipeline](21-soe-pipeline.md) — Sensors → Operators → Emitters architecture
 - [Audio Pipeline](20-media-pipeline.md) — Mic → FFT → MQTT → lights
 - [MIDI Pipeline](23-midi-pipeline.md) — MIDI files → synth + lights + N-body visualizer
@@ -100,8 +102,8 @@ compute on another, output on a third.
 
 ## Part V — Developer
 
-Write your own effects, sensors, operators, or emitters.  Understand
-the engine internals or extend the platform.
+Write your own effects, sensors, operators, emitters, or transport
+adapters.  Understand the engine internals or extend the platform.
 
 - [Effect Developer Guide](07-effect-dev-guide.md) — Architecture, base class, Param system, HSBK
 - [Engine & Controller API](09-engine-api.md) — Programmatic API, VirtualMultizoneDevice

@@ -5,11 +5,13 @@
 
 ## What You Need Depends on What You Want
 
-GlowUp is modular.  The core requires nothing beyond Python and
-LIFX bulbs.  Each additional capability has its own dependencies.
+GlowUp is modular.  The smallest deployment requires nothing beyond
+Python and a LIFX device, but the overall platform is broader than
+lighting.  Each transport, sensor family, voice feature, and
+distributed capability has its own dependencies.
 Install only what you need.
 
-### Core (pretty lights from the CLI)
+### Core (single-node starter deployment)
 
 | Requirement | Install |
 |-------------|---------|
@@ -30,7 +32,7 @@ No external Python packages — the core is pure stdlib.
 |-------------|---------|
 | ffmpeg | macOS: `brew install ffmpeg` · Linux: `sudo apt install ffmpeg` |
 
-### Server (REST API, scheduling)
+### Server (API host, scheduling, SOE coordination)
 
 No additional packages beyond core.  Just run `python3 server.py server.json`.
 
@@ -53,7 +55,7 @@ survives reboots, see [Persistent Services](24-persistent-services.md).
 | cloudflared *(for tunnel)* | See [Cloudflare Tunnel](15-tunnel.md) |
 | Xcode *(for iOS app)* | App Store |
 
-### Audio Output (theremin, audio effects)
+### Audio Output (theremin, audio effects, speakers)
 
 | Requirement | Install |
 |-------------|---------|
@@ -108,6 +110,15 @@ survives reboots, see [Persistent Services](24-persistent-services.md).
 | paho-mqtt | `pip install paho-mqtt` |
 | MQTT broker | See MQTT above |
 | A web browser | Any modern browser with WebGL |
+
+### Voice Control
+
+| Requirement | Install |
+|-------------|---------|
+| MQTT broker | See MQTT above |
+| `paho-mqtt` | `pip install paho-mqtt` |
+| microphone / speaker hardware | depends on deployment |
+| speech dependencies | install the packages required by your chosen voice path |
 
 ---
 

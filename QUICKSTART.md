@@ -1,7 +1,7 @@
 # GlowUp Quick Start
 
-Get LIFX lights doing cool things in under 2 minutes.
-No server required.  Just a laptop and some bulbs.
+Get GlowUp running in under 2 minutes with its simplest deployment:
+one laptop, one LIFX device, no server required.
 
 ## Prerequisites
 
@@ -88,4 +88,5 @@ python3 glowup.py play aurora --config my_lights.json --group living
 - **[Full Manual](docs/MANUAL.md)** — the complete guide, organized by what you want to do
 - **[Effects Reference](docs/06-effects.md)** — every effect with its parameters
 - **[CLI Reference](docs/04-cli-reference.md)** — all command-line options
-- **Server mode** — run `python3 server.py` for scheduling, REST API, iOS app, and more (see [Part II](docs/MANUAL.md#part-ii--server))
+- **Server mode** — run `python3 server.py` for scheduling, SOE coordination, REST API, iOS app, and more (see [Part II](docs/MANUAL.md#part-ii--server))
+- **Distributed mode** — add MQTT, remote workers, adapters, and voice components when you are ready

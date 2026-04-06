@@ -1,10 +1,11 @@
-"""GlowUp REST API server — remote control daemon for LIFX devices.
+"""GlowUp REST API server — coordinator and API host for the local SOE runtime.
 
-Provides an HTTP API for querying and controlling LIFX devices from
-anywhere.  Designed to be the single daemon running on a Raspberry Pi
-(or Mac), this server subsumes the role of the standalone scheduler by
-managing effects directly through the :class:`Controller` API instead
-of spawning subprocesses.
+Provides an HTTP API for querying and controlling GlowUp from anywhere.
+In the smallest deployment that means LIFX devices and schedules; in a
+full deployment it also means sensors, operators, media, adapters,
+voice, and distributed workers.  This server subsumes the role of the
+standalone scheduler by managing effects directly through the
+:class:`Controller` API instead of spawning subprocesses.
 
 The server does **not** perform broadcast discovery.  All device IPs
 must be listed in the ``groups`` section of the configuration file.
@@ -21,10 +22,10 @@ Architecture::
     cloudflared on Pi
         ↓ localhost
     server.py (this file)
-        ↓ in-process
-    Controller / Engine / Transport
-        ↓ UDP
-    LIFX Devices
+        ↓ local orchestration
+    SignalBus / Controller / Operators / Adapters
+        ↓ mixed transports
+    LIFX / MQTT / Workers / Voice / Other emitters
 
 Endpoints::
 

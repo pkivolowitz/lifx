@@ -3,11 +3,11 @@
 > Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 > Licensed under the [MIT License](../LICENSE).
 
-Any GlowUp component that should run unattended — the server, a
-MIDI light bridge, an audio emitter, a distributed agent, the MQTT
-broker — needs to survive reboots and restart on failure.  This
-document covers how to make any component persistent on Linux and
-macOS.
+Any GlowUp component that should run unattended — the coordinator,
+adapter processes, voice components, distributed agents, emitters,
+or the MQTT broker — needs to survive reboots and restart on failure.
+This document covers how to make those decentralized building blocks
+persistent on Linux and macOS.
 
 ## Linux (systemd)
 

@@ -3,34 +3,49 @@
 > Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 > Licensed under the [MIT License](../LICENSE).
 
-The GLOWUP LIFX Effect Engine drives animated lighting effects on LIFX
-devices (string lights, beams, Z strips, single color bulbs, and monochrome
-bulbs) over the local network using the LIFX LAN protocol. It replaces the
-battery-draining phone app with a lightweight CLI that can run on a
-Raspberry Pi or similar as a daemon.
+GlowUp is a decentralized home-control system built around the
+**Sensors → Operators → Emitters** model.
 
-Color effects on monochrome (white-only) bulbs are automatically converted
-to perceptually correct brightness using BT.709 luma coefficients.
+Sensors bring information into the system.  A motion detector, Zigbee
+soil sensor, lock state, microphone, camera feed, wake word, REST call,
+or user-set parameter are all signals.  Operators transform those
+signals: thresholding, gating, occupancy inference, FFT analysis,
+voice intent execution, ML classification, scheduling, and effect
+rendering.  Emitters send results back into the world as light, audio,
+screens, notifications, logical signals, or other downstream inputs.
 
-**Virtual multizone** — Any combination of LIFX devices can be grouped
-into a virtual multizone strip.  Multizone devices (string lights, beams)
-contribute all their zones; single bulbs contribute one zone each.  Five
-white lamps around a room become a 5-zone animation surface; add a
-108-zone string light and it becomes 113 zones.  A cylon scanner sweeps
-lamp to lamp, aurora curtains drift around you, a wave oscillates across
-the room.  Define device groups in a config file and the engine treats
-them as one device.  Effects don't need any changes — they already
-render per-zone colors, and the virtual device routes each color back
-to the correct physical device, batching multizone updates efficiently.
+LIFX is the most mature emitter family in GlowUp today, which is why
+the project includes a rich effect engine, virtual multizone surfaces,
+and direct LAN control.  But GlowUp is not defined by LIFX.  It is
+defined by a transport-agnostic signal fabric, composable operators,
+and the ability to distribute work across multiple machines.
 
-LIFX limits a single physical chain to 3 string lights (36 bulbs,
-108 zones — 12 bulbs × 3 zones × 3 strings).  The virtual multizone
-feature removes that ceiling entirely.  Each chain is an independent
-network device with its own IP address; the engine stitches them
-together in software.  Five separate 3-string chains scattered around
-a room become a single 180-bulb, 540-zone animation surface with no
-hardware modifications.
+## Core Ideas
 
-Effects are **pure renderers** — they know nothing about devices or
-networking. Given a timestamp and a zone count, they return a list of
-colors. The engine handles framing, timing, and transport.
+- **Generalized signal system** — a temperature reading, a voice command,
+  and a UI parameter change are all just named signals.
+- **Decentralized deployment** — sensors, operators, and emitters may run
+  on different computers and communicate over MQTT, UDP, HTTP, BLE,
+  Zigbee, vendor APIs, and other transports.
+- **Resiliency by structure** — adapter processes, keepalive daemons,
+  device registry indirection, and service supervision reduce the blast
+  radius of failures.
+- **Voice is native** — wake word, speech recognition, intent execution,
+  and speech output are part of the same architecture, not a sidecar app.
+
+## LIFX as a Flagship Emitter
+
+GlowUp includes a mature lighting engine for LIFX devices (string lights,
+beams, Z strips, single-color bulbs, matrix products, and monochrome
+bulbs) over the LAN protocol.  Color effects on monochrome bulbs are
+automatically converted to perceptually correct brightness using
+BT.709 luma coefficients.
+
+**Virtual multizone** groups let multiple LIFX devices behave as one
+animation surface.  Multizone devices contribute all their zones;
+single bulbs contribute one zone each.  Effects remain pure renderers:
+they know nothing about networking or hardware layout.  They render to
+an abstract surface, and GlowUp maps the result back onto real devices.
+
+That same separation of concerns is what lets GlowUp extend past
+lighting into generalized home control.

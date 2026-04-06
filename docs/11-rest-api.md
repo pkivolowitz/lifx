@@ -3,10 +3,11 @@
 > Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 > Licensed under the [MIT License](../LICENSE).
 
-The REST API server (`server.py`) exposes all GlowUp functionality over
-HTTP, enabling remote control from the iOS app or any HTTP client.  It
-replaces `scheduler.py` by managing effects directly through the
-`Controller` API instead of spawning subprocesses.
+The REST API server (`server.py`) is GlowUp's coordinator and API host.
+It exposes control and introspection over HTTP, anchors the local SOE
+runtime, and provides the integration point used by the iOS app and
+other HTTP clients.  It replaces `scheduler.py` by managing effects
+directly through the `Controller` API instead of spawning subprocesses.
 
 ```bash
 python3 server.py server.json              # start the server
@@ -16,7 +17,7 @@ python3 server.py --dry-run server.json    # preview resolved schedule
 ### Server Configuration
 
 The server reads a JSON configuration file that combines server settings
-with the same schedule format used by `scheduler.py`.
+with schedules, operators, adapters, and other runtime configuration.
 
 **Device identifiers** in the `groups` section can be registry labels,
 MAC addresses, or raw IP addresses.  At startup the server resolves
