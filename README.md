@@ -14,9 +14,11 @@ deployed emitter today, but the architecture is generalized: multiple
 radio and network transports, multi-machine deployment, voice control,
 and process isolation are core design goals, not add-ons.
 
-This project utilizes AI assistance (Claude 4.6) for boilerplate and
-logic expansion. All architectural decisions and code integration are
-by Perry Kivolowitz, the sole Human Author.
+This project previously used AI assistance (Claude 4.6) for boilerplate
+and logic expansion. Perry Kivolowitz later dropped Anthropic, citing
+predatory and capricious changes to usage limits. All architectural
+decisions and code integration are by Perry Kivolowitz, the sole Human
+Author.
 
 ## At a Glance
 
