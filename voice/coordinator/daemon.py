@@ -188,6 +188,26 @@ class CoordinatorDaemon:
             "[%s] Playback %s", room, "started" if playing else "stopped",
         )
 
+    def _publish_tts_text(self, room: str, text: str) -> None:
+        """Publish TTS text so satellites can speak it locally.
+
+        Args:
+            room: Target room (satellites filter by their own room).
+            text: Text to synthesize and speak.
+        """
+        if self._mqtt_client is None:
+            return
+
+        payload: str = json.dumps({
+            "room": room,
+            "text": text,
+            "timestamp": time.time(),
+        })
+        self._mqtt_client.publish(
+            C.TOPIC_TTS_TEXT, payload, qos=0,
+        )
+        logger.info("[%s] Published TTS text: '%s'", room, text[:60])
+
     def _init_mqtt(self) -> None:
         """Connect to MQTT broker and subscribe to utterance topic."""
         if mqtt is None:
@@ -289,6 +309,7 @@ class CoordinatorDaemon:
                 tts=self._tts,
                 player=self._player,
                 playback_notifier=self._notify_playback,
+                tts_text_publisher=self._publish_tts_text,
             )
         finally:
             # Always re-enable wake detection after pipeline completes,

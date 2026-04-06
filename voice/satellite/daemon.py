@@ -151,6 +151,12 @@ class SatelliteDaemon:
         self._device_name: Optional[str] = audio_cfg.get("device_name")
         self._needs_resample: bool = False
 
+        # Piper TTS — persistent process for low-latency local speech.
+        self._piper_proc: Optional[subprocess.Popen] = None
+        self._piper_rate: str = "22050"
+        self._piper_lock: threading.Lock = threading.Lock()
+        self._init_piper()
+
         # Capture config.
         cap_cfg: dict[str, Any] = config.get("capture", {})
         self._capture = UtteranceCapture(
@@ -193,27 +199,39 @@ class SatelliteDaemon:
         else:
             self._mqtt_client = mqtt.Client(client_id=client_id)
 
-        self._mqtt_client.on_message = self._on_playback_message
+        self._mqtt_client.on_message = self._on_mqtt_message
         self._mqtt_client.connect(self._mqtt_broker, self._mqtt_port)
         self._mqtt_client.subscribe(C.TOPIC_PLAYBACK, qos=0)
+        self._mqtt_client.subscribe(C.TOPIC_TTS_TEXT, qos=0)
         self._mqtt_client.loop_start()
         logger.info(
             "MQTT connected: %s:%d as %s",
             self._mqtt_broker, self._mqtt_port, client_id,
         )
 
-    def _on_playback_message(
+    def _on_mqtt_message(
         self, client: Any, userdata: Any, msg: Any,
     ) -> None:
+        """Dispatch incoming MQTT messages by topic.
+
+        Args:
+            client:   MQTT client instance.
+            userdata: User data (unused).
+            msg:      MQTT message.
+        """
+        if msg.topic == C.TOPIC_PLAYBACK:
+            self._on_playback_message(msg)
+        elif msg.topic == C.TOPIC_TTS_TEXT:
+            self._on_tts_text_message(msg)
+
+    def _on_playback_message(self, msg: Any) -> None:
         """Handle playback state messages from the coordinator.
 
         Suppresses wake detection while TTS audio is playing in
         this satellite's room, preventing echo re-triggers.
 
         Args:
-            client:   MQTT client instance.
-            userdata: User data (unused).
-            msg:      MQTT message with JSON payload.
+            msg: MQTT message with JSON payload.
         """
         try:
             data: dict[str, Any] = json.loads(msg.payload)
@@ -229,6 +247,161 @@ class SatelliteDaemon:
                     logger.info("Playback ended — wake re-enabled")
         except Exception as exc:
             logger.debug("Playback message parse error: %s", exc)
+
+    def _on_tts_text_message(self, msg: Any) -> None:
+        """Receive TTS text from the coordinator and speak it locally.
+
+        Uses espeak-ng via subprocess to synthesize speech through
+        the default ALSA output device.
+
+        Args:
+            msg: MQTT message with JSON payload {room, text}.
+        """
+        try:
+            data: dict[str, Any] = json.loads(msg.payload)
+            room: str = data.get("room", "")
+            text: str = data.get("text", "")
+
+            if room != self._room or not text:
+                return
+
+            logger.info("TTS received: '%s'", text[:60])
+            # Speak in a thread so it doesn't block the MQTT callback
+            # loop.  Suppress wake detection for the duration of local
+            # TTS — piper inference + playback takes seconds, and the
+            # mic will pick up the speaker output.
+            threading.Thread(
+                target=self._speak_local_suppressed,
+                args=(text,),
+                daemon=True,
+            ).start()
+        except Exception as exc:
+            logger.error("TTS text message error: %s", exc)
+
+    def _speak_local_suppressed(self, text: str) -> None:
+        """Speak text locally with wake word suppression.
+
+        Suppresses wake detection before speaking and re-enables it
+        after playback completes, preventing the mic from re-triggering
+        on the speaker output.
+
+        Args:
+            text: Text to speak.
+        """
+        self._playback_suppressed = True
+        logger.info("Local TTS started — wake suppressed")
+        try:
+            self._speak_local(text)
+        finally:
+            self._playback_suppressed = False
+            logger.info("Local TTS ended — wake re-enabled")
+
+    def _init_piper(self) -> None:
+        """Start persistent piper process for low-latency TTS.
+
+        Piper reads lines from stdin and writes raw PCM to stdout.
+        The model is loaded once at startup (~10s) and stays warm
+        for sub-second inference on subsequent requests.
+        """
+        piper_model: str = self._config.get(
+            "piper_model", os.path.expanduser("~/models/en_US-lessac-medium.onnx"),
+        )
+        piper_bin: str = self._config.get(
+            "piper_bin", os.path.expanduser("~/venv/bin/piper"),
+        )
+        if not os.path.exists(piper_bin) or not os.path.exists(piper_model):
+            logger.warning("Piper not available: bin=%s model=%s", piper_bin, piper_model)
+            return
+
+        # Read sample rate from the model's JSON config.
+        model_json: str = piper_model + ".json"
+        if os.path.exists(model_json):
+            with open(model_json, "r") as mf:
+                mcfg = json.load(mf)
+            self._piper_rate = str(mcfg.get("audio", {}).get("sample_rate", 22050))
+
+        try:
+            self._piper_proc = subprocess.Popen(
+                [piper_bin, "--model", piper_model, "--output-raw"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info(
+                "Piper TTS started: model=%s rate=%s",
+                os.path.basename(piper_model), self._piper_rate,
+            )
+        except Exception as exc:
+            logger.error("Failed to start piper: %s", exc)
+            self._piper_proc = None
+
+    def _speak_local(self, text: str) -> None:
+        """Synthesize and play text through the local audio output.
+
+        Uses persistent piper process for sub-second inference.
+        Falls back to espeak-ng if piper is unavailable.
+
+        Args:
+            text: Text to speak.
+        """
+        with self._piper_lock:
+            if self._piper_proc and self._piper_proc.poll() is None:
+                try:
+                    # Write text line to piper stdin — triggers inference.
+                    line: bytes = (text.strip() + "\n").encode("utf-8")
+                    self._piper_proc.stdin.write(line)
+                    self._piper_proc.stdin.flush()
+
+                    # Piper outputs raw PCM to stdout.  Read until the
+                    # audio stream pauses (no more data available).
+                    # Use a small read loop with a timeout to detect end
+                    # of utterance output.
+                    import select
+                    chunks: list[bytes] = []
+                    fd = self._piper_proc.stdout.fileno()
+                    while True:
+                        ready, _, _ = select.select([fd], [], [], 0.3)
+                        if ready:
+                            data = os.read(fd, 65536)
+                            if not data:
+                                break
+                            chunks.append(data)
+                        else:
+                            # No data for 300ms — utterance is done.
+                            if chunks:
+                                break
+                    if chunks:
+                        raw_audio: bytes = b"".join(chunks)
+                        # Play via aplay.
+                        aplay = subprocess.run(
+                            ["aplay", "-r", self._piper_rate, "-f", "S16_LE", "-t", "raw", "-"],
+                            input=raw_audio,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=30,
+                        )
+                        logger.info("Spoke (piper): '%s'", text[:40])
+                        return
+                except Exception as exc:
+                    logger.warning("Piper speak failed: %s", exc)
+                    # Restart piper if it died.
+                    self._piper_proc = None
+                    self._init_piper()
+
+        # Fallback: espeak-ng.
+        try:
+            subprocess.run(
+                ["espeak-ng", "-s", "160", "--", text],
+                timeout=30,
+                capture_output=True,
+            )
+            logger.info("Spoke (espeak-ng): '%s'", text[:40])
+        except FileNotFoundError:
+            logger.error("No TTS engine installed (tried piper, espeak-ng)")
+        except subprocess.TimeoutExpired:
+            logger.error("espeak-ng timed out speaking: '%s'", text[:40])
+        except Exception as exc:
+            logger.error("Local TTS failed: %s", exc)
 
     def _init_audio(self) -> None:
         """Open the audio input stream.

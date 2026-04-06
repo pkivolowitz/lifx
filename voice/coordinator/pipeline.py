@@ -57,6 +57,11 @@ class PlaybackNotifier(Protocol):
     def __call__(self, room: str, playing: bool) -> None: ...
 
 
+class TTSTextPublisher(Protocol):
+    """Callback to publish TTS text for satellite-local speech."""
+    def __call__(self, room: str, text: str) -> None: ...
+
+
 # ---------------------------------------------------------------------------
 # Phrase cache — pre-generate common TTS phrases on first use
 # ---------------------------------------------------------------------------
@@ -162,6 +167,7 @@ def process_utterance(
     tts: Optional[TTSLike] = None,
     player: Optional[PlayerLike] = None,
     playback_notifier: Optional[PlaybackNotifier] = None,
+    tts_text_publisher: Optional[TTSTextPublisher] = None,
 ) -> dict[str, Any]:
     """Process a voice utterance through the full pipeline.
 
@@ -173,14 +179,15 @@ def process_utterance(
       and stream to the room's speaker
 
     Args:
-        room:          Room name (from satellite).
-        pcm:           Raw PCM audio bytes.
-        meta:          Message metadata (sample_rate, timestamp, etc.).
-        stt:           Speech-to-text engine.
-        intent_parser: Intent parser (Ollama or mock).
-        executor:      GlowUp API executor.
-        tts:           Text-to-speech engine (optional).
-        player:        Audio player for response (optional).
+        room:               Room name (from satellite).
+        pcm:                Raw PCM audio bytes.
+        meta:               Message metadata (sample_rate, timestamp, etc.).
+        stt:                Speech-to-text engine.
+        intent_parser:      Intent parser (Ollama or mock).
+        executor:           GlowUp API executor.
+        tts:                Text-to-speech engine (optional).
+        player:             Audio player for response (optional).
+        tts_text_publisher: Callback to publish text for satellite-local TTS.
 
     Returns:
         Pipeline result dict with ``text``, ``intent``, ``result``,
@@ -194,10 +201,13 @@ def process_utterance(
 
     if not text:
         logger.info("[%s] Empty transcription — nothing heard", room)
+        _no_catch: str = "Sorry, I didn't catch that."
         _speak(
-            "Sorry, I didn't catch that.",
+            _no_catch,
             room, tts, player, playback_notifier,
         )
+        if tts_text_publisher:
+            tts_text_publisher(room, _no_catch)
         return {
             "room": room,
             "text": "",
@@ -226,10 +236,13 @@ def process_utterance(
     action_name: str = intent.get("action", "")
     action_label: str = executor.get_action_label(action_name)
     if action_name in _SLOW_ACTIONS and action_label:
+        _wait_msg: str = f"Waiting on the {action_label}."
         _speak_cached(
-            f"Waiting on the {action_label}.",
+            _wait_msg,
             room, tts, player, playback_notifier,
         )
+        if tts_text_publisher:
+            tts_text_publisher(room, _wait_msg)
 
     # Step 3: Execute against GlowUp.
     result: dict[str, Any] = executor.execute(intent, room)
@@ -242,9 +255,13 @@ def process_utterance(
     if should_speak and confirmation:
         # Queries and chat: speak the full result.
         _speak(confirmation, room, tts, player, playback_notifier)
+        if tts_text_publisher:
+            tts_text_publisher(room, confirmation)
     elif not should_speak and result.get("status") == "ok":
         # Commands: physical change is the feedback, just say "Got it."
         _speak_cached("Got it.", room, tts, player, playback_notifier)
+        if tts_text_publisher:
+            tts_text_publisher(room, "Got it.")
 
     latency: float = _elapsed_ms(t0)
     logger.info(
@@ -309,10 +326,9 @@ def _speak(
 
     try:
         if player is None:
-            # No AirPlay — speak directly through Mac speakers.
-            if hasattr(tts, "speak_direct"):
-                tts.speak_direct(text)
-                logger.info("[%s] Spoke (direct: %s)", room, text[:40])
+            # No AirPlay — satellites handle TTS locally via MQTT.
+            # Skip speak_direct so we don't block on macOS 'say'.
+            logger.info("[%s] TTS delegated to satellite: %s", room, text[:40])
             return
 
         audio, sample_rate = tts.synthesize(text)
@@ -348,9 +364,8 @@ def _speak_cached(
         return
 
     if player is None:
-        if hasattr(tts, "speak_direct"):
-            tts.speak_direct(text)
-            logger.info("[%s] Spoke (direct cached: %s)", room, text[:30])
+        # Satellites handle TTS locally via MQTT.
+        logger.info("[%s] TTS delegated to satellite (cached): %s", room, text[:30])
         return
 
     try:

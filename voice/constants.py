@@ -23,6 +23,12 @@ TOPIC_STATUS_PREFIX: str = "glowup/voice/status"
 # Satellites suppress wake detection while their room is playing.
 TOPIC_PLAYBACK: str = "glowup/voice/playback"
 
+# Coordinator → satellites: TTS text for local speech synthesis.
+# JSON payload: {"room": "...", "text": "..."}.
+# Satellites with local TTS (espeak/piper) speak the text through
+# their own audio output instead of relying on coordinator playback.
+TOPIC_TTS_TEXT: str = "glowup/voice/tts_text"
+
 # ---------------------------------------------------------------------------
 # Audio format — all satellites must produce this format
 # ---------------------------------------------------------------------------
