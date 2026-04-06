@@ -151,11 +151,21 @@ class SatelliteDaemon:
         self._device_name: Optional[str] = audio_cfg.get("device_name")
         self._needs_resample: bool = False
 
+        # TTS output routing — "local" (default) speaks through piper/espeak
+        # on this device, "mqtt" publishes text to a topic for a remote
+        # speaker daemon (e.g. Daedalus) to play through its speakers.
+        self._tts_output: str = config.get("tts_output", "local")
+        self._tts_topic: str = config.get(
+            "tts_topic", "glowup/tts/speak",
+        )
+
         # Piper TTS — persistent process for low-latency local speech.
+        # Only initialized when tts_output is "local".
         self._piper_proc: Optional[subprocess.Popen] = None
         self._piper_rate: str = "22050"
         self._piper_lock: threading.Lock = threading.Lock()
-        self._init_piper()
+        if self._tts_output == "local":
+            self._init_piper()
 
         # Capture config.
         cap_cfg: dict[str, Any] = config.get("capture", {})
@@ -266,10 +276,18 @@ class SatelliteDaemon:
                 return
 
             logger.info("TTS received: '%s'", text[:60])
-            # Speak in a thread so it doesn't block the MQTT callback
-            # loop.  Suppress wake detection for the duration of local
-            # TTS — piper inference + playback takes seconds, and the
-            # mic will pick up the speaker output.
+
+            if self._tts_output == "mqtt":
+                # Publish to remote speaker daemon (e.g. Daedalus).
+                payload: str = json.dumps({"text": text})
+                self._mqtt_client.publish(self._tts_topic, payload, qos=1)
+                logger.info("TTS forwarded to %s", self._tts_topic)
+                return
+
+            # Local: speak in a thread so it doesn't block the MQTT
+            # callback loop.  Suppress wake detection for the duration
+            # — piper + playback takes seconds, and the mic will pick
+            # up the speaker output.
             threading.Thread(
                 target=self._speak_local_suppressed,
                 args=(text,),

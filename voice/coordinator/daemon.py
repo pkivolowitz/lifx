@@ -78,6 +78,15 @@ class CoordinatorDaemon:
         self._tts: Any = None
         self._player: Any = None
 
+        # Per-room speaker routing.
+        # "local": coordinator speaks via persistent piper + sounddevice.
+        # "satellite": send TTS text back to satellite to speak.
+        # "mqtt": publish to a custom MQTT topic for a remote speaker.
+        self._room_speakers: dict[str, dict[str, Any]] = config.get(
+            "room_speakers", {},
+        )
+        self._local_speaker: Optional[Any] = None
+
         # GlowUp API config.
         glowup_cfg: dict[str, Any] = config.get("glowup", {})
         self._api_base: str = glowup_cfg.get(
@@ -147,6 +156,72 @@ class CoordinatorDaemon:
             voice_model=tts_cfg.get("voice_model"),
             voice_name=tts_cfg.get("voice_name"),
         )
+
+    def _init_local_speaker(self) -> None:
+        """Initialize persistent piper for rooms with speaker='local'.
+
+        Only starts if at least one room is configured for local speech.
+        The piper process stays warm for sub-second inference.
+        """
+        has_local: bool = any(
+            cfg.get("speaker") == "local"
+            for cfg in self._room_speakers.values()
+        )
+        if not has_local:
+            return
+
+        try:
+            from voice.speaker.daemon import SpeakerDaemon
+            model: str = self._config.get(
+                "piper_model",
+                os.path.expanduser("~/models/en_US-ryan-low.onnx"),
+            )
+            piper_bin: str = self._config.get(
+                "piper_bin",
+                os.path.expanduser("~/venv/bin/piper"),
+            )
+            speaker: SpeakerDaemon = SpeakerDaemon(
+                piper_model=model,
+                piper_bin=piper_bin,
+            )
+            if speaker._init_piper():
+                self._local_speaker = speaker
+                logger.info("Local speaker initialized (piper + sounddevice)")
+            else:
+                logger.warning("Local speaker piper init failed")
+        except Exception as exc:
+            logger.error("Local speaker init failed: %s", exc)
+
+    def _speak_for_room(self, room: str, text: str) -> None:
+        """Route TTS to the correct speaker for a room.
+
+        Checks room_speakers config to determine output method.
+        Falls back to satellite if room is not configured.
+
+        Args:
+            room: Room name (from satellite).
+            text: Text to speak.
+        """
+        cfg: dict[str, Any] = self._room_speakers.get(room, {})
+        speaker_type: str = cfg.get("speaker", "satellite")
+
+        if speaker_type == "local" and self._local_speaker is not None:
+            try:
+                self._local_speaker._speak(text)
+                logger.info("[%s] Spoke locally: '%s'", room, text[:40])
+            except Exception as exc:
+                logger.error("[%s] Local speak failed: %s", room, exc)
+                self._publish_tts_text(room, text)
+
+        elif speaker_type == "mqtt":
+            topic: str = cfg.get("topic", "glowup/tts/speak")
+            payload: str = json.dumps({"text": text})
+            if self._mqtt_client is not None:
+                self._mqtt_client.publish(topic, payload, qos=1)
+                logger.info("[%s] TTS → %s: '%s'", room, topic, text[:40])
+
+        else:
+            self._publish_tts_text(room, text)
 
     def _init_player(self) -> None:
         """Initialize AirPlay audio player for TTS responses."""
@@ -309,7 +384,7 @@ class CoordinatorDaemon:
                 tts=self._tts,
                 player=self._player,
                 playback_notifier=self._notify_playback,
-                tts_text_publisher=self._publish_tts_text,
+                tts_text_publisher=self._speak_for_room,
             )
         finally:
             # Always re-enable wake detection after pipeline completes,
@@ -338,6 +413,7 @@ class CoordinatorDaemon:
         self._init_executor()
         self._init_tts()
         self._init_player()
+        self._init_local_speaker()
 
         # Give executor access to TTS for voice-change commands.
         self._executor.set_tts(self._tts)
