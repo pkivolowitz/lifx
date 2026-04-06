@@ -51,6 +51,14 @@ Available actions:
 - set_voice: change the speaking voice. Target is the voice name. Use when someone says "switch to Samantha", "use the Daniel voice", "change voice to Karen", etc. (params: voice_name="Samantha")
 - repair: restart a specific adapter or subsystem. Target is the adapter name: zigbee, vivint, nvr, printer, or mqtt. Use when someone says "repair NVR", "restart vivint", "fix the printer adapter", etc.
 - tell_time: ask for the current time. Use when someone says "what time is it?", "tell me the time", "what's the time?", "got the time?", etc.
+- tell_date: ask for today's date or day of the week. Use when someone says "what's today's date?", "what day is it?", "what's the date?", etc.
+- query_locks: ask about lock status. Use when someone says "are the doors locked?", "is the front door locked?", "lock status", "check the locks", etc.
+- query_doors: ask about door open/closed status. Use when someone says "are any doors open?", "is the back door open?", "check the doors", etc.
+- query_alarm: ask about the alarm/security system. Use when someone says "is the alarm on?", "alarm status", "is the house armed?", etc.
+- query_batteries: ask about low batteries. Use when someone says "any low batteries?", "battery status", "what needs batteries?", etc.
+- query_printer: ask about the printer. Use when someone says "how's the printer?", "printer status", "does the printer need toner?", "any printer alerts?", etc.
+- query_schedule: ask about the lighting schedule. Use when someone says "what's scheduled?", "what's on the schedule?", "any schedules tonight?", etc.
+- query_uptime: ask about server uptime or how long the system has been running. Use when someone says "how long have you been running?", "uptime", "when did you start?", etc.
 - scene: activate a named scene or preset
 - chat: general conversation, questions, or anything NOT related to controlling devices or querying sensors (params: message=<the user's full message>)
 
@@ -94,6 +102,17 @@ Examples:
 - "use the Daniel voice" -> {{"action": "set_voice", "target": "all", "params": {{"voice_name": "Daniel"}}}}
 - "what time is it?" -> {{"action": "tell_time", "target": "all", "params": {{}}}}
 - "tell me the time" -> {{"action": "tell_time", "target": "all", "params": {{}}}}
+- "what's today's date?" -> {{"action": "tell_date", "target": "all", "params": {{}}}}
+- "what day is it?" -> {{"action": "tell_date", "target": "all", "params": {{}}}}
+- "are the doors locked?" -> {{"action": "query_locks", "target": "all", "params": {{}}}}
+- "is the front door locked?" -> {{"action": "query_locks", "target": "front door", "params": {{}}}}
+- "are any doors open?" -> {{"action": "query_doors", "target": "all", "params": {{}}}}
+- "is the back door open?" -> {{"action": "query_doors", "target": "back door", "params": {{}}}}
+- "is the alarm on?" -> {{"action": "query_alarm", "target": "all", "params": {{}}}}
+- "any low batteries?" -> {{"action": "query_batteries", "target": "all", "params": {{}}}}
+- "how's the printer?" -> {{"action": "query_printer", "target": "all", "params": {{}}}}
+- "what's on the schedule?" -> {{"action": "query_schedule", "target": "all", "params": {{}}}}
+- "how long have you been running?" -> {{"action": "query_uptime", "target": "all", "params": {{}}}}
 - "tell me about the battle of Gettysburg" -> {{"action": "chat", "target": "all", "params": {{"message": "tell me about the battle of Gettysburg"}}}}
 """
 

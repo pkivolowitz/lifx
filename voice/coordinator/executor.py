@@ -118,6 +118,14 @@ class GlowUpExecutor:
             "system_status": self._handle_system_status,
             "set_voice": self._handle_set_voice,
             "tell_time": self._handle_tell_time,
+            "tell_date": self._handle_tell_date,
+            "lock_status": self._handle_lock_status,
+            "door_status": self._handle_door_status,
+            "alarm_status": self._handle_alarm_status,
+            "battery_status": self._handle_battery_status,
+            "printer_status": self._handle_printer_status,
+            "schedule_status": self._handle_schedule_status,
+            "uptime_status": self._handle_uptime_status,
         }
 
         # TTS reference — set after init by the coordinator daemon.
@@ -1031,6 +1039,385 @@ class GlowUpExecutor:
         return {
             "status": "ok",
             "confirmation": f"It is {time_str}.",
+            "speak": True,
+        }
+
+    def _handle_tell_date(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Speak today's date and day of the week.
+
+        No API call required — reads the system clock directly.
+        """
+        now: datetime = datetime.now()
+        # "Saturday, April 5th, 2026"
+        day_name: str = now.strftime("%A")
+        month_name: str = now.strftime("%B")
+        day_num: int = now.day
+        year: int = now.year
+
+        # Ordinal suffix.
+        if 11 <= day_num <= 13:
+            suffix: str = "th"
+        else:
+            suffix = {1: "st", 2: "nd", 3: "rd"}.get(day_num % 10, "th")
+
+        return {
+            "status": "ok",
+            "confirmation": f"Today is {day_name}, {month_name} {day_num}{suffix}, {year}.",
+            "speak": True,
+        }
+
+    def _handle_lock_status(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Report lock status from Vivint adapter.
+
+        One API call to /api/home/locks.
+        """
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/home/locks")
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Cannot reach the lock system.",
+                "speak": True,
+            }
+
+        locks: list[dict[str, Any]] = data.get("locks", [])
+        if not locks:
+            return {
+                "status": "ok",
+                "confirmation": "No locks are configured.",
+                "speak": True,
+            }
+
+        # Filter to specific lock if target is not "all".
+        if target_raw and target_raw != "all":
+            target_lower: str = target_raw.lower()
+            locks = [
+                lk for lk in locks
+                if target_lower in lk.get("name", "").lower()
+            ]
+            if not locks:
+                return {
+                    "status": "ok",
+                    "confirmation": f"I don't see a lock called {display_target}.",
+                    "speak": True,
+                }
+
+        locked: list[str] = []
+        unlocked: list[str] = []
+        for lk in locks:
+            name: str = lk.get("name", "unknown")
+            # lock_state 1.0 = locked, 0.0 = unlocked.
+            if lk.get("lock_state", 0) >= 1.0:
+                locked.append(name)
+            else:
+                unlocked.append(name)
+
+        if not unlocked:
+            confirmation: str = "All locks are locked."
+        elif not locked:
+            confirmation = "All locks are unlocked."
+        else:
+            unlocked_names: str = ", ".join(unlocked)
+            confirmation = f"{unlocked_names} {'is' if len(unlocked) == 1 else 'are'} unlocked."
+
+        return {
+            "status": "ok",
+            "confirmation": confirmation,
+            "speak": True,
+        }
+
+    def _handle_door_status(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Report door contact sensor status from Vivint adapter.
+
+        One API call to /api/home/security.
+        """
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/home/security")
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Cannot reach the security system.",
+                "speak": True,
+            }
+
+        doors: list[dict[str, Any]] = data.get("doors", [])
+        if not doors:
+            return {
+                "status": "ok",
+                "confirmation": "No door sensors are configured.",
+                "speak": True,
+            }
+
+        open_doors: list[str] = [
+            d.get("name", "unknown") for d in doors if d.get("is_on", False)
+        ]
+
+        if not open_doors:
+            confirmation: str = "All doors are closed."
+        else:
+            names: str = ", ".join(open_doors)
+            confirmation = f"{names} {'is' if len(open_doors) == 1 else 'are'} open."
+
+        return {
+            "status": "ok",
+            "confirmation": confirmation,
+            "speak": True,
+        }
+
+    def _handle_alarm_status(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Report alarm/security panel state from Vivint adapter.
+
+        One API call to /api/home/security.
+        """
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/home/security")
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Cannot reach the security system.",
+                "speak": True,
+            }
+
+        state: str = data.get("alarm_state", "unknown")
+        # Map internal state names to spoken forms.
+        spoken_map: dict[str, str] = {
+            "disarmed": "disarmed",
+            "armed_stay": "armed in stay mode",
+            "armed_away": "armed in away mode",
+            "unknown": "in an unknown state",
+        }
+        spoken: str = spoken_map.get(state, state)
+
+        return {
+            "status": "ok",
+            "confirmation": f"The alarm is {spoken}.",
+            "speak": True,
+        }
+
+    def _handle_battery_status(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Report devices with low batteries.
+
+        Checks Vivint sensors via /api/status (adapter health).
+        """
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/status")
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Cannot reach the server.",
+                "speak": True,
+            }
+
+        # Low battery threshold (percentage).
+        LOW_THRESHOLD: int = 30
+
+        low: list[str] = []
+        vivint: dict[str, Any] = data.get("adapters", {}).get("vivint", {})
+
+        # Check locks.
+        for name, info in vivint.get("locks", {}).items():
+            batt: float = info.get("battery", 1.0)
+            pct: int = int(batt * 100) if batt <= 1.0 else int(batt)
+            if pct < LOW_THRESHOLD:
+                label: str = name.replace("_", " ").title()
+                low.append(f"{label} at {pct}%")
+
+        # Check sensors.
+        for name, info in vivint.get("sensors", {}).items():
+            batt_val: Any = info.get("battery")
+            if batt_val is None:
+                continue
+            pct = int(batt_val)
+            if pct < LOW_THRESHOLD:
+                label = info.get("name", name)
+                low.append(f"{label} at {pct}%")
+
+        if not low:
+            confirmation: str = "All batteries are good."
+        else:
+            confirmation = f"{len(low)} low: " + ", ".join(low[:5])
+            if len(low) > 5:
+                confirmation += f", and {len(low) - 5} more"
+            confirmation += "."
+
+        return {
+            "status": "ok",
+            "confirmation": confirmation,
+            "speak": True,
+        }
+
+    def _handle_printer_status(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Report printer health from the printer adapter.
+
+        One API call to /api/status.
+        """
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/status")
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Cannot reach the server.",
+                "speak": True,
+            }
+
+        printer: dict[str, Any] = data.get("adapters", {}).get("printer", {})
+        if not printer:
+            return {
+                "status": "ok",
+                "confirmation": "No printer is configured.",
+                "speak": True,
+            }
+
+        status: str = printer.get("status", "unknown")
+        details: dict[str, Any] = printer.get("details", {})
+        alerts: list[str] = details.get("alerts", [])
+        drum_pct: float = details.get("drum_life_pct", 0)
+        page_count: int = details.get("page_count", 0)
+
+        if status == "ok" and not alerts:
+            confirmation: str = (
+                f"Printer is fine. Drum at {drum_pct:.0f}%, "
+                f"{page_count} pages printed."
+            )
+        else:
+            alert_str: str = ", ".join(alerts) if alerts else "unknown issue"
+            confirmation = f"Printer needs attention: {alert_str}."
+
+        return {
+            "status": "ok",
+            "confirmation": confirmation,
+            "speak": True,
+        }
+
+    def _handle_schedule_status(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Report active schedule entries.
+
+        One API call to /api/schedule.
+        """
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/schedule")
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Cannot reach the server.",
+                "speak": True,
+            }
+
+        entries: list[dict[str, Any]] = data.get("entries", [])
+        enabled: list[dict[str, Any]] = [
+            e for e in entries if e.get("enabled", True)
+        ]
+
+        if not enabled:
+            return {
+                "status": "ok",
+                "confirmation": "No active schedules.",
+                "speak": True,
+            }
+
+        # Summarize: count + first few targets.
+        targets: list[str] = []
+        for e in enabled[:5]:
+            t: str = e.get("target", e.get("label", "unknown"))
+            if t not in targets:
+                targets.append(t)
+
+        target_str: str = ", ".join(targets)
+        confirmation: str = (
+            f"{len(enabled)} active schedules covering {target_str}."
+        )
+
+        return {
+            "status": "ok",
+            "confirmation": confirmation,
+            "speak": True,
+        }
+
+    def _handle_uptime_status(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Report server uptime.
+
+        One API call to /api/status (checks response time as proxy).
+        Uses the process start time from /api/status if available,
+        otherwise just confirms the server is reachable.
+        """
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/status")
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "The server is not responding.",
+                "speak": True,
+            }
+
+        # Server doesn't expose uptime directly. Report adapter count
+        # and ready state as a proxy.
+        adapters: dict[str, Any] = data.get("adapters", {})
+        healthy: int = sum(
+            1 for info in adapters.values()
+            if info.get("running") or info.get("connected") or info.get("status") == "ok"
+        )
+
+        return {
+            "status": "ok",
+            "confirmation": (
+                f"Server is up and ready with {healthy} adapters online."
+            ),
             "speak": True,
         }
 

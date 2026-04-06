@@ -153,6 +153,54 @@ tell_time:
   handler: tell_time
   speak: true
 
+tell_date:
+  type: query
+  label: calendar
+  handler: tell_date
+  speak: true
+
+query_locks:
+  type: query
+  label: locks
+  handler: lock_status
+  speak: true
+
+query_doors:
+  type: query
+  label: doors
+  handler: door_status
+  speak: true
+
+query_alarm:
+  type: query
+  label: alarm
+  handler: alarm_status
+  speak: true
+
+query_batteries:
+  type: query
+  label: batteries
+  handler: battery_status
+  speak: true
+
+query_printer:
+  type: query
+  label: printer
+  handler: printer_status
+  speak: true
+
+query_schedule:
+  type: query
+  label: schedule
+  handler: schedule_status
+  speak: true
+
+query_uptime:
+  type: query
+  label: system
+  handler: uptime_status
+  speak: true
+
 repair:
   type: command
   label: system
