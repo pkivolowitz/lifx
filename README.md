@@ -26,7 +26,7 @@ by Perry Kivolowitz, the sole Human Author.
 | **SOE signal fabric** | BLE, Zigbee, Vivint, audio, screen, MIDI, REST ingest, and distributed workers all feed the same Sensors-Operators-Emitters model |
 | **50+ REST endpoints** | Device control, group CRUD, scheduling, automations, media signals, diagnostics, registry, and distributed fleet operations |
 | **Resilient runtime** | ARP keepalive, label-based identity, restartable services, MQTT bridges, and out-of-process adapters isolate failure domains |
-| **780+ tests** | Audit, fuzz, concurrency, REST integration, effect contracts — gated by pre-commit hook |
+| **1000+ tests** | Audit, fuzz, concurrency, REST integration, effect contracts — gated by pre-commit hook |
 | **Zero required packages** | Core is pure stdlib.  Every optional dependency (ffmpeg, paho-mqtt, bleak, etc.) is guarded and documented |
 
 ## What Do You Want to Do?

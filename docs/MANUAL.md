@@ -108,6 +108,6 @@ adapters.  Understand the engine internals or extend the platform.
 - [Effect Developer Guide](07-effect-dev-guide.md) — Architecture, base class, Param system, HSBK
 - [Engine & Controller API](09-engine-api.md) — Programmatic API, VirtualMultizoneDevice
 - [Emitter Developer Guide](22-emitter-dev-guide.md) — Emitter ABC, SynthBackend pattern
-- [Testing](10-testing.md) — Test modules, 500+ tests, how to run
+- [Testing](10-testing.md) — Test modules, 1000+ tests, how to run
 - [Test Interpretation Guide](TEST_GUIDE.md) — What tests prove, failure modes, triage
 - [Effect Gallery](13-gallery.md) — GitHub Pages gallery with animated GIF previews

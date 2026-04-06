@@ -11,11 +11,37 @@ lighting.  Each transport, sensor family, voice feature, and
 distributed capability has its own dependencies.
 Install only what you need.
 
+A multiplatform installer is in development.  Today, setup is still
+manual.
+
+## Where Serverless Ends
+
+You can stay **serverless** if all you want is direct LIFX control from
+the CLI:
+
+- discovery
+- playing effects by IP
+- simulator preview
+- recording renders
+
+That mode stops the moment you want the system to be **always on** or
+to coordinate anything beyond direct one-machine LIFX control.
+
+You should plan on a **Linux server** when you want any of the following:
+
+- scheduling
+- label-based device resolution and registry-backed identity
+- MQTT
+- sensors or adapters
+- voice control
+- distributed workers
+- dashboards, remote access, or persistent services
+
 ### Core (single-node starter deployment)
 
 | Requirement | Install |
 |-------------|---------|
-| Python 3.10+ | macOS: `brew install python@3.12` · Linux: included · Windows: [python.org](https://www.python.org/downloads/) |
+| Python 3.10+ | Minimum supported version on every platform. macOS example: `brew install python@3.12` · Linux: included · Windows: [python.org](https://www.python.org/downloads/) |
 | LIFX devices on your LAN | Any multizone, single color, or monochrome bulb |
 
 No external Python packages — the core is pure stdlib.
@@ -34,7 +60,21 @@ No external Python packages — the core is pure stdlib.
 
 ### Server (API host, scheduling, SOE coordination)
 
-No additional packages beyond core.  Just run `python3 server.py server.json`.
+This is the line where GlowUp stops being serverless.  If you want
+always-on coordination, scheduling, sensors, MQTT, voice, or distributed
+execution, run a Linux server.
+
+MQTT is required for the servered system to function as intended.  Plan
+on a Linux server, `paho-mqtt`, and a broker.
+
+| Requirement | Install |
+|-------------|---------|
+| Python 3.10+ | Same minimum as core |
+| Linux server | Raspberry Pi, Ubuntu box, mini PC, or other always-on Linux host |
+| MQTT broker | `sudo apt install mosquitto` or equivalent |
+| paho-mqtt | `pip install paho-mqtt` |
+
+Then run `python3 server.py server.json`.
 
 To run the server (or any component) as a persistent service that
 survives reboots, see [Persistent Services](24-persistent-services.md).
@@ -62,7 +102,7 @@ survives reboots, see [Persistent Services](24-persistent-services.md).
 | sounddevice | `pip install sounddevice` |
 | numpy | `pip install numpy` |
 
-### BLE Sensors (ONVIS motion/temperature)
+### BLE Sensors (example: ONVIS motion/temperature)
 
 | Requirement | Install |
 |-------------|---------|
@@ -111,13 +151,19 @@ survives reboots, see [Persistent Services](24-persistent-services.md).
 | MQTT broker | See MQTT above |
 | A web browser | Any modern browser with WebGL |
 
+Best results come from an NVIDIA 4XXX-class GPU.  Lower-end GPUs and
+CPU-only fallback paths can work, but this feature is happiest on a
+machine with real graphics headroom.
+
 ### Voice Control
 
 | Requirement | Install |
 |-------------|---------|
 | MQTT broker | See MQTT above |
 | `paho-mqtt` | `pip install paho-mqtt` |
+| Piper *(recommended voice output)* | install `piper` / `piper-tts` for local speech output |
 | microphone / speaker hardware | depends on deployment |
+| Pi 4-class satellite or better | practical minimum for a useful always-on satellite node |
 | speech dependencies | install the packages required by your chosen voice path |
 
 ---
@@ -126,13 +172,17 @@ survives reboots, see [Persistent Services](24-persistent-services.md).
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| **macOS** | Fully supported | Primary development platform |
-| **Linux (Pi, Ubuntu, etc.)** | Fully supported | Recommended deployment target |
-| **Windows** | Untested | Use `--ip` for discovery; effects and server should work |
+| **macOS** | Mature | Primary development platform; strong support for local and development workflows |
+| **Linux (Pi, Ubuntu, etc.)** | Mature | Recommended deployment target for servers, adapters, MQTT, and persistent services |
+| **Windows** | In its infancy | Start with direct `--ip` usage; expect rough edges |
 
 ## Platform-Specific Setup
 
 ### macOS
+
+Python 3.10 is the minimum supported version.  Homebrew Python 3.12 is
+just an example of a current installation target, not a stricter
+requirement.
 
 ```bash
 brew install python@3.12
@@ -162,8 +212,9 @@ deployments don't need it.
 
 ### Windows
 
-> **Windows support has not been tested.**  If you try it, please
-> report results via a GitHub issue.
+> **Windows support is in its infancy.**  Basic direct-device workflows
+> are the right starting point.  If you try broader usage, please report
+> results via a GitHub issue.
 
 Install Python 3.10+ from [python.org](https://www.python.org/downloads/)
 (tkinter is included).  Discovery requires `--ip` to address
