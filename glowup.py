@@ -2220,8 +2220,8 @@ def _play_via_server(args: argparse.Namespace) -> None:
         try:
             ffplay_proc.kill()
             ffplay_proc.wait(timeout=3.0)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("ffplay cleanup failed: %s", exc)
 
     stop_path: str = f"/api/devices/{encoded_device}/stop"
     try:
@@ -2652,8 +2652,8 @@ def cmd_play(args: argparse.Namespace) -> None:
     if _local_media_mgr is not None:
         try:
             _local_media_mgr.shutdown()
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.debug("Media manager shutdown failed: %s", exc)
 
     em.close()
     _print("Done.")

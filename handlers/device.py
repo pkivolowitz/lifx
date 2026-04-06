@@ -17,17 +17,19 @@ import socket
 import struct
 import threading
 import time as time_mod
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timezone
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from server_constants import *  # All constants available
-from effects import MediaEffect
+from server_constants import (
+    DEFAULT_FADE_MS,
+    SSE_POLL_INTERVAL,
+)
 from emitters import Emitter
 from engine import Controller
 from media import MediaManager, SignalBus
 from media.source import AudioStreamServer
-from transport import LifxDevice, SendMode
+from transport import LifxDevice
 from schedule_utils import find_active_entry as _find_active_entry
 from server_utils import (
     is_group_id as _is_group_id,

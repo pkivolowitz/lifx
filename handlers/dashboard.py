@@ -20,7 +20,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from server_constants import *  # All constants available
+# server_constants not used in this module.
 from operators import OperatorManager
 from media import SignalBus
 from schedule_utils import parse_time_spec as _parse_time_spec

@@ -20,7 +20,10 @@ from datetime import datetime, time, timedelta
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from server_constants import *  # All constants available
+from server_constants import (
+    CALIBRATION_PULSE_DELAY_SECONDS,
+    CALIBRATION_SOCKET_TIMEOUT_SECONDS,
+)
 
 
 class CalibrationHandlerMixin:

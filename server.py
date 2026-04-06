@@ -1081,12 +1081,12 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
                         b"HTTP/1.1 503 Service Unavailable\r\n"
                         b"Content-Length: 0\r\n\r\n"
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug("503 send failed: %s", exc)
                 try:
                     request.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.debug("Socket close failed: %s", exc)
                 return
             self._active_threads += 1
             if self._active_threads > self._thread_high_water:

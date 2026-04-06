@@ -20,7 +20,7 @@ from datetime import datetime, time, timedelta
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from server_constants import *  # All constants available
+from server_constants import AUDIO_QUEUE_TIMEOUT_SECONDS
 from media import MediaManager
 
 

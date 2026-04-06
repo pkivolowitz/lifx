@@ -20,7 +20,7 @@ from datetime import datetime, time, timedelta
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from server_constants import *  # All constants available
+# server_constants not used in this module.
 
 
 class StaticHandlerMixin:

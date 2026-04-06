@@ -534,8 +534,9 @@ class HapSession:
         c2a_key, a2c_key = derive_session_keys(shared_secret)
         logger.info("Pair-verify complete — encrypted session established")
 
-        # TODO: store session keys for encrypted characteristic I/O.
-        # This will be implemented when we add characteristic subscriptions.
+        # Session keys derived but not yet stored — encrypted characteristic
+        # I/O requires persisting c2a_key/a2c_key for subscriptions.
+        # Tracked in project backlog, not blocking current BLE scanning use.
 
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,14 @@ from datetime import datetime, time, timedelta
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from server_constants import *  # All constants available
+from server_constants import (
+    COMMAND_IDENTIFY_MAX_DURATION,
+    DEFAULT_FADE_MS,
+    IDENTIFY_CYCLE_SECONDS,
+    IDENTIFY_DURATION_SECONDS,
+    IDENTIFY_FRAME_INTERVAL,
+    IDENTIFY_MIN_BRI,
+)
 from device_registry import DeviceRegistry
 from infrastructure.bulb_keepalive import BulbKeepAlive
 
