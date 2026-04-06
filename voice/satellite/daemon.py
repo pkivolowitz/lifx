@@ -164,6 +164,13 @@ class SatelliteDaemon:
         self._piper_proc: Optional[subprocess.Popen] = None
         self._piper_rate: str = "22050"
         self._piper_lock: threading.Lock = threading.Lock()
+        # Track active aplay process for cancellation.
+        self._aplay_proc: Optional[subprocess.Popen] = None
+        self._aplay_lock: threading.Lock = threading.Lock()
+        # Generation counter — incremented on each new TTS request.
+        # After piper inference, if the counter has moved, the audio
+        # is stale and should be discarded.
+        self._tts_generation: int = 0
         if self._tts_output == "local":
             self._init_piper()
 
@@ -234,11 +241,25 @@ class SatelliteDaemon:
         elif msg.topic == C.TOPIC_TTS_TEXT:
             self._on_tts_text_message(msg)
 
+    def _cancel_speech(self) -> None:
+        """Kill any in-progress aplay subprocess.
+
+        Called when a new utterance starts processing or new TTS text
+        arrives, ensuring stale responses don't play over fresh ones.
+        """
+        with self._aplay_lock:
+            if self._aplay_proc and self._aplay_proc.poll() is None:
+                self._aplay_proc.kill()
+                self._aplay_proc.wait()
+                logger.info("Cancelled in-progress speech")
+                self._aplay_proc = None
+
     def _on_playback_message(self, msg: Any) -> None:
         """Handle playback state messages from the coordinator.
 
         Suppresses wake detection while TTS audio is playing in
         this satellite's room, preventing echo re-triggers.
+        Cancels any in-progress speech when a new utterance starts.
 
         Args:
             msg: MQTT message with JSON payload.
@@ -252,6 +273,8 @@ class SatelliteDaemon:
             if room == self._room:
                 self._playback_suppressed = playing
                 if playing:
+                    # New utterance being processed — cancel stale speech.
+                    self._cancel_speech()
                     logger.info("Playback started — wake suppressed")
                 else:
                     logger.info("Playback ended — wake re-enabled")
@@ -275,7 +298,13 @@ class SatelliteDaemon:
             if room != self._room or not text:
                 return
 
-            logger.info("TTS received: '%s'", text[:60])
+            # Increment generation — any in-flight TTS with an older
+            # generation will be discarded after inference.
+            self._tts_generation += 1
+            gen: int = self._tts_generation
+            logger.info("TTS received (gen=%d): '%s'", gen, text[:60])
+            # Cancel any in-progress playback.
+            self._cancel_speech()
 
             if self._tts_output == "mqtt":
                 # Publish to remote speaker daemon (e.g. Daedalus).
@@ -290,26 +319,28 @@ class SatelliteDaemon:
             # up the speaker output.
             threading.Thread(
                 target=self._speak_local_suppressed,
-                args=(text,),
+                args=(text, gen),
                 daemon=True,
             ).start()
         except Exception as exc:
             logger.error("TTS text message error: %s", exc)
 
-    def _speak_local_suppressed(self, text: str) -> None:
+    def _speak_local_suppressed(self, text: str, generation: int) -> None:
         """Speak text locally with wake word suppression.
 
         Suppresses wake detection before speaking and re-enables it
         after playback completes, preventing the mic from re-triggering
-        on the speaker output.
+        on the speaker output.  Checks generation counter to discard
+        stale responses.
 
         Args:
-            text: Text to speak.
+            text:       Text to speak.
+            generation: TTS generation counter at time of request.
         """
         self._playback_suppressed = True
-        logger.info("Local TTS started — wake suppressed")
+        logger.info("Local TTS started (gen=%d) — wake suppressed", generation)
         try:
-            self._speak_local(text)
+            self._speak_local(text, generation)
         finally:
             self._playback_suppressed = False
             logger.info("Local TTS ended — wake re-enabled")
@@ -353,14 +384,17 @@ class SatelliteDaemon:
             logger.error("Failed to start piper: %s", exc)
             self._piper_proc = None
 
-    def _speak_local(self, text: str) -> None:
+    def _speak_local(self, text: str, generation: int = 0) -> None:
         """Synthesize and play text through the local audio output.
 
         Uses persistent piper process for sub-second inference.
-        Falls back to espeak-ng if piper is unavailable.
+        Falls back to espeak-ng if piper is unavailable.  Checks
+        generation counter after inference — if a newer request
+        arrived while piper was working, the audio is discarded.
 
         Args:
-            text: Text to speak.
+            text:       Text to speak.
+            generation: TTS generation counter at time of request.
         """
         with self._piper_lock:
             if self._piper_proc and self._piper_proc.poll() is None:
@@ -372,8 +406,6 @@ class SatelliteDaemon:
 
                     # Piper outputs raw PCM to stdout.  Read until the
                     # audio stream pauses (no more data available).
-                    # Use a small read loop with a timeout to detect end
-                    # of utterance output.
                     import select
                     chunks: list[bytes] = []
                     fd = self._piper_proc.stdout.fileno()
@@ -388,16 +420,34 @@ class SatelliteDaemon:
                             # No data for 300ms — utterance is done.
                             if chunks:
                                 break
+
+                    # Check if this response is still current.
+                    if generation and generation != self._tts_generation:
+                        logger.info(
+                            "Discarding stale TTS (gen=%d, current=%d): '%s'",
+                            generation, self._tts_generation, text[:40],
+                        )
+                        return
+
                     if chunks:
                         raw_audio: bytes = b"".join(chunks)
-                        # Play via aplay.
-                        aplay = subprocess.run(
-                            ["aplay", "-r", self._piper_rate, "-f", "S16_LE", "-t", "raw", "-"],
-                            input=raw_audio,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            timeout=30,
-                        )
+                        # Play via aplay — use Popen so we can cancel.
+                        with self._aplay_lock:
+                            self._aplay_proc = subprocess.Popen(
+                                ["aplay", "-r", self._piper_rate, "-f", "S16_LE", "-t", "raw", "-"],
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+                        try:
+                            self._aplay_proc.stdin.write(raw_audio)
+                            self._aplay_proc.stdin.close()
+                            self._aplay_proc.wait(timeout=30)
+                        except Exception:
+                            pass  # Killed by _cancel_speech — normal.
+                        finally:
+                            with self._aplay_lock:
+                                self._aplay_proc = None
                         logger.info("Spoke (piper): '%s'", text[:40])
                         return
                 except Exception as exc:
