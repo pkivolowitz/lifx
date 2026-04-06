@@ -1120,8 +1120,8 @@ class GlowUpExecutor:
         unlocked: list[str] = []
         for lk in locks:
             name: str = lk.get("name", "unknown")
-            # lock_state 1.0 = locked, 0.0 = unlocked.
-            if lk.get("lock_state", 0) >= 1.0:
+            # API returns "locked": true/false.
+            if lk.get("locked", False):
                 locked.append(name)
             else:
                 unlocked.append(name)
