@@ -59,6 +59,11 @@ Available actions:
 - query_printer: ask about the printer. Use when someone says "how's the printer?", "printer status", "does the printer need toner?", "any printer alerts?", etc.
 - query_schedule: ask about the lighting schedule. Use when someone says "what's scheduled?", "what's on the schedule?", "any schedules tonight?", etc.
 - query_uptime: ask about server uptime or how long the system has been running. Use when someone says "how long have you been running?", "uptime", "when did you start?", etc.
+- identify_room: identify which room or satellite is responding. Use when someone says "what room am I in?", "which satellite is this?", "where am I?", "what room is this?", etc.
+- shopping_add: add an item to the shopping list. Use when someone says "add milk to the shopping list", "put bread on the list", "we need eggs", etc. (params: item="milk")
+- shopping_remove: remove an item from the shopping list. Use when someone says "remove milk from the list", "take bread off the list", "never mind the eggs", etc. (params: item="milk")
+- shopping_query: check if something is on the shopping list or ask what's on it. Use when someone says "is milk on the list?", "what's on the shopping list?", "read the list", etc. (params: item="milk" or empty for full list)
+- shopping_clear: clear the entire shopping list. Use when someone says "clear the shopping list", "empty the list", "start a new list", etc.
 - scene: activate a named scene or preset
 - chat: general conversation, questions, or anything NOT related to controlling devices or querying sensors (params: message=<the user's full message>)
 
@@ -113,6 +118,15 @@ Examples:
 - "how's the printer?" -> {{"action": "query_printer", "target": "all", "params": {{}}}}
 - "what's on the schedule?" -> {{"action": "query_schedule", "target": "all", "params": {{}}}}
 - "how long have you been running?" -> {{"action": "query_uptime", "target": "all", "params": {{}}}}
+- "what room am I in?" -> {{"action": "identify_room", "target": "all", "params": {{}}}}
+- "which satellite is this?" -> {{"action": "identify_room", "target": "all", "params": {{}}}}
+- "add milk to the shopping list" -> {{"action": "shopping_add", "target": "all", "params": {{"item": "milk"}}}}
+- "we need paper towels" -> {{"action": "shopping_add", "target": "all", "params": {{"item": "paper towels"}}}}
+- "put bread on the list" -> {{"action": "shopping_add", "target": "all", "params": {{"item": "bread"}}}}
+- "remove milk from the list" -> {{"action": "shopping_remove", "target": "all", "params": {{"item": "milk"}}}}
+- "is milk on the list?" -> {{"action": "shopping_query", "target": "all", "params": {{"item": "milk"}}}}
+- "what's on the shopping list?" -> {{"action": "shopping_query", "target": "all", "params": {{}}}}
+- "clear the shopping list" -> {{"action": "shopping_clear", "target": "all", "params": {{}}}}
 - "tell me about the battle of Gettysburg" -> {{"action": "chat", "target": "all", "params": {{"message": "tell me about the battle of Gettysburg"}}}}
 """
 

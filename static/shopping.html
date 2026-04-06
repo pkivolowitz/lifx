@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Shopping List</title>
+<style>
+:root {
+    --bg: #1a1410;
+    --card-bg: rgba(255,255,255,0.06);
+    --text: #e8dcc8;
+    --dim: #8a7a60;
+    --gold: #c4a44a;
+    --green: #6aaa90;
+    --red: #c45a3a;
+    --border: rgba(196,164,74,0.15);
+    --checked: rgba(255,255,255,0.15);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    padding: 0;
+    min-height: 100vh;
+}
+
+/* Site nav — consistent with other pages. */
+nav {
+    display: flex;
+    gap: 18px;
+    padding: 6px 16px;
+    font-size: 0.8rem;
+    letter-spacing: 0.04em;
+}
+nav a {
+    text-decoration: none;
+    color: rgba(255,255,255,0.35);
+}
+nav a.active {
+    color: rgba(255,255,255,0.7);
+    font-weight: 600;
+}
+
+.container {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 16px 20px;
+}
+
+h1 {
+    font-size: 1.6rem;
+    font-weight: 300;
+    color: var(--gold);
+    margin-bottom: 16px;
+}
+
+/* Add form. */
+.add-form {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+.add-input {
+    flex: 1;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card-bg);
+    color: var(--text);
+    font-size: 1rem;
+    font-family: var(--font);
+    outline: none;
+}
+.add-input::placeholder { color: var(--dim); }
+.add-input:focus { border-color: var(--gold); }
+.add-btn {
+    padding: 12px 20px;
+    border: none;
+    border-radius: 8px;
+    background: var(--gold);
+    color: #1a1410;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+.add-btn:active { opacity: 0.7; }
+
+/* Item list. */
+.item-list {
+    list-style: none;
+}
+.item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 12px;
+    border-bottom: 1px solid var(--border);
+    transition: opacity 0.3s ease;
+}
+.item.checked {
+    opacity: 0.35;
+}
+.item.checked .item-text {
+    text-decoration: line-through;
+}
+
+/* Checkbox — large tap target. */
+.item-check {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    border: 2px solid var(--dim);
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: transparent;
+    font-size: 18px;
+    transition: all 0.2s ease;
+}
+.item.checked .item-check {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+}
+
+.item-text {
+    flex: 1;
+    font-size: 1.1rem;
+    line-height: 1.3;
+}
+
+.item-delete {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--dim);
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.item-delete:active { color: var(--red); }
+
+/* Empty state. */
+.empty {
+    text-align: center;
+    color: var(--dim);
+    font-size: 1.1rem;
+    padding: 40px 0;
+}
+
+/* Footer actions. */
+.footer {
+    margin-top: 20px;
+    text-align: center;
+}
+.clear-btn {
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--dim);
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+.clear-btn:active { color: var(--red); border-color: var(--red); }
+
+/* Count badge. */
+.count {
+    font-size: 0.85rem;
+    color: var(--dim);
+    margin-bottom: 12px;
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="/home">Home</a>
+  <a href="/dashboard">Dashboard</a>
+  <a href="/power">Power</a>
+  <a href="http://10.0.0.123:8099">Zigbee</a>
+  <a href="/shopping" class="active">Shopping</a>
+</nav>
+
+<div class="container">
+    <h1>Shopping List</h1>
+
+    <div class="add-form">
+        <input type="text" class="add-input" id="addInput"
+               placeholder="Add an item..." autocomplete="off">
+        <button class="add-btn" id="addBtn">Add</button>
+    </div>
+
+    <div class="count" id="countBadge"></div>
+    <ul class="item-list" id="itemList"></ul>
+    <div class="empty" id="emptyState" style="display:none">List is empty</div>
+
+    <div class="footer" id="footer" style="display:none">
+        <button class="clear-btn" id="clearBtn">Clear checked items</button>
+    </div>
+</div>
+
+<script>
+(function () {
+    "use strict";
+
+    var list = document.getElementById("itemList");
+    var input = document.getElementById("addInput");
+    var addBtn = document.getElementById("addBtn");
+    var emptyState = document.getElementById("emptyState");
+    var footer = document.getElementById("footer");
+    var clearBtn = document.getElementById("clearBtn");
+    var countBadge = document.getElementById("countBadge");
+
+    /* Poll interval (ms). */
+    var POLL_MS = 5000;
+
+    function api(method, path, body) {
+        var opts = { method: method, headers: {} };
+        if (body !== undefined) {
+            opts.headers["Content-Type"] = "application/json";
+            opts.body = JSON.stringify(body);
+        }
+        return fetch(path, opts).then(function (r) { return r.json(); });
+    }
+
+    function render(items) {
+        list.innerHTML = "";
+        var unchecked = 0;
+        var hasChecked = false;
+
+        /* Sort: unchecked first, then checked. Within each group, newest first. */
+        items.sort(function (a, b) {
+            if (a.checked !== b.checked) return a.checked ? 1 : -1;
+            return b.added - a.added;
+        });
+
+        items.forEach(function (item) {
+            if (item.checked) hasChecked = true;
+            else unchecked++;
+
+            var li = document.createElement("li");
+            li.className = "item" + (item.checked ? " checked" : "");
+
+            var check = document.createElement("button");
+            check.className = "item-check";
+            check.innerHTML = item.checked ? "&#10003;" : "";
+            check.onclick = function () {
+                api("POST", "/api/shopping/" + item.id + "/check",
+                    { checked: !item.checked }).then(poll);
+            };
+
+            var text = document.createElement("span");
+            text.className = "item-text";
+            text.textContent = item.text;
+
+            var del = document.createElement("button");
+            del.className = "item-delete";
+            del.innerHTML = "&times;";
+            del.onclick = function () {
+                api("DELETE", "/api/shopping/" + item.id).then(poll);
+            };
+
+            li.appendChild(check);
+            li.appendChild(text);
+            li.appendChild(del);
+            list.appendChild(li);
+        });
+
+        emptyState.style.display = items.length === 0 ? "" : "none";
+        footer.style.display = hasChecked ? "" : "none";
+        countBadge.textContent = unchecked > 0
+            ? unchecked + " item" + (unchecked !== 1 ? "s" : "")
+            : "";
+    }
+
+    function poll() {
+        api("GET", "/api/shopping").then(function (data) {
+            render(data.items || []);
+        }).catch(function () { /* retry next poll */ });
+    }
+
+    function addItem() {
+        var text = input.value.trim();
+        if (!text) return;
+        input.value = "";
+        api("POST", "/api/shopping", { text: text }).then(poll);
+    }
+
+    addBtn.onclick = addItem;
+    input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") addItem();
+    });
+
+    clearBtn.onclick = function () {
+        api("DELETE", "/api/shopping/checked").then(poll);
+    };
+
+    poll();
+    setInterval(poll, POLL_MS);
+})();
+</script>
+</body>
+</html>

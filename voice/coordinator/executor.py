@@ -126,6 +126,11 @@ class GlowUpExecutor:
             "printer_status": self._handle_printer_status,
             "schedule_status": self._handle_schedule_status,
             "uptime_status": self._handle_uptime_status,
+            "shopping_add": self._handle_shopping_add,
+            "shopping_remove": self._handle_shopping_remove,
+            "shopping_query": self._handle_shopping_query,
+            "shopping_clear": self._handle_shopping_clear,
+            "identify_room": self._handle_identify_room,
         }
 
         # TTS reference — set after init by the coordinator daemon.
@@ -306,6 +311,9 @@ class GlowUpExecutor:
         Returns:
             Dict with ``status``, ``confirmation``, ``speak``.
         """
+        # Stash room for handlers that need it (e.g., identify_room).
+        self._current_room: str = room
+
         action: str = intent.get("action", "unknown")
         target_raw: str = intent.get("target", "all")
         target_raw = self._resolve_target(target_raw)
@@ -1418,6 +1426,200 @@ class GlowUpExecutor:
             "confirmation": (
                 f"Server is up and ready with {healthy} adapters online."
             ),
+            "speak": True,
+        }
+
+    def _handle_shopping_add(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Add an item to the shopping list.
+
+        One API call to POST /api/shopping.
+        """
+        item_text: str = params.get("item", "").strip()
+        if not item_text:
+            return {
+                "status": "error",
+                "confirmation": "I didn't catch what to add.",
+                "speak": True,
+            }
+        try:
+            self._request("POST", "/api/shopping", {"text": item_text})
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Failed to add to the shopping list.",
+                "speak": True,
+            }
+        return {
+            "status": "ok",
+            "confirmation": f"Added {item_text} to the shopping list.",
+            "speak": True,
+        }
+
+    def _handle_shopping_remove(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Remove an item from the shopping list.
+
+        Fetches the list, finds the item, deletes by ID.
+        """
+        item_text: str = params.get("item", "").strip()
+        if not item_text:
+            return {
+                "status": "error",
+                "confirmation": "I didn't catch what to remove.",
+                "speak": True,
+            }
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/shopping")
+            items: list[dict[str, Any]] = data.get("items", [])
+            target_lower: str = item_text.lower()
+            for item in items:
+                if (item["text"].lower() == target_lower
+                        and not item.get("checked")):
+                    self._request("DELETE", f"/api/shopping/{item['id']}")
+                    return {
+                        "status": "ok",
+                        "confirmation": f"Removed {item_text} from the list.",
+                        "speak": True,
+                    }
+            return {
+                "status": "ok",
+                "confirmation": f"{item_text} is not on the list.",
+                "speak": True,
+            }
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Failed to check the shopping list.",
+                "speak": True,
+            }
+
+    def _handle_shopping_query(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Query the shopping list — specific item or full list.
+
+        One API call to GET /api/shopping.
+        """
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/shopping")
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Failed to check the shopping list.",
+                "speak": True,
+            }
+
+        items: list[dict[str, Any]] = [
+            i for i in data.get("items", []) if not i.get("checked")
+        ]
+
+        # Specific item query.
+        item_text: str = params.get("item", "").strip()
+        if item_text:
+            found: bool = any(
+                i["text"].lower() == item_text.lower() for i in items
+            )
+            if found:
+                return {
+                    "status": "ok",
+                    "confirmation": f"Yes, {item_text} is on the list.",
+                    "speak": True,
+                }
+            return {
+                "status": "ok",
+                "confirmation": f"No, {item_text} is not on the list.",
+                "speak": True,
+            }
+
+        # Full list.
+        if not items:
+            return {
+                "status": "ok",
+                "confirmation": "The shopping list is empty.",
+                "speak": True,
+            }
+
+        # Read up to 8 items to keep TTS reasonable.
+        names: list[str] = [i["text"] for i in items[:8]]
+        count: int = len(items)
+        listing: str = ", ".join(names)
+        if count > 8:
+            listing += f", and {count - 8} more"
+        return {
+            "status": "ok",
+            "confirmation": f"{count} items: {listing}.",
+            "speak": True,
+        }
+
+    def _handle_shopping_clear(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Clear the entire shopping list.
+
+        Fetches and deletes all items.
+        """
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/shopping")
+            items: list[dict[str, Any]] = data.get("items", [])
+            for item in items:
+                self._request("DELETE", f"/api/shopping/{item['id']}")
+            return {
+                "status": "ok",
+                "confirmation": f"Shopping list cleared. {len(items)} items removed.",
+                "speak": True,
+            }
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Failed to clear the shopping list.",
+                "speak": True,
+            }
+
+    def _handle_identify_room(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Identify which satellite/room is processing this request.
+
+        No API call — the room name comes from the satellite's MQTT
+        header, passed through the pipeline as display_target.
+        """
+        # display_target is "all" for untargeted queries, but the
+        # room is passed through the pipeline's room parameter.
+        # The executor receives room via the intent's target, but
+        # the actual room comes from the pipeline caller.
+        # We store it on self during execute() dispatch.
+        room: str = getattr(self, "_current_room", "unknown")
+        return {
+            "status": "ok",
+            "confirmation": f"You are in the {room}.",
             "speak": True,
         }
 

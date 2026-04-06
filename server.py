@@ -308,6 +308,19 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_post_zigbee_set", requires_auth=False),
     _Route("GET", ("api", "operators"),
            "_handle_get_operators", requires_auth=True),
+    _Route("GET", ("shopping",),
+           "_handle_get_shopping_page", requires_auth=False),
+    _Route("GET", ("api", "shopping"),
+           "_handle_get_shopping", requires_auth=False),
+    _Route("POST", ("api", "shopping"),
+           "_handle_post_shopping", requires_auth=False),
+    _Route("POST", ("api", "shopping", "{id}", "check"),
+           "_handle_post_shopping_check", requires_auth=False),
+    _Route("DELETE", ("api", "shopping", "{id}"),
+           "_handle_delete_shopping_item", requires_auth=False,
+           unquote_params=("id",)),
+    _Route("DELETE", ("api", "shopping", "checked"),
+           "_handle_delete_shopping_checked", requires_auth=False),
     _Route("GET", ("photos", "{filename}"),
            "_handle_get_photo", requires_auth=False),
 
@@ -527,6 +540,7 @@ from handlers import (
     RegistryHandlerMixin, DashboardHandlerMixin, CalibrationHandlerMixin,
     DistributedHandlerMixin, DiagnosticsHandlerMixin, StaticHandlerMixin,
 )
+from handlers.shopping import ShoppingHandlerMixin, ShoppingStore
 
 
 class GlowUpRequestHandler(
@@ -542,6 +556,7 @@ class GlowUpRequestHandler(
     DistributedHandlerMixin,
     DiagnosticsHandlerMixin,
     StaticHandlerMixin,
+    ShoppingHandlerMixin,
     http.server.BaseHTTPRequestHandler,
 ):
     """HTTP request handler for the GlowUp REST API.
@@ -1749,9 +1764,16 @@ def main() -> None:
     GlowUpRequestHandler.config = config
     GlowUpRequestHandler.config_path = config_path
 
+    # -- Shopping list store ---------------------------------------------------
+    shopping_path: str = os.path.join(
+        os.path.dirname(config_path), "shopping.json",
+    )
+    server_shopping_store: ShoppingStore = ShoppingStore(shopping_path)
+
     server: ThreadedHTTPServer = ThreadedHTTPServer(
         ("", port), GlowUpRequestHandler,
     )
+    server._shopping_store = server_shopping_store
 
     # Graceful shutdown on SIGINT / SIGTERM.
     # server.shutdown() must be called from a different thread than

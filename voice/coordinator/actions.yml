@@ -214,6 +214,36 @@ repair:
 # Chat — freeform Ollama conversation (special handling in executor)
 # ---------------------------------------------------------------------------
 
+identify_room:
+  type: query
+  label: room
+  handler: identify_room
+  speak: true
+
+shopping_add:
+  type: query
+  label: shopping list
+  handler: shopping_add
+  speak: true
+
+shopping_remove:
+  type: query
+  label: shopping list
+  handler: shopping_remove
+  speak: true
+
+shopping_query:
+  type: query
+  label: shopping list
+  handler: shopping_query
+  speak: true
+
+shopping_clear:
+  type: query
+  label: shopping list
+  handler: shopping_clear
+  speak: true
+
 chat:
   type: chat
   label: assistant

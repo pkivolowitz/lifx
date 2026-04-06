@@ -305,6 +305,11 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "calibrate", "time_sync"),
             ("api", "ble", "sensors"),
             ("api", "ble", "sensors", "{label}"),
+            ("shopping",),
+            ("api", "shopping"),
+            ("api", "shopping", "{id}", "check"),
+            ("api", "shopping", "{id}"),
+            ("api", "shopping", "checked"),
         }
         for route in _ROUTES:
             if route.pattern in AUTH_FREE_PATTERNS:
@@ -327,16 +332,16 @@ class TestRouteCount(unittest.TestCase):
         """GET routes should match the expected count."""
         get_routes: list[_Route] = [r for r in _ROUTES if r.method == "GET"]
         self.assertEqual(
-            len(get_routes), 46,
-            f"Expected 46 GET routes, got {len(get_routes)}",
+            len(get_routes), 48,
+            f"Expected 48 GET routes, got {len(get_routes)}",
         )
 
     def test_post_route_count(self) -> None:
         """POST routes should match the expected count."""
         post_routes: list[_Route] = [r for r in _ROUTES if r.method == "POST"]
         self.assertEqual(
-            len(post_routes), 31,
-            f"Expected 31 POST routes, got {len(post_routes)}",
+            len(post_routes), 33,
+            f"Expected 33 POST routes, got {len(post_routes)}",
         )
 
     def test_put_route_count(self) -> None:
@@ -351,8 +356,8 @@ class TestRouteCount(unittest.TestCase):
         """DELETE routes should match the expected count."""
         del_routes: list[_Route] = [r for r in _ROUTES if r.method == "DELETE"]
         self.assertEqual(
-            len(del_routes), 5,
-            f"Expected 5 DELETE routes, got {len(del_routes)}",
+            len(del_routes), 7,
+            f"Expected 7 DELETE routes, got {len(del_routes)}",
         )
 
 
