@@ -196,7 +196,12 @@ class SatelliteDaemon:
         # Playback suppression — mutes wake detection while the
         # coordinator is playing TTS audio through a nearby speaker,
         # preventing the mic from re-triggering on its own output.
-        self._playback_suppressed: bool = False
+        # Suppression counter — incremented when local TTS starts,
+        # decremented when it ends.  Wake detection is suppressed
+        # when count > 0.  Using a counter instead of a boolean
+        # prevents races between overlapping TTS threads.
+        self._suppress_count: int = 0
+        self._suppress_lock: threading.Lock = threading.Lock()
 
         # PyAudio resources.
         self._pa: Optional["pyaudio.PyAudio"] = None
@@ -257,9 +262,10 @@ class SatelliteDaemon:
     def _on_playback_message(self, msg: Any) -> None:
         """Handle playback state messages from the coordinator.
 
-        Suppresses wake detection while TTS audio is playing in
-        this satellite's room, preventing echo re-triggers.
-        Cancels any in-progress speech when a new utterance starts.
+        Used only to cancel stale speech when a new utterance starts.
+        Suppression is handled locally by _speak_local_suppressed —
+        NOT by this MQTT message, because QoS 0 messages can be
+        dropped, which would leave suppression stuck True forever.
 
         Args:
             msg: MQTT message with JSON payload.
@@ -269,15 +275,10 @@ class SatelliteDaemon:
             room: str = data.get("room", "")
             playing: bool = data.get("playing", False)
 
-            # Only suppress if the playback is in our room.
-            if room == self._room:
-                self._playback_suppressed = playing
-                if playing:
-                    # New utterance being processed — cancel stale speech.
-                    self._cancel_speech()
-                    logger.info("Playback started — wake suppressed")
-                else:
-                    logger.info("Playback ended — wake re-enabled")
+            if room == self._room and playing:
+                # New utterance being processed — cancel stale speech.
+                self._cancel_speech()
+                logger.info("New utterance — cancelled stale speech")
         except Exception as exc:
             logger.debug("Playback message parse error: %s", exc)
 
@@ -333,17 +334,22 @@ class SatelliteDaemon:
         on the speaker output.  Checks generation counter to discard
         stale responses.
 
+        Uses a counter instead of a boolean so overlapping TTS threads
+        don't clobber each other's suppression state.
+
         Args:
             text:       Text to speak.
             generation: TTS generation counter at time of request.
         """
-        self._playback_suppressed = True
-        logger.info("Local TTS started (gen=%d) — wake suppressed", generation)
+        with self._suppress_lock:
+            self._suppress_count += 1
+        logger.info("Local TTS started (gen=%d, suppress=%d)", generation, self._suppress_count)
         try:
             self._speak_local(text, generation)
         finally:
-            self._playback_suppressed = False
-            logger.info("Local TTS ended — wake re-enabled")
+            with self._suppress_lock:
+                self._suppress_count = max(0, self._suppress_count - 1)
+            logger.info("Local TTS ended (suppress=%d)", self._suppress_count)
 
     def _init_piper(self) -> None:
         """Start persistent piper process for low-latency TTS.
@@ -784,7 +790,7 @@ class SatelliteDaemon:
 
                 # Skip wake detection while speaker is playing TTS
                 # to prevent the mic from re-triggering on its own output.
-                if self._playback_suppressed:
+                if self._suppress_count > 0:
                     continue
 
                 # Feed wake detector.

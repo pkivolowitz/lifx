@@ -112,6 +112,11 @@ class UtteranceCapture:
     def capture(self, stream: Any, use_alsa: bool = False) -> Optional[bytes]:
         """Capture an utterance from the audio stream.
 
+        Uses adaptive silence detection: the noise floor is measured
+        from the pre-wake ring buffer, and silence is defined as
+        RMS below (noise_floor * multiplier).  This handles fans,
+        AC, and other ambient noise automatically.
+
         Reads chunks until silence is detected or the maximum
         duration is reached.  Prepends pre-wake ring buffer
         contents.
@@ -125,10 +130,32 @@ class UtteranceCapture:
             Raw PCM bytes of the captured utterance, or None if
             the capture was too short (below min_seconds).
         """
+        # Measure noise floor from the pre-wake ring buffer.
+        # This is audio from just before the wake word — pure ambient.
+        noise_floor: float = 0.0
+        if self._ring:
+            ring_rms: list[float] = [compute_rms(chunk) for chunk in self._ring]
+            noise_floor = sum(ring_rms) / len(ring_rms)
+
+        # Silence threshold: noise floor + headroom multiplier.
+        # Speech is typically 3-10x louder than ambient noise.
+        # Use 1.8x as the boundary — anything below is silence.
+        _NOISE_MULTIPLIER: float = 1.8
+        # Minimum threshold prevents zero-floor edge case (dead quiet room).
+        _MIN_THRESHOLD: float = 50.0
+        adaptive_threshold: float = max(
+            noise_floor * _NOISE_MULTIPLIER, _MIN_THRESHOLD,
+        )
+        logger.info(
+            "Adaptive silence: floor=%.0f threshold=%.0f (configured=%d)",
+            noise_floor, adaptive_threshold, self._silence_rms,
+        )
+
         frames: list[bytes] = list(self._ring)
         self._ring.clear()
 
         silent_count: int = 0
+        speech_seen: bool = False
         total_chunks: int = 0
 
         for _ in range(self._max_chunks):
@@ -149,12 +176,16 @@ class UtteranceCapture:
             total_chunks += 1
 
             rms: float = compute_rms(data)
-            if rms < self._silence_rms:
-                silent_count += 1
-                if silent_count >= self._silence_chunks:
-                    break
-            else:
+            if rms >= adaptive_threshold:
+                speech_seen = True
                 silent_count = 0
+            else:
+                # Only count silence after speech has been seen.
+                # This prevents cutting off before the speaker starts.
+                if speech_seen:
+                    silent_count += 1
+                    if silent_count >= self._silence_chunks:
+                        break
 
         if total_chunks < self._min_chunks:
             logger.debug(
