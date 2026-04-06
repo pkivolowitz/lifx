@@ -29,7 +29,7 @@ from server_constants import (
     IDENTIFY_MIN_BRI,
 )
 from device_registry import DeviceRegistry
-from infrastructure.bulb_keepalive import BulbKeepAlive
+from infrastructure.adapter_proxy import KeepaliveProxy
 
 
 class DiscoveryHandlerMixin:
@@ -42,7 +42,7 @@ class DiscoveryHandlerMixin:
         Each entry includes IP and MAC address.  If the keepalive
         daemon is not running, returns an empty list.
         """
-        daemon: Optional[BulbKeepAlive] = self.keepalive
+        daemon: Optional[KeepaliveProxy] = self.keepalive
         if daemon is None:
             self._send_json(200, {"discovered_bulbs": []})
             return
@@ -343,7 +343,7 @@ class DiscoveryHandlerMixin:
             # For specific IP, always return it (even if not in ARP cache yet).
             devices: list[dict] = [{"ip": target_ip, "mac": ""}]
         else:
-            daemon: Optional[BulbKeepAlive] = self.keepalive
+            daemon: Optional[KeepaliveProxy] = self.keepalive
             if daemon is None:
                 self._send_json(200, {"devices": []})
                 return

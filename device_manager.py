@@ -33,7 +33,7 @@ from engine import Controller
 from media import SignalBus
 from media.source import AudioStreamServer
 from transport import LifxDevice, SendMode, SINGLE_ZONE_COUNT
-from infrastructure.bulb_keepalive import BulbKeepAlive
+from infrastructure.adapter_proxy import KeepaliveProxy
 from device_registry import DeviceRegistry
 
 from server_constants import (
@@ -152,7 +152,7 @@ class DeviceManager:
         # devices.  Set by server.py after construction.
         self._registry: Optional[DeviceRegistry] = None
         # Optional keepalive daemon for MAC→IP lookups.
-        self._keepalive: Optional[BulbKeepAlive] = None
+        self._keepalive: Optional[KeepaliveProxy] = None
         # Readiness flag: False until initial load completes.
         self._ready: bool = False
         # Optional diagnostics logger (None if psycopg2 or DB unavailable).

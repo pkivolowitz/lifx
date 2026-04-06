@@ -310,38 +310,60 @@ class ProcessAdapterBase:
         self._heartbeat_timer.start()
 
     def _publish_heartbeat(self) -> None:
-        """Publish a heartbeat message and schedule the next one."""
-        uptime_s: float = time.monotonic() - self._start_time
-        # Resource usage — maxrss is in kilobytes on Linux,
-        # bytes on macOS.  Normalize to megabytes.
-        usage: resource.struct_rusage = resource.getrusage(
-            resource.RUSAGE_SELF,
-        )
-        # macOS reports bytes; Linux reports kilobytes.
-        rss_mb: float = usage.ru_maxrss / (1024.0 * 1024.0)
-        if os.uname().sysname == "Linux":
-            # Linux ru_maxrss is in KB, not bytes.
-            rss_mb = usage.ru_maxrss / 1024.0
-        heartbeat: dict[str, Any] = {
-            "adapter": self._adapter_id,
-            "pid": os.getpid(),
-            "uptime_s": round(uptime_s, 1),
-            "ts": time.time(),
-            "state": "running",
-            "rss_mb": round(rss_mb, 1),
-            "detail": self.get_status_detail(),
-        }
+        """Publish a heartbeat message and schedule the next one.
 
-        topic: str = TOPIC_HEARTBEAT.format(id=self._adapter_id)
-        self._client.publish(
-            topic,
-            json.dumps(heartbeat),
-            qos=QOS_HEARTBEAT,
-            retain=True,
-        )
+        Wrapped in try/except so a crashing ``get_status_detail()``
+        does not kill the timer thread and silence all future heartbeats.
+        """
+        try:
+            uptime_s: float = time.monotonic() - self._start_time
+            # Resource usage — maxrss is in kilobytes on Linux,
+            # bytes on macOS.  Normalize to megabytes.
+            usage: resource.struct_rusage = resource.getrusage(
+                resource.RUSAGE_SELF,
+            )
+            # macOS reports bytes; Linux reports kilobytes.
+            rss_mb: float = usage.ru_maxrss / (1024.0 * 1024.0)
+            if os.uname().sysname == "Linux":
+                # Linux ru_maxrss is in KB, not bytes.
+                rss_mb = usage.ru_maxrss / 1024.0
 
-        # Schedule next heartbeat.
-        self._schedule_heartbeat()
+            # get_status_detail() may fail if the adapter crashed or
+            # is in an unexpected state.  Degrade gracefully.
+            try:
+                detail: dict[str, Any] = self.get_status_detail()
+            except Exception as exc:
+                logger.warning(
+                    "[%s] get_status_detail() failed: %s",
+                    self._adapter_id, exc,
+                )
+                detail = {"error": str(exc)}
+
+            heartbeat: dict[str, Any] = {
+                "adapter": self._adapter_id,
+                "pid": os.getpid(),
+                "uptime_s": round(uptime_s, 1),
+                "ts": time.time(),
+                "state": "running",
+                "rss_mb": round(rss_mb, 1),
+                "detail": detail,
+            }
+
+            topic: str = TOPIC_HEARTBEAT.format(id=self._adapter_id)
+            self._client.publish(
+                topic,
+                json.dumps(heartbeat),
+                qos=QOS_HEARTBEAT,
+                retain=True,
+            )
+        except Exception as exc:
+            logger.error(
+                "[%s] Heartbeat publish failed: %s",
+                self._adapter_id, exc,
+            )
+        finally:
+            # Always schedule the next heartbeat, even on failure.
+            self._schedule_heartbeat()
 
     # ------------------------------------------------------------------
     # Shutdown

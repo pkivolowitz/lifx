@@ -104,6 +104,20 @@ class BleAdapter(MqttAdapterBase):
         self._status: dict[str, dict[str, Any]] = {}
         self._status_lock: threading.Lock = threading.Lock()
 
+    def get_status(self) -> dict[str, Any]:
+        """Return adapter-level status summary for heartbeats.
+
+        Returns:
+            Dict with running state, sensor count, and known labels.
+        """
+        with self._status_lock:
+            labels: list[str] = sorted(self._status.keys())
+        return {
+            "running": self.running,
+            "sensors": len(labels),
+            "labels": labels,
+        }
+
     def get_status_blob(self, label: str) -> Optional[dict[str, Any]]:
         """Get the last health status JSON for a sensor.
 

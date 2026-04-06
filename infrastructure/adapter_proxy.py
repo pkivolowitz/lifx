@@ -358,3 +358,208 @@ class MatterProxyWrapper:
     def running(self) -> bool:
         """Whether the adapter process is alive."""
         return self._proxy.is_alive()
+
+
+# ---------------------------------------------------------------------------
+# KeepaliveProxy — drop-in replacement for BulbKeepAlive
+# ---------------------------------------------------------------------------
+
+class KeepaliveProxy:
+    """MQTT-backed proxy that presents the same interface as BulbKeepAlive.
+
+    Subscribes to the keepalive process's MQTT topics and maintains
+    local copies of the IP-to-MAC map and power states.  Handlers,
+    device_manager, and registry code call ``known_bulbs``,
+    ``known_bulbs_by_mac``, ``ip_for_mac()``, and ``is_alive()``
+    exactly as they did with the in-process BulbKeepAlive.
+
+    Args:
+        mqtt_client: Connected paho MQTT client (the server's proc_mqtt).
+    """
+
+    # MQTT topics (must match keepalive_process.py).
+    _TOPIC_DISCOVERED: str = "glowup/adapter/keepalive/discovered"
+    _TOPIC_NEW_BULB: str = "glowup/adapter/keepalive/event/new_bulb"
+    _TOPIC_STATUS: str = "glowup/adapter/keepalive/status"
+    _TOPIC_HEARTBEAT: str = "glowup/adapter/keepalive/heartbeat"
+
+    def __init__(self, mqtt_client: Any) -> None:
+        """Initialize and subscribe to keepalive topics."""
+        self._client: Any = mqtt_client
+        self._lock: threading.Lock = threading.Lock()
+
+        # IP → MAC map, populated from retained discovery message.
+        self._known: dict[str, str] = {}
+
+        # Adapter health state.
+        self._online: bool = False
+        self._last_heartbeat_ts: float = 0.0
+        self._last_heartbeat: Optional[dict[str, Any]] = None
+        self._initial_scan_done: threading.Event = threading.Event()
+
+        # Callback for new bulb events — server wires this up
+        # the same way it wired keepalive._on_new_bulb.
+        self._on_new_bulb: Optional[Any] = None
+
+        # Callback for power query results — server wires this
+        # the same way it wired keepalive._on_power_query.
+        self._on_power_query: Optional[Any] = None
+
+        # Subscribe to keepalive topics.
+        mqtt_client.subscribe(self._TOPIC_DISCOVERED, qos=1)
+        mqtt_client.subscribe(self._TOPIC_NEW_BULB, qos=1)
+        mqtt_client.subscribe(self._TOPIC_STATUS, qos=1)
+        mqtt_client.subscribe(self._TOPIC_HEARTBEAT, qos=0)
+
+        mqtt_client.message_callback_add(
+            self._TOPIC_DISCOVERED, self._on_discovered,
+        )
+        mqtt_client.message_callback_add(
+            self._TOPIC_NEW_BULB, self._on_new_bulb_msg,
+        )
+        mqtt_client.message_callback_add(
+            self._TOPIC_STATUS, self._on_status,
+        )
+        mqtt_client.message_callback_add(
+            self._TOPIC_HEARTBEAT, self._on_heartbeat,
+        )
+
+        logger.info("[keepalive-proxy] Subscribed to keepalive topics")
+
+    # ------------------------------------------------------------------
+    # BulbKeepAlive-compatible interface
+    # ------------------------------------------------------------------
+
+    @property
+    def known_bulbs(self) -> dict[str, str]:
+        """Return snapshot of {IP: MAC} for all discovered bulbs."""
+        with self._lock:
+            return dict(self._known)
+
+    @property
+    def known_bulbs_by_mac(self) -> dict[str, str]:
+        """Return snapshot of {MAC: IP} — reverse of known_bulbs."""
+        with self._lock:
+            return {mac: ip for ip, mac in self._known.items()}
+
+    def ip_for_mac(self, mac: str) -> Optional[str]:
+        """Return current IP for a MAC address, or None if offline.
+
+        Args:
+            mac: Lowercase colon-separated MAC.
+        """
+        mac_lower: str = mac.lower()
+        with self._lock:
+            for ip, known_mac in self._known.items():
+                if known_mac == mac_lower:
+                    return ip
+        return None
+
+    def is_alive(self) -> bool:
+        """Check if the keepalive process is alive."""
+        with self._lock:
+            if not self._online:
+                return False
+            if self._last_heartbeat_ts == 0.0:
+                return False
+            return (
+                time.monotonic() - self._last_heartbeat_ts
+                < HEARTBEAT_STALE_S
+            )
+
+    def wait_initial_scan(self, timeout: float = 30.0) -> bool:
+        """Block until the keepalive process reports initial scan done.
+
+        If the retained heartbeat already has ``initial_scan_done: true``,
+        returns immediately.
+
+        Args:
+            timeout: Maximum seconds to wait.
+
+        Returns:
+            True if scan completed, False on timeout.
+        """
+        return self._initial_scan_done.wait(timeout=timeout)
+
+    # Stubs for compatibility — the proxy doesn't run threads.
+    def start(self) -> None:
+        """No-op — the keepalive process is managed by systemd."""
+
+    def stop(self) -> None:
+        """No-op — the keepalive process is managed by systemd."""
+
+    def join(self, timeout: float = 3.0) -> None:
+        """No-op — no thread to join."""
+
+    # ------------------------------------------------------------------
+    # MQTT callbacks
+    # ------------------------------------------------------------------
+
+    def _on_discovered(
+        self, client: Any, userdata: Any, message: Any,
+    ) -> None:
+        """Handle retained IP→MAC map from the keepalive process."""
+        try:
+            data: dict[str, str] = json.loads(message.payload)
+        except (json.JSONDecodeError, ValueError):
+            return
+        with self._lock:
+            self._known = data
+        logger.info(
+            "[keepalive-proxy] Received device map: %d bulb(s)",
+            len(data),
+        )
+
+    def _on_new_bulb_msg(
+        self, client: Any, userdata: Any, message: Any,
+    ) -> None:
+        """Handle new bulb discovery event."""
+        try:
+            data: dict[str, str] = json.loads(message.payload)
+        except (json.JSONDecodeError, ValueError):
+            return
+        ip: str = data.get("ip", "")
+        mac: str = data.get("mac", "")
+        if ip and mac:
+            with self._lock:
+                self._known[ip] = mac
+            # Fire the callback — same as BulbKeepAlive._on_new_bulb.
+            cb = self._on_new_bulb
+            if cb is not None:
+                try:
+                    cb(ip, mac)
+                except Exception as exc:
+                    logger.warning(
+                        "[keepalive-proxy] on_new_bulb callback failed: %s",
+                        exc,
+                    )
+
+    def _on_status(
+        self, client: Any, userdata: Any, message: Any,
+    ) -> None:
+        """Handle keepalive process online/offline (LWT)."""
+        payload: str = message.payload.decode("utf-8", errors="replace")
+        online: bool = payload.strip().lower() == "online"
+        with self._lock:
+            self._online = online
+        logger.info(
+            "[keepalive-proxy] Status: %s",
+            "ONLINE" if online else "OFFLINE",
+        )
+
+    def _on_heartbeat(
+        self, client: Any, userdata: Any, message: Any,
+    ) -> None:
+        """Handle keepalive heartbeat — check for initial_scan_done."""
+        try:
+            data: dict[str, Any] = json.loads(message.payload)
+        except (json.JSONDecodeError, ValueError):
+            return
+        with self._lock:
+            self._last_heartbeat = data
+            self._last_heartbeat_ts = time.monotonic()
+            self._online = True
+        # Check if initial scan is done.
+        detail: dict[str, Any] = data.get("detail", {})
+        if detail.get("initial_scan_done", False):
+            self._initial_scan_done.set()

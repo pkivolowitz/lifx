@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  GlowUp Voice Coordinator — LaunchDaemon for Daedalus (Mac Studio M1).
+
+  Install:
+    sudo cp com.glowup.coordinator.plist /Library/LaunchDaemons/
+    sudo launchctl load /Library/LaunchDaemons/com.glowup.coordinator.plist
+
+  Remove:
+    sudo launchctl unload /Library/LaunchDaemons/com.glowup.coordinator.plist
+    sudo rm /Library/LaunchDaemons/com.glowup.coordinator.plist
+
+  Logs:
+    tail -f ~/Library/Logs/glowup-coordinator.log
+    tail -f ~/Library/Logs/glowup-coordinator.err
+
+  Requires:
+    ~/coordinator_config.json with mqtt, glowup, room_speakers, piper config.
+    ~/venv with paho-mqtt, faster-whisper, piper-tts, sounddevice, numpy.
+    ~/lifx/voice/ synced from dev machine.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.glowup.coordinator</string>
+
+    <key>UserName</key>
+    <string>perrykivolowitz</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/perrykivolowitz/lifx</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/perrykivolowitz/venv/bin/python</string>
+        <string>-m</string>
+        <string>voice.coordinator.daemon</string>
+        <string>--config</string>
+        <string>/Users/perrykivolowitz/coordinator_config.json</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/perrykivolowitz/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/perrykivolowitz</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/perrykivolowitz/Library/Logs/glowup-coordinator.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/perrykivolowitz/Library/Logs/glowup-coordinator.err</string>
+</dict>
+</plist>

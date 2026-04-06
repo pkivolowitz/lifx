@@ -58,7 +58,7 @@ from distributed.midi_parser import MidiParser as _MidiParser
 import media.fft as _fft_mod
 from effects import Param as _Param, create_effect as _create_effect_fn
 from effects import get_registry as _get_registry_fn
-import scheduler as _scheduler_mod
+import schedule_utils as _scheduler_mod
 from solar import sun_times as _sun_times_fn
 import automation as _automation_mod
 
@@ -526,7 +526,7 @@ class TestFuzzSchedulerTimeParse(unittest.TestCase):
 
     def _parse(self, spec: str) -> Optional[datetime]:
         """Helper — calls _parse_time_spec with precomputed args."""
-        return _scheduler_mod._parse_time_spec(
+        return _scheduler_mod.parse_time_spec(
             spec, self._sun, self._date, self._offset,
         )
 
@@ -756,7 +756,7 @@ class TestFuzzScheduleEntryValidation(unittest.TestCase):
                 "enabled": random.choice([True, False, None, "yes", 0]),
             }
             try:
-                result = _scheduler_mod._resolve_entries(
+                result = _scheduler_mod.resolve_entries(
                     [entry], 30.6954, -88.0399,
                     self._date, self._offset,
                 )

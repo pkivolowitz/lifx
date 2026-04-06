@@ -463,7 +463,10 @@ def main() -> None:
     args: argparse.Namespace = parser.parse_args()
 
     top: GlowUpTop = GlowUpTop(args.broker, args.port)
-    curses.wrapper(top.run)
+    try:
+        curses.wrapper(top.run)
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

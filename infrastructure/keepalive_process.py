@@ -153,15 +153,29 @@ class KeepaliveProcess(ProcessAdapterBase):
         The server checks ``initial_scan_done`` in the heartbeat detail
         to know when the IP-to-MAC map is available.
 
+        Accesses ``_known`` directly (under lock) rather than the
+        ``known_bulbs`` property to avoid potential contention with
+        the heartbeat timer thread.  Uses a timeout to prevent
+        deadlocking the heartbeat if ``_scan_arp`` holds the lock.
+
         Returns:
             Status dict with bulb count and scan state.
         """
         if self._keepalive is None:
             return {"running": False, "known_bulbs": 0}
-        known: dict[str, str] = self._keepalive.known_bulbs
+        # Use _lock directly with a short timeout-like approach:
+        # try to acquire, skip if contended.
+        lock = self._keepalive._lock
+        if lock.acquire(timeout=1.0):
+            try:
+                bulb_count: int = len(self._keepalive._known)
+            finally:
+                lock.release()
+        else:
+            bulb_count = -1  # contended — report unknown
         return {
             "running": True,
-            "known_bulbs": len(known),
+            "known_bulbs": bulb_count,
             "initial_scan_done": self._keepalive._initial_scan_done.is_set(),
         }
 
@@ -170,24 +184,32 @@ class KeepaliveProcess(ProcessAdapterBase):
     # ------------------------------------------------------------------
 
     def _on_new_bulb(self, ip: str, mac: str) -> None:
-        """Handle new bulb discovery — publish event and update map.
+        """Handle new bulb discovery — defer ALL work to avoid deadlock.
 
-        Called from the BulbKeepAlive thread.
+        Called from the BulbKeepAlive thread **while holding _lock**.
+        Must NOT call ``known_bulbs``, ``publish()``, or any method
+        that could block, or a deadlock/hang results.
+
+        All MQTT publishing is deferred to a timer thread so the lock
+        is released before any work happens.
 
         Args:
             ip:  IP address of the discovered bulb.
             mac: MAC address (lowercase, colon-separated).
         """
-        event: dict[str, str] = {"ip": ip, "mac": mac}
-        self._client.publish(
-            TOPIC_NEW_BULB,
-            json.dumps(event),
-            qos=QOS_NEW_BULB,
-        )
         logger.info("[keepalive] New bulb: %s (%s)", ip, mac)
 
-        # Update the retained discovery map.
-        self._publish_discovered_map()
+        # Defer all MQTT work — we are called under _lock.
+        def _deferred_publish() -> None:
+            event: dict[str, str] = {"ip": ip, "mac": mac}
+            self._client.publish(
+                TOPIC_NEW_BULB,
+                json.dumps(event),
+                qos=QOS_NEW_BULB,
+            )
+            self._publish_discovered_map()
+
+        threading.Timer(0.1, _deferred_publish).start()
 
     def _on_power_query(self) -> None:
         """Periodic power state query — probe all known bulbs concurrently.

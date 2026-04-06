@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from infrastructure.bulb_keepalive import BulbKeepAlive
+    from infrastructure.adapter_proxy import KeepaliveProxy
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -222,7 +222,7 @@ class DeviceRegistry:
     def ip_to_label(
         self,
         ip: str,
-        keepalive: Optional["BulbKeepAlive"] = None,
+        keepalive: Optional["KeepaliveProxy"] = None,
     ) -> Optional[str]:
         """Return the registered label for a device at a given IP.
 
@@ -302,7 +302,7 @@ class DeviceRegistry:
     def resolve_to_ip(
         self,
         identifier: str,
-        keepalive: "BulbKeepAlive",
+        keepalive: "KeepaliveProxy",
     ) -> Optional[str]:
         """Resolve any identifier (IP, MAC, or label) to a live IP address.
 
@@ -482,7 +482,7 @@ class DeviceRegistry:
 
     def format_table(
         self,
-        keepalive: Optional["BulbKeepAlive"] = None,
+        keepalive: Optional["KeepaliveProxy"] = None,
     ) -> str:
         """Format the registry as a human-readable table.
 

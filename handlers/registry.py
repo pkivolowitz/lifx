@@ -22,7 +22,7 @@ from urllib.parse import unquote
 
 # server_constants not used in this module.
 from device_registry import DeviceRegistry
-from infrastructure.bulb_keepalive import BulbKeepAlive
+from infrastructure.adapter_proxy import KeepaliveProxy
 
 
 class RegistryHandlerMixin:
@@ -40,7 +40,7 @@ class RegistryHandlerMixin:
             return
 
         devices: dict[str, dict] = reg.all_devices()
-        daemon: Optional[BulbKeepAlive] = self.keepalive
+        daemon: Optional[KeepaliveProxy] = self.keepalive
         mac_to_ip: dict[str, str] = {}
         if daemon is not None:
             mac_to_ip = daemon.known_bulbs_by_mac
@@ -87,7 +87,7 @@ class RegistryHandlerMixin:
         # are given, the caller knows the static IP of an offline device
         # — skip the ARP lookup entirely.
         if not mac and ip_arg:
-            daemon: Optional[BulbKeepAlive] = self.keepalive
+            daemon: Optional[KeepaliveProxy] = self.keepalive
             if daemon is not None:
                 bulbs: dict[str, str] = daemon.known_bulbs
                 mac = bulbs.get(ip_arg, "")
@@ -176,7 +176,7 @@ class RegistryHandlerMixin:
             self._send_json(500, {"error": "Registry not loaded"})
             return
 
-        daemon: Optional[BulbKeepAlive] = self.keepalive
+        daemon: Optional[KeepaliveProxy] = self.keepalive
         mac_to_ip: dict[str, str] = {}
         if daemon is not None:
             mac_to_ip = daemon.known_bulbs_by_mac
@@ -235,7 +235,7 @@ class RegistryHandlerMixin:
         # Resolve to IP.
         target_ip: str = ip_arg
         if not target_ip and mac:
-            daemon: Optional[BulbKeepAlive] = self.keepalive
+            daemon: Optional[KeepaliveProxy] = self.keepalive
             if daemon is not None:
                 target_ip = daemon.ip_for_mac(mac) or ""
 
