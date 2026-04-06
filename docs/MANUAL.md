@@ -58,8 +58,7 @@ schedule and exposes a REST API.
 - [Adapter Base Classes](27-adapter-base.md) — MqttAdapterBase, PollingAdapterBase, AsyncPollingAdapterBase
 - [BLE Sensors](28-ble-sensors.md) — BLE sensor daemon, MQTT bridge, ONVIS
 - [Zigbee Adapter](29-zigbee-adapter.md) — Zigbee2MQTT, soil/motion/contact sensors
-- [HDHomeRun](33-hdhr-adapter.md) — Network tuner integration, signal diagnostics
-- [Power Monitoring](34-power-monitoring.md) — Smart plug tracking, cost charts, anomaly detection
+- [Vendor Integrations](CONTRIB.md) — Vivint, Reolink NVR, Brother printer, HDHomeRun (contrib adapters)
 
 **Automation & display:**
 

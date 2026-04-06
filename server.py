@@ -121,18 +121,18 @@ except ImportError:
     _HAS_ZIGBEE = False
 
 try:
-    from adapters.vivint_adapter import VivintAdapter
+    from adapters.contrib.vivint_adapter import VivintAdapter
     _HAS_VIVINT: bool = True
 except ImportError:
     _HAS_VIVINT = False
 
 try:
-    from adapters.nvr_adapter import NvrAdapter
+    from adapters.contrib.nvr_adapter import NvrAdapter
     _HAS_NVR: bool = True
 except ImportError:
     _HAS_NVR = False
 try:
-    from adapters.printer_adapter import PrinterAdapter
+    from adapters.contrib.printer_adapter import PrinterAdapter
     _HAS_PRINTER: bool = True
 except ImportError:
     _HAS_PRINTER = False
@@ -176,11 +176,10 @@ except ImportError:
     StateStore = None  # type: ignore[assignment,misc]
     _HAS_STATE_STORE = False
 
-# ARP-based bulb discovery and keepalive daemon.
-from infrastructure.bulb_keepalive import BulbKeepAlive
-
 # Server-side proxy for out-of-process adapters.
-from infrastructure.adapter_proxy import AdapterProxy, MatterProxyWrapper
+from infrastructure.adapter_proxy import (
+    AdapterProxy, KeepaliveProxy, MatterProxyWrapper,
+)
 
 # MAC-based device identity registry.
 from device_registry import DeviceRegistry
@@ -581,7 +580,7 @@ class GlowUpRequestHandler(
     media_manager: Optional[MediaManager] = None
     automation_manager: Optional[AutomationManager] = None
     orchestrator: Optional[Any] = None
-    keepalive: Optional[BulbKeepAlive] = None
+    keepalive: Optional[KeepaliveProxy] = None
     registry: Optional[DeviceRegistry] = None
     operator_manager: Optional[OperatorManager] = None
     lock_manager: Optional[Any] = None
@@ -641,7 +640,7 @@ class GlowUpRequestHandler(
 
         # Try registry + keepalive resolution (label or MAC → IP).
         reg: Optional[DeviceRegistry] = self.registry
-        ka: Optional[BulbKeepAlive] = self.keepalive
+        ka: Optional[KeepaliveProxy] = self.keepalive
         if reg is not None and ka is not None:
             ip: Optional[str] = reg.resolve_to_ip(identifier, ka)
             if ip is not None:
@@ -1438,7 +1437,7 @@ def _get_groups(config: dict[str, Any]) -> dict[str, list[str]]:
 def _resolve_config_groups(
     raw_groups: dict[str, list[str]],
     registry: "DeviceRegistry",
-    keepalive: "BulbKeepAlive",
+    keepalive: "KeepaliveProxy",
 ) -> tuple[dict[str, list[str]], list[str], list[tuple[str, str]]]:
     """Resolve config group entries to live IP addresses.
 
@@ -1451,7 +1450,7 @@ def _resolve_config_groups(
         raw_groups:  Group name to list-of-identifiers mapping from
                      the config file.
         registry:    Loaded :class:`DeviceRegistry` instance.
-        keepalive:   Running :class:`BulbKeepAlive` instance whose
+        keepalive:   Running :class:`KeepaliveProxy` instance whose
                      initial ARP scan has completed.
 
     Returns:
@@ -2033,7 +2032,7 @@ def main() -> None:
     media_mgr: Optional[MediaManager] = None
     # Orchestrator reference — set by _background_startup if configured.
     orch: Optional[Any] = None
-    keepalive: Optional[BulbKeepAlive] = None
+    keepalive: Optional[KeepaliveProxy] = None
     # Adapter proxies — out-of-process adapters communicate via MQTT.
     # Set by _background_startup.
     zigbee_proxy: Optional[AdapterProxy] = None
@@ -2064,20 +2063,45 @@ def main() -> None:
         nonlocal proc_mqtt, operator_mgr, lock_mgr
 
         try:
-            # -- Step 1: Start the ARP-based bulb keepalive daemon --------
-            # Must run BEFORE device loading so the ARP table is
-            # populated for label/MAC → IP resolution.
-            # On multi-homed hosts (e.g., Daedalus with ethernet +
-            # WiFi/lnet), bind to the LIFX interface IP and specify
-            # the sweep network explicitly.  Auto-detection of the
-            # local network fails under launchd (ifconfig not in PATH).
-            lifx_cfg: dict = config.get("lifx", {})
-            keepalive = BulbKeepAlive(
-                bind_ip=lifx_cfg.get("bind_ip"),
-                sweep_network=lifx_cfg.get("sweep_network"),
-            )
-            GlowUpRequestHandler.keepalive = keepalive
-            keepalive.start()
+            # -- Step 0: Process communication MQTT client -------------------
+            # Must exist before KeepaliveProxy (and later, AdapterProxy).
+            # Moved here from its original location so keepalive can
+            # subscribe to MQTT topics before we wait for device data.
+            mqtt_cfg_early: dict = config.get("mqtt", {})
+            broker_addr_early: str = mqtt_cfg_early.get("broker", "localhost")
+            broker_port_early: int = mqtt_cfg_early.get("port", 1883)
+
+            if _MQTT_AVAILABLE:
+                import paho.mqtt.client as _paho
+                _paho_v2: bool = hasattr(_paho, "CallbackAPIVersion")
+                _proc_id: str = f"glowup-server-proc-{int(time.time())}"
+                if _paho_v2:
+                    proc_mqtt = _paho.Client(
+                        _paho.CallbackAPIVersion.VERSION2,
+                        client_id=_proc_id,
+                    )
+                else:
+                    proc_mqtt = _paho.Client(client_id=_proc_id)
+                proc_mqtt.connect(broker_addr_early, broker_port_early)
+                proc_mqtt.loop_start()
+                logging.info(
+                    "Process comm MQTT client connected to %s:%d",
+                    broker_addr_early, broker_port_early,
+                )
+
+            # -- Step 1: Keepalive proxy (replaces in-process KeepaliveProxy) --
+            # The keepalive process runs separately via systemd.
+            # KeepaliveProxy subscribes to its MQTT topics and presents
+            # the same interface (known_bulbs, known_bulbs_by_mac, etc.)
+            # so all handlers and device_manager work unchanged.
+            if proc_mqtt is not None:
+                keepalive = KeepaliveProxy(proc_mqtt)
+                GlowUpRequestHandler.keepalive = keepalive
+            else:
+                logging.warning(
+                    "MQTT not available — keepalive proxy disabled, "
+                    "device discovery will not work"
+                )
 
             # -- Step 2: Load the device registry -------------------------
             device_reg: DeviceRegistry = DeviceRegistry()
@@ -2164,9 +2188,37 @@ def main() -> None:
             logging.info("Loaded %d device(s)", len(devices))
             dm.query_all_power_states()
 
-            # Wire keepalive → DeviceManager power state queries.
-            # Every 2nd ARP cycle (~2 min), query all device power states.
-            keepalive._on_power_query = dm.query_all_power_states
+            # Subscribe to power state updates from the keepalive process.
+            # The isolated keepalive queries bulb power via UDP and
+            # publishes results to glowup/device_state/{ip}/power.
+            # We update the device manager's power cache directly —
+            # no more dm.query_all_power_states() from the server.
+            if proc_mqtt is not None:
+                def _on_power_state_update(
+                    client: Any, userdata: Any, message: Any,
+                ) -> None:
+                    # topic: glowup/device_state/{ip}/power
+                    parts: list[str] = message.topic.split("/")
+                    if len(parts) < 4:
+                        return
+                    ip_addr: str = parts[2]
+                    try:
+                        data: dict[str, Any] = json.loads(message.payload)
+                    except (json.JSONDecodeError, ValueError):
+                        return
+                    power: Optional[bool] = data.get("power")
+                    if power is not None:
+                        with dm._lock:
+                            dm._power_states[ip_addr] = power
+
+                proc_mqtt.subscribe("glowup/device_state/+/power", qos=1)
+                proc_mqtt.message_callback_add(
+                    "glowup/device_state/+/power",
+                    _on_power_state_update,
+                )
+                logging.info(
+                    "Subscribed to power state updates from keepalive process",
+                )
 
             # Track unresolved group members so we can re-resolve them
             # when keepalive discovers new devices on the network.
@@ -2334,25 +2386,8 @@ def main() -> None:
             # Adapters run as separate processes via run_adapter.py.
             # The server creates AdapterProxy instances that subscribe
             # to MQTT heartbeats, status, and command responses.
-            # A single MQTT client handles all process communication.
-            if _MQTT_AVAILABLE:
-                import paho.mqtt.client as _paho
-                _paho_v2: bool = hasattr(_paho, "CallbackAPIVersion")
-                _proc_id: str = f"glowup-server-proc-{int(time.time())}"
-                if _paho_v2:
-                    proc_mqtt = _paho.Client(
-                        _paho.CallbackAPIVersion.VERSION2,
-                        client_id=_proc_id,
-                    )
-                else:
-                    proc_mqtt = _paho.Client(client_id=_proc_id)
-                proc_mqtt.connect(broker_addr, broker_port)
-                proc_mqtt.loop_start()
-                logging.info(
-                    "Process comm MQTT client connected to %s:%d",
-                    broker_addr, broker_port,
-                )
-
+            # proc_mqtt was created in Step 0 above.
+            if proc_mqtt is not None:
                 # Create proxies for each adapter type.
                 zigbee_proxy = AdapterProxy("zigbee", proc_mqtt)
                 vivint_proxy = AdapterProxy("vivint", proc_mqtt)

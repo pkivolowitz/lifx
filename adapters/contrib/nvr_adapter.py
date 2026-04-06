@@ -35,7 +35,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from .adapter_base import AsyncPollingAdapterBase
+from adapters.adapter_base import AsyncPollingAdapterBase
 
 logger: logging.Logger = logging.getLogger("glowup.nvr")
 

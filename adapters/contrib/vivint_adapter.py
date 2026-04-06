@@ -43,7 +43,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from .adapter_base import AsyncPollingAdapterBase
+from adapters.adapter_base import AsyncPollingAdapterBase
 from media import SignalMeta
 
 logger: logging.Logger = logging.getLogger("glowup.vivint")

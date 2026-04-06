@@ -164,6 +164,7 @@ disclosure tree:
 - **Database** — PostgreSQL diagnostics, dashboard
 - **Distributed** — MQTT, SOE pipeline, audio/MIDI pipelines
 - **Developer** — effects, sensors, operators, emitters
+- **[Vendor Integrations](docs/CONTRIB.md)** — example adapters for Vivint, Reolink, Brother printers, HDHomeRun
 
 <p align="center">
   <img src="docs/assets/multizone.PNG" alt="Virtual multizone group in iOS app" width="300">
