@@ -37,7 +37,13 @@ import threading
 from typing import Any, Optional
 
 import numpy as np
-import sounddevice as sd
+
+try:
+    import sounddevice as sd
+    _HAS_SOUNDDEVICE: bool = True
+except ImportError:
+    sd = None  # type: ignore[assignment]
+    _HAS_SOUNDDEVICE = False
 
 from emitters import Emitter, EmitterCapabilities, Param
 
@@ -182,7 +188,7 @@ class AudioOutEmitter(Emitter):
         self._harmonic_sum: float = sum(amp for _, amp in self._harmonics)
 
         # Audio stream handle.
-        self._stream: Optional[sd.OutputStream] = None
+        self._stream: Optional[Any] = None  # sd.OutputStream when available.
 
     # --- Lifecycle ---------------------------------------------------------
 
@@ -206,6 +212,12 @@ class AudioOutEmitter(Emitter):
         generates the waveform.  The stream starts immediately — silence
         is produced until the first frame arrives with amplitude > 0.
         """
+        if not _HAS_SOUNDDEVICE:
+            logger.error(
+                "sounddevice not installed — pip install sounddevice"
+            )
+            return
+
         logger.info(
             "AudioOutEmitter '%s' opening audio stream "
             "(%d Hz, block=%d, channels=%d)",
@@ -322,7 +334,7 @@ class AudioOutEmitter(Emitter):
         outdata: np.ndarray,
         frames: int,
         time_info: Any,
-        status: sd.CallbackFlags,
+        status: Any,  # sd.CallbackFlags when sounddevice available.
     ) -> None:
         """Generate audio samples for the output buffer.
 

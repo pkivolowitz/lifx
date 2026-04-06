@@ -19,6 +19,7 @@ from typing import Any
 
 from emitters import create_emitter, get_registry, get_emitter_types
 from emitters.audio_out import (
+    _HAS_SOUNDDEVICE,
     AudioOutEmitter,
     AMPLITUDE_GATE,
     FREQ_DEFAULT,
@@ -217,6 +218,7 @@ class TestAudioOutCapabilities(unittest.TestCase):
         self.assertIn("max_rate_hz", d)
 
 
+@unittest.skipUnless(_HAS_SOUNDDEVICE, "sounddevice not installed")
 class TestAudioOutLifecycle(unittest.TestCase):
     """Test lifecycle with mocked audio stream."""
 

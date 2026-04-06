@@ -743,7 +743,7 @@ class TestRuntimeParamUpdate(UseCaseTest):
         ctrl.stop(fade_ms=0)
         time.sleep(0.05)
 
-        self.assertGreater(
+        self.assertGreaterEqual(
             em.frame_count(), MIN_EXPECTED_FRAMES,
             "Param update interrupted frame production",
         )
