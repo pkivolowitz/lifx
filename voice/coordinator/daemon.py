@@ -406,17 +406,53 @@ class CoordinatorDaemon:
         """
         self._running = True
 
-        # Initialize components.
+        # Initialize components with graceful failure handling.
         logger.info("Initializing pipeline components...")
-        self._init_stt()
-        self._init_intent()
-        self._init_executor()
-        self._init_tts()
-        self._init_player()
-        self._init_local_speaker()
+        try:
+            self._init_stt()
+        except Exception as exc:
+            logger.error(
+                "STT initialization failed: %s. "
+                "Install with: pip install faster-whisper",
+                exc,
+            )
+            return
+
+        try:
+            self._init_intent()
+        except Exception as exc:
+            logger.error(
+                "Intent parser initialization failed: %s. "
+                "Check that Ollama is running.",
+                exc,
+            )
+            return
+
+        try:
+            self._init_executor()
+        except Exception as exc:
+            logger.error("Executor initialization failed: %s", exc)
+            return
+
+        try:
+            self._init_tts()
+        except Exception as exc:
+            logger.warning("TTS initialization failed: %s — voice responses disabled", exc)
+            # TTS is optional — coordinator can still process commands.
+
+        try:
+            self._init_player()
+        except Exception as exc:
+            logger.warning("AirPlay player failed: %s — local TTS only", exc)
+
+        try:
+            self._init_local_speaker()
+        except Exception as exc:
+            logger.warning("Local speaker failed: %s", exc)
 
         # Give executor access to TTS for voice-change commands.
-        self._executor.set_tts(self._tts)
+        if self._executor and self._tts:
+            self._executor.set_tts(self._tts)
 
         # Worker pool.
         self._pool = concurrent.futures.ThreadPoolExecutor(
@@ -425,7 +461,19 @@ class CoordinatorDaemon:
         )
 
         # MQTT.
-        self._init_mqtt()
+        try:
+            self._init_mqtt()
+        except ImportError:
+            logger.error(
+                "paho-mqtt not installed. Install with: pip install paho-mqtt"
+            )
+            return
+        except Exception as exc:
+            logger.error(
+                "MQTT connection failed (%s:%d): %s",
+                self._mqtt_broker, self._mqtt_port, exc,
+            )
+            return
 
         logger.info(
             "Coordinator running (workers=%d, broker=%s:%d)",

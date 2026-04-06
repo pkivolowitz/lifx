@@ -208,7 +208,12 @@ class SatelliteDaemon:
         self._stream: Optional["pyaudio.Stream"] = None
 
     def _init_mqtt(self) -> None:
-        """Connect to the MQTT broker."""
+        """Connect to the MQTT broker.
+
+        Raises:
+            ImportError: paho-mqtt not installed.
+            Exception: Broker unreachable.
+        """
         if mqtt is None:
             raise ImportError("paho-mqtt not installed")
 
@@ -646,10 +651,18 @@ class SatelliteDaemon:
         else:
             from voice.satellite.wake import WakeDetector
             wake_cfg: dict[str, Any] = self._config.get("wake", {})
+            model_path: str = wake_cfg.get("model_path", "")
+            if model_path and not os.path.exists(model_path):
+                raise FileNotFoundError(model_path)
+            # Default: use built-in hey_mycroft if no custom model.
+            if not model_path:
+                model_path = "hey_mycroft_v0.1"
+                logger.info(
+                    "No wake word model configured — using built-in '%s'",
+                    model_path,
+                )
             self._wake = WakeDetector(
-                model_path=wake_cfg.get(
-                    "model_path", "/home/pi/models/hey_mashugenah.onnx",
-                ),
+                model_path=model_path,
                 threshold=wake_cfg.get("threshold", C.WAKE_THRESHOLD),
                 vad_threshold=wake_cfg.get(
                     "vad_threshold", C.VAD_THRESHOLD,
@@ -751,9 +764,58 @@ class SatelliteDaemon:
         """
         self._running = True
 
-        self._init_mqtt()
-        self._init_audio()
-        self._init_wake()
+        # Initialize subsystems with graceful failure handling.
+        # Each subsystem is required — if any fails, the satellite
+        # cannot operate and exits with a clear error message.
+        try:
+            self._init_mqtt()
+        except ImportError:
+            logger.error(
+                "paho-mqtt not installed. Install with: "
+                "pip install paho-mqtt"
+            )
+            return
+        except Exception as exc:
+            logger.error(
+                "MQTT connection failed (%s:%d): %s. "
+                "Check that the broker is running.",
+                self._mqtt_broker, self._mqtt_port, exc,
+            )
+            return
+
+        try:
+            self._init_audio()
+        except Exception as exc:
+            logger.error(
+                "Audio initialization failed: %s. "
+                "Check that a microphone is connected and not in use "
+                "by another process.",
+                exc,
+            )
+            return
+
+        try:
+            self._init_wake()
+        except ImportError as exc:
+            logger.error(
+                "Wake word initialization failed: %s. "
+                "Install with: pip install openwakeword",
+                exc,
+            )
+            return
+        except FileNotFoundError as exc:
+            logger.error(
+                "Wake word model not found: %s. "
+                "Provide a model path in the config or use --mock-wake "
+                "for development.",
+                exc,
+            )
+            return
+        except Exception as exc:
+            logger.error(
+                "Wake word initialization failed: %s", exc,
+            )
+            return
 
         logger.info(
             "Satellite [%s] listening%s...",
@@ -762,7 +824,9 @@ class SatelliteDaemon:
         )
 
         last_heartbeat: float = 0.0
-        assert self._stream is not None
+        if self._stream is None:
+            logger.error("No audio stream — cannot start")
+            return
 
         try:
             while self._running:
