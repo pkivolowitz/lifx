@@ -230,6 +230,7 @@ class SatelliteDaemon:
         self._mqtt_client.connect(self._mqtt_broker, self._mqtt_port)
         self._mqtt_client.subscribe(C.TOPIC_PLAYBACK, qos=0)
         self._mqtt_client.subscribe(C.TOPIC_TTS_TEXT, qos=0)
+        self._mqtt_client.subscribe(C.TOPIC_FLUSH, qos=1)
         self._mqtt_client.loop_start()
         logger.info(
             "MQTT connected: %s:%d as %s",
@@ -250,6 +251,8 @@ class SatelliteDaemon:
             self._on_playback_message(msg)
         elif msg.topic == C.TOPIC_TTS_TEXT:
             self._on_tts_text_message(msg)
+        elif msg.topic == C.TOPIC_FLUSH:
+            self._on_flush_message(msg)
 
     def _cancel_speech(self) -> None:
         """Kill any in-progress aplay subprocess.
@@ -263,6 +266,23 @@ class SatelliteDaemon:
                 self._aplay_proc.wait()
                 logger.info("Cancelled in-progress speech")
                 self._aplay_proc = None
+
+    def _on_flush_message(self, msg: Any) -> None:
+        """Handle flush broadcast from the coordinator.
+
+        Bumps the TTS generation counter so any in-flight piper
+        inference is discarded, and kills any active aplay process.
+        The satellite comes up clean for the next request.
+
+        Args:
+            msg: MQTT message (payload ignored — presence is the signal).
+        """
+        self._tts_generation += 1
+        self._cancel_speech()
+        logger.info(
+            "FLUSH received — generation bumped to %d, speech cancelled",
+            self._tts_generation,
+        )
 
     def _on_playback_message(self, msg: Any) -> None:
         """Handle playback state messages from the coordinator.

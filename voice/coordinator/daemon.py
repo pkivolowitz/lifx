@@ -16,7 +16,7 @@ Usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import argparse
 import concurrent.futures
@@ -25,6 +25,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from typing import Any, Optional
 
@@ -77,6 +78,13 @@ class CoordinatorDaemon:
         self._executor: Any = None
         self._tts: Any = None
         self._player: Any = None
+
+        # Flush epoch — monotonically increasing counter.  Incremented
+        # when a "flush it" command is detected.  Pipeline workers
+        # compare their captured epoch against the current value to
+        # detect staleness and abort.
+        self._epoch: int = 0
+        self._epoch_lock: threading.Lock = threading.Lock()
 
         # Per-room speaker routing.
         # "local": coordinator speaks via persistent piper + sounddevice.
@@ -283,6 +291,25 @@ class CoordinatorDaemon:
         )
         logger.info("[%s] Published TTS text: '%s'", room, text[:60])
 
+    def _flush(self) -> None:
+        """Increment the epoch and broadcast flush to all satellites.
+
+        Called when a "flush it" voice command is detected.  All
+        in-flight pipeline workers will see the epoch change and
+        abort before speaking stale responses.  Satellites cancel
+        any in-progress TTS playback.
+        """
+        with self._epoch_lock:
+            self._epoch += 1
+        logger.info(
+            "FLUSH: epoch=%d — all in-flight requests invalidated",
+            self._epoch,
+        )
+
+        if self._mqtt_client is not None:
+            payload: str = json.dumps({"timestamp": time.time()})
+            self._mqtt_client.publish(C.TOPIC_FLUSH, payload, qos=1)
+
     def _init_mqtt(self) -> None:
         """Connect to MQTT broker and subscribe to utterance topic."""
         if mqtt is None:
@@ -360,6 +387,10 @@ class CoordinatorDaemon:
             header.get("wake_score", 0),
         )
 
+        # Capture epoch before pipeline — used to detect flush commands
+        # that arrive while this utterance is being processed.
+        epoch: int = self._epoch
+
         # Suppress wake detection for the entire pipeline duration,
         # not just during TTS playback.  Prevents the satellite from
         # re-triggering on its own HomePod output during slow queries.
@@ -385,11 +416,21 @@ class CoordinatorDaemon:
                 player=self._player,
                 playback_notifier=self._notify_playback,
                 tts_text_publisher=self._speak_for_room,
+                epoch=epoch,
+                get_epoch=lambda: self._epoch,
+                on_flush=self._flush,
             )
         finally:
             # Always re-enable wake detection after pipeline completes,
             # even if the pipeline crashed.
             self._notify_playback(room, False)
+
+        if result.get("aborted"):
+            logger.info(
+                "[%s] Pipeline aborted (superseded by flush): '%s'",
+                room, result.get("text", ""),
+            )
+            return
 
         logger.info(
             "[%s] Pipeline: '%s' → %s (%.0fms)",

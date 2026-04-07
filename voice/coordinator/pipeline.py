@@ -11,12 +11,14 @@ at first use and cached so they play instantly without TTS latency.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.1"
+__version__ = "1.2"
 
 import logging
 import os
 import time
-from typing import Any, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
+
+from voice import constants as C
 
 logger: logging.Logger = logging.getLogger("glowup.voice.pipeline")
 
@@ -60,6 +62,30 @@ class PlaybackNotifier(Protocol):
 class TTSTextPublisher(Protocol):
     """Callback to publish TTS text for satellite-local speech."""
     def __call__(self, room: str, text: str) -> None: ...
+
+
+# ---------------------------------------------------------------------------
+# Epoch staleness check
+# ---------------------------------------------------------------------------
+
+def _is_stale(epoch: int, get_epoch: Optional[Callable[[], int]]) -> bool:
+    """Check if the current pipeline invocation has been superseded.
+
+    A flush command increments the coordinator's epoch.  Any pipeline
+    whose captured epoch no longer matches the coordinator's current
+    epoch should abort — its response is stale and would confuse the
+    user if spoken.
+
+    Args:
+        epoch:     Epoch captured at pipeline entry.
+        get_epoch: Callable returning the coordinator's current epoch.
+
+    Returns:
+        True if this pipeline is stale and should abort.
+    """
+    if get_epoch is None:
+        return False
+    return get_epoch() != epoch
 
 
 # ---------------------------------------------------------------------------
@@ -168,15 +194,24 @@ def process_utterance(
     player: Optional[PlayerLike] = None,
     playback_notifier: Optional[PlaybackNotifier] = None,
     tts_text_publisher: Optional[TTSTextPublisher] = None,
+    epoch: int = 0,
+    get_epoch: Optional[Callable[[], int]] = None,
+    on_flush: Optional[Callable[[], None]] = None,
 ) -> dict[str, Any]:
     """Process a voice utterance through the full pipeline.
 
     Steps:
     - STT: transcribe PCM audio to text
+    - Flush check: if the utterance is "flush it", cancel all
+      in-flight work and confirm
     - Intent: parse text into structured intent via LLM
     - Execute: dispatch intent to GlowUp API
     - TTS + Play: if the response should be spoken, synthesize
       and stream to the room's speaker
+
+    Each expensive step checks the epoch counter first.  If a flush
+    command has been processed since this pipeline started, the epoch
+    will have advanced and this pipeline aborts silently.
 
     Args:
         room:               Room name (from satellite).
@@ -188,10 +223,15 @@ def process_utterance(
         tts:                Text-to-speech engine (optional).
         player:             Audio player for response (optional).
         tts_text_publisher: Callback to publish text for satellite-local TTS.
+        epoch:              Epoch counter at time of dispatch.
+        get_epoch:          Returns coordinator's current epoch.
+        on_flush:           Called when flush command detected — increments
+                            epoch and broadcasts to satellites.
 
     Returns:
         Pipeline result dict with ``text``, ``intent``, ``result``,
-        ``latency_ms``.
+        ``latency_ms``.  Includes ``aborted: True`` if superseded
+        by a flush.
     """
     t0: float = time.monotonic()
     sample_rate: int = meta.get("sample_rate", 16000)
@@ -218,6 +258,33 @@ def process_utterance(
 
     logger.info("[%s] Heard: '%s'", room, text)
 
+    # Step 1.5: Flush check — intercept before intent parsing.
+    # "Hey <wake_word> flush it" → STT produces "flush it".
+    if text.strip().lower() in C.FLUSH_PATTERNS:
+        logger.info("[%s] FLUSH command detected", room)
+        if on_flush is not None:
+            on_flush()
+        _flush_msg: str = "Flushed."
+        _speak_cached(_flush_msg, room, tts, player, playback_notifier)
+        if tts_text_publisher:
+            tts_text_publisher(room, _flush_msg)
+        return {
+            "room": room,
+            "text": text,
+            "intent": {"action": "flush"},
+            "result": {"status": "ok", "confirmation": _flush_msg},
+            "latency_ms": _elapsed_ms(t0),
+        }
+
+    # Epoch check — abort if a flush arrived while STT was running.
+    if _is_stale(epoch, get_epoch):
+        logger.info("[%s] Pipeline aborted after STT (epoch stale)", room)
+        return {
+            "room": room, "text": text, "intent": None,
+            "result": None, "aborted": True,
+            "latency_ms": _elapsed_ms(t0),
+        }
+
     # Step 2: Intent parsing.
     intent: dict[str, Any] = intent_parser.parse(text)
 
@@ -227,6 +294,15 @@ def process_utterance(
         intent.setdefault("params", {})["message"] = text
 
     logger.info("[%s] Intent: %s", room, intent)
+
+    # Epoch check — abort if flushed during intent parsing.
+    if _is_stale(epoch, get_epoch):
+        logger.info("[%s] Pipeline aborted after intent (epoch stale)", room)
+        return {
+            "room": room, "text": text, "intent": intent,
+            "result": None, "aborted": True,
+            "latency_ms": _elapsed_ms(t0),
+        }
 
     # Step 2.5: Acknowledge — speak "Waiting on the {label}" only for
     # slow actions (chat, weather).  Commands are instant (physical change
@@ -247,6 +323,15 @@ def process_utterance(
     # Step 3: Execute against GlowUp.
     result: dict[str, Any] = executor.execute(intent, room)
     logger.info("[%s] Result: %s", room, result)
+
+    # Epoch check — abort if flushed during execution.
+    if _is_stale(epoch, get_epoch):
+        logger.info("[%s] Pipeline aborted after execute (epoch stale)", room)
+        return {
+            "room": room, "text": text, "intent": intent,
+            "result": result, "aborted": True,
+            "latency_ms": _elapsed_ms(t0),
+        }
 
     # Step 4: Speak response.
     confirmation: str = result.get("confirmation", "")

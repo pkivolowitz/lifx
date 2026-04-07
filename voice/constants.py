@@ -29,6 +29,11 @@ TOPIC_PLAYBACK: str = "glowup/voice/playback"
 # their own audio output instead of relying on coordinator playback.
 TOPIC_TTS_TEXT: str = "glowup/voice/tts_text"
 
+# Coordinator → satellites: flush all in-flight requests.
+# Satellites cancel any pending TTS and bump their generation counter.
+# JSON payload: {"timestamp": ...}.
+TOPIC_FLUSH: str = "glowup/voice/flush"
+
 # ---------------------------------------------------------------------------
 # Audio format — all satellites must produce this format
 # ---------------------------------------------------------------------------
@@ -120,6 +125,20 @@ INTENT_TIMEOUT_S: float = 10.0
 
 # Maximum retries for invalid JSON from Ollama.
 INTENT_MAX_RETRIES: int = 1
+
+# ---------------------------------------------------------------------------
+# Flush command
+# ---------------------------------------------------------------------------
+
+# Flush command patterns — matched against STT output (lowercase, stripped).
+# The user says "Hey <wake_word> flush it" — only the post-wake utterance
+# is transcribed, so we match against the bare phrase.
+FLUSH_PATTERNS: frozenset[str] = frozenset({
+    "flush it",
+    "flush it.",
+    "flush",
+    "flush.",
+})
 
 # ---------------------------------------------------------------------------
 # Satellite heartbeat
