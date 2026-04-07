@@ -309,6 +309,32 @@ class TriggerOperator(Operator):
         """Log shutdown."""
         logger.debug("TriggerOperator '%s' stopped", self.name)
 
+    # --- Manual override ---------------------------------------------------
+
+    def on_group_override(self, group_name: str) -> None:
+        """Reset active state when the group is manually overridden.
+
+        Called by :meth:`OperatorManager.notify_group_override` when a
+        user manually controls a group (power, play, stop).  If this
+        trigger's group matches, ``_active`` is reset so the next
+        matching sensor event can re-fire the on-action.
+
+        Args:
+            group_name: The bare group name (no ``group:`` prefix).
+        """
+        if not self._enabled:
+            return
+        if group_name != self._group:
+            return
+        if not self._active:
+            return
+
+        self._active = False
+        logger.info(
+            "TriggerOperator '%s' reset by manual override on '%s'",
+            self.name, group_name,
+        )
+
     # --- Actions -----------------------------------------------------------
 
     def _fire_on_action(self) -> None:

@@ -700,6 +700,43 @@ class OperatorManager:
                         # and monitoring operators can react.
                         self._notify_disabled(op.name)
 
+    def notify_group_override(self, device_id: str) -> None:
+        """Notify operators that a group was manually overridden.
+
+        Called by API handlers when a user manually controls a group
+        (power on/off, play, stop).  TriggerOperators watching that
+        group reset their ``_active`` state so the next sensor event
+        can re-fire.
+
+        Without this, a manual power-off while a trigger is active
+        leaves the trigger stuck: it thinks lights are on, the
+        watchdog keeps resetting on new motion, and lights never
+        come back.
+
+        Args:
+            device_id: Device identifier — may be ``"group:Living Room"``
+                       or a bare IP.  Group prefix is stripped before
+                       comparison.
+        """
+        # Strip "group:" prefix if present so comparison matches
+        # TriggerOperator._group (stored without prefix).
+        if device_id.startswith("group:"):
+            group_name: str = device_id[len("group:"):]
+        else:
+            group_name = device_id
+
+        with self._lock:
+            for slot in self._slots:
+                op: Operator = slot.operator
+                if hasattr(op, "on_group_override"):
+                    try:
+                        op.on_group_override(group_name)
+                    except Exception as exc:
+                        logger.debug(
+                            "on_group_override error in '%s': %s",
+                            op.name, exc,
+                        )
+
     def _notify_disabled(self, operator_name: str) -> None:
         """Write a disable notification signal to the bus.
 

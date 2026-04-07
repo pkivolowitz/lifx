@@ -50,6 +50,20 @@ _power_executor: concurrent.futures.ThreadPoolExecutor = (
 class DeviceHandlerMixin:
     """Device control handlers (play, stop, power, identify, etc)."""
 
+    def _notify_operator_override(self, device_id: str) -> None:
+        """Notify operators that a device/group was manually controlled.
+
+        Resets any TriggerOperator whose group matches so the next
+        sensor event can re-fire.  No-op if no OperatorManager is
+        configured.
+
+        Args:
+            device_id: Device IP or ``group:Name`` identifier.
+        """
+        om = getattr(self, "operator_manager", None)
+        if om is not None:
+            om.notify_group_override(device_id)
+
     def _handle_get_device_status(self, ip: str) -> None:
         """GET /api/devices/{ip}/status — device effect status.
 
@@ -275,6 +289,7 @@ class DeviceHandlerMixin:
             # Track override AFTER successful play — if play fails,
             # the override must not persist (C15: override deadlock).
             self.device_manager.mark_override(ip, active_entry)
+            self._notify_operator_override(ip)
             # Track the dynamic music source so stop can clean it up.
             if music_source_name:
                 self.device_manager._music_sources[ip] = music_source_name
@@ -320,6 +335,7 @@ class DeviceHandlerMixin:
             if not self.device_manager.is_overridden(ip):
                 active_entry: Optional[str] = self._get_active_entry_for_ip(ip)
                 self.device_manager.mark_override(ip, active_entry)
+            self._notify_operator_override(ip)
             status: dict[str, Any] = self.device_manager.stop(ip)
             # Clean up TCP audio stream server for this device.
             audio_srv: Optional[AudioStreamServer] = (
@@ -471,6 +487,7 @@ class DeviceHandlerMixin:
                 )
 
                 # Respond immediately — work continues in background.
+                self._notify_operator_override(ip)
                 self._send_json(202, {
                     "status": "accepted",
                     "ip": ip,
@@ -483,6 +500,7 @@ class DeviceHandlerMixin:
             # set_power() already updates _power_states for the device
             # and all group members — no need to duplicate here.
             logging.info("API: power %s on %s", "on" if on else "off", ip)
+            self._notify_operator_override(ip)
             self._send_json(200, result)
         except KeyError:
             self._send_json(404, {"error": "Device not found"})
