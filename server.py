@@ -2451,6 +2451,42 @@ def main() -> None:
                     "feed into local SignalBus",
                 )
 
+                # Subscribe to the Zigbee adapter's direct per-property
+                # publishes for power recording.  These arrive on
+                # glowup/zigbee/{device}/{property} via the broker-2
+                # bridge and bypass MqttSignalBus dedup, so PowerLogger
+                # receives every reading even when values are unchanged.
+                # PowerLogger.record() throttles DB writes internally.
+                def _on_zigbee_power(
+                    client: Any, userdata: Any, message: Any,
+                ) -> None:
+                    # topic: glowup/zigbee/{device}/{property}
+                    parts: list[str] = message.topic.split("/")
+                    if len(parts) < 4:
+                        return
+                    device: str = parts[2]
+                    prop: str = parts[3]
+                    if GlowUpRequestHandler.power_logger is not None:
+                        try:
+                            value: float = float(
+                                json.loads(message.payload),
+                            )
+                            GlowUpRequestHandler.power_logger.record(
+                                device, prop, value,
+                            )
+                        except (ValueError, TypeError,
+                                json.JSONDecodeError):
+                            pass
+
+                proc_mqtt.subscribe("glowup/zigbee/#", qos=0)
+                proc_mqtt.message_callback_add(
+                    "glowup/zigbee/#", _on_zigbee_power,
+                )
+                logging.info(
+                    "Subscribed to glowup/zigbee/# — direct power "
+                    "recording bypasses signal dedup",
+                )
+
                 # Wire Matter proxy into scheduler for matter: groups.
                 # MatterProxyWrapper provides the adapter-compatible
                 # interface (power_on/off, get_device_names) that the

@@ -90,7 +90,34 @@ class PowerLogger:
         self._last_write: dict[str, float] = {}
         # Per-device accumulator for current readings.
         self._pending: dict[str, dict[str, float]] = {}
+        self._running: bool = True
+        self._flush_thread: Optional[threading.Thread] = None
         self._open()
+        self._start_flush_timer()
+
+    def _start_flush_timer(self) -> None:
+        """Start the background flush timer.
+
+        Runs as a daemon thread, calling flush_pending() every
+        MIN_WRITE_INTERVAL seconds to drain orphaned _pending data.
+        """
+        def _flush_loop() -> None:
+            while self._running:
+                # Interruptible sleep — check _running every second.
+                remaining: float = MIN_WRITE_INTERVAL
+                while remaining > 0 and self._running:
+                    chunk: float = min(remaining, 1.0)
+                    time.sleep(chunk)
+                    remaining -= chunk
+                if self._running:
+                    self.flush_pending()
+
+        self._flush_thread = threading.Thread(
+            target=_flush_loop,
+            daemon=True,
+            name="power-logger-flush",
+        )
+        self._flush_thread.start()
 
     def _open(self) -> None:
         """Open the database and create tables if needed."""
@@ -183,6 +210,59 @@ class PowerLogger:
                     self._prune()
             except Exception as exc:
                 logger.warning("Power logger write failed: %s", exc)
+
+    def flush_pending(self) -> None:
+        """Flush any pending readings whose throttle interval has passed.
+
+        Called by a background timer to ensure accumulated data is
+        written even when MqttSignalBus dedup suppresses further
+        record() calls for unchanged values.  Without this, a value
+        that lands in ``_pending`` during a throttle window and never
+        gets another record() call would sit there forever.
+
+        Thread-safe.  Respects per-device throttle — only flushes
+        devices whose ``MIN_WRITE_INTERVAL`` has elapsed.
+        """
+        if self._conn is None:
+            return
+
+        now: float = time.time()
+        with self._lock:
+            # Snapshot device list to avoid mutating dict during iteration.
+            devices: list[str] = list(self._pending.keys())
+            for device in devices:
+                last: float = self._last_write.get(device, 0.0)
+                if now - last < MIN_WRITE_INTERVAL:
+                    continue
+
+                readings: dict[str, float] = self._pending.pop(device, {})
+                if not readings:
+                    continue
+
+                self._last_write[device] = now
+                try:
+                    self._conn.execute(
+                        """INSERT INTO power_readings
+                           (device, timestamp, power, voltage, current_a,
+                            energy, power_factor)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            device,
+                            now,
+                            readings.get("power"),
+                            readings.get("voltage"),
+                            readings.get("current"),
+                            readings.get("energy"),
+                            readings.get("power_factor"),
+                        ),
+                    )
+                    self._conn.commit()
+                    self._write_count += 1
+
+                    if self._write_count % PRUNE_EVERY == 0:
+                        self._prune()
+                except Exception as exc:
+                    logger.warning("Power logger flush failed: %s", exc)
 
     def _prune(self) -> None:
         """Remove records older than RETENTION_SECONDS."""
@@ -332,7 +412,13 @@ class PowerLogger:
                 return []
 
     def close(self) -> None:
-        """Close the database connection."""
+        """Stop the flush timer and close the database connection."""
+        self._running = False
+        if self._flush_thread is not None:
+            self._flush_thread.join(timeout=MIN_WRITE_INTERVAL + 2)
+            self._flush_thread = None
+        # Final flush — write any remaining pending data.
+        self.flush_pending()
         if self._conn:
             self._conn.close()
             self._conn = None

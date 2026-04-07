@@ -539,5 +539,95 @@ class TestPowerLoggerClose(unittest.TestCase):
             os.unlink(path)
 
 
+class TestPowerLoggerPeriodicFlush(unittest.TestCase):
+    """Tests for the periodic flush timer.
+
+    When MqttSignalBus dedup suppresses unchanged signals, PowerLogger
+    stops receiving record() calls.  Accumulated data in _pending must
+    still be flushed to the database by a background timer.
+    """
+
+    def setUp(self) -> None:
+        self._tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._path = self._tmpfile.name
+        self._tmpfile.close()
+        self.pl = PowerLogger(db_path=self._path)
+        self.pl._last_write.clear()
+
+    def tearDown(self) -> None:
+        self.pl.close()
+        os.unlink(self._path)
+
+    def test_pending_data_flushed_without_record_call(self) -> None:
+        """Pending data must be flushed even if no further record() arrives.
+
+        This is the exact scenario that broke the power dashboard:
+        a value gets accumulated and throttled, then MqttSignalBus
+        dedup suppresses all subsequent signals.  The flush timer
+        must write the orphaned pending data.
+        """
+        # First write goes through — establishes baseline.
+        self.pl.record("BYIR", "power", 0.0)
+        count_after_first = self.pl._write_count
+
+        # Second record within throttle window — accumulated but not written.
+        self.pl.record("BYIR", "power", 13.1)
+        self.assertEqual(self.pl._write_count, count_after_first,
+                         "Throttled record should not have written yet")
+        self.assertIn("BYIR", self.pl._pending,
+                       "Throttled value must be in _pending buffer")
+
+        # Backdate last write so flush timer considers it eligible.
+        self.pl._last_write["BYIR"] = time.time() - MIN_WRITE_INTERVAL - 1
+
+        # Trigger the flush (simulates what the background timer does).
+        self.pl.flush_pending()
+
+        # The 13.1W value must now be in the database.
+        # Use write_count to confirm a second write occurred.
+        self.assertGreater(self.pl._write_count, count_after_first,
+                           "Pending 13.1W was not flushed to database")
+
+    def test_flush_respects_throttle(self) -> None:
+        """Flush must not write data whose device is still within throttle."""
+        self.pl.record("dev", "power", 100.0)
+        # Accumulate without writing.
+        self.pl.record("dev", "power", 200.0)
+        # Do NOT backdate — throttle is still active.
+        self.pl.flush_pending()
+        # Should still be pending, not written.
+        self.assertIn("dev", self.pl._pending)
+
+    def test_flush_clears_pending(self) -> None:
+        """After flush writes, _pending is cleared for that device."""
+        self.pl.record("dev", "power", 50.0)
+        self.pl.record("dev", "power", 75.0)
+        self.pl._last_write["dev"] = time.time() - MIN_WRITE_INTERVAL - 1
+        self.pl.flush_pending()
+        self.assertNotIn("dev", self.pl._pending)
+
+    def test_flush_noop_when_no_pending(self) -> None:
+        """Flush with empty _pending does nothing and does not crash."""
+        self.pl.flush_pending()  # Must not raise.
+
+    def test_flush_multiple_devices(self) -> None:
+        """Flush writes pending data for all eligible devices."""
+        # Device A — eligible for flush.
+        self.pl.record("A", "power", 10.0)
+        self.pl.record("A", "power", 20.0)
+        self.pl._last_write["A"] = time.time() - MIN_WRITE_INTERVAL - 1
+
+        # Device B — still within throttle.
+        self.pl.record("B", "power", 30.0)
+        self.pl.record("B", "power", 40.0)
+        # B's last write is recent — don't backdate.
+
+        self.pl.flush_pending()
+
+        # A should be flushed, B should still be pending.
+        self.assertNotIn("A", self.pl._pending)
+        self.assertIn("B", self.pl._pending)
+
+
 if __name__ == "__main__":
     unittest.main()

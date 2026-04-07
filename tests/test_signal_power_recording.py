@@ -286,5 +286,104 @@ class TestServerCodeFeedsPowerLogger(unittest.TestCase):
         )
 
 
+class TestZigbeePowerSubscription(unittest.TestCase):
+    """Verify server subscribes to glowup/zigbee/ for direct power recording.
+
+    The Zigbee adapter publishes every Z2M property to
+    ``glowup/zigbee/{device}/{property}`` on broker-2's MQTT, which
+    the bridge forwards to glowup.  These messages bypass
+    MqttSignalBus dedup.  The server must subscribe to these and
+    feed power properties to PowerLogger — otherwise slow-reporting
+    devices (like BYIR at ~6min intervals) lose readings when dedup
+    suppresses the ``glowup/signals/`` path.
+    """
+
+    # Topic prefix for adapter's direct publishes.
+    ZIGBEE_TOPIC_PREFIX: str = "glowup/zigbee/"
+
+    def test_server_subscribes_to_glowup_zigbee(self) -> None:
+        """server.py must subscribe to glowup/zigbee/ for power recording."""
+        server_path: str = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "server.py",
+        )
+        with open(server_path) as f:
+            source: str = f.read()
+        self.assertIn(
+            "glowup/zigbee/",
+            source,
+            "server.py does not subscribe to glowup/zigbee/ — "
+            "slow-reporting Zigbee devices will miss power recordings",
+        )
+
+    def test_zigbee_power_message_recorded(self) -> None:
+        """A glowup/zigbee/{device}/power message must produce a DB row."""
+        tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        path: str = tmpfile.name
+        tmpfile.close()
+        pl: PowerLogger = PowerLogger(db_path=path)
+        pl._last_write.clear()
+        try:
+            msg = make_mqtt_message(
+                f"{self.ZIGBEE_TOPIC_PREFIX}BYIR/power", 13.1,
+            )
+            simulate_on_zigbee_power(msg, pl)
+            rows = pl.query(device="BYIR", hours=1, resolution=1)
+            self.assertGreater(
+                len(rows), 0,
+                "glowup/zigbee/BYIR/power did not produce a DB row",
+            )
+        finally:
+            pl.close()
+            os.unlink(path)
+
+    def test_zigbee_non_power_property_ignored(self) -> None:
+        """Non-power properties on glowup/zigbee/ must not record."""
+        tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        path: str = tmpfile.name
+        tmpfile.close()
+        pl: PowerLogger = PowerLogger(db_path=path)
+        pl._last_write.clear()
+        try:
+            msg = make_mqtt_message(
+                f"{self.ZIGBEE_TOPIC_PREFIX}BYIR/linkquality", 56.0,
+            )
+            simulate_on_zigbee_power(msg, pl)
+            self.assertEqual(
+                pl.devices(), [],
+                "Non-power zigbee property should not create a DB row",
+            )
+        finally:
+            pl.close()
+            os.unlink(path)
+
+
+def simulate_on_zigbee_power(
+    message: SimpleNamespace,
+    power_logger: Optional[PowerLogger],
+) -> None:
+    """Reproduce the glowup/zigbee/ callback contract.
+
+    Parses ``glowup/zigbee/{device}/{property}`` and feeds power
+    properties to PowerLogger.record().
+
+    Args:
+        message:      Fake paho MQTT message.
+        power_logger: PowerLogger instance (or None).
+    """
+    # topic: glowup/zigbee/{device}/{property}
+    parts: list[str] = message.topic.split("/")
+    if len(parts) < 4:
+        return
+    device: str = parts[2]
+    prop: str = parts[3]
+    if power_logger is not None:
+        try:
+            value: float = float(json.loads(message.payload))
+            power_logger.record(device, prop, value)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            pass
+
+
 if __name__ == "__main__":
     unittest.main()
