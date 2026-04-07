@@ -2426,6 +2426,22 @@ def main() -> None:
                     if signal_bus is not None:
                         signal_bus.write_local(sig_name, sig_value)
 
+                    # Feed power-related signals to PowerLogger.
+                    # Signal names from the Zigbee adapter are
+                    # "{device}:{property}" (e.g. "ML_Power:power").
+                    # PowerLogger.record() filters for power properties
+                    # internally and throttles writes per device.
+                    if GlowUpRequestHandler.power_logger is not None:
+                        sig_parts: list[str] = sig_name.split(":", 1)
+                        if len(sig_parts) == 2:
+                            try:
+                                GlowUpRequestHandler.power_logger.record(
+                                    sig_parts[0], sig_parts[1],
+                                    float(sig_value),
+                                )
+                            except (ValueError, TypeError):
+                                pass
+
                 proc_mqtt.subscribe("glowup/signals/#", qos=0)
                 proc_mqtt.message_callback_add(
                     "glowup/signals/#", _on_remote_signal,
