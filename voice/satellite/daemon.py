@@ -239,6 +239,7 @@ class SatelliteDaemon:
         self._mqtt_client.subscribe(C.TOPIC_PLAYBACK, qos=0)
         self._mqtt_client.subscribe(C.TOPIC_TTS_TEXT, qos=0)
         self._mqtt_client.subscribe(C.TOPIC_FLUSH, qos=1)
+        self._mqtt_client.subscribe(C.TOPIC_THINKING, qos=0)
         self._mqtt_client.loop_start()
         logger.info(
             "MQTT connected: %s:%d as %s",
@@ -261,6 +262,8 @@ class SatelliteDaemon:
             self._on_tts_text_message(msg)
         elif msg.topic == C.TOPIC_FLUSH:
             self._on_flush_message(msg)
+        elif msg.topic == C.TOPIC_THINKING:
+            self._on_thinking_message(msg)
 
     def _cancel_speech(self) -> None:
         """Kill any in-progress piper and aplay processes.
@@ -303,6 +306,67 @@ class SatelliteDaemon:
             "FLUSH received — generation bumped to %d, speech cancelled",
             self._tts_generation,
         )
+
+    def _on_thinking_message(self, msg: Any) -> None:
+        """Play local "working" audio cue for slow actions.
+
+        The coordinator sends this instead of a "Waiting on the
+        assistant" TTS message.  The satellite plays a short audio
+        clip (Star Trek TOS computer "Working...") through aplay.
+        No piper needed — it's a pre-recorded WAV file.
+
+        When the real answer arrives via tts_text, _cancel_speech
+        will kill this aplay if it's still playing.
+
+        Args:
+            msg: MQTT message with JSON payload {room, timestamp}.
+        """
+        try:
+            data: dict[str, Any] = json.loads(msg.payload)
+            room: str = data.get("room", "")
+
+            if room != self._room:
+                return
+
+            # Path to the pre-recorded "working" audio clip.
+            working_wav: str = os.path.join(
+                os.path.expanduser("~/models"), "tos_working.wav",
+            )
+            if not os.path.exists(working_wav):
+                logger.warning("Working audio not found: %s", working_wav)
+                return
+
+            # Play through aplay in a thread so we don't block MQTT.
+            # Register aplay for cancellation so the real answer can
+            # preempt it.
+            def _play_working() -> None:
+                with self._suppress_lock:
+                    self._suppress_count += 1
+                logger.info("Playing 'working' audio cue")
+                try:
+                    aplay: subprocess.Popen = subprocess.Popen(
+                        ["aplay", "-q", working_wav],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    with self._active_lock:
+                        self._active_aplay = aplay
+                    aplay.wait()
+                    if aplay.returncode and aplay.returncode < 0:
+                        logger.info("Working audio cancelled by incoming TTS")
+                    else:
+                        logger.info("Working audio finished")
+                except Exception as exc:
+                    logger.warning("Working audio failed: %s", exc)
+                finally:
+                    with self._active_lock:
+                        self._active_aplay = None
+                    with self._suppress_lock:
+                        self._suppress_count = max(0, self._suppress_count - 1)
+
+            threading.Thread(target=_play_working, daemon=True).start()
+        except Exception as exc:
+            logger.error("Thinking message error: %s", exc)
 
     def _on_playback_message(self, msg: Any) -> None:
         """Handle playback state messages from the coordinator.

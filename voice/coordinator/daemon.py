@@ -331,6 +331,26 @@ class CoordinatorDaemon:
         )
         logger.info("[%s] Published TTS text (seq=%d): '%s'", room, seq, text[:60])
 
+    def _publish_thinking(self, room: str) -> None:
+        """Signal the satellite that a slow action is processing.
+
+        The satellite plays a local "working" audio cue.  This replaces
+        the old "Waiting on the assistant" TTS message, eliminating the
+        two-message preempt path.
+
+        Args:
+            room: Target room.
+        """
+        if self._mqtt_client is None:
+            return
+
+        payload: str = json.dumps({
+            "room": room,
+            "timestamp": time.time(),
+        })
+        self._mqtt_client.publish(C.TOPIC_THINKING, payload, qos=0)
+        logger.info("[%s] Published thinking signal", room)
+
     def _flush(self) -> None:
         """Increment the epoch and broadcast flush to all satellites.
 
@@ -467,6 +487,7 @@ class CoordinatorDaemon:
                 player=self._player,
                 playback_notifier=self._notify_playback,
                 tts_text_publisher=scoped_publisher,
+                thinking_publisher=self._publish_thinking,
                 epoch=epoch,
                 get_epoch=lambda: self._epoch,
                 on_flush=self._flush,

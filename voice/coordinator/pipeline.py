@@ -64,6 +64,11 @@ class TTSTextPublisher(Protocol):
     def __call__(self, room: str, text: str) -> None: ...
 
 
+class ThinkingPublisher(Protocol):
+    """Callback to signal satellites that a slow action is processing."""
+    def __call__(self, room: str) -> None: ...
+
+
 # ---------------------------------------------------------------------------
 # Epoch staleness check
 # ---------------------------------------------------------------------------
@@ -194,6 +199,7 @@ def process_utterance(
     player: Optional[PlayerLike] = None,
     playback_notifier: Optional[PlaybackNotifier] = None,
     tts_text_publisher: Optional[TTSTextPublisher] = None,
+    thinking_publisher: Optional[ThinkingPublisher] = None,
     epoch: int = 0,
     get_epoch: Optional[Callable[[], int]] = None,
     on_flush: Optional[Callable[[], None]] = None,
@@ -322,21 +328,16 @@ def process_utterance(
             "latency_ms": _elapsed_ms(t0),
         }
 
-    # Step 2.5: Acknowledge — speak "Waiting on the {label}" only for
-    # slow actions (chat, weather).  Commands are instant (physical change
-    # is the feedback).  Queries hit local APIs and return in milliseconds
-    # — the "Waiting" TTS + AirPlay takes longer than the query itself.
+    # Step 2.5: Thinking signal — for slow actions (chat, weather),
+    # send a lightweight MQTT signal so the satellite can play a local
+    # "working" audio cue.  This replaces the old "Waiting on the
+    # assistant" TTS message, eliminating the two-message preempt path
+    # that caused pipe corruption bugs.
     _SLOW_ACTIONS: set[str] = {"chat", "query_weather"}
     action_name: str = intent.get("action", "")
-    action_label: str = executor.get_action_label(action_name)
-    if action_name in _SLOW_ACTIONS and action_label:
-        _wait_msg: str = f"Waiting on the {action_label}."
-        _speak_cached(
-            _wait_msg,
-            room, tts, player, playback_notifier,
-        )
-        if tts_text_publisher:
-            tts_text_publisher(room, _wait_msg)
+    if action_name in _SLOW_ACTIONS:
+        if thinking_publisher:
+            thinking_publisher(room)
 
     # Step 3: Execute against GlowUp.
     result: dict[str, Any] = executor.execute(intent, room)

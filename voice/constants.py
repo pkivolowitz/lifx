@@ -34,6 +34,13 @@ TOPIC_TTS_TEXT: str = "glowup/voice/tts_text"
 # JSON payload: {"timestamp": ...}.
 TOPIC_FLUSH: str = "glowup/voice/flush"
 
+# Coordinator → satellites: thinking signal for slow actions.
+# Satellite plays a short "working" audio cue locally instead of
+# the coordinator sending a separate "Waiting on the assistant" TTS
+# message.  Eliminates the two-message preempt path.
+# JSON payload: {"room": "...", "timestamp": ...}.
+TOPIC_THINKING: str = "glowup/voice/thinking"
+
 # ---------------------------------------------------------------------------
 # Audio format — all satellites must produce this format
 # ---------------------------------------------------------------------------
