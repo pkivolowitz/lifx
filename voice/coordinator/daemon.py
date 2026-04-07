@@ -231,6 +231,40 @@ class CoordinatorDaemon:
         else:
             self._publish_tts_text(room, text)
 
+    def _speak_for_room_seq(
+        self, room: str, text: str, seq: int,
+    ) -> None:
+        """Route TTS with utterance sequence number.
+
+        Same as _speak_for_room but passes seq to _publish_tts_text
+        so the satellite can discard out-of-order responses.
+
+        Args:
+            room: Room name (from satellite).
+            text: Text to speak.
+            seq:  Utterance sequence number from the satellite.
+        """
+        cfg: dict[str, Any] = self._room_speakers.get(room, {})
+        speaker_type: str = cfg.get("speaker", "satellite")
+
+        if speaker_type == "local" and self._local_speaker is not None:
+            try:
+                self._local_speaker._speak(text)
+                logger.info("[%s] Spoke locally: '%s'", room, text[:40])
+            except Exception as exc:
+                logger.error("[%s] Local speak failed: %s", room, exc)
+                self._publish_tts_text(room, text, seq)
+
+        elif speaker_type == "mqtt":
+            topic: str = cfg.get("topic", "glowup/tts/speak")
+            payload: str = json.dumps({"text": text})
+            if self._mqtt_client is not None:
+                self._mqtt_client.publish(topic, payload, qos=1)
+                logger.info("[%s] TTS → %s: '%s'", room, topic, text[:40])
+
+        else:
+            self._publish_tts_text(room, text, seq)
+
     def _init_player(self) -> None:
         """Initialize AirPlay audio player for TTS responses."""
         airplay_cfg: dict[str, Any] = self._config.get("airplay", {})
@@ -271,12 +305,17 @@ class CoordinatorDaemon:
             "[%s] Playback %s", room, "started" if playing else "stopped",
         )
 
-    def _publish_tts_text(self, room: str, text: str) -> None:
+    def _publish_tts_text(
+        self, room: str, text: str, seq: int = 0,
+    ) -> None:
         """Publish TTS text so satellites can speak it locally.
 
         Args:
             room: Target room (satellites filter by their own room).
             text: Text to synthesize and speak.
+            seq:  Utterance sequence number from the originating
+                  satellite.  Echoed back so the satellite can
+                  discard out-of-order responses.
         """
         if self._mqtt_client is None:
             return
@@ -285,11 +324,12 @@ class CoordinatorDaemon:
             "room": room,
             "text": text,
             "timestamp": time.time(),
+            "seq": seq,
         })
         self._mqtt_client.publish(
             C.TOPIC_TTS_TEXT, payload, qos=0,
         )
-        logger.info("[%s] Published TTS text: '%s'", room, text[:60])
+        logger.info("[%s] Published TTS text (seq=%d): '%s'", room, seq, text[:60])
 
     def _flush(self) -> None:
         """Increment the epoch and broadcast flush to all satellites.
@@ -391,6 +431,17 @@ class CoordinatorDaemon:
         # that arrive while this utterance is being processed.
         epoch: int = self._epoch
 
+        # Utterance sequence number from the satellite — echoed back
+        # in TTS responses so the satellite can discard out-of-order
+        # replies from slow concurrent pipelines.
+        utterance_seq: int = header.get("seq", 0)
+
+        # Closure that binds the utterance seq to TTS publishing.
+        # The pipeline calls tts_text_publisher(room, text) without
+        # knowing about sequence numbers.
+        def scoped_publisher(r: str, t: str) -> None:
+            self._speak_for_room_seq(r, t, utterance_seq)
+
         # Suppress wake detection for the entire pipeline duration,
         # not just during TTS playback.  Prevents the satellite from
         # re-triggering on its own HomePod output during slow queries.
@@ -415,7 +466,7 @@ class CoordinatorDaemon:
                 tts=self._tts,
                 player=self._player,
                 playback_notifier=self._notify_playback,
-                tts_text_publisher=self._speak_for_room,
+                tts_text_publisher=scoped_publisher,
                 epoch=epoch,
                 get_epoch=lambda: self._epoch,
                 on_flush=self._flush,

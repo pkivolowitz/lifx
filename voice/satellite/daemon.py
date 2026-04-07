@@ -167,6 +167,13 @@ class SatelliteDaemon:
         # Track active aplay process for cancellation.
         self._aplay_proc: Optional[subprocess.Popen] = None
         self._aplay_lock: threading.Lock = threading.Lock()
+        # Utterance sequence — incremented each time this satellite
+        # publishes a new utterance.  The coordinator echoes the seq
+        # back in TTS responses.  The satellite discards any TTS whose
+        # seq doesn't match the latest published utterance, preventing
+        # out-of-order responses from playing.
+        self._utterance_seq: int = 0
+
         # Generation counter — incremented on each new TTS request.
         # After piper inference, if the counter has moved, the audio
         # is stale and should be discarded.
@@ -324,11 +331,23 @@ class SatelliteDaemon:
             if room != self._room or not text:
                 return
 
+            # Sequence check — discard TTS for a stale utterance.
+            # The coordinator echoes the satellite's utterance seq.
+            # If we've published a newer utterance since, this
+            # response is out of order and must be dropped.
+            msg_seq: int = data.get("seq", 0)
+            if msg_seq and msg_seq != self._utterance_seq:
+                logger.info(
+                    "Discarding stale TTS (seq=%d, current=%d): '%s'",
+                    msg_seq, self._utterance_seq, text[:40],
+                )
+                return
+
             # Increment generation — any in-flight TTS with an older
             # generation will be discarded after inference.
             self._tts_generation += 1
             gen: int = self._tts_generation
-            logger.info("TTS received (gen=%d): '%s'", gen, text[:60])
+            logger.info("TTS received (gen=%d, seq=%d): '%s'", gen, msg_seq, text[:60])
             # Cancel any in-progress playback.
             self._cancel_speech()
 
@@ -430,29 +449,7 @@ class SatelliteDaemon:
         with self._piper_lock:
             if self._piper_proc and self._piper_proc.poll() is None:
                 try:
-                    # Write text line to piper stdin — triggers inference.
-                    line: bytes = (text.strip() + "\n").encode("utf-8")
-                    self._piper_proc.stdin.write(line)
-                    self._piper_proc.stdin.flush()
-
-                    # Piper outputs raw PCM to stdout.  Read until the
-                    # audio stream pauses (no more data available).
-                    import select
-                    chunks: list[bytes] = []
-                    fd = self._piper_proc.stdout.fileno()
-                    while True:
-                        ready, _, _ = select.select([fd], [], [], 0.3)
-                        if ready:
-                            data = os.read(fd, 65536)
-                            if not data:
-                                break
-                            chunks.append(data)
-                        else:
-                            # No data for 300ms — utterance is done.
-                            if chunks:
-                                break
-
-                    # Check if this response is still current.
+                    # Check generation before spending time on synthesis.
                     if generation and generation != self._tts_generation:
                         logger.info(
                             "Discarding stale TTS (gen=%d, current=%d): '%s'",
@@ -460,27 +457,68 @@ class SatelliteDaemon:
                         )
                         return
 
-                    if chunks:
-                        raw_audio: bytes = b"".join(chunks)
-                        # Play via aplay — use Popen so we can cancel.
+                    # Drain any leftover PCM from a previous utterance
+                    # that Piper hadn't fully flushed.
+                    import fcntl
+                    import select
+                    fd = self._piper_proc.stdout.fileno()
+                    old_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+                    fcntl.fcntl(fd, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
+                    drained: int = 0
+                    try:
+                        while True:
+                            d = os.read(fd, 65536)
+                            if not d:
+                                break
+                            drained += len(d)
+                    except BlockingIOError:
+                        pass
+                    finally:
+                        fcntl.fcntl(fd, fcntl.F_SETFL, old_flags)
+                    if drained:
+                        logger.warning(
+                            "Drained %d stale bytes from piper pipe", drained,
+                        )
+
+                    # Write text line to piper stdin — triggers inference.
+                    line: bytes = (text.strip() + "\n").encode("utf-8")
+                    self._piper_proc.stdin.write(line)
+                    self._piper_proc.stdin.flush()
+
+                    # Stream piper PCM directly to aplay instead of
+                    # collecting all chunks first.  This eliminates the
+                    # timeout-based end-of-utterance detection problem:
+                    # aplay plays audio as it arrives, so gaps in Piper's
+                    # output become natural pauses in speech rather than
+                    # lost data in the pipe.
+                    with self._aplay_lock:
+                        self._aplay_proc = subprocess.Popen(
+                            ["aplay", "-r", self._piper_rate, "-f", "S16_LE", "-t", "raw", "-"],
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    aplay_stdin = self._aplay_proc.stdin
+                    try:
+                        while True:
+                            ready, _, _ = select.select([fd], [], [], 3.0)
+                            if ready:
+                                data = os.read(fd, 65536)
+                                if not data:
+                                    break
+                                aplay_stdin.write(data)
+                            else:
+                                # 3s of silence — Piper is done.
+                                break
+                        aplay_stdin.close()
+                        self._aplay_proc.wait(timeout=30)
+                    except Exception:
+                        pass  # Killed by _cancel_speech — normal.
+                    finally:
                         with self._aplay_lock:
-                            self._aplay_proc = subprocess.Popen(
-                                ["aplay", "-r", self._piper_rate, "-f", "S16_LE", "-t", "raw", "-"],
-                                stdin=subprocess.PIPE,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                            )
-                        try:
-                            self._aplay_proc.stdin.write(raw_audio)
-                            self._aplay_proc.stdin.close()
-                            self._aplay_proc.wait(timeout=30)
-                        except Exception:
-                            pass  # Killed by _cancel_speech — normal.
-                        finally:
-                            with self._aplay_lock:
-                                self._aplay_proc = None
-                        logger.info("Spoke (piper): '%s'", text[:40])
-                        return
+                            self._aplay_proc = None
+                    logger.info("Spoke (piper): '%s'", text[:40])
+                    return
                 except Exception as exc:
                     logger.warning("Piper speak failed: %s", exc)
                     # Restart piper if it died.
@@ -739,6 +777,7 @@ class SatelliteDaemon:
             logger.warning("MQTT not connected — dropping utterance")
             return
 
+        self._utterance_seq += 1
         header: dict[str, Any] = {
             "room": self._room,
             "sample_rate": self._sample_rate,
@@ -746,6 +785,7 @@ class SatelliteDaemon:
             "bit_depth": C.BIT_DEPTH,
             "timestamp": time.time(),
             "wake_score": float(wake_score),
+            "seq": self._utterance_seq,
         }
 
         payload: bytes = encode(header, pcm)

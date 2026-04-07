@@ -340,8 +340,8 @@ class TestProcessUtterance(unittest.TestCase):
         # Should have played "Got it." (cached).
         self.assertGreater(len(player.played), 0)
 
-    def test_query_speaks_ack_then_result(self) -> None:
-        """Query speaks 'Waiting on the...' then the result."""
+    def test_fast_query_skips_ack(self) -> None:
+        """Fast queries (query_sensor) skip 'Waiting on...' ack."""
         _phrase_cache.clear()
         stt = FakeSTT(text="what's the temperature")
         intent = FakeIntentParser(intent={
@@ -365,8 +365,8 @@ class TestProcessUtterance(unittest.TestCase):
             {"sample_rate": 16000},
             stt, intent, executor, tts, player,
         )
-        # Should play ack + result = 2 plays.
-        self.assertEqual(len(player.played), 2)
+        # Fast queries skip ack — result only = 1 play.
+        self.assertEqual(len(player.played), 1)
 
     def test_chat_injects_full_transcription(self) -> None:
         """Chat action gets the full transcription as message."""

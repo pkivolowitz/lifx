@@ -295,6 +295,24 @@ def process_utterance(
 
     logger.info("[%s] Intent: %s", room, intent)
 
+    # Step 2.1: Flush via intent — Ollama classified as flush even though
+    # the exact pattern match at step 1.5 missed.  Handle identically.
+    if intent.get("action") == "flush":
+        logger.info("[%s] FLUSH command via intent parser", room)
+        if on_flush is not None:
+            on_flush()
+        _flush_msg2: str = "Flushed."
+        _speak_cached(_flush_msg2, room, tts, player, playback_notifier)
+        if tts_text_publisher:
+            tts_text_publisher(room, _flush_msg2)
+        return {
+            "room": room,
+            "text": text,
+            "intent": intent,
+            "result": {"status": "ok", "confirmation": _flush_msg2},
+            "latency_ms": _elapsed_ms(t0),
+        }
+
     # Epoch check — abort if flushed during intent parsing.
     if _is_stale(epoch, get_epoch):
         logger.info("[%s] Pipeline aborted after intent (epoch stale)", room)

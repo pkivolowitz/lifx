@@ -131,6 +131,16 @@ class GlowUpExecutor:
             "shopping_query": self._handle_shopping_query,
             "shopping_clear": self._handle_shopping_clear,
             "identify_room": self._handle_identify_room,
+            "commands": self._handle_commands,
+            "help_lights": self._handle_help_lights,
+            "help_shopping": self._handle_help_shopping,
+            "help_security": self._handle_help_security,
+            "help_system": self._handle_help_system,
+            "help_sensors": self._handle_help_sensors,
+            "list_sensors": self._handle_list_sensors,
+            "list_groups": self._handle_list_groups,
+            "list_doors": self._handle_list_doors,
+            "list_locks": self._handle_list_locks,
         }
 
         # TTS reference — set after init by the coordinator daemon.
@@ -1178,7 +1188,7 @@ class GlowUpExecutor:
             }
 
         open_doors: list[str] = [
-            d.get("name", "unknown") for d in doors if d.get("is_on", False)
+            d.get("name", "unknown") for d in doors if d.get("open", False)
         ]
 
         if not open_doors:
@@ -1620,6 +1630,283 @@ class GlowUpExecutor:
         return {
             "status": "ok",
             "confirmation": f"You are in the {room}.",
+            "speak": True,
+        }
+
+    # ------------------------------------------------------------------
+    # Commands / help / list handlers
+    # ------------------------------------------------------------------
+
+    def _handle_commands(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Top-level command summary — speaks categories."""
+        return {
+            "status": "ok",
+            "confirmation": (
+                "I can control lights, answer questions about sensors "
+                "and weather, manage your shopping list, check home "
+                "security, and have a conversation. "
+                "Say 'help lights', 'help sensors', 'help shopping', "
+                "'help security', or 'help system' for details."
+            ),
+            "speak": True,
+        }
+
+    def _handle_help_lights(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Help for lighting commands."""
+        return {
+            "status": "ok",
+            "confirmation": (
+                "I can turn lights on or off, set brightness, "
+                "change color or color temperature, play effects, "
+                "and stop them. You can target a single light, "
+                "a group, or say 'all'. "
+                "Say 'list groups' to hear your groups."
+            ),
+            "speak": True,
+        }
+
+    def _handle_help_shopping(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Help for shopping list commands."""
+        return {
+            "status": "ok",
+            "confirmation": (
+                "I can add items to the shopping list, remove items, "
+                "read the list, or clear it. "
+                "For example, say 'add milk to the shopping list' "
+                "or 'what's on the shopping list'."
+            ),
+            "speak": True,
+        }
+
+    def _handle_help_security(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Help for home security commands."""
+        return {
+            "status": "ok",
+            "confirmation": (
+                "I can check if doors are locked, if any doors are open, "
+                "the alarm status, and battery levels. "
+                "Say 'list locks' or 'list doors' to hear the names."
+            ),
+            "speak": True,
+        }
+
+    def _handle_help_system(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Help for system commands."""
+        return {
+            "status": "ok",
+            "confirmation": (
+                "I can check system status, report uptime, "
+                "restart an adapter, change my voice, "
+                "tell time and date, check the schedule, "
+                "check the printer, and flush pending requests."
+            ),
+            "speak": True,
+        }
+
+    def _handle_help_sensors(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Help for sensor commands."""
+        return {
+            "status": "ok",
+            "confirmation": (
+                "I can read temperature and humidity from indoor sensors, "
+                "check soil moisture, report power usage from smart plugs, "
+                "and get the weather. "
+                "Say 'list sensors' to hear what sensors are available."
+            ),
+            "speak": True,
+        }
+
+    def _handle_list_sensors(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Enumerate available sensors from live API data."""
+        parts: list[str] = []
+
+        # BLE sensors (temperature, humidity).
+        try:
+            ble_data: dict[str, Any] = self._request("GET", "/api/ble/sensors")
+            if ble_data:
+                names: list[str] = list(ble_data.keys())
+                parts.append(
+                    f"Indoor sensors: {', '.join(names)}"
+                )
+        except Exception:
+            parts.append("Indoor sensors are not responding")
+
+        # Soil moisture sensors (from actions.yml zones).
+        soil_cfg: dict[str, Any] | None = self._actions.get("query_soil")
+        if soil_cfg:
+            zones: dict[str, Any] = soil_cfg.get("zones", {})
+            if zones:
+                zone_names: list[str] = list(zones.keys())
+                parts.append(
+                    f"Soil sensors: {', '.join(zone_names)}"
+                )
+
+        # Power monitors (Zigbee smart plugs).
+        try:
+            power_data: dict[str, Any] = self._request(
+                "GET", "/api/power/devices",
+            )
+            raw_devices: Any = power_data.get("devices", [])
+            # API returns a list of device name strings.
+            if isinstance(raw_devices, list) and raw_devices:
+                parts.append(
+                    f"Power monitors: {', '.join(str(d) for d in raw_devices)}"
+                )
+        except Exception:
+            pass
+
+        if not parts:
+            confirmation: str = "No sensors are available right now."
+        else:
+            confirmation = ". ".join(parts) + "."
+
+        return {
+            "status": "ok",
+            "confirmation": confirmation,
+            "speak": True,
+        }
+
+    def _handle_list_groups(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Enumerate light groups from live API data."""
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/groups")
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Cannot reach the lighting system.",
+                "speak": True,
+            }
+
+        groups_dict: dict[str, Any] = data.get("groups", {})
+        group_names: list[str] = [
+            name for name in groups_dict.keys() if name != "all"
+        ]
+        if not group_names:
+            confirmation: str = "No groups are configured."
+        else:
+            confirmation = f"Your groups are: {', '.join(group_names)}."
+
+        return {
+            "status": "ok",
+            "confirmation": confirmation,
+            "speak": True,
+        }
+
+    def _handle_list_doors(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Enumerate door sensors from live API data."""
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/home/security")
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Cannot reach the security system.",
+                "speak": True,
+            }
+
+        doors: list[dict[str, Any]] = data.get("doors", [])
+        if not doors:
+            confirmation: str = "No door sensors are configured."
+        else:
+            names: list[str] = [d.get("name", "unknown") for d in doors]
+            confirmation = f"Your door sensors are: {', '.join(names)}."
+
+        return {
+            "status": "ok",
+            "confirmation": confirmation,
+            "speak": True,
+        }
+
+    def _handle_list_locks(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Enumerate locks from live API data."""
+        try:
+            data: dict[str, Any] = self._request("GET", "/api/home/locks")
+        except Exception:
+            return {
+                "status": "error",
+                "confirmation": "Cannot reach the lock system.",
+                "speak": True,
+            }
+
+        locks: list[dict[str, Any]] = data.get("locks", [])
+        if not locks:
+            confirmation: str = "No locks are configured."
+        else:
+            names: list[str] = [lk.get("name", "unknown") for lk in locks]
+            confirmation = f"Your locks are: {', '.join(names)}."
+
+        return {
+            "status": "ok",
+            "confirmation": confirmation,
             "speak": True,
         }
 

@@ -64,6 +64,17 @@ Available actions:
 - shopping_remove: remove an item from the shopping list. Use when someone says "remove milk from the list", "take bread off the list", "never mind the eggs", etc. (params: item="milk")
 - shopping_query: check if something is on the shopping list or ask what's on it. Use when someone says "is milk on the list?", "what's on the shopping list?", "read the list", etc. (params: item="milk" or empty for full list)
 - shopping_clear: clear the entire shopping list. Use when someone says "clear the shopping list", "empty the list", "start a new list", etc.
+- flush: cancel all in-flight requests and reset. Use when someone says "flush it", "flush", "cancel", "never mind", "stop listening", "forget it", etc.
+- commands: list what the system can do at a high level. Use when someone says "commands", "list commands", "what can you do?", "what do you do?", etc.
+- help_lights: explain available lighting commands. Use when someone says "help lights", "commands lights", "what light commands are there?", etc.
+- help_shopping: explain shopping list commands. Use when someone says "help shopping", "commands shopping", etc.
+- help_security: explain home security commands. Use when someone says "help security", "commands security", etc.
+- help_system: explain system commands. Use when someone says "help system", "commands system", etc.
+- help_sensors: explain sensor commands. Use when someone says "help sensors", "commands sensors", etc.
+- list_sensors: enumerate available sensors. Use when someone says "list sensors", "what sensors do I have?", "what sensors are there?", etc.
+- list_groups: enumerate light groups. Use when someone says "list groups", "what groups do I have?", "what are my groups?", etc.
+- list_doors: enumerate door sensors. Use when someone says "list doors", "what doors do you know about?", etc.
+- list_locks: enumerate locks. Use when someone says "list locks", "what locks do you know about?", etc.
 - scene: activate a named scene or preset
 - chat: general conversation, questions, or anything NOT related to controlling devices or querying sensors (params: message=<the user's full message>)
 
@@ -127,6 +138,26 @@ Examples:
 - "is milk on the list?" -> {{"action": "shopping_query", "target": "all", "params": {{"item": "milk"}}}}
 - "what's on the shopping list?" -> {{"action": "shopping_query", "target": "all", "params": {{}}}}
 - "clear the shopping list" -> {{"action": "shopping_clear", "target": "all", "params": {{}}}}
+- "flush it" -> {{"action": "flush", "target": "all", "params": {{}}}}
+- "flush" -> {{"action": "flush", "target": "all", "params": {{}}}}
+- "never mind" -> {{"action": "flush", "target": "all", "params": {{}}}}
+- "cancel" -> {{"action": "flush", "target": "all", "params": {{}}}}
+- "forget it" -> {{"action": "flush", "target": "all", "params": {{}}}}
+- "commands" -> {{"action": "commands", "target": "all", "params": {{}}}}
+- "list commands" -> {{"action": "commands", "target": "all", "params": {{}}}}
+- "what can you do?" -> {{"action": "commands", "target": "all", "params": {{}}}}
+- "help lights" -> {{"action": "help_lights", "target": "all", "params": {{}}}}
+- "commands lights" -> {{"action": "help_lights", "target": "all", "params": {{}}}}
+- "help shopping" -> {{"action": "help_shopping", "target": "all", "params": {{}}}}
+- "help security" -> {{"action": "help_security", "target": "all", "params": {{}}}}
+- "help system" -> {{"action": "help_system", "target": "all", "params": {{}}}}
+- "help sensors" -> {{"action": "help_sensors", "target": "all", "params": {{}}}}
+- "list sensors" -> {{"action": "list_sensors", "target": "all", "params": {{}}}}
+- "what sensors do I have?" -> {{"action": "list_sensors", "target": "all", "params": {{}}}}
+- "list groups" -> {{"action": "list_groups", "target": "all", "params": {{}}}}
+- "what groups do I have?" -> {{"action": "list_groups", "target": "all", "params": {{}}}}
+- "list doors" -> {{"action": "list_doors", "target": "all", "params": {{}}}}
+- "list locks" -> {{"action": "list_locks", "target": "all", "params": {{}}}}
 - "tell me about the battle of Gettysburg" -> {{"action": "chat", "target": "all", "params": {{"message": "tell me about the battle of Gettysburg"}}}}
 """
 

@@ -244,6 +244,74 @@ shopping_clear:
   handler: shopping_clear
   speak: true
 
+# ---------------------------------------------------------------------------
+# Commands / help / list — voice-accessible help system
+# ---------------------------------------------------------------------------
+
+commands:
+  type: query
+  label: commands
+  handler: commands
+  speak: true
+
+help_lights:
+  type: query
+  label: commands
+  handler: help_lights
+  speak: true
+
+help_shopping:
+  type: query
+  label: commands
+  handler: help_shopping
+  speak: true
+
+help_security:
+  type: query
+  label: commands
+  handler: help_security
+  speak: true
+
+help_system:
+  type: query
+  label: commands
+  handler: help_system
+  speak: true
+
+help_sensors:
+  type: query
+  label: commands
+  handler: help_sensors
+  speak: true
+
+list_sensors:
+  type: query
+  label: sensors
+  handler: list_sensors
+  speak: true
+
+list_groups:
+  type: query
+  label: lights
+  handler: list_groups
+  speak: true
+
+list_doors:
+  type: query
+  label: doors
+  handler: list_doors
+  speak: true
+
+list_locks:
+  type: query
+  label: locks
+  handler: list_locks
+  speak: true
+
+# ---------------------------------------------------------------------------
+# Chat — freeform Ollama conversation (special handling in executor)
+# ---------------------------------------------------------------------------
+
 chat:
   type: chat
   label: assistant
