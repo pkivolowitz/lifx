@@ -159,14 +159,16 @@ class SatelliteDaemon:
             "tts_topic", "glowup/tts/speak",
         )
 
-        # Piper TTS — persistent process for low-latency local speech.
-        # Only initialized when tts_output is "local".
-        self._piper_proc: Optional[subprocess.Popen] = None
-        self._piper_rate: str = "22050"
-        self._piper_lock: threading.Lock = threading.Lock()
-        # Track active aplay process for cancellation.
-        self._aplay_proc: Optional[subprocess.Popen] = None
-        self._aplay_lock: threading.Lock = threading.Lock()
+        # Piper TTS — pool of pre-warmed single-use piper processes.
+        # Each process handles one utterance then exits.  EOF on stdout
+        # is the end-of-stream signal — no timeouts.
+        self._piper_pool: Optional["PiperPool"] = None
+        # Track active piper + aplay processes for cancellation.
+        # Cancel = kill both processes.  Piper's stdout EOF fires,
+        # the read loop exits, no orphaned PCM, no pipe corruption.
+        self._active_piper: Optional[subprocess.Popen] = None
+        self._active_aplay: Optional[subprocess.Popen] = None
+        self._active_lock: threading.Lock = threading.Lock()
         # Utterance sequence — incremented each time this satellite
         # publishes a new utterance.  The coordinator echoes the seq
         # back in TTS responses.  The satellite discards any TTS whose
@@ -175,11 +177,10 @@ class SatelliteDaemon:
         self._utterance_seq: int = 0
 
         # Generation counter — incremented on each new TTS request.
-        # After piper inference, if the counter has moved, the audio
-        # is stale and should be discarded.
+        # Used to discard stale TTS that arrives after a newer request.
         self._tts_generation: int = 0
         if self._tts_output == "local":
-            self._init_piper()
+            self._init_piper_pool()
 
         # Capture config.
         cap_cfg: dict[str, Any] = config.get("capture", {})
@@ -262,17 +263,29 @@ class SatelliteDaemon:
             self._on_flush_message(msg)
 
     def _cancel_speech(self) -> None:
-        """Kill any in-progress aplay subprocess.
+        """Kill any in-progress piper and aplay processes.
 
         Called when a new utterance starts processing or new TTS text
         arrives, ensuring stale responses don't play over fresh ones.
+
+        Killing piper closes its stdout, which causes the read loop
+        in _speak_local to hit EOF and exit cleanly.  No orphaned PCM,
+        no pipe drain needed.
         """
-        with self._aplay_lock:
-            if self._aplay_proc and self._aplay_proc.poll() is None:
-                self._aplay_proc.kill()
-                self._aplay_proc.wait()
-                logger.info("Cancelled in-progress speech")
-                self._aplay_proc = None
+        with self._active_lock:
+            killed: bool = False
+            if self._active_aplay and self._active_aplay.poll() is None:
+                self._active_aplay.kill()
+                self._active_aplay.wait()
+                killed = True
+            if self._active_piper and self._active_piper.poll() is None:
+                self._active_piper.kill()
+                self._active_piper.wait()
+                killed = True
+            self._active_aplay = None
+            self._active_piper = None
+            if killed:
+                logger.info("Cancelled in-progress speech (piper + aplay killed)")
 
     def _on_flush_message(self, msg: Any) -> None:
         """Handle flush broadcast from the coordinator.
@@ -395,179 +408,122 @@ class SatelliteDaemon:
                 self._suppress_count = max(0, self._suppress_count - 1)
             logger.info("Local TTS ended (suppress=%d)", self._suppress_count)
 
-    def _init_piper(self) -> None:
-        """Start persistent piper process for low-latency TTS.
+    def _init_piper_pool(self) -> None:
+        """Start the PiperPool for single-use TTS processes.
 
-        Piper reads lines from stdin and writes raw PCM to stdout.
-        The model is loaded once at startup (~10s) and stays warm
-        for sub-second inference on subsequent requests.
+        Each process loads the model once, handles one utterance,
+        then exits.  EOF on stdout is the end-of-stream signal.
         """
+        from voice.piper_pool import PiperPool
+
         piper_model: str = self._config.get(
             "piper_model", os.path.expanduser("~/models/en_US-lessac-medium.onnx"),
         )
         piper_bin: str = self._config.get(
             "piper_bin", os.path.expanduser("~/venv/bin/piper"),
         )
-        if not os.path.exists(piper_bin) or not os.path.exists(piper_model):
-            logger.warning("Piper not available: bin=%s model=%s", piper_bin, piper_model)
-            return
 
-        # Read sample rate from the model's JSON config.
-        model_json: str = piper_model + ".json"
-        if os.path.exists(model_json):
-            with open(model_json, "r") as mf:
-                mcfg = json.load(mf)
-            self._piper_rate = str(mcfg.get("audio", {}).get("sample_rate", 22050))
-
-        try:
-            self._piper_proc = subprocess.Popen(
-                [piper_bin, "--model", piper_model, "--output-raw"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-            logger.info(
-                "Piper TTS started: model=%s rate=%s",
-                os.path.basename(piper_model), self._piper_rate,
-            )
-        except Exception as exc:
-            logger.error("Failed to start piper: %s", exc)
-            self._piper_proc = None
+        pool: PiperPool = PiperPool(
+            model=piper_model,
+            piper_bin=piper_bin,
+            size=2,
+        )
+        if pool.start():
+            self._piper_pool = pool
+        else:
+            logger.error("PiperPool failed to start")
 
     def _speak_local(self, text: str, generation: int = 0) -> None:
         """Synthesize and play text through the local audio output.
 
-        Uses persistent piper process for sub-second inference.
-        Falls back to espeak-ng if piper is unavailable.  Checks
-        generation counter after inference — if a newer request
-        arrived while piper was working, the audio is discarded.
+        Acquires a single-use piper process from the pool, writes
+        the text, closes stdin, and streams PCM to aplay until EOF.
+        No timeouts — EOF is the only end-of-stream signal.
+
+        On cancel, _cancel_speech kills both piper and aplay.  Piper's
+        stdout closes, the read loop exits on EOF.  No orphaned PCM.
+
+        Falls back to espeak-ng if the piper pool is unavailable.
 
         Args:
             text:       Text to speak.
             generation: TTS generation counter at time of request.
         """
-        with self._piper_lock:
-            if self._piper_proc and self._piper_proc.poll() is None:
+        if self._piper_pool is not None:
+            # Check generation before acquiring from pool.
+            if generation and generation != self._tts_generation:
+                logger.info(
+                    "Discarding stale TTS (gen=%d, current=%d): '%s'",
+                    generation, self._tts_generation, text[:40],
+                )
+                return
+
+            piper: subprocess.Popen = self._piper_pool.acquire()
+            rate: str = str(self._piper_pool.sample_rate)
+
+            # Register piper as the active process so _cancel_speech
+            # can kill it.
+            with self._active_lock:
+                self._active_piper = piper
+
+            try:
+                # Write text and close stdin — piper will produce PCM
+                # on stdout then exit.  EOF is our end-of-stream signal.
+                line: bytes = (text.strip() + "\n").encode("utf-8")
+                piper.stdin.write(line)
+                piper.stdin.close()
+
+                # Start aplay and register it for cancellation.
+                aplay: subprocess.Popen = subprocess.Popen(
+                    ["aplay", "-r", rate, "-f", "S16_LE", "-t", "raw", "-"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                with self._active_lock:
+                    self._active_aplay = aplay
+
+                # Stream PCM from piper stdout to aplay stdin until EOF.
+                # No select(), no timeout.  os.read returns b"" at EOF.
+                fd: int = piper.stdout.fileno()
+                pcm_bytes: int = 0
                 try:
-                    # Check generation before spending time on synthesis.
-                    if generation and generation != self._tts_generation:
-                        logger.info(
-                            "Discarding stale TTS (gen=%d, current=%d): '%s'",
-                            generation, self._tts_generation, text[:40],
-                        )
-                        return
+                    while True:
+                        data: bytes = os.read(fd, 65536)
+                        if not data:
+                            break
+                        pcm_bytes += len(data)
+                        aplay.stdin.write(data)
+                    aplay.stdin.close()
+                    aplay.wait(timeout=30)
+                except (BrokenPipeError, OSError):
+                    # aplay was killed by _cancel_speech — normal.
+                    pass
 
-                    import select
-                    fd = self._piper_proc.stdout.fileno()
+                piper.wait(timeout=5)
 
-                    # Write text line to piper stdin — triggers inference.
-                    line: bytes = (text.strip() + "\n").encode("utf-8")
-                    self._piper_proc.stdin.write(line)
-                    self._piper_proc.stdin.flush()
-
-                    # Stream piper PCM directly to aplay instead of
-                    # collecting all chunks first.  This eliminates the
-                    # timeout-based end-of-utterance detection problem:
-                    # aplay plays audio as it arrives, so gaps in Piper's
-                    # output become natural pauses in speech rather than
-                    # lost data in the pipe.
-                    with self._aplay_lock:
-                        self._aplay_proc = subprocess.Popen(
-                            ["aplay", "-r", self._piper_rate, "-f", "S16_LE", "-t", "raw", "-"],
-                            stdin=subprocess.PIPE,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                    aplay_stdin = self._aplay_proc.stdin
-                    cancelled: bool = False
-                    pcm_bytes: int = 0
-                    # Two-phase timeout: wait up to 30s for piper to
-                    # start producing PCM (inference time varies with
-                    # text length and CPU).  Once the first chunk
-                    # arrives, switch to 3s gap timeout to detect
-                    # end-of-stream.
-                    _INFERENCE_TIMEOUT_S: float = 30.0
-                    _STREAM_GAP_TIMEOUT_S: float = 3.0
-                    try:
-                        while True:
-                            timeout = (
-                                _STREAM_GAP_TIMEOUT_S if pcm_bytes > 0
-                                else _INFERENCE_TIMEOUT_S
-                            )
-                            ready, _, _ = select.select([fd], [], [], timeout)
-                            if ready:
-                                data = os.read(fd, 65536)
-                                if not data:
-                                    break
-                                pcm_bytes += len(data)
-                                aplay_stdin.write(data)
-                            else:
-                                if pcm_bytes == 0:
-                                    logger.warning(
-                                        "Piper produced no output after %.0fs "
-                                        "for '%s'",
-                                        _INFERENCE_TIMEOUT_S, text[:40],
-                                    )
-                                break
-                        aplay_stdin.close()
-                        self._aplay_proc.wait(timeout=30)
-                    except Exception:
-                        # aplay was killed by _cancel_speech.  Piper is
-                        # still producing PCM for this text — drain it
-                        # ALL before releasing _piper_lock, otherwise
-                        # the next request reads stale audio.
-                        cancelled = True
-                        drained: int = 0
-                        logger.info(
-                            "Speech cancelled for '%s' after %d PCM bytes — "
-                            "draining remaining piper output",
-                            text[:40], pcm_bytes,
-                        )
-                        # Use the same two-phase timeout: if piper
-                        # hasn't produced ANY output yet (pcm_bytes==0
-                        # and drained==0), wait the full inference
-                        # timeout for it to start.  Once data flows,
-                        # switch to the 3s gap timeout.
-                        while True:
-                            has_data: bool = (pcm_bytes + drained) > 0
-                            drain_timeout = (
-                                _STREAM_GAP_TIMEOUT_S if has_data
-                                else _INFERENCE_TIMEOUT_S
-                            )
-                            ready, _, _ = select.select(
-                                [fd], [], [], drain_timeout,
-                            )
-                            if ready:
-                                leftover = os.read(fd, 65536)
-                                if not leftover:
-                                    break
-                                drained += len(leftover)
-                            else:
-                                break
-                        logger.info(
-                            "Drained %d bytes of cancelled PCM for '%s'",
-                            drained, text[:40],
-                        )
-                    finally:
-                        with self._aplay_lock:
-                            self._aplay_proc = None
-                    if cancelled:
-                        logger.info(
-                            "Cancelled speech: '%s' (played %d bytes, "
-                            "drained remainder)",
-                            text[:40], pcm_bytes,
-                        )
-                    else:
-                        logger.info(
-                            "Spoke (piper): '%s' (%d PCM bytes)",
-                            text[:40], pcm_bytes,
-                        )
-                    return
-                except Exception as exc:
-                    logger.warning("Piper speak failed: %s", exc)
-                    # Restart piper if it died.
-                    self._piper_proc = None
-                    self._init_piper()
+                # Log outcome.
+                if piper.returncode and piper.returncode < 0:
+                    logger.info(
+                        "Speech cancelled: '%s' (%d PCM bytes before kill)",
+                        text[:40], pcm_bytes,
+                    )
+                else:
+                    logger.info(
+                        "Spoke (piper): '%s' (%d PCM bytes)",
+                        text[:40], pcm_bytes,
+                    )
+            except Exception as exc:
+                logger.warning("Piper speak failed: %s", exc)
+                # Kill the piper process if it's still alive.
+                if piper.poll() is None:
+                    piper.kill()
+                    piper.wait()
+            finally:
+                with self._active_lock:
+                    self._active_piper = None
+                    self._active_aplay = None
+            return
 
         # Fallback: espeak-ng.
         try:
@@ -1024,6 +980,10 @@ class SatelliteDaemon:
             self._mqtt_client.loop_stop()
             self._mqtt_client.disconnect()
             self._mqtt_client = None
+
+        if self._piper_pool is not None:
+            self._piper_pool.stop()
+            self._piper_pool = None
 
         logger.info("Satellite [%s] stopped", self._room)
 

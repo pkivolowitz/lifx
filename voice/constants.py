@@ -65,7 +65,7 @@ CHUNK_BYTES: int = CHUNK_SAMPLES * BYTES_PER_SAMPLE
 
 # Maximum utterance duration (seconds).  Prevents runaway captures if
 # silence detection fails.
-MAX_UTTERANCE_S: float = 5.0
+MAX_UTTERANCE_S: float = 10.0
 
 # Silence timeout (seconds).  Stop capturing after this much silence
 # following speech.  1.0s is snappy for commands; increase for
@@ -121,7 +121,7 @@ MAX_WORKERS: int = 4
 CAPABILITIES_REFRESH_S: float = 300.0
 
 # Ollama intent parsing timeout (seconds).
-INTENT_TIMEOUT_S: float = 10.0
+INTENT_TIMEOUT_S: float = 15.0
 
 # Maximum retries for invalid JSON from Ollama.
 INTENT_MAX_RETRIES: int = 1

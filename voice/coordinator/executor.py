@@ -1969,7 +1969,7 @@ class GlowUpExecutor:
             "stream": False,
             "options": {
                 "temperature": 0.7,
-                "num_predict": 80,
+                "num_predict": 120,
             },
         }
 
