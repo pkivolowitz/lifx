@@ -457,28 +457,8 @@ class SatelliteDaemon:
                         )
                         return
 
-                    # Drain any leftover PCM from a previous utterance
-                    # that Piper hadn't fully flushed.
-                    import fcntl
                     import select
                     fd = self._piper_proc.stdout.fileno()
-                    old_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-                    fcntl.fcntl(fd, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
-                    drained: int = 0
-                    try:
-                        while True:
-                            d = os.read(fd, 65536)
-                            if not d:
-                                break
-                            drained += len(d)
-                    except BlockingIOError:
-                        pass
-                    finally:
-                        fcntl.fcntl(fd, fcntl.F_SETFL, old_flags)
-                    if drained:
-                        logger.warning(
-                            "Drained %d stale bytes from piper pipe", drained,
-                        )
 
                     # Write text line to piper stdin — triggers inference.
                     line: bytes = (text.strip() + "\n").encode("utf-8")
@@ -499,25 +479,89 @@ class SatelliteDaemon:
                             stderr=subprocess.DEVNULL,
                         )
                     aplay_stdin = self._aplay_proc.stdin
+                    cancelled: bool = False
+                    pcm_bytes: int = 0
+                    # Two-phase timeout: wait up to 30s for piper to
+                    # start producing PCM (inference time varies with
+                    # text length and CPU).  Once the first chunk
+                    # arrives, switch to 3s gap timeout to detect
+                    # end-of-stream.
+                    _INFERENCE_TIMEOUT_S: float = 30.0
+                    _STREAM_GAP_TIMEOUT_S: float = 3.0
                     try:
                         while True:
-                            ready, _, _ = select.select([fd], [], [], 3.0)
+                            timeout = (
+                                _STREAM_GAP_TIMEOUT_S if pcm_bytes > 0
+                                else _INFERENCE_TIMEOUT_S
+                            )
+                            ready, _, _ = select.select([fd], [], [], timeout)
                             if ready:
                                 data = os.read(fd, 65536)
                                 if not data:
                                     break
+                                pcm_bytes += len(data)
                                 aplay_stdin.write(data)
                             else:
-                                # 3s of silence — Piper is done.
+                                if pcm_bytes == 0:
+                                    logger.warning(
+                                        "Piper produced no output after %.0fs "
+                                        "for '%s'",
+                                        _INFERENCE_TIMEOUT_S, text[:40],
+                                    )
                                 break
                         aplay_stdin.close()
                         self._aplay_proc.wait(timeout=30)
                     except Exception:
-                        pass  # Killed by _cancel_speech — normal.
+                        # aplay was killed by _cancel_speech.  Piper is
+                        # still producing PCM for this text — drain it
+                        # ALL before releasing _piper_lock, otherwise
+                        # the next request reads stale audio.
+                        cancelled = True
+                        drained: int = 0
+                        logger.info(
+                            "Speech cancelled for '%s' after %d PCM bytes — "
+                            "draining remaining piper output",
+                            text[:40], pcm_bytes,
+                        )
+                        # Use the same two-phase timeout: if piper
+                        # hasn't produced ANY output yet (pcm_bytes==0
+                        # and drained==0), wait the full inference
+                        # timeout for it to start.  Once data flows,
+                        # switch to the 3s gap timeout.
+                        while True:
+                            has_data: bool = (pcm_bytes + drained) > 0
+                            drain_timeout = (
+                                _STREAM_GAP_TIMEOUT_S if has_data
+                                else _INFERENCE_TIMEOUT_S
+                            )
+                            ready, _, _ = select.select(
+                                [fd], [], [], drain_timeout,
+                            )
+                            if ready:
+                                leftover = os.read(fd, 65536)
+                                if not leftover:
+                                    break
+                                drained += len(leftover)
+                            else:
+                                break
+                        logger.info(
+                            "Drained %d bytes of cancelled PCM for '%s'",
+                            drained, text[:40],
+                        )
                     finally:
                         with self._aplay_lock:
                             self._aplay_proc = None
-                    logger.info("Spoke (piper): '%s'", text[:40])
+                    if cancelled:
+                        logger.info(
+                            "Cancelled speech: '%s' (played %d bytes, "
+                            "drained remainder)",
+                            text[:40], pcm_bytes,
+                        )
+                    else:
+                        logger.info(
+                            "Spoke (piper): '%s' (%d PCM bytes)",
+                            text[:40], pcm_bytes,
+                        )
                     return
                 except Exception as exc:
                     logger.warning("Piper speak failed: %s", exc)
