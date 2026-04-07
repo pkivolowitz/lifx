@@ -28,12 +28,7 @@ Required sequence:
 - Read project memory:
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/MEMORY.md`
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_project_state.md`
-  - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_project_state_note.md`
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_network.md`
-  - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_pi_infrastructure.md`
-  - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/taxonomy.md`
-  - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_broker2.md`
-  - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/feedback_session_startup.md`
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/feedback_debugging_methodology.md`
 - Inspect repo state:
   - `git branch --show-current`
@@ -77,9 +72,3 @@ Rules:
 - Do not duplicate stable knowledge already in project memory
 - Do not add `_precompact.md` to `MEMORY.md`
 
-## Notes
-
-- Production server is Pi 5 `glowup` at `10.0.0.214`
-- Deploy target is `./deploy.sh glowup`
-- Primary git remote is `staging` over SSH to NAS
-- GlowUp is a generalized SOE platform, not merely a lighting app
