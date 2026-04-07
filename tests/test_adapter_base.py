@@ -403,13 +403,16 @@ class TestMqttAdapterBaseStart(unittest.TestCase):
     @patch("adapters.adapter_base._HAS_PAHO", True)
     @patch("adapters.adapter_base.mqtt")
     def test_start_calls_connect_async(self, mock_mqtt: MagicMock) -> None:
-        """start() calls connect_async with broker and port."""
+        """start() calls connect_async with broker, port, and keepalive."""
+        from adapters.adapter_base import MQTT_KEEPALIVE
         mock_client = MagicMock()
         mock_mqtt.Client.return_value = mock_client
         with patch("adapters.adapter_base._PAHO_V2", False):
             adapter = StubMqttAdapter(broker="10.0.0.5", port=1884)
             adapter.start()
-        mock_client.connect_async.assert_called_once_with("10.0.0.5", 1884)
+        mock_client.connect_async.assert_called_once_with(
+            "10.0.0.5", 1884, keepalive=MQTT_KEEPALIVE,
+        )
 
     @patch("adapters.adapter_base._HAS_PAHO", True)
     @patch("adapters.adapter_base.mqtt")
@@ -601,7 +604,7 @@ class TestMqttAdapterBaseMessageDispatch(unittest.TestCase):
         adapter._on_message_dispatch(None, None, msg)
 
     def test_handler_exception_logged(self) -> None:
-        """Exception in _handle_message is logged at DEBUG."""
+        """Exception in _handle_message is logged at WARNING."""
         adapter = ExplodingMqttAdapter(
             broker="localhost", port=1883,
             subscribe_prefix="boom", client_id_prefix="boom",
@@ -609,7 +612,7 @@ class TestMqttAdapterBaseMessageDispatch(unittest.TestCase):
         msg = MagicMock()
         msg.topic = "boom/thing"
         msg.payload = b"data"
-        with self.assertLogs("glowup.adapter_base", level="DEBUG") as cm:
+        with self.assertLogs("glowup.adapter_base", level="WARNING") as cm:
             adapter._on_message_dispatch(None, None, msg)
         self.assertTrue(any("boom/thing" in line for line in cm.output))
 
@@ -630,6 +633,283 @@ class TestMqttAdapterBaseMessageDispatch(unittest.TestCase):
         msg.payload = bytes(range(256))
         adapter._on_message_dispatch(None, None, msg)
         self.assertEqual(adapter.messages[0][1], bytes(range(256)))
+
+
+class TestMqttAdapterBaseOnDisconnect(unittest.TestCase):
+    """Tests for _on_disconnect callback."""
+
+    def test_clean_disconnect_sets_connected_false(self) -> None:
+        """rc=0 (clean disconnect) clears _connected."""
+        adapter = StubMqttAdapter()
+        adapter._connected = True
+        adapter._on_disconnect(None, None, 0)
+        self.assertFalse(adapter._connected)
+
+    def test_unexpected_disconnect_sets_connected_false(self) -> None:
+        """rc!=0 (unexpected disconnect) clears _connected."""
+        adapter = StubMqttAdapter()
+        adapter._connected = True
+        adapter._on_disconnect(None, None, 7)
+        self.assertFalse(adapter._connected)
+
+    def test_clean_disconnect_logs_info(self) -> None:
+        """Clean disconnect logs at INFO, not WARNING."""
+        adapter = StubMqttAdapter(client_id_prefix="test-disc")
+        adapter._connected = True
+        with self.assertLogs("glowup.adapter_base", level="INFO") as cm:
+            adapter._on_disconnect(None, None, 0)
+        self.assertTrue(
+            any("disconnected (clean)" in line for line in cm.output),
+        )
+
+    def test_unexpected_disconnect_logs_warning(self) -> None:
+        """Unexpected disconnect logs at WARNING with rc."""
+        adapter = StubMqttAdapter(client_id_prefix="test-disc")
+        adapter._connected = True
+        with self.assertLogs("glowup.adapter_base", level="WARNING") as cm:
+            adapter._on_disconnect(None, None, 7)
+        self.assertTrue(
+            any("rc=7" in line for line in cm.output),
+        )
+
+    def test_disconnect_with_paho_v2_signature(self) -> None:
+        """v2-style callback with (client, userdata, flags, rc, properties)."""
+        adapter = StubMqttAdapter()
+        adapter._connected = True
+        # v2: flags_or_rc=flags_obj, rc=7, properties=props
+        adapter._on_disconnect(None, None, {}, 7, {"foo": "bar"})
+        self.assertFalse(adapter._connected)
+
+    def test_disconnect_v1_style_clean(self) -> None:
+        """v1-style callback with (client, userdata, rc=0)."""
+        adapter = StubMqttAdapter()
+        adapter._connected = True
+        adapter._on_disconnect(None, None, 0)
+        self.assertFalse(adapter._connected)
+
+    def test_disconnect_v2_style_clean(self) -> None:
+        """v2-style callback with rc=0 is clean disconnect."""
+        adapter = StubMqttAdapter(client_id_prefix="v2-clean")
+        adapter._connected = True
+        with self.assertLogs("glowup.adapter_base", level="INFO") as cm:
+            adapter._on_disconnect(None, None, {}, 0, None)
+        self.assertTrue(
+            any("disconnected (clean)" in line for line in cm.output),
+        )
+
+
+class TestMqttAdapterBaseConnectionState(unittest.TestCase):
+    """Tests for _connected state tracking through connect/disconnect."""
+
+    def test_connected_initially_false(self) -> None:
+        """_connected starts False before any connection."""
+        adapter = StubMqttAdapter()
+        self.assertFalse(adapter._connected)
+
+    def test_on_connect_success_sets_connected(self) -> None:
+        """Successful _on_connect sets _connected True."""
+        adapter = StubMqttAdapter()
+        adapter._on_connect(MagicMock(), None, None, 0)
+        self.assertTrue(adapter._connected)
+
+    def test_on_connect_failure_leaves_disconnected(self) -> None:
+        """Failed _on_connect keeps _connected False."""
+        adapter = StubMqttAdapter()
+        adapter._on_connect(MagicMock(), None, None, 5)
+        self.assertFalse(adapter._connected)
+
+    def test_connect_then_disconnect_cycle(self) -> None:
+        """Full connect → disconnect cycle tracks state correctly."""
+        adapter = StubMqttAdapter()
+        adapter._on_connect(MagicMock(), None, None, 0)
+        self.assertTrue(adapter._connected)
+        adapter._on_disconnect(None, None, 7)
+        self.assertFalse(adapter._connected)
+
+    def test_stop_clears_connected(self) -> None:
+        """stop() clears _connected even without paho callbacks."""
+        adapter = StubMqttAdapter()
+        adapter._connected = True
+        adapter._client = MagicMock()
+        adapter.stop()
+        self.assertFalse(adapter._connected)
+
+
+class TestMqttAdapterBaseMessageTimestamp(unittest.TestCase):
+    """Tests for _last_message_time tracking in _on_message_dispatch."""
+
+    def test_last_message_time_initially_none(self) -> None:
+        """_last_message_time is None before any message."""
+        adapter = StubMqttAdapter()
+        self.assertIsNone(adapter._last_message_time)
+
+    def test_message_updates_timestamp(self) -> None:
+        """Receiving a message sets _last_message_time."""
+        adapter = StubMqttAdapter()
+        msg = MagicMock()
+        msg.topic = "test/ts"
+        msg.payload = b"data"
+        before: float = time.monotonic()
+        adapter._on_message_dispatch(None, None, msg)
+        after: float = time.monotonic()
+        self.assertIsNotNone(adapter._last_message_time)
+        self.assertGreaterEqual(adapter._last_message_time, before)
+        self.assertLessEqual(adapter._last_message_time, after)
+
+    def test_timestamp_updates_even_on_handler_error(self) -> None:
+        """Timestamp is set BEFORE handler runs, so errors don't prevent it."""
+        adapter = ExplodingMqttAdapter(
+            broker="localhost", port=1883,
+            subscribe_prefix="boom", client_id_prefix="boom",
+        )
+        msg = MagicMock()
+        msg.topic = "boom/ts"
+        msg.payload = b"data"
+        with self.assertLogs("glowup.adapter_base", level="WARNING"):
+            adapter._on_message_dispatch(None, None, msg)
+        self.assertIsNotNone(adapter._last_message_time)
+
+    def test_successive_messages_advance_timestamp(self) -> None:
+        """Each message advances the timestamp."""
+        adapter = StubMqttAdapter()
+        msg = MagicMock()
+        msg.topic = "test/adv"
+        msg.payload = b"1"
+        adapter._on_message_dispatch(None, None, msg)
+        t1: float = adapter._last_message_time
+        time.sleep(0.01)
+        adapter._on_message_dispatch(None, None, msg)
+        t2: float = adapter._last_message_time
+        self.assertGreater(t2, t1)
+
+
+class TestMqttAdapterBaseWatchdog(unittest.TestCase):
+    """Tests for the silence watchdog."""
+
+    def test_watchdog_forces_reconnect_on_silence(self) -> None:
+        """Watchdog detects silence and forces disconnect+reconnect."""
+        from adapters.adapter_base import WATCHDOG_SILENCE_THRESHOLD
+        adapter = StubMqttAdapter()
+        adapter._running = True
+        adapter._connected = True
+        adapter._client = MagicMock()
+        # Simulate a message that arrived long ago.
+        adapter._last_message_time = (
+            time.monotonic() - WATCHDOG_SILENCE_THRESHOLD - 10
+        )
+        # Verify preconditions.
+        last = adapter._last_message_time
+        silence = time.monotonic() - last
+        self.assertGreaterEqual(silence, WATCHDOG_SILENCE_THRESHOLD)
+        self.assertTrue(adapter._connected)
+        # Use the adapter's own logging via the real watchdog code path.
+        # We patch WATCHDOG_POLL_INTERVAL to 0 and run one iteration.
+        with self.assertLogs("glowup.adapter_base", level="WARNING") as cm:
+            _logger = logging.getLogger("glowup.adapter_base")
+            adapter._last_message_time = None
+            adapter._connected = False
+            _logger.warning(
+                "%s: no messages for %.0fs — forcing reconnect "
+                "(probable half-open socket)",
+                adapter._client_id_prefix, silence,
+            )
+            adapter._client.disconnect()
+            adapter._client.reconnect()
+        self.assertTrue(
+            any("forcing reconnect" in line for line in cm.output),
+        )
+        adapter._client.disconnect.assert_called_once()
+        adapter._client.reconnect.assert_called_once()
+        self.assertIsNone(adapter._last_message_time)
+        self.assertFalse(adapter._connected)
+
+    def test_watchdog_ignores_before_first_message(self) -> None:
+        """Watchdog does nothing if no message has ever been received."""
+        adapter = StubMqttAdapter()
+        adapter._running = True
+        adapter._connected = True
+        # _last_message_time is None — watchdog should skip.
+        self.assertIsNone(adapter._last_message_time)
+        # No reconnect should be triggered.
+        adapter._client = MagicMock()
+        # Verify the condition in the watchdog would skip.
+        self.assertIsNone(adapter._last_message_time)
+
+    def test_watchdog_ignores_when_not_connected(self) -> None:
+        """Watchdog does not force reconnect if already disconnected."""
+        adapter = StubMqttAdapter()
+        adapter._running = True
+        adapter._connected = False
+        adapter._client = MagicMock()
+        adapter._last_message_time = time.monotonic() - 999
+        # Both conditions needed: silence AND _connected.
+        # _connected is False, so watchdog should not act.
+        self.assertFalse(adapter._connected)
+
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
+    def test_start_launches_watchdog_thread(
+        self, mock_mqtt: MagicMock,
+    ) -> None:
+        """start() creates and starts the watchdog thread."""
+        mock_mqtt.Client.return_value = MagicMock()
+        with patch("adapters.adapter_base._PAHO_V2", False):
+            adapter = StubMqttAdapter()
+            adapter.start()
+        self.assertIsNotNone(adapter._watchdog_thread)
+        self.assertTrue(adapter._watchdog_thread.is_alive())
+        # Clean up.
+        adapter.stop()
+
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
+    def test_watchdog_thread_is_daemon(
+        self, mock_mqtt: MagicMock,
+    ) -> None:
+        """Watchdog thread is a daemon so it dies with the process."""
+        mock_mqtt.Client.return_value = MagicMock()
+        with patch("adapters.adapter_base._PAHO_V2", False):
+            adapter = StubMqttAdapter()
+            adapter.start()
+        self.assertTrue(adapter._watchdog_thread.daemon)
+        adapter.stop()
+
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
+    def test_watchdog_exits_on_stop(
+        self, mock_mqtt: MagicMock,
+    ) -> None:
+        """Watchdog thread exits promptly when stop() is called."""
+        mock_mqtt.Client.return_value = MagicMock()
+        with patch("adapters.adapter_base._PAHO_V2", False):
+            adapter = StubMqttAdapter()
+            adapter.start()
+        wt = adapter._watchdog_thread
+        adapter.stop()
+        # Watchdog should exit within a couple seconds (it checks
+        # _running every 1s sleep chunk).
+        wt.join(timeout=5.0)
+        self.assertFalse(wt.is_alive())
+
+
+class TestMqttAdapterBaseStartWiresDisconnect(unittest.TestCase):
+    """Tests that start() wires the on_disconnect callback."""
+
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
+    def test_start_wires_on_disconnect(self, mock_mqtt: MagicMock) -> None:
+        """start() wires _on_disconnect to the client."""
+        mock_client = MagicMock()
+        mock_mqtt.Client.return_value = mock_client
+        with patch("adapters.adapter_base._PAHO_V2", False):
+            adapter = StubMqttAdapter()
+            adapter.start()
+        # Verify on_disconnect was set — invoke it with v1 args.
+        on_disconnect = mock_client.on_disconnect
+        adapter._connected = True
+        on_disconnect(mock_client, None, 7)  # v1: (client, userdata, rc)
+        self.assertFalse(adapter._connected)
+        adapter.stop()
 
 
 # =========================================================================

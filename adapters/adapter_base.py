@@ -76,6 +76,21 @@ THREAD_JOIN_TIMEOUT: float = 10.0
 # Smaller values make stop() more responsive but waste CPU.
 SLEEP_CHUNK: float = 5.0
 
+# MQTT keepalive interval (seconds).  Paho default is 60s; tighter
+# interval detects dead TCP connections sooner via missing PINGRESPs.
+MQTT_KEEPALIVE: int = 30
+
+# Watchdog silence threshold (seconds).  If no MQTT message arrives
+# within this window after the first message, the watchdog forces a
+# reconnect.  Z2M publishes every ~10s; 120s allows for transient
+# gaps without false alarms.
+WATCHDOG_SILENCE_THRESHOLD: float = 120.0
+
+# Watchdog poll interval (seconds).  How often the watchdog thread
+# checks for silence.  Short enough to detect promptly, long enough
+# to avoid wasting CPU.
+WATCHDOG_POLL_INTERVAL: float = 15.0
+
 # ---------------------------------------------------------------------------
 # Optional paho-mqtt dependency
 # ---------------------------------------------------------------------------
@@ -133,7 +148,19 @@ class MqttAdapterBase(AdapterBase):
     """Base class for adapters that subscribe to MQTT topics.
 
     Handles paho client creation (v1 and v2), ``connect_async``, network
-    loop management, ``on_connect`` subscription, and ``stop``/``disconnect``.
+    loop management, ``on_connect`` subscription, disconnect detection,
+    silence watchdog, and ``stop``/``disconnect``.
+
+    Disconnect detection:  Paho's ``on_disconnect`` callback is wired so
+    that TCP drops are logged at WARNING.  This surfaces the event that
+    was previously invisible.
+
+    Silence watchdog:  A background thread monitors the time since the
+    last received message.  If no message arrives within
+    ``WATCHDOG_SILENCE_THRESHOLD`` seconds (after at least one message
+    has been seen), the watchdog forces a disconnect+reconnect.  This
+    catches the half-open TCP socket case where paho believes it is
+    connected but no data is flowing.
 
     Subclasses must implement ``_handle_message(topic, payload)``.
 
@@ -165,12 +192,19 @@ class MqttAdapterBase(AdapterBase):
         self._subscribe_prefix: str = subscribe_prefix
         self._client_id_prefix: str = client_id_prefix
         self._client: Any = None
+        # Connection state tracking.
+        self._connected: bool = False
+        # Watchdog timestamp — monotonic clock, None until first message.
+        self._last_message_time: Optional[float] = None
+        self._watchdog_thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
         """Start the MQTT subscriber.
 
-        Creates a paho MQTT client, wires callbacks, and starts the
-        network loop.  No-op if ``paho-mqtt`` is not installed.
+        Creates a paho MQTT client, wires callbacks (including
+        ``on_disconnect``), starts the network loop, and launches
+        the silence watchdog thread.  No-op if ``paho-mqtt`` is not
+        installed.
         """
         if not _HAS_PAHO:
             logger.warning(
@@ -180,6 +214,8 @@ class MqttAdapterBase(AdapterBase):
             return
 
         self._running = True
+        self._connected = False
+        self._last_message_time = None
         client_id: str = f"{self._client_id_prefix}-{int(time.time())}"
 
         if _PAHO_V2:
@@ -191,18 +227,34 @@ class MqttAdapterBase(AdapterBase):
             self._client = mqtt.Client(client_id=client_id)
 
         self._client.on_connect = self._on_connect
+        self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message_dispatch
-        self._client.connect_async(self._broker, self._port)
+        self._client.connect_async(
+            self._broker, self._port, keepalive=MQTT_KEEPALIVE,
+        )
         self._client.loop_start()
+
+        # Silence watchdog — detects half-open sockets that paho
+        # cannot see.  Runs as a daemon thread so it dies with the
+        # process if stop() is never called.
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            daemon=True,
+            name=f"{self._client_id_prefix}-watchdog",
+        )
+        self._watchdog_thread.start()
 
         self._on_started()
 
     def stop(self) -> None:
-        """Stop the MQTT subscriber and disconnect."""
+        """Stop the MQTT subscriber, watchdog, and disconnect."""
         self._running = False
         if self._client:
             self._client.loop_stop()
             self._client.disconnect()
+        self._connected = False
+        # Watchdog thread is a daemon and checks _running; it will
+        # exit on the next poll cycle.
         self._on_stopped()
 
     # --- MQTT callbacks ----------------------------------------------------
@@ -232,7 +284,9 @@ class MqttAdapterBase(AdapterBase):
                 "%s: MQTT connect failed: rc=%d",
                 self._client_id_prefix, rc,
             )
+            self._connected = False
             return
+        self._connected = True
         topic: str = f"{self._subscribe_prefix}/#"
         client.subscribe(topic)
         logger.info(
@@ -240,26 +294,125 @@ class MqttAdapterBase(AdapterBase):
             self._client_id_prefix, topic,
         )
 
+    def _on_disconnect(
+        self,
+        client: Any,
+        userdata: Any,
+        flags_or_rc: Any,
+        rc: Any = None,
+        properties: Any = None,
+    ) -> None:
+        """Log disconnection and update connection state.
+
+        Compatible with both paho v1 and v2 callback signatures:
+            - v1: ``on_disconnect(client, userdata, rc)``
+            - v2: ``on_disconnect(client, userdata, flags, rc, properties)``
+
+        Paho calls this when the TCP connection drops.  If rc != 0
+        the disconnect was unexpected and paho will auto-reconnect
+        (if loop_start is running).  Either way, we log at WARNING
+        so the event is visible in journalctl.
+
+        Args:
+            client:       The paho MQTT client.
+            userdata:     User data (unused).
+            flags_or_rc:  Disconnect flags (v2) or return code (v1).
+            rc:           Return code (v2 only; None for v1).
+            properties:   MQTT v5 properties (unused).
+        """
+        # Normalize rc across paho v1 (3 args) and v2 (5 args).
+        actual_rc: Any = flags_or_rc if rc is None else rc
+
+        self._connected = False
+        if actual_rc == 0:
+            logger.info(
+                "%s: MQTT disconnected (clean)",
+                self._client_id_prefix,
+            )
+        else:
+            logger.warning(
+                "%s: MQTT disconnected unexpectedly (rc=%s) "
+                "— paho will attempt reconnect",
+                self._client_id_prefix, actual_rc,
+            )
+
     def _on_message_dispatch(
         self, client: Any, userdata: Any, msg: Any,
     ) -> None:
         """Dispatch incoming message to subclass handler.
 
-        Catches exceptions from the subclass handler to prevent
-        crashing paho's internal network thread.
+        Updates the watchdog timestamp on every message.  Catches
+        exceptions from the subclass handler to prevent crashing
+        paho's internal network thread, but logs at WARNING so
+        persistent errors are visible.
 
         Args:
             client:   The paho MQTT client.
             userdata: User data (unused).
             msg:      The MQTT message (has ``.topic`` and ``.payload``).
         """
+        self._last_message_time = time.monotonic()
         try:
             self._handle_message(msg.topic, msg.payload)
         except Exception as exc:
-            logger.debug(
-                "%s: message error on %s: %s",
+            logger.warning(
+                "%s: message handler error on %s: %s",
                 self._client_id_prefix, msg.topic, exc,
             )
+
+    # --- Silence watchdog --------------------------------------------------
+
+    def _watchdog_loop(self) -> None:
+        """Monitor for message silence and force reconnect if detected.
+
+        Runs on a daemon thread.  After the first message is received,
+        checks every ``WATCHDOG_POLL_INTERVAL`` seconds whether
+        ``WATCHDOG_SILENCE_THRESHOLD`` has elapsed without a message.
+
+        If silence is detected and we believe we are still connected,
+        the connection is stale (half-open socket).  Force a
+        disconnect so paho's auto-reconnect kicks in.
+        """
+        while self._running:
+            # Interruptible sleep — exit promptly on stop().
+            remaining: float = WATCHDOG_POLL_INTERVAL
+            while remaining > 0 and self._running:
+                chunk: float = min(remaining, 1.0)
+                time.sleep(chunk)
+                remaining -= chunk
+
+            if not self._running:
+                break
+
+            # Only check after we've received at least one message.
+            last: Optional[float] = self._last_message_time
+            if last is None:
+                continue
+
+            silence: float = time.monotonic() - last
+            if silence >= WATCHDOG_SILENCE_THRESHOLD and self._connected:
+                logger.warning(
+                    "%s: no messages for %.0fs — forcing reconnect "
+                    "(probable half-open socket)",
+                    self._client_id_prefix, silence,
+                )
+                # Reset timestamp so we don't spam reconnects every
+                # poll cycle.  Next message will set it again.
+                self._last_message_time = None
+                self._connected = False
+                try:
+                    self._client.disconnect()
+                except Exception:
+                    pass
+                # Paho's loop_start thread will detect the disconnect
+                # and begin reconnecting automatically.
+                try:
+                    self._client.reconnect()
+                except Exception as exc:
+                    logger.warning(
+                        "%s: reconnect failed: %s — paho will retry",
+                        self._client_id_prefix, exc,
+                    )
 
     @abstractmethod
     def _handle_message(self, topic: str, payload: bytes) -> None:
