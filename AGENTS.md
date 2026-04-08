@@ -9,28 +9,37 @@ below instead of inventing a generic meaning.
 `onboard` means: execute the project startup checklist, recover shared
 context, and report current state before doing other work.
 
-Required sequence:
+### Discovery (handled by the SessionStart hook)
 
-- Run `scutil --get ComputerName`
-- Run `hostname`
-- Run `date`
-- Verify NAS is mounted with `ls ~/NAS/.claude/global/`
+Machine identity, date, NAS mount, handoff presence, precompact
+presence, and project memory index presence are reported automatically
+by `~/NAS/.claude/bin/session-bootstrap.sh`, invoked via the
+SessionStart hook in `~/.claude/settings.json`. The result appears as a
+`SESSION BOOTSTRAP` block in initial context.
+
+Do **not** re-run those checks with manual `ls` / `hostname` / `date`
+calls. If the bootstrap block is missing (older session, hook
+misconfigured), run the script manually:
+
+    bash ~/NAS/.claude/bin/session-bootstrap.sh
+
+### Post-discovery actions (Claude's responsibility)
+
 - Read `~/NAS/.claude/global/identity.md`
 - Read `~/NAS/.claude/global/rules.md`
-- Read debugging lecture PDF:
-  `/Users/perrykivolowitz/lifx/docs/Discourses and Dialogs on Debugging.pdf`
-- Check handoff file for this machine at `~/NAS/.claude/handoff/<machine>.md`
-  - If present: read it, internalize it, archive it per global rules
-- Check precompact file:
-  `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/_precompact.md`
-  - If present: read it, internalize it, then delete it
+- If the bootstrap block says **handoff PRESENT**: its body is embedded
+  inline — internalize it, then archive to
+  `~/NAS/.claude/handoff/archive/<from>_to_<machine>_<YYYY-MM-DD>.md`
+- If the bootstrap block says **precompact PRESENT**: read the file,
+  internalize it, then DELETE it (Compaction Protocol in rules.md)
 - Pull latest branch state from `staging` before code changes
 - Read project memory:
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/MEMORY.md`
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_project_state.md`
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_network.md`
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/feedback_debugging_methodology.md`
-- Inspect repo state:
+  - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/feedback_token_discipline.md`
+- Inspect repo state (the bootstrap script does not touch git):
   - `git branch --show-current`
   - `git status --short --branch`
   - `git remote -v`
@@ -45,6 +54,17 @@ Required sequence:
   - last known project context
 
 Do not give a generic repo tour unless the user asks for one.
+
+## On-demand: debugging lecture
+
+`/Users/perrykivolowitz/lifx/docs/Discourses and Dialogs on Debugging.pdf`
+is **not** part of the onboard sequence. It is ~37 image-rendered slides
+and costs ~55K tokens to read. The core principles are already captured
+in `feedback_debugging_methodology.md` (read at every onboard).
+
+Read the PDF only when Perry explicitly tells you to — typically when
+he sees you "going in circles" debugging and wants you to recalibrate
+on the scientific method.
 
 ## `precompact`
 
