@@ -1,0 +1,371 @@
+/* GlowUp Installer - base styles
+ *
+ * Dark theme to match the logo aesthetic. All dimensions use rem
+ * for accessibility. No external fonts — system stack only.
+ */
+
+:root {
+    --bg:          #0a0a0f;
+    --card-bg:     #14141f;
+    --border:      #2a2a3a;
+    --text:        #e0e0e8;
+    --text-dim:    #888898;
+    --accent:      #7b5ea7;
+    --accent-glow: rgba(123, 94, 167, 0.4);
+    --btn-disabled:#3a3a4a;
+    --radius:      0.5rem;
+}
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    height: 100%;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+}
+
+/* --- Layout ------------------------------------------------------------- */
+
+.container {
+    width: 100%;
+    max-width: 36rem;
+}
+
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 2.5rem 2rem;
+    text-align: center;
+}
+
+/* --- Logo & headings ---------------------------------------------------- */
+
+.logo {
+    width: 7rem;
+    height: 7rem;
+    border-radius: 50%;
+    object-fit: cover;
+    margin-bottom: 1rem;
+    box-shadow: 0 0 24px var(--accent-glow);
+}
+
+h1 {
+    font-size: 1.8rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+}
+
+.tagline {
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+}
+
+.version {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    margin-bottom: 1.5rem;
+}
+
+/* --- License section ---------------------------------------------------- */
+
+.license-section {
+    text-align: left;
+    margin-top: 1rem;
+}
+
+.license-section h2 {
+    font-size: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.license-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem;
+    max-height: 12rem;
+    overflow-y: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+    margin-bottom: 1rem;
+}
+
+.license-box p {
+    margin-bottom: 0.6rem;
+}
+
+.license-box p:last-child {
+    margin-bottom: 0;
+}
+
+/* --- Checkbox ----------------------------------------------------------- */
+
+.checkbox-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    margin-bottom: 1.5rem;
+}
+
+.checkbox-row input[type="checkbox"] {
+    margin-top: 0.2rem;
+    accent-color: var(--accent);
+    flex-shrink: 0;
+}
+
+/* --- Buttons ------------------------------------------------------------ */
+
+.btn {
+    padding: 0.6rem 1.8rem;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, box-shadow 0.15s;
+}
+
+.btn-primary {
+    background: var(--accent);
+    color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+    box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.btn-primary:disabled {
+    background: var(--btn-disabled);
+    color: var(--text-dim);
+    cursor: not-allowed;
+}
+
+/* --- Footer ------------------------------------------------------------- */
+
+.page-footer {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-align: center;
+    line-height: 1.6;
+}
+
+/* --- Info panels -------------------------------------------------------- */
+
+.info-panel {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    text-align: left;
+    margin-bottom: 1rem;
+}
+
+.info-panel h3 {
+    font-size: 0.95rem;
+    margin-bottom: 0.5rem;
+    color: var(--text);
+}
+
+.info-panel ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.info-panel li {
+    font-size: 0.85rem;
+    line-height: 1.6;
+    padding-left: 1.2rem;
+    position: relative;
+    color: var(--text-dim);
+}
+
+.info-panel li::before {
+    position: absolute;
+    left: 0;
+}
+
+.info-panel.yes-panel li::before {
+    content: "\2713";
+    color: #5cb85c;
+}
+
+.info-panel.no-panel li::before {
+    content: "\2717";
+    color: #d9534f;
+}
+
+.info-panel.future-panel li::before {
+    content: "\2192";
+    color: var(--accent);
+}
+
+/* --- Page header (non-welcome pages) ------------------------------------ */
+
+.page-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+.page-header .logo-small {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 50%;
+    object-fit: cover;
+    box-shadow: 0 0 12px var(--accent-glow);
+}
+
+.page-header h1 {
+    font-size: 1.3rem;
+    text-align: left;
+}
+
+.page-subtitle {
+    font-size: 0.9rem;
+    color: var(--text-dim);
+    text-align: left;
+    margin-bottom: 1.5rem;
+}
+
+/* --- Button row with back button ---------------------------------------- */
+
+.button-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+.btn-secondary {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+    border-color: var(--text-dim);
+    color: var(--text);
+}
+
+.button-group-right {
+    display: flex;
+    gap: 0.75rem;
+}
+
+/* --- Form elements ------------------------------------------------------ */
+
+.form-section {
+    text-align: left;
+    margin-bottom: 1.25rem;
+}
+
+.form-label {
+    display: block;
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.form-hint {
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    margin-bottom: 0.5rem;
+    line-height: 1.5;
+}
+
+.form-hint-inline {
+    font-size: 0.78rem;
+    color: var(--text-dim);
+}
+
+.form-input {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 0.85rem;
+    font-family: monospace;
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* --- Progress log ------------------------------------------------------- */
+
+.progress-area {
+    text-align: left;
+    margin-bottom: 1.25rem;
+}
+
+.progress-area h3 {
+    font-size: 0.95rem;
+    margin-bottom: 0.5rem;
+}
+
+.progress-log {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+    max-height: 10rem;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 0.75rem;
+    line-height: 1.6;
+    color: var(--text-dim);
+}
+
+/* --- Inline code in result panels --------------------------------------- */
+
+code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.15rem 0.35rem;
+    font-size: 0.8rem;
+    color: var(--accent);
+}
+
+/* --- Scrollbar (Webkit) ------------------------------------------------- */
+
+.license-box::-webkit-scrollbar {
+    width: 6px;
+}
+
+.license-box::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.license-box::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
