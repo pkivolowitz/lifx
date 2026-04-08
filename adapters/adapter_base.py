@@ -158,9 +158,21 @@ class MqttAdapterBase(AdapterBase):
     Silence watchdog:  A background thread monitors the time since the
     last received message.  If no message arrives within
     ``WATCHDOG_SILENCE_THRESHOLD`` seconds (after at least one message
-    has been seen), the watchdog forces a disconnect+reconnect.  This
-    catches the half-open TCP socket case where paho believes it is
-    connected but no data is flowing.
+    has been seen), the watchdog tears down the paho client entirely
+    and rebuilds it with a fresh ``client_id`` (epoch + per-process
+    reconnect counter).  This catches the half-open TCP socket case
+    where paho believes it is connected but no data is flowing.
+
+    Why a full rebuild instead of disconnect+reconnect:  An earlier
+    fix (commit 7679713, 2026-04-06) called ``disconnect()`` followed
+    by ``reconnect()`` on the same client object with the same
+    ``client_id``.  In production this produced a zombie session on
+    broker-2's mosquitto where the SUBSCRIBE was acknowledged and
+    retained messages were delivered, but no live publishes ever
+    came through.  The bug recurred 14 hours after that fix landed
+    and burned 26 hours of dead Zigbee data.  Tearing down the
+    client and generating a new ``client_id`` for every recovery
+    avoids the session-takeover race that caused the zombie state.
 
     Subclasses must implement ``_handle_message(topic, payload)``.
 
@@ -197,6 +209,10 @@ class MqttAdapterBase(AdapterBase):
         # Watchdog timestamp — monotonic clock, None until first message.
         self._last_message_time: Optional[float] = None
         self._watchdog_thread: Optional[threading.Thread] = None
+        # Per-process counter so each rebuilt client gets a fresh
+        # client_id even if multiple recoveries happen within the
+        # same epoch second.  See class docstring for rationale.
+        self._reconnect_count: int = 0
 
     def start(self) -> None:
         """Start the MQTT subscriber.
@@ -216,7 +232,47 @@ class MqttAdapterBase(AdapterBase):
         self._running = True
         self._connected = False
         self._last_message_time = None
-        client_id: str = f"{self._client_id_prefix}-{int(time.time())}"
+        self._reconnect_count = 0
+
+        # Build the initial paho client.  Same code path the watchdog
+        # uses for recovery, so any future bug in client construction
+        # affects both startup and recovery identically — no two
+        # divergent build paths.
+        self._create_and_start_client()
+
+        # Silence watchdog — detects half-open sockets that paho
+        # cannot see.  Runs as a daemon thread so it dies with the
+        # process if stop() is never called.  Created exactly once
+        # in the lifetime of the adapter; recoveries reuse it.
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            daemon=True,
+            name=f"{self._client_id_prefix}-watchdog",
+        )
+        self._watchdog_thread.start()
+
+        self._on_started()
+
+    def _create_and_start_client(self) -> None:
+        """Create a fresh paho client with a unique client_id and start its loop.
+
+        Generates a new ``client_id`` every call by combining the
+        prefix, the current epoch second, and the per-process
+        ``_reconnect_count``.  The counter component is essential:
+        broker-2's mosquitto rejected reused client_ids on rapid
+        reconnect (the half-open zombie case), so every rebuild MUST
+        get a brand-new id even if two rebuilds happen within the
+        same wall-clock second.
+
+        Wires all callbacks, calls ``connect_async``, and starts
+        ``loop_start``.  Caller is responsible for tearing down any
+        previous client first — see ``_recover_from_silence``.
+        """
+        self._reconnect_count += 1
+        client_id: str = (
+            f"{self._client_id_prefix}-"
+            f"{int(time.time())}-{self._reconnect_count}"
+        )
 
         if _PAHO_V2:
             self._client = mqtt.Client(
@@ -233,18 +289,10 @@ class MqttAdapterBase(AdapterBase):
             self._broker, self._port, keepalive=MQTT_KEEPALIVE,
         )
         self._client.loop_start()
-
-        # Silence watchdog — detects half-open sockets that paho
-        # cannot see.  Runs as a daemon thread so it dies with the
-        # process if stop() is never called.
-        self._watchdog_thread = threading.Thread(
-            target=self._watchdog_loop,
-            daemon=True,
-            name=f"{self._client_id_prefix}-watchdog",
+        logger.info(
+            "%s: paho client started (client_id=%s)",
+            self._client_id_prefix, client_id,
         )
-        self._watchdog_thread.start()
-
-        self._on_started()
 
     def stop(self) -> None:
         """Stop the MQTT subscriber, watchdog, and disconnect."""
@@ -363,15 +411,13 @@ class MqttAdapterBase(AdapterBase):
     # --- Silence watchdog --------------------------------------------------
 
     def _watchdog_loop(self) -> None:
-        """Monitor for message silence and force reconnect if detected.
+        """Monitor for message silence and trigger recovery if detected.
 
-        Runs on a daemon thread.  After the first message is received,
-        checks every ``WATCHDOG_POLL_INTERVAL`` seconds whether
-        ``WATCHDOG_SILENCE_THRESHOLD`` has elapsed without a message.
-
-        If silence is detected and we believe we are still connected,
-        the connection is stale (half-open socket).  Force a
-        disconnect so paho's auto-reconnect kicks in.
+        Runs on a daemon thread.  After every ``WATCHDOG_POLL_INTERVAL``
+        seconds, calls ``_watchdog_check()`` for one iteration of the
+        silence detection logic.  The check is extracted into its own
+        method so it can be unit-tested without driving the loop's
+        sleep cycle.
         """
         while self._running:
             # Interruptible sleep — exit promptly on stop().
@@ -384,35 +430,94 @@ class MqttAdapterBase(AdapterBase):
             if not self._running:
                 break
 
-            # Only check after we've received at least one message.
-            last: Optional[float] = self._last_message_time
-            if last is None:
-                continue
+            self._watchdog_check()
 
-            silence: float = time.monotonic() - last
-            if silence >= WATCHDOG_SILENCE_THRESHOLD and self._connected:
-                logger.warning(
-                    "%s: no messages for %.0fs — forcing reconnect "
-                    "(probable half-open socket)",
-                    self._client_id_prefix, silence,
+    def _watchdog_check(self) -> bool:
+        """One iteration of the silence watchdog.
+
+        Returns ``True`` if a recovery was triggered this iteration,
+        ``False`` if no action was needed.  Extracted from the loop
+        so unit tests can drive a single check with controlled state
+        instead of mocking the surrounding sleep loop.
+
+        Skip conditions:
+            - No message has been received yet
+              (``_last_message_time is None``)
+            - Silence has not yet exceeded
+              ``WATCHDOG_SILENCE_THRESHOLD``
+            - We are not currently connected (a recovery is already
+              in flight, or initial connect has not completed)
+
+        On trigger: logs at WARNING and calls
+        ``_recover_from_silence``.
+        """
+        last: Optional[float] = self._last_message_time
+        if last is None:
+            return False
+
+        silence: float = time.monotonic() - last
+        if silence < WATCHDOG_SILENCE_THRESHOLD:
+            return False
+        if not self._connected:
+            return False
+
+        logger.warning(
+            "%s: no messages for %.0fs — forcing reconnect "
+            "(probable half-open socket)",
+            self._client_id_prefix, silence,
+        )
+        self._recover_from_silence()
+        return True
+
+    def _recover_from_silence(self) -> None:
+        """Tear down the current paho client and start a fresh one.
+
+        Called by ``_watchdog_check`` when silence has exceeded the
+        threshold.  Performs a full client rebuild — NOT a
+        ``disconnect()`` + ``reconnect()`` on the existing client.
+
+        The previous fix (commit 7679713, 2026-04-06) used the
+        same-client disconnect+reconnect approach.  In production
+        against real mosquitto + Z2M on broker-2 it produced a
+        zombie session: the SUBSCRIBE was ACKed, retained messages
+        were delivered, but no live publishes ever came through.
+        The bug recurred 14 hours after that fix landed
+        (2026-04-07 09:14:50) and burned 26 hours of Zigbee data
+        before being noticed.
+
+        Full rebuild fixes this by generating a new ``client_id``
+        on every recovery (via ``_create_and_start_client``), which
+        avoids the session-takeover race on the broker side.
+        """
+        # Reset state FIRST so that if the watchdog fires again
+        # before the new client connects, _watchdog_check skips
+        # via the `last is None` and `not self._connected` guards.
+        self._last_message_time = None
+        self._connected = False
+
+        # Tear down the old client.  Both calls are best-effort
+        # because the old socket may already be dead — that is the
+        # exact condition that triggered us.  We log at debug not
+        # warning so a clean half-open recovery does not look noisy.
+        if self._client is not None:
+            try:
+                self._client.loop_stop()
+            except Exception as exc:
+                logger.debug(
+                    "%s: loop_stop on old client raised: %s",
+                    self._client_id_prefix, exc,
                 )
-                # Reset timestamp so we don't spam reconnects every
-                # poll cycle.  Next message will set it again.
-                self._last_message_time = None
-                self._connected = False
-                try:
-                    self._client.disconnect()
-                except Exception:
-                    pass
-                # Paho's loop_start thread will detect the disconnect
-                # and begin reconnecting automatically.
-                try:
-                    self._client.reconnect()
-                except Exception as exc:
-                    logger.warning(
-                        "%s: reconnect failed: %s — paho will retry",
-                        self._client_id_prefix, exc,
-                    )
+            try:
+                self._client.disconnect()
+            except Exception as exc:
+                logger.debug(
+                    "%s: disconnect on old client raised: %s",
+                    self._client_id_prefix, exc,
+                )
+            self._client = None
+
+        # Build a fresh client with a brand-new client_id.
+        self._create_and_start_client()
 
     @abstractmethod
     def _handle_message(self, topic: str, payload: bytes) -> None:

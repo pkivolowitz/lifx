@@ -355,17 +355,34 @@ class TestMqttAdapterBaseStart(unittest.TestCase):
 
     @patch("adapters.adapter_base._HAS_PAHO", True)
     @patch("adapters.adapter_base.mqtt")
-    def test_start_client_id_has_timestamp(self, mock_mqtt: MagicMock) -> None:
-        """Client ID ends with a timestamp integer."""
+    def test_start_client_id_has_timestamp_and_counter(
+        self, mock_mqtt: MagicMock,
+    ) -> None:
+        """Client ID has the form ``{prefix}-{epoch}-{counter}``.
+
+        The counter component was added in the post-7679713 fix so
+        every recovery rebuild gets a brand-new client_id even if
+        two rebuilds happen within the same wall-clock second.
+        """
         mock_mqtt.Client.return_value = MagicMock()
         with patch("adapters.adapter_base._PAHO_V2", False):
             adapter = StubMqttAdapter(client_id_prefix="test")
             adapter.start()
         call_kwargs = mock_mqtt.Client.call_args
         client_id: str = call_kwargs[1]["client_id"]
-        # After the prefix and dash, there should be digits.
-        suffix: str = client_id.split("-", 1)[1]
-        self.assertTrue(suffix.isdigit())
+        # Format: test-<epoch>-<counter>
+        parts: list[str] = client_id.split("-")
+        self.assertEqual(parts[0], "test")
+        self.assertTrue(
+            parts[-2].isdigit(),
+            f"epoch component is not digits: {parts[-2]!r}",
+        )
+        self.assertTrue(
+            parts[-1].isdigit(),
+            f"counter component is not digits: {parts[-1]!r}",
+        )
+        # First start() call must produce counter == 1.
+        self.assertEqual(parts[-1], "1")
 
     @patch("adapters.adapter_base._HAS_PAHO", True)
     @patch("adapters.adapter_base.mqtt")
@@ -786,65 +803,175 @@ class TestMqttAdapterBaseMessageTimestamp(unittest.TestCase):
 class TestMqttAdapterBaseWatchdog(unittest.TestCase):
     """Tests for the silence watchdog."""
 
-    def test_watchdog_forces_reconnect_on_silence(self) -> None:
-        """Watchdog detects silence and forces disconnect+reconnect."""
+    # NOTE on test history: the original three tests in this class
+    # (committed in 7679713 alongside the watchdog itself) were
+    # tautologies that set state, did the watchdog's work manually,
+    # then asserted the manual work happened.  They never invoked
+    # _watchdog_loop or any real watchdog code, and would have
+    # passed even if _watchdog_loop were entirely deleted.  They
+    # gave false confidence that let the production zombie bug
+    # recur on 2026-04-07 (see project_zigbee_adapter_zombie and
+    # feedback_adapter_watchdog_test_gap in project memory).  The
+    # tests below replace them with real exercises of the actual
+    # _watchdog_check and _recover_from_silence methods.
+
+    def test_watchdog_check_returns_false_before_first_message(self) -> None:
+        """_watchdog_check skips when no message has ever arrived."""
+        adapter = StubMqttAdapter()
+        adapter._connected = True
+        adapter._last_message_time = None
+        adapter._recover_from_silence = MagicMock()  # type: ignore[method-assign]
+
+        result: bool = adapter._watchdog_check()
+
+        self.assertFalse(result)
+        adapter._recover_from_silence.assert_not_called()
+
+    def test_watchdog_check_returns_false_within_silence_threshold(self) -> None:
+        """_watchdog_check skips when silence is shorter than threshold."""
         from adapters.adapter_base import WATCHDOG_SILENCE_THRESHOLD
         adapter = StubMqttAdapter()
-        adapter._running = True
         adapter._connected = True
-        adapter._client = MagicMock()
-        # Simulate a message that arrived long ago.
-        adapter._last_message_time = (
-            time.monotonic() - WATCHDOG_SILENCE_THRESHOLD - 10
+        # Recent message — much less than the threshold.
+        adapter._last_message_time = time.monotonic() - (
+            WATCHDOG_SILENCE_THRESHOLD / 2.0
         )
-        # Verify preconditions.
-        last = adapter._last_message_time
-        silence = time.monotonic() - last
-        self.assertGreaterEqual(silence, WATCHDOG_SILENCE_THRESHOLD)
-        self.assertTrue(adapter._connected)
-        # Use the adapter's own logging via the real watchdog code path.
-        # We patch WATCHDOG_POLL_INTERVAL to 0 and run one iteration.
+        adapter._recover_from_silence = MagicMock()  # type: ignore[method-assign]
+
+        result: bool = adapter._watchdog_check()
+
+        self.assertFalse(result)
+        adapter._recover_from_silence.assert_not_called()
+
+    def test_watchdog_check_returns_false_when_not_connected(self) -> None:
+        """_watchdog_check skips when _connected is False (recovery in flight)."""
+        from adapters.adapter_base import WATCHDOG_SILENCE_THRESHOLD
+        adapter = StubMqttAdapter()
+        adapter._connected = False
+        adapter._last_message_time = time.monotonic() - (
+            WATCHDOG_SILENCE_THRESHOLD + 10
+        )
+        adapter._recover_from_silence = MagicMock()  # type: ignore[method-assign]
+
+        result: bool = adapter._watchdog_check()
+
+        self.assertFalse(result)
+        adapter._recover_from_silence.assert_not_called()
+
+    def test_watchdog_check_triggers_recovery_on_silence(self) -> None:
+        """_watchdog_check calls _recover_from_silence when silence exceeds threshold."""
+        from adapters.adapter_base import WATCHDOG_SILENCE_THRESHOLD
+        adapter = StubMqttAdapter()
+        adapter._connected = True
+        adapter._last_message_time = time.monotonic() - (
+            WATCHDOG_SILENCE_THRESHOLD + 10
+        )
+        adapter._recover_from_silence = MagicMock()  # type: ignore[method-assign]
+
         with self.assertLogs("glowup.adapter_base", level="WARNING") as cm:
-            _logger = logging.getLogger("glowup.adapter_base")
-            adapter._last_message_time = None
-            adapter._connected = False
-            _logger.warning(
-                "%s: no messages for %.0fs — forcing reconnect "
-                "(probable half-open socket)",
-                adapter._client_id_prefix, silence,
-            )
-            adapter._client.disconnect()
-            adapter._client.reconnect()
+            result: bool = adapter._watchdog_check()
+
+        self.assertTrue(result)
+        adapter._recover_from_silence.assert_called_once()
         self.assertTrue(
             any("forcing reconnect" in line for line in cm.output),
+            "Watchdog did not log the forcing-reconnect WARNING",
         )
-        adapter._client.disconnect.assert_called_once()
-        adapter._client.reconnect.assert_called_once()
-        self.assertIsNone(adapter._last_message_time)
-        self.assertFalse(adapter._connected)
 
-    def test_watchdog_ignores_before_first_message(self) -> None:
-        """Watchdog does nothing if no message has ever been received."""
+    def test_recover_from_silence_tears_down_old_client_and_rebuilds(self) -> None:
+        """_recover_from_silence calls loop_stop+disconnect on old client, then _create_and_start_client."""
         adapter = StubMqttAdapter()
-        adapter._running = True
+        old_client: MagicMock = MagicMock()
+        adapter._client = old_client
         adapter._connected = True
-        # _last_message_time is None — watchdog should skip.
-        self.assertIsNone(adapter._last_message_time)
-        # No reconnect should be triggered.
-        adapter._client = MagicMock()
-        # Verify the condition in the watchdog would skip.
-        self.assertIsNone(adapter._last_message_time)
+        adapter._last_message_time = time.monotonic()
+        adapter._create_and_start_client = MagicMock()  # type: ignore[method-assign]
 
-    def test_watchdog_ignores_when_not_connected(self) -> None:
-        """Watchdog does not force reconnect if already disconnected."""
-        adapter = StubMqttAdapter()
-        adapter._running = True
-        adapter._connected = False
-        adapter._client = MagicMock()
-        adapter._last_message_time = time.monotonic() - 999
-        # Both conditions needed: silence AND _connected.
-        # _connected is False, so watchdog should not act.
+        adapter._recover_from_silence()
+
+        # Old client must have been torn down — both calls,
+        # in order, on the SAME client object.
+        old_client.loop_stop.assert_called_once()
+        old_client.disconnect.assert_called_once()
+        # State must have been reset to the pre-connection condition
+        # so a re-firing watchdog skips until the new client connects.
+        self.assertIsNone(adapter._last_message_time)
         self.assertFalse(adapter._connected)
+        # And the rebuild must have been invoked.
+        adapter._create_and_start_client.assert_called_once()
+
+    def test_recover_from_silence_handles_old_client_already_dead(self) -> None:
+        """_recover_from_silence still rebuilds when old client teardown raises."""
+        adapter = StubMqttAdapter()
+        old_client: MagicMock = MagicMock()
+        old_client.loop_stop.side_effect = OSError("socket already dead")
+        old_client.disconnect.side_effect = OSError("socket already dead")
+        adapter._client = old_client
+        adapter._connected = True
+        adapter._last_message_time = time.monotonic()
+        adapter._create_and_start_client = MagicMock()  # type: ignore[method-assign]
+
+        # Must not raise.
+        adapter._recover_from_silence()
+
+        # Rebuild must still happen even when teardown best-effort calls
+        # raise — that's the whole point: old socket is already dead,
+        # which is exactly the condition that triggered recovery.
+        adapter._create_and_start_client.assert_called_once()
+        self.assertIsNone(adapter._last_message_time)
+        self.assertFalse(adapter._connected)
+
+    @patch("adapters.adapter_base._HAS_PAHO", True)
+    @patch("adapters.adapter_base.mqtt")
+    def test_create_and_start_client_uses_unique_client_id_per_call(
+        self, mock_mqtt: MagicMock,
+    ) -> None:
+        """Every call to _create_and_start_client increments _reconnect_count and produces a fresh client_id.
+
+        This is the load-bearing assertion of the post-7679713 fix:
+        the production zombie bug came from reusing the same client_id
+        across recovery cycles, which let broker-2's mosquitto get
+        stuck in a session-takeover state.  Each rebuild MUST get a
+        new id.
+        """
+        # Make every Client() call return a fresh MagicMock so we
+        # can inspect them independently.
+        clients_created: list[MagicMock] = []
+        def _make_client(*args: Any, **kwargs: Any) -> MagicMock:
+            c = MagicMock()
+            clients_created.append(c)
+            return c
+        mock_mqtt.Client.side_effect = _make_client
+
+        with patch("adapters.adapter_base._PAHO_V2", False):
+            adapter = StubMqttAdapter()
+            adapter._reconnect_count = 0
+            # Call three times in a row — exactly what the watchdog
+            # would do across three recovery cycles in the same epoch
+            # second.  Counter component must keep them unique.
+            adapter._create_and_start_client()
+            adapter._create_and_start_client()
+            adapter._create_and_start_client()
+
+        self.assertEqual(adapter._reconnect_count, 3)
+        self.assertEqual(len(clients_created), 3)
+
+        # Extract the client_id passed to each Client() call.
+        ids: list[str] = []
+        for call_args in mock_mqtt.Client.call_args_list:
+            ids.append(call_args.kwargs["client_id"])
+        # All three must be distinct strings — this is the assertion
+        # that would have caught the production bug at test time.
+        self.assertEqual(len(set(ids)), 3, f"Client IDs collided: {ids}")
+        # And each must end with the matching counter suffix.
+        self.assertTrue(ids[0].endswith("-1"))
+        self.assertTrue(ids[1].endswith("-2"))
+        self.assertTrue(ids[2].endswith("-3"))
+
+        # Each client must have had its callbacks wired and loop started.
+        for c in clients_created:
+            c.connect_async.assert_called_once()
+            c.loop_start.assert_called_once()
 
     @patch("adapters.adapter_base._HAS_PAHO", True)
     @patch("adapters.adapter_base.mqtt")
@@ -1223,6 +1350,26 @@ class TestAsyncPollingAdapterBaseLifecycle(unittest.TestCase):
         time.sleep(0.2)
         self.assertTrue(adapter.disconnected)
 
+    def _wait_for(
+        self,
+        predicate: "callable[[], bool]",
+        timeout: float = 5.0,
+        poll: float = 0.01,
+    ) -> bool:
+        """Poll ``predicate`` until it returns True or ``timeout`` elapses.
+
+        Returns True if the predicate became True, False on timeout.
+        Used by the async retry tests to replace fixed time.sleep()
+        budgets that flake under load.  See feedback memory entry
+        about why fixed-sleep test budgets are an antipattern.
+        """
+        deadline: float = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return True
+            time.sleep(poll)
+        return False
+
     def test_reconnect_on_connect_failure(self) -> None:
         """Connection failures trigger retry with backoff."""
         adapter = StubAsyncAdapter(
@@ -1231,12 +1378,26 @@ class TestAsyncPollingAdapterBaseLifecycle(unittest.TestCase):
             max_reconnect_delay=0.1,
         )
         adapter.start()
-        # Wait for retries: fail, wait 0.02, fail, wait 0.04, succeed.
-        time.sleep(0.5)
+        # Expected sequence: fail, wait 0.02, fail, wait 0.04, succeed,
+        # then run one cycle.  Poll until the success-and-cycle state
+        # is reached rather than guessing a sleep budget — under load
+        # a fixed sleep can wake before the asyncio scheduler has run
+        # the 3rd attempt, producing a flake.
+        reached: bool = self._wait_for(
+            lambda: (
+                adapter.connected
+                and adapter._connect_attempts == 3
+                and adapter.cycle_count == 1
+            ),
+            timeout=5.0,
+        )
         adapter.stop()
-        self.assertTrue(adapter.connected)
-        self.assertEqual(adapter._connect_attempts, 3)
-        self.assertEqual(adapter.cycle_count, 1)
+        self.assertTrue(
+            reached,
+            f"State not reached: connected={adapter.connected}, "
+            f"attempts={adapter._connect_attempts}, "
+            f"cycles={adapter.cycle_count}",
+        )
 
     def test_backoff_resets_after_success(self) -> None:
         """Delay resets to initial value after successful connect."""
@@ -1248,27 +1409,48 @@ class TestAsyncPollingAdapterBaseLifecycle(unittest.TestCase):
             max_reconnect_delay=0.5,
         )
         adapter.start()
-        time.sleep(0.3)
+        # Poll for cycle_count == 1 instead of fixed sleep.
+        reached: bool = self._wait_for(
+            lambda: adapter.cycle_count == 1,
+            timeout=5.0,
+        )
         adapter.stop()
-        # If backoff reset properly, the cycle ran.
-        self.assertEqual(adapter.cycle_count, 1)
+        self.assertTrue(
+            reached,
+            f"cycle_count never reached 1: {adapter.cycle_count}",
+        )
 
     def test_backoff_capped_at_max(self) -> None:
-        """Reconnect delay does not exceed max_reconnect_delay."""
-        # With initial=0.02, max=0.05: delays would be 0.02, 0.04, 0.05
-        # (capped at 0.05, not 0.08).
+        """Reconnect delay does not exceed max_reconnect_delay.
+
+        With initial=0.02, max=0.05: delays would be 0.02, 0.04, 0.05
+        (capped at 0.05, not 0.08).  Three failures then success →
+        4 total attempts, 1 successful cycle.
+
+        Originally written with a fixed ``time.sleep(0.5)`` budget;
+        flaked under load when the asyncio scheduler did not run all
+        4 attempts within 500ms.  Now polls for the actual end state
+        with a generous upper bound.
+        """
         adapter = StubAsyncAdapter(
             connect_error_count=3,
             reconnect_delay=0.02,
             max_reconnect_delay=0.05,
         )
         adapter.start()
-        t0: float = time.time()
-        # Total wait: 0.02 + 0.04 + 0.05 + connect = ~0.12
-        time.sleep(0.5)
+        reached: bool = self._wait_for(
+            lambda: (
+                adapter.connected
+                and adapter._connect_attempts == 4
+            ),
+            timeout=5.0,
+        )
         adapter.stop()
-        self.assertTrue(adapter.connected)
-        self.assertEqual(adapter._connect_attempts, 4)
+        self.assertTrue(
+            reached,
+            f"State not reached: connected={adapter.connected}, "
+            f"attempts={adapter._connect_attempts}",
+        )
 
     def test_stop_interrupts_reconnect_sleep(self) -> None:
         """stop() during reconnect sleep exits quickly."""

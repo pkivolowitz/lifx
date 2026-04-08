@@ -512,13 +512,34 @@ class TestBrokerGoesCompletelyDead(unittest.TestCase):
 class TestBrokerHangsHalfOpen(unittest.TestCase):
     """Broker stops sending data but keeps socket open — half-open socket.
 
-    This is the exact failure mode that went undetected for 24+ hours
-    in production.  The watchdog must detect the silence and force a
-    reconnect.
+    This is the exact failure mode that killed Zigbee data on the
+    production hub on 2026-04-07 09:14:50 and went undetected for
+    26+ hours.  The original version of this test (commit 7679713,
+    2026-04-06) only asserted that the watchdog FIRED — that a new
+    TCP connection was opened and the "forcing reconnect" log line
+    was printed.  Both happened in production too.  The recurrence
+    was hidden because the test never checked whether messages
+    actually resumed flowing AFTER the recovery.
+
+    The fixed test below adds the post-recovery freshness check:
+    after the watchdog fires, resume publishing on the broker,
+    snapshot the adapter's message count, wait, and assert the
+    count grew.  An action-attempted assertion is not the same as
+    an action-succeeded assertion.  See
+    [feedback_adapter_watchdog_test_gap] in project memory.
     """
 
-    def test_watchdog_detects_silence_and_reconnects(self) -> None:
-        """Watchdog fires after silence threshold, adapter reconnects."""
+    def test_watchdog_detects_silence_and_recovers_message_flow(self) -> None:
+        """Watchdog fires AND messages actually flow again after recovery.
+
+        Two-phase assertion:
+            1. Watchdog detected silence and tore down + rebuilt the
+               client (broker.connections increased, "forcing reconnect"
+               WARNING was logged).
+            2. After publishing resumes, the adapter actually receives
+               new messages — proving the recovery path delivers data,
+               not just that it was attempted.
+        """
         broker = FaultBroker()
         broker.start()
         try:
@@ -543,16 +564,42 @@ class TestBrokerHangsHalfOpen(unittest.TestCase):
                 broker.inject_silence()
                 initial_connections: int = broker.connections
 
-                # Wait for watchdog to detect silence and force reconnect.
+                # Phase 1: wait for watchdog to detect silence and
+                # force a recovery.  The watchdog tears down the old
+                # client and creates a new one, which appears as a
+                # fresh TCP connection on the broker side.
                 with self.assertLogs("glowup.adapter_base", level="WARNING") as cm:
                     deadline = time.monotonic() + TEST_SILENCE_THRESHOLD + 8.0
                     while (broker.connections <= initial_connections
                            and time.monotonic() < deadline):
                         time.sleep(0.5)
 
+                self.assertGreater(
+                    broker.connections, initial_connections,
+                    "Watchdog did not trigger a reconnect within deadline",
+                )
                 self.assertTrue(
                     any("forcing reconnect" in line for line in cm.output),
                     "Watchdog did not log forced reconnect",
+                )
+
+                # Phase 2: prove the recovery actually delivers data.
+                # Resume publishing, snapshot the message count, wait,
+                # and assert the count advanced.  THIS IS THE
+                # ASSERTION THAT WAS MISSING IN COMMIT 7679713 AND
+                # THAT LET THE PRODUCTION ZOMBIE BUG SLIP THROUGH.
+                broker.resume_publishing()
+                count_after_recovery: int = adapter.message_count()
+                deadline = time.monotonic() + RECONNECT_WAIT
+                while (adapter.message_count() <= count_after_recovery
+                       and time.monotonic() < deadline):
+                    time.sleep(0.3)
+                self.assertGreater(
+                    adapter.message_count(), count_after_recovery,
+                    "Watchdog reconnected (broker saw new TCP) but no "
+                    "messages flowed afterwards — this is the exact "
+                    "production zombie state from 2026-04-07. Recovery "
+                    "is broken.",
                 )
         finally:
             adapter.stop()
