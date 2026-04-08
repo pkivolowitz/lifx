@@ -88,8 +88,24 @@ class PowerLogger:
         self._write_count: int = 0
         # Per-device last-write timestamp to throttle writes.
         self._last_write: dict[str, float] = {}
-        # Per-device accumulator for current readings.
+        # Per-device CARRY-FORWARD state.  Holds the most recent value
+        # of every property ever seen for the device — NEVER popped.
+        # Each new record() merges the incoming property into this
+        # dict; each write snapshots the dict into a row.  This is
+        # the fix for the production NULL-column bug observed
+        # 2026-04-08: ThirdReality plugs do change-based reporting,
+        # so a single Z2M message can contain only `current` (no
+        # power, no voltage).  The previous design popped _pending
+        # on every write, so any subsequent partial message produced
+        # rows with NULL columns for properties that did not happen
+        # to arrive in that exact 5-second window.
         self._pending: dict[str, dict[str, float]] = {}
+        # Per-device dirty flag — True if _pending has been modified
+        # since the last write for this device.  flush_pending()
+        # only writes a row when dirty, preventing the carry-forward
+        # state from generating redundant snapshots when the device
+        # has gone silent.
+        self._dirty: dict[str, bool] = {}
         self._running: bool = True
         self._flush_thread: Optional[threading.Thread] = None
         self._open()
@@ -156,8 +172,29 @@ class PowerLogger:
     def record(self, device: str, prop: str, value: float) -> None:
         """Record a power-related signal value.
 
-        Accumulates properties for a device and writes a row when
-        enough data has arrived or the throttle interval has passed.
+        Merges the incoming property into the device's carry-forward
+        state and writes a row when the throttle interval has passed.
+
+        Carry-forward semantics:  ThirdReality smart plugs (and most
+        Zigbee devices) do change-based reporting — a Z2M message can
+        contain any subset of the device's properties, only those
+        that have changed beyond the report-on-change threshold since
+        the last sample.  The PowerLogger therefore cannot treat each
+        record() call as a complete snapshot.  Instead, ``_pending``
+        holds the most recently observed value of every property
+        ever seen for the device, and each row written is a snapshot
+        of that dict at write time.  Properties not present in the
+        current message inherit their previous value.  This is the
+        fix for the 2026-04-08 NULL-column bug, when the dashboard
+        appeared to show LRTV "drops to 0 W" while the TV was on —
+        those rows were not 0 W readings, they were sparse messages
+        producing NULL columns that the chart's ``|| 0`` JS coercion
+        rendered as zero.
+
+        A device whose plug stops reporting will eventually carry
+        the same row contents forward indefinitely; ``flush_pending``
+        consults the per-device ``_dirty`` flag to avoid writing
+        redundant snapshots when nothing has actually changed.
 
         Args:
             device: Device friendly name (e.g., ``ML_Power``).
@@ -173,6 +210,7 @@ class PowerLogger:
             if device not in self._pending:
                 self._pending[device] = {}
             self._pending[device][prop] = value
+            self._dirty[device] = True
 
             # Throttle: only write if enough time has passed.
             now: float = time.time()
@@ -180,12 +218,16 @@ class PowerLogger:
             if now - last < MIN_WRITE_INTERVAL:
                 return
 
-            # Write accumulated values.
-            readings: dict[str, float] = self._pending.pop(device, {})
+            # Snapshot the carry-forward state.  Do NOT pop —
+            # ``_pending`` must persist across writes so that
+            # properties seen earlier remain available when later
+            # messages contain only a subset of fields.
+            readings: dict[str, float] = dict(self._pending[device])
             if not readings:
                 return
 
             self._last_write[device] = now
+            self._dirty[device] = False
             try:
                 self._conn.execute(
                     """INSERT INTO power_readings
@@ -212,16 +254,26 @@ class PowerLogger:
                 logger.warning("Power logger write failed: %s", exc)
 
     def flush_pending(self) -> None:
-        """Flush any pending readings whose throttle interval has passed.
+        """Flush any pending dirty carry-forward state on a timer.
 
-        Called by a background timer to ensure accumulated data is
-        written even when MqttSignalBus dedup suppresses further
-        record() calls for unchanged values.  Without this, a value
-        that lands in ``_pending`` during a throttle window and never
-        gets another record() call would sit there forever.
+        Called by a background timer to ensure that if a device is
+        updated once and then goes quiet (e.g., MqttSignalBus dedup
+        suppresses subsequent identical values, or the device
+        actually stops reporting), the most recent state still lands
+        in the database within ``MIN_WRITE_INTERVAL``.
 
-        Thread-safe.  Respects per-device throttle — only flushes
-        devices whose ``MIN_WRITE_INTERVAL`` has elapsed.
+        Carry-forward interaction:  Because ``record()`` no longer
+        pops ``_pending``, this method must NOT write on every poll
+        cycle — that would generate a steady stream of redundant
+        snapshots when the device is silent and pollute the database.
+        The per-device ``_dirty`` flag prevents this: it is set
+        ``True`` on every ``record()`` and cleared when a row is
+        written (either here or in ``record()``).  flush_pending
+        only emits a row when ``_dirty`` is ``True``, so each
+        burst of activity produces at most one extra row beyond what
+        the inline throttle in ``record()`` would have written.
+
+        Thread-safe.  Respects per-device throttle.
         """
         if self._conn is None:
             return
@@ -231,15 +283,22 @@ class PowerLogger:
             # Snapshot device list to avoid mutating dict during iteration.
             devices: list[str] = list(self._pending.keys())
             for device in devices:
+                # Skip silent devices — nothing new since last write.
+                if not self._dirty.get(device, False):
+                    continue
+
                 last: float = self._last_write.get(device, 0.0)
                 if now - last < MIN_WRITE_INTERVAL:
                     continue
 
-                readings: dict[str, float] = self._pending.pop(device, {})
+                # Snapshot, do not pop.  Carry-forward state must
+                # persist for the next message that may be sparse.
+                readings: dict[str, float] = dict(self._pending[device])
                 if not readings:
                     continue
 
                 self._last_write[device] = now
+                self._dirty[device] = False
                 try:
                     self._conn.execute(
                         """INSERT INTO power_readings

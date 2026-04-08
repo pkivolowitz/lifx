@@ -408,21 +408,39 @@ function fetchReadings() {
             var values = [];
             for (var i = 0; i < readings.length; i++) {
                 labels.push(formatTime(readings[i].bucket));
-                values.push(readings[i].power || 0);
+                /* Push null (not 0) for missing readings so Chart.js
+                 * renders a gap in the line.  Coercing null to 0 here
+                 * was the bug behind the LRTV "drops to 0" mystery on
+                 * 2026-04-08: NULL columns from sparse Z2M messages
+                 * looked like the TV was being switched off every few
+                 * seconds.  Render gaps honestly so any future data-
+                 * quality regression is visible at a glance. */
+                var p = readings[i].power;
+                values.push(p == null ? null : p);
             }
             chart.data.labels = labels;
             chart.data.datasets[0].data = values;
             chart.update();
 
-            /* Update current reading from last data point. */
+            /* Update current reading from last data point.  Show "—"
+             * (em dash) for unknown values rather than fake zeros. */
             if (readings.length > 0) {
                 var last = readings[readings.length - 1];
                 document.getElementById("currentWatts").innerHTML =
-                    (last.power || 0).toFixed(1) + '<span class="stat-unit">W</span>';
+                    (last.power == null
+                        ? '—'
+                        : last.power.toFixed(1)) +
+                    '<span class="stat-unit">W</span>';
                 document.getElementById("voltage").innerHTML =
-                    (last.voltage || 0).toFixed(1) + '<span class="stat-unit">V</span>';
+                    (last.voltage == null
+                        ? '—'
+                        : last.voltage.toFixed(1)) +
+                    '<span class="stat-unit">V</span>';
                 document.getElementById("current").innerHTML =
-                    (last.current_a || 0).toFixed(2) + '<span class="stat-unit">A</span>';
+                    (last.current_a == null
+                        ? '—'
+                        : last.current_a.toFixed(2)) +
+                    '<span class="stat-unit">A</span>';
             }
         })
         .catch(function() {});
@@ -565,14 +583,19 @@ function updateControls() {
                 }
             }
             for (var dev in latest) {
+                var p = latest[dev].power;
                 var el = document.getElementById("ctrl-power-" + dev);
                 if (el) {
-                    el.textContent = (latest[dev].power || 0).toFixed(1) + " W";
+                    /* Show "—" for unknown rather than fake "0.0 W". */
+                    el.textContent = (p == null ? '—' : p.toFixed(1) + " W");
                 }
-                /* Infer state: power > 1W = ON. */
+                /* Infer state: power > 1W = ON.  When p is null we
+                 * have NO information about the device state — leave
+                 * the toggle as the user / a previous fetch left it,
+                 * do not flip it to OFF based on absent data. */
                 var chk = document.getElementById("ctrl-check-" + dev);
-                if (chk && !chk.matches(":focus")) {
-                    chk.checked = (latest[dev].power || 0) > 1;
+                if (chk && !chk.matches(":focus") && p != null) {
+                    chk.checked = p > 1;
                 }
             }
         })

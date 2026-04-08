@@ -598,20 +598,41 @@ class TestPowerLoggerPeriodicFlush(unittest.TestCase):
         # Should still be pending, not written.
         self.assertIn("dev", self.pl._pending)
 
-    def test_flush_clears_pending(self) -> None:
-        """After flush writes, _pending is cleared for that device."""
+    def test_flush_clears_dirty_but_keeps_pending(self) -> None:
+        """After flush writes, _dirty is cleared but _pending state is kept.
+
+        Updated 2026-04-08 from the original test_flush_clears_pending,
+        which asserted ``_pending`` was destructively popped after each
+        flush.  That destructive pop was the root cause of the LRTV
+        NULL-column bug — see TestPowerLoggerCarryForward and the
+        project_zigbee_adapter_zombie / power_logger memory entries.
+        New semantics: _pending holds the device's full carry-forward
+        state and is never popped; _dirty tracks whether anything new
+        has arrived since the last write.
+        """
         self.pl.record("dev", "power", 50.0)
         self.pl.record("dev", "power", 75.0)
         self.pl._last_write["dev"] = time.time() - MIN_WRITE_INTERVAL - 1
         self.pl.flush_pending()
-        self.assertNotIn("dev", self.pl._pending)
+        # Carry-forward state is preserved.
+        self.assertIn("dev", self.pl._pending)
+        self.assertEqual(self.pl._pending["dev"].get("power"), 75.0)
+        # And the dirty flag was cleared by the write.
+        self.assertFalse(self.pl._dirty.get("dev", False))
 
     def test_flush_noop_when_no_pending(self) -> None:
         """Flush with empty _pending does nothing and does not crash."""
         self.pl.flush_pending()  # Must not raise.
 
     def test_flush_multiple_devices(self) -> None:
-        """Flush writes pending data for all eligible devices."""
+        """Flush writes pending data for all eligible devices.
+
+        With carry-forward semantics, _pending is never popped — both
+        devices retain their state across the flush.  The observable
+        difference is the per-device _dirty flag: A's was cleared by
+        the flush write; B's stays True because B was still inside
+        its throttle window so no row was written for it.
+        """
         # Device A — eligible for flush.
         self.pl.record("A", "power", 10.0)
         self.pl.record("A", "power", 20.0)
@@ -624,9 +645,210 @@ class TestPowerLoggerPeriodicFlush(unittest.TestCase):
 
         self.pl.flush_pending()
 
-        # A should be flushed, B should still be pending.
-        self.assertNotIn("A", self.pl._pending)
+        # Both devices still have carry-forward state.
+        self.assertIn("A", self.pl._pending)
         self.assertIn("B", self.pl._pending)
+        # A was flushed (dirty cleared), B was throttle-skipped (still dirty).
+        self.assertFalse(self.pl._dirty.get("A", False))
+        self.assertTrue(self.pl._dirty.get("B", False))
+
+
+class TestPowerLoggerCarryForward(unittest.TestCase):
+    """Regression tests for the carry-forward fix (2026-04-08).
+
+    Background:  ThirdReality smart plugs (and most Zigbee devices) do
+    change-based reporting — a single Z2M message contains only the
+    properties that have crossed the report-on-change threshold since
+    the last sample.  In production on 2026-04-08, the LRTV plug
+    appeared on the dashboard to "drop to 0 W" every few seconds
+    while the TV was running, but the plug never actually reported
+    0 W.  Investigation showed:
+
+    - The drops were rendered from rows where ``power`` was NULL.
+    - The chart's ``readings[i].power || 0`` JS coercion was silently
+      turning NULL into 0 for display.
+    - The NULL rows were a write artifact: the original ``record()``
+      destructively popped ``_pending`` on every write, so when a
+      sparse Z2M message arrived containing only ``current``, the
+      row written for it had NULL for the four other columns.
+
+    The fix changes ``_pending`` to a carry-forward state that is
+    never popped, plus a per-device ``_dirty`` flag so flush_pending
+    does not write redundant snapshots.  These tests pin both halves
+    of the new behavior so the bug cannot silently come back.
+
+    The test ``test_lrtv_sparse_messages_produce_complete_rows`` is
+    the literal production reproduction — it simulates the exact
+    sequence that produced the bad rows in the live database and
+    asserts every row has all five columns populated.  It would
+    fail against the pre-fix code.
+    """
+
+    def setUp(self) -> None:
+        self._tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._path = self._tmpfile.name
+        self._tmpfile.close()
+        self.pl = PowerLogger(db_path=self._path)
+        self.pl._last_write.clear()
+
+    def tearDown(self) -> None:
+        self.pl.close()
+        os.unlink(self._path)
+
+    def _all_rows(self, device: str) -> list[tuple]:
+        """Return every row for a device with all five reading columns.
+
+        Bypasses ``query()`` because that method buckets and averages —
+        we need to inspect the raw rows to see NULLs.
+        """
+        conn = sqlite3.connect(self._path)
+        try:
+            return conn.execute(
+                "SELECT power, voltage, current_a, energy, power_factor "
+                "FROM power_readings WHERE device=? ORDER BY id",
+                (device,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    def test_pending_is_not_popped_after_write(self) -> None:
+        """After a write, _pending[device] still contains the snapshot."""
+        self.pl.record("dev", "power", 100.0)
+        # Write happened — _pending must STILL hold the value.
+        self.assertIn("dev", self.pl._pending)
+        self.assertEqual(self.pl._pending["dev"].get("power"), 100.0)
+        # And _dirty was cleared.
+        self.assertFalse(self.pl._dirty.get("dev", False))
+
+    def test_subsequent_record_merges_into_pending(self) -> None:
+        """A second property record() merges into the carry-forward dict."""
+        self.pl.record("dev", "power", 100.0)
+        # Throttle is now active.  Add voltage — must merge, not replace.
+        self.pl.record("dev", "voltage", 124.8)
+        self.assertEqual(self.pl._pending["dev"].get("power"), 100.0)
+        self.assertEqual(self.pl._pending["dev"].get("voltage"), 124.8)
+        # And the merge marked the device dirty (a write is owed).
+        self.assertTrue(self.pl._dirty.get("dev", False))
+
+    def test_lrtv_sparse_messages_produce_complete_rows(self) -> None:
+        """The production LRTV reproduction.
+
+        Simulates: a complete first Z2M message with all five
+        properties, then a sparse second Z2M message containing
+        ONLY ``current`` (the most-changing property on a TV plug).
+        After the fix, the row written for the sparse message must
+        contain the carried-forward values of the four other
+        properties, not NULL.
+
+        Pre-fix behavior: the second row had power=NULL, voltage=NULL,
+        energy=NULL, power_factor=NULL — the chart's ``|| 0`` coercion
+        rendered the NULL power as a drop to 0 W.
+
+        Post-fix behavior: every row carries the most recently seen
+        value of every property.
+        """
+        # First Z2M message — all five properties.  Throttle is empty,
+        # so the first record() call writes a row with whichever
+        # property arrives first.  The remaining properties accumulate
+        # in _pending under throttle suppression.
+        self.pl.record("LRTV", "power", 245.0)
+        self.pl.record("LRTV", "voltage", 124.8)
+        self.pl.record("LRTV", "current", 2.0)
+        self.pl.record("LRTV", "energy", 5.11)
+        self.pl.record("LRTV", "power_factor", 1.0)
+
+        # Backdate so the next call is past the throttle window —
+        # the next record() will write a fresh row.
+        self.pl._last_write["LRTV"] = time.time() - MIN_WRITE_INTERVAL - 1
+
+        # Sparse second Z2M message — ONLY ``current`` changed.
+        # This is the EXACT shape that produced
+        #     (None, None, 2.13, None, None)
+        # rows in the production database before the fix.
+        self.pl.record("LRTV", "current", 2.13)
+
+        rows: list[tuple] = self._all_rows("LRTV")
+        self.assertGreaterEqual(
+            len(rows), 2,
+            "Expected at least 2 rows (one per write window)",
+        )
+
+        # The most recent row — the one written from the sparse
+        # current-only message — must carry forward all the other
+        # properties.  Pre-fix, this row was
+        # (None, None, 2.13, None, None); post-fix, all five must
+        # be populated.
+        last_row: tuple = rows[-1]
+        col_names: tuple = (
+            "power", "voltage", "current_a", "energy", "power_factor",
+        )
+        for col, val in zip(col_names, last_row):
+            self.assertIsNotNone(
+                val,
+                f"Carry-forward failed: column {col} is NULL in row "
+                f"written from sparse message.  Full row: "
+                f"{dict(zip(col_names, last_row))}",
+            )
+        # And the values must be the carry-forward, not stale garbage.
+        self.assertAlmostEqual(last_row[0], 245.0, places=1)   # power
+        self.assertAlmostEqual(last_row[1], 124.8, places=1)   # voltage
+        self.assertAlmostEqual(last_row[2], 2.13, places=2)    # current (fresh)
+        self.assertAlmostEqual(last_row[3], 5.11, places=2)    # energy
+        self.assertAlmostEqual(last_row[4], 1.0, places=2)     # power_factor
+
+    def test_flush_pending_skips_when_not_dirty(self) -> None:
+        """flush_pending must NOT write a row when _dirty is False.
+
+        Without the dirty flag, carry-forward state would generate a
+        steady stream of redundant identical snapshots whenever a
+        device went silent.  The dirty flag is the throttle that
+        keeps the database honest about what has actually changed.
+        """
+        self.pl.record("dev", "power", 100.0)
+        # Now _dirty["dev"] is False (write just happened).
+        write_count_before: int = self.pl._write_count
+        # Backdate the throttle so the only thing standing between
+        # us and a redundant write is the dirty flag.
+        self.pl._last_write["dev"] = time.time() - MIN_WRITE_INTERVAL - 1
+        self.pl.flush_pending()
+        # No new row was written — silence stays silent.
+        self.assertEqual(
+            self.pl._write_count, write_count_before,
+            "flush_pending wrote a redundant row when nothing was dirty",
+        )
+
+    def test_flush_pending_writes_dirty_after_dedup_silence(self) -> None:
+        """flush_pending must write the latest snapshot for the dedup case.
+
+        Scenario the original flush_pending was added to handle:
+        a property arrives, gets accumulated and throttled, then
+        MqttSignalBus dedup suppresses every subsequent value (or
+        the device just goes quiet).  Without flush_pending, the
+        accumulated value sits in _pending forever.
+        """
+        # First write — establishes baseline, _dirty=False.
+        self.pl.record("dev", "power", 100.0)
+        write_count_after_first: int = self.pl._write_count
+        # Sparse follow-up update arrives within the throttle
+        # window — accumulated, marked dirty, not written yet.
+        self.pl.record("dev", "voltage", 124.8)
+        self.assertTrue(self.pl._dirty.get("dev"))
+        # No further record() calls (dedup, silence, whatever).
+        # Backdate so the throttle is no longer the gate.
+        self.pl._last_write["dev"] = time.time() - MIN_WRITE_INTERVAL - 1
+        self.pl.flush_pending()
+        # A row WAS written — flush honored the dirty flag.
+        self.assertGreater(
+            self.pl._write_count, write_count_after_first,
+            "Dirty pending data was not flushed",
+        )
+        # And dirty is now cleared.
+        self.assertFalse(self.pl._dirty.get("dev", False))
+        # Next flush is a no-op (silence stays silent again).
+        write_count_after_flush: int = self.pl._write_count
+        self.pl._last_write["dev"] = time.time() - MIN_WRITE_INTERVAL - 1
+        self.pl.flush_pending()
+        self.assertEqual(self.pl._write_count, write_count_after_flush)
 
 
 if __name__ == "__main__":
