@@ -23,6 +23,7 @@ from urllib.parse import unquote
 # server_constants not used in this module.
 from device_registry import DeviceRegistry
 from infrastructure.adapter_proxy import KeepaliveProxy
+from transport import LifxDevice, SOCKET_TIMEOUT
 
 
 class RegistryHandlerMixin:

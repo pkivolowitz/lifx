@@ -77,11 +77,16 @@ class GroupHandlerMixin:
         self._save_config_field("groups", all_groups)
         self.config["groups"] = all_groups
 
-        # Update runtime group config so next scan cycle builds
-        # the VirtualMultizoneEmitter.  Lock to prevent race with
-        # scheduler thread reading _group_config concurrently.
+        # Update runtime group config AND rebuild the VirtualMultizone-
+        # Emitter in a single critical section so no other thread can
+        # observe the new _group_config entry without the matching
+        # emitter in _emitters.  Previously this handler only updated
+        # _group_config and waited for load_devices / Rediscover to
+        # build the emitter — which meant newly-created groups were
+        # silently dead until the user happened to run Rediscover.
         with self.device_manager._lock:
             self.device_manager._group_config[name] = clean_members
+            self.device_manager._rebuild_group_emitter_locked(name)
 
         logging.info(
             "API: group '%s' created with %d member(s): %s",
@@ -144,10 +149,20 @@ class GroupHandlerMixin:
         self._save_config_field("groups", updated)
         self.config["groups"] = updated
 
-        # Update runtime group config under lock.
+        # Update runtime group config AND rebuild the emitter under a
+        # single lock.  On rename, the old group's emitter must be
+        # torn down before the new one is built so stale group:<old>
+        # entries do not linger in _emitters.  The rebuild helper
+        # handles the teardown automatically when it sees the name
+        # is no longer in _group_config.
         with self.device_manager._lock:
             self.device_manager._group_config.pop(name, None)
             self.device_manager._group_config[new_name] = clean_members
+            if new_name != name:
+                # Old name is gone from _group_config — helper will
+                # drop the old group_id emitter cleanly.
+                self.device_manager._rebuild_group_emitter_locked(name)
+            self.device_manager._rebuild_group_emitter_locked(new_name)
 
         # Cascade rename into schedule entries that reference this group.
         renamed_count: int = 0
@@ -193,9 +208,13 @@ class GroupHandlerMixin:
         self._save_config_field("groups", updated)
         self.config["groups"] = updated
 
-        # Remove from runtime group config under lock.
+        # Remove from runtime group config AND tear down the emitter
+        # in the same critical section.  The rebuild helper, seeing
+        # the name is no longer in _group_config, drops the emitter,
+        # stops any active controller, and clears override tracking.
         with self.device_manager._lock:
             self.device_manager._group_config.pop(name, None)
+            self.device_manager._rebuild_group_emitter_locked(name)
 
         # Report any schedule entries that reference the deleted group.
         specs: list[dict[str, Any]] = self.config.get("schedule", [])

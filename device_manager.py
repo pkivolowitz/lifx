@@ -388,6 +388,90 @@ class DeviceManager:
 
         return self._devices_as_list()
 
+    def _rebuild_group_emitter_locked(self, group_name: str) -> None:
+        """Rebuild (or remove) the virtual emitter for a single group.
+
+        This is the narrow hot-path for dashboard-driven group CRUD —
+        it avoids re-probing every device the way :meth:`load_devices`
+        does.  Call it after mutating ``_group_config`` to bring
+        ``_emitters`` and ``_controllers`` back into sync without a
+        full rediscover.
+
+        Semantics:
+
+        - If *group_name* is no longer present in ``_group_config``
+          (delete case), any existing emitter, controller, and
+          override tracking for the corresponding ``group:<name>``
+          identifier are dropped.
+        - If *group_name* is present but its membership list is empty
+          or none of its members are currently cached in
+          ``_emitters``, the same drop happens and a warning is
+          logged — the group is effectively dead until the user runs
+          Rediscover to introspect the new members.
+        - Otherwise, any lingering controller for the old group
+          definition is stopped (so in-flight effects on the previous
+          membership do not keep running), a fresh
+          :class:`VirtualMultizoneEmitter` is constructed from the
+          currently-cached member emitters, and the result is stored
+          in ``_emitters`` under the ``group:<name>`` key.
+
+        Caller must hold ``self._lock``.  Matches the locking
+        discipline used by :meth:`load_devices`.
+
+        Args:
+            group_name: The human-readable group name — the same key
+                used in ``_group_config``.  Not the ``group:<name>``
+                emitter identifier.
+        """
+        group_id: str = _group_id_from_name(group_name)
+
+        # Stop any lingering controller for this group before
+        # touching its emitter — a running effect on the old
+        # definition would otherwise keep firing at stale member
+        # emitters.  Happens on both rebuild and delete paths.
+        old_ctrl: Optional[Controller] = self._controllers.pop(
+            group_id, None,
+        )
+        if old_ctrl is not None:
+            old_ctrl.stop(fade_ms=0)
+
+        ips: list[str] = self._group_config.get(group_name, [])
+        if not ips:
+            # Delete case, or empty-membership update — drop the
+            # emitter and override tracking entirely.
+            self._emitters.pop(group_id, None)
+            self._overrides.pop(group_id, None)
+            logger.info(
+                "Group '%s' — emitter removed (no members)", group_name,
+            )
+            return
+
+        # Assemble member emitters from the currently-cached entries.
+        # IPs not in ``_emitters`` are skipped — for freshly-discovered
+        # devices that have not yet been introspected via Rediscover,
+        # the user must Rediscover first for them to participate.
+        member_emitters: list[Emitter] = [
+            self._emitters[ip] for ip in ips if ip in self._emitters
+        ]
+        if not member_emitters:
+            logger.warning(
+                "Group '%s' has no reachable devices (%d configured) "
+                "— emitter not rebuilt, run Rediscover to introspect "
+                "new members", group_name, len(ips),
+            )
+            self._emitters.pop(group_id, None)
+            self._overrides.pop(group_id, None)
+            return
+
+        vem: VirtualMultizoneEmitter = VirtualMultizoneEmitter(
+            member_emitters, name=group_name, owns_emitters=False,
+        )
+        self._emitters[group_id] = vem
+        logger.info(
+            "Group '%s' rebuilt — %d emitter(s), %d zone(s)",
+            group_name, len(member_emitters), vem.zone_count,
+        )
+
     @property
     def ready(self) -> bool:
         """Return ``True`` once initial device loading has completed."""

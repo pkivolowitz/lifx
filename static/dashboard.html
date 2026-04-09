@@ -295,11 +295,76 @@
     padding: 6px 0;
     border-bottom: 1px solid var(--border);
     font-size: 13px;
+    flex-wrap: wrap;
+    row-gap: 2px;
   }
   .discovered-row:last-child { border-bottom: none; }
   .discovered-ip { font-weight: 600; color: var(--green); }
   .discovered-label { color: var(--text); }
   .discovered-mac { color: var(--dim); font-family: monospace; font-size: 12px; }
+  /* Inline labeling controls added to each discovered-bulbs row.
+     Per-row: editable label input + Identify button + error slot.
+     Label input is borderless at rest, bordered on hover/focus, so
+     the row stays visually calm until the user is actually editing. */
+  .discovered-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+  }
+  .discovered-label-input {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text);
+    font-size: 13px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    min-width: 140px;
+    outline: none;
+    font-family: inherit;
+  }
+  .discovered-label-input:hover {
+    border-color: var(--border);
+  }
+  .discovered-label-input:focus {
+    border-color: var(--accent);
+    background: var(--bg);
+  }
+  .discovered-label-input::placeholder {
+    color: var(--dim);
+    font-style: italic;
+  }
+  .btn-identify {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 2px 10px;
+    border-radius: 3px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .btn-identify:hover {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .btn-identify.active {
+    background: var(--green);
+    color: #fff;
+    border-color: var(--green);
+  }
+  .btn-identify:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .discovered-error {
+    flex-basis: 100%;
+    color: var(--accent);
+    font-size: 11px;
+    padding: 2px 0 4px 0;
+  }
   .refresh-note {
     color: var(--dim);
     font-size: 11px;
@@ -1056,35 +1121,57 @@ async function refresh() {
     }
 
     // Discovered Devices — cross-reference with device list for
-    // labels, product type, and zone count.
+    // labels, product type, and zone count.  Each row exposes an
+    // inline label input and an Identify button so the user can
+    // label unknown devices directly from the dashboard without
+    // touching the CLI registry tool.
     const devByIp = {};
     physical.forEach(d => { devByIp[d.ip] = d; });
     const dbEl = document.getElementById('discovered-bulbs');
-    if (bulbs.length === 0) {
-      dbEl.innerHTML =
-        '<div class="device-idle" style="padding:8px 0;">No devices discovered yet</div>';
-    } else {
-      dbEl.innerHTML = bulbs.map(b => {
-        const dev = devByIp[b.ip];
-        const label = (dev && dev.label) || b.label || '';
-        const product = (dev && dev.product) || '';
-        const zones = (dev && dev.zones) || 1;
-        const isMatrix = dev && dev.is_matrix;
-        const nameCol = label || b.mac;
-        const zoneMeta = isMatrix
-          ? (dev.width + '\u00d7' + dev.height + ' matrix')
-          : (zones + ' zone' + (zones !== 1 ? 's' : ''));
-        const meta = product ? product + ' \u00b7 ' + zoneMeta : '';
-        return `
-          <div class="discovered-row">
-            <div>
-              <span class="discovered-ip">${esc(b.ip)}</span>
-              <span class="discovered-label">${' \u2014 ' + esc(nameCol)}</span>
+    // Skip rebuilding while the user is mid-edit in a label input
+    // or while an Identify button is focused — otherwise the
+    // 5-second poll would clobber their input on every tick.
+    const active = document.activeElement;
+    const editing = active && dbEl.contains(active) &&
+                    (active.classList.contains('discovered-label-input') ||
+                     active.classList.contains('btn-identify'));
+    if (!editing) {
+      if (bulbs.length === 0) {
+        dbEl.innerHTML =
+          '<div class="device-idle" style="padding:8px 0;">No devices discovered yet</div>';
+      } else {
+        dbEl.innerHTML = bulbs.map(b => {
+          const dev = devByIp[b.ip];
+          const label = (dev && dev.label) || b.label || '';
+          const product = (dev && dev.product) || '';
+          const zones = (dev && dev.zones) || 1;
+          const isMatrix = dev && dev.is_matrix;
+          const zoneMeta = isMatrix
+            ? (dev.width + '\u00d7' + dev.height + ' matrix')
+            : (zones + ' zone' + (zones !== 1 ? 's' : ''));
+          const meta = product ? product + ' \u00b7 ' + zoneMeta : '';
+          // data-original holds the label as it was when the row
+          // was rendered; labelKeydown reverts to this on Escape
+          // and saveLabel compares against it to skip no-op saves.
+          return `
+            <div class="discovered-row" data-mac="${esc(b.mac)}" data-ip="${esc(b.ip)}">
+              <div class="discovered-main">
+                <span class="discovered-ip">${esc(b.ip)}</span>
+                <input type="text"
+                       class="discovered-label-input"
+                       value="${esc(label)}"
+                       data-original="${esc(label)}"
+                       placeholder="(unlabeled — click to name)"
+                       maxlength="64"
+                       onkeydown="labelKeydown(this, event)"
+                       onblur="labelBlur(this)">
+                <button class="btn-identify" onclick="identifyBulb(this)">Identify</button>
+              </div>
+              <span class="discovered-mac">${esc(meta)}</span>
             </div>
-            <span class="discovered-mac">${esc(meta)}</span>
-          </div>
-        `;
-      }).join('');
+          `;
+        }).join('');
+      }
     }
 
     document.getElementById('last-update').textContent =
@@ -1102,6 +1189,162 @@ function esc(s) {
   const d = document.createElement('div');
   d.textContent = String(s);
   return d.innerHTML;
+}
+
+// ---- Discovered-bulbs inline labeling + identify ----
+
+// Byte length helper — the registry enforces a 32-byte UTF-8
+// cap matching the LIFX firmware SetLabel limit.  Counting bytes
+// (not chars) matters for multi-byte labels like emoji or accented
+// characters.
+function labelByteLength(s) {
+  return new Blob([s]).size;
+}
+
+// Max label bytes — matches MAX_LABEL_BYTES in device_registry.py.
+const LABEL_MAX_BYTES = 32;
+
+// Show or clear the inline error underneath a discovered row.
+// Creates the error slot lazily so rows without errors stay tidy.
+function showRowError(rowEl, msg) {
+  let slot = rowEl.querySelector('.discovered-error');
+  if (!msg) {
+    if (slot) slot.remove();
+    return;
+  }
+  if (!slot) {
+    slot = document.createElement('div');
+    slot.className = 'discovered-error';
+    rowEl.appendChild(slot);
+  }
+  slot.textContent = msg;
+}
+
+// Identify a bulb — pulses its brightness so the user can locate
+// the physical device.  Uses the existing
+// POST /api/devices/{ip}/identify endpoint.  The button briefly
+// turns green to confirm the request was dispatched; the bulb
+// itself keeps pulsing on the server side for a few seconds.
+async function identifyBulb(btn) {
+  const row = btn.closest('.discovered-row');
+  if (!row) return;
+  const ip = row.dataset.ip;
+  if (!ip) return;
+  showRowError(row, '');
+  btn.disabled = true;
+  btn.classList.add('active');
+  btn.textContent = 'Flashing\u2026';
+  try {
+    const resp = await fetch(BASE + '/api/devices/' +
+                             encodeURIComponent(ip) + '/identify', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN },
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      showRowError(row, 'Identify failed: ' +
+                   (err.error || ('HTTP ' + resp.status)));
+    }
+  } catch (e) {
+    showRowError(row, 'Identify request failed.');
+  } finally {
+    // Reset the button after a short delay so the user sees the
+    // acknowledgement even if the request returns instantly.
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.classList.remove('active');
+      btn.textContent = 'Identify';
+    }, 1500);
+  }
+}
+
+// Keyboard handler for the per-row label input.  Enter commits,
+// Escape reverts to the original value and drops focus.
+function labelKeydown(input, ev) {
+  if (ev.key === 'Enter') {
+    ev.preventDefault();
+    input.blur();  // blur triggers labelBlur → saveLabel.
+  } else if (ev.key === 'Escape') {
+    ev.preventDefault();
+    input.value = input.dataset.original || '';
+    const row = input.closest('.discovered-row');
+    if (row) showRowError(row, '');
+    input.blur();
+  }
+}
+
+// Blur handler — only commits if the value actually changed,
+// to avoid spamming the registry on accidental focus changes.
+function labelBlur(input) {
+  const current = input.value.trim();
+  const original = (input.dataset.original || '').trim();
+  if (current === original) return;
+  saveLabel(input, current);
+}
+
+// Commit a label change to the device registry.  Writes via
+// POST /api/registry/device — the server also writes SetLabel to
+// the bulb firmware if the device is online, so the main device
+// list picks up the new name on the next poll.
+async function saveLabel(input, newLabel) {
+  const row = input.closest('.discovered-row');
+  if (!row) return;
+  const mac = row.dataset.mac;
+  if (!mac) {
+    showRowError(row, 'Cannot save — no MAC for this device.');
+    return;
+  }
+
+  // Client-side validation — match the registry rules so common
+  // mistakes get caught without a round-trip.  The server is still
+  // the final authority.
+  if (newLabel.length === 0) {
+    showRowError(row, 'Label cannot be empty.');
+    input.value = input.dataset.original || '';
+    return;
+  }
+  const bytes = labelByteLength(newLabel);
+  if (bytes > LABEL_MAX_BYTES) {
+    showRowError(row, 'Label is ' + bytes + ' bytes (max ' +
+                 LABEL_MAX_BYTES + ').');
+    return;
+  }
+
+  showRowError(row, '');
+  input.disabled = true;
+
+  try {
+    const resp = await fetch(BASE + '/api/registry/device', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + TOKEN,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ mac: mac, label: newLabel }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      // 400 is returned for collisions (label already in use by
+      // another MAC) and for validation errors.  Show the server
+      // message as-is since it includes the colliding MAC.
+      showRowError(row, err.error || ('Save failed (HTTP ' +
+                   resp.status + ')'));
+      // Revert so the displayed value reflects what's actually
+      // stored — the user sees the failure and their typed value
+      // is kept in place only until the next poll.
+      input.value = input.dataset.original || '';
+      return;
+    }
+    const result = await resp.json();
+    // Commit succeeded — update the in-memory original so a
+    // subsequent blur doesn't re-save the same value.
+    input.dataset.original = result.label || newLabel;
+  } catch (e) {
+    showRowError(row, 'Save request failed.');
+    input.value = input.dataset.original || '';
+  } finally {
+    input.disabled = false;
+  }
 }
 
 // ---- Power toggle for devices and groups ----
