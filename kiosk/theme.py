@@ -50,27 +50,31 @@ class Theme(NamedTuple):
     soil_critical: tuple[int, int, int]
 
 
-# Day theme — warm whites on dark loam.
+# Day theme — monochromatic seafoam on pure-hue teal shades.
+# Derived from Benjamin Moore 2039-60 "Seafoam" (#b9efe1, HLS 164.4°).
+# Backgrounds use S=1.0 with low L (pure hue + black) so they never
+# drift into neutral/brown territory; text stays near-white with a
+# slight hue tint for subtle cohesion.
 DAY = Theme(
-    bg=(44, 34, 24),
+    bg=(0, 61, 45),
     clock=(255, 255, 255),
-    date=(255, 255, 255),
-    ampm=(180, 180, 180),
-    card_bg=(62, 50, 38, 200),
-    card_border=(140, 115, 80, 76),
-    text=(255, 255, 255),
-    label=(200, 200, 200),
-    dim=(140, 140, 140),
-    ok=(102, 187, 106),
-    bad=(239, 83, 80),
-    warn=(255, 183, 77),
-    locked=(102, 187, 106),
-    unlocked=(239, 83, 80),
+    date=(214, 235, 230),
+    ampm=(255, 255, 255),  # unused; AM/PM ditched
+    card_bg=(0, 0, 0, 0),  # transparent — canvas bg shows through
+    card_border=(130, 230, 195, 255),
+    text=(240, 245, 243),
+    label=(159, 223, 207),
+    dim=(112, 169, 154),
+    ok=(99, 233, 198),
+    bad=(178, 255, 235),
+    warn=(158, 250, 226),
+    locked=(99, 233, 198),
+    unlocked=(178, 255, 235),
     temp=(255, 255, 255),
-    humid=(200, 200, 200),
-    soil_wet=(102, 187, 106),
-    soil_dry=(255, 183, 77),
-    soil_critical=(239, 83, 80),
+    humid=(159, 223, 207),
+    soil_wet=(99, 233, 198),
+    soil_dry=(158, 250, 226),
+    soil_critical=(178, 255, 235),
 )
 
 # Night theme — deep red/amber for bedroom dark adaptation.

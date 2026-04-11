@@ -71,6 +71,65 @@ def _sans(size: int) -> pygame.font.Font:
     return _font(None, size)
 
 
+def _fit_font_width(
+    base_size: int, text: str, max_w: int, min_size: int = 14,
+) -> pygame.font.Font:
+    """Return a sans font sized so ``text`` renders within ``max_w`` pixels.
+
+    Starts at ``base_size`` (which is usually derived from rect.h) and
+    shrinks proportionally if the rendered width would overflow max_w.
+    Never shrinks below ``min_size``.
+    """
+    font = _sans(base_size)
+    w, _ = font.size(text)
+    if w > max_w and w > 0:
+        scaled = max(min_size, int(base_size * max_w / w))
+        font = _sans(scaled)
+    return font
+
+
+def _clock_font_sizes(
+    width: int, target_h: int, date_str: str,
+) -> tuple[int, int]:
+    """Pick (time_font_size, date_font_size) that fit width and target_h.
+
+    Shared between ``measure_clock_height`` (layout planning) and
+    ``draw_clock`` (rendering) so the two stay in sync.
+    """
+    time_probe: str = "00:00"
+    target_w: int = int(width * 0.95)
+
+    time_size: int = max(40, int(target_h * 0.94))
+    tfont = _sans(time_size)
+    tw, _ = tfont.size(time_probe)
+    if tw > target_w:
+        time_size = max(40, int(time_size * target_w / tw))
+
+    date_size: int = max(16, target_h * 7 // 4 // 7)
+    dfont = _sans(date_size)
+    dw, _ = dfont.size(date_str)
+    if dw > target_w:
+        date_size = max(14, int(date_size * target_w / dw))
+
+    return time_size, date_size
+
+
+def measure_clock_height(width: int, target_h: int) -> int:
+    """Return the pixel height the clock block actually needs.
+
+    Lets ``app.py`` reserve exactly as much vertical space as the
+    time+date block will consume, instead of a fixed fraction that
+    leaves dead space below the date.
+    """
+    now = datetime.now()
+    date_str: str = now.strftime("%A, %B %-d")
+    time_size, date_size = _clock_font_sizes(width, target_h, date_str)
+    time_h: int = _sans(time_size).get_height()
+    date_h: int = _sans(date_size).get_height()
+    # 24px top + 24px bottom padding so the card border has breathing room.
+    return time_h + 4 + date_h + 48
+
+
 # ---------------------------------------------------------------------------
 # Card background helper
 # ---------------------------------------------------------------------------
@@ -79,18 +138,18 @@ def _draw_card(surf: pygame.Surface, rect: pygame.Rect,
                theme: Theme) -> None:
     """Draw a rounded card background with border.
 
-    Args:
-        surf:  Target surface.
-        rect:  Card position and size.
-        theme: Current color theme.
+    The SRCALPHA surface is explicitly filled with transparent pixels
+    before drawing — on this Pi's pygame/SDL stack the default init
+    is opaque black, which caused the whole tile interior to blit as
+    a dark rect over the canvas.
     """
-    # Background.
     card_surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-    pygame.draw.rect(card_surf, theme.card_bg,
-                     (0, 0, rect.w, rect.h), border_radius=12)
-    # Border.
+    card_surf.fill((0, 0, 0, 0))
+    if theme.card_bg[3] > 0:
+        pygame.draw.rect(card_surf, theme.card_bg,
+                         (0, 0, rect.w, rect.h), border_radius=14)
     pygame.draw.rect(card_surf, theme.card_border,
-                     (0, 0, rect.w, rect.h), width=1, border_radius=12)
+                     (0, 0, rect.w, rect.h), width=3, border_radius=14)
     surf.blit(card_surf, rect.topleft)
 
 
@@ -109,8 +168,8 @@ def _draw_title(surf: pygame.Surface, rect: pygame.Rect,
     """
     font = _sans(max(14, rect.h * 7 // 4 // 10))
     text = font.render(title, True, theme.label)
-    surf.blit(text, (rect.x + 10, rect.y + 8))
-    return rect.y + 8 + text.get_height() + 4
+    surf.blit(text, (rect.x + 20, rect.y + 16))
+    return rect.y + 16 + text.get_height() + 6
 
 
 # ---------------------------------------------------------------------------
@@ -119,34 +178,32 @@ def _draw_title(surf: pygame.Surface, rect: pygame.Rect,
 
 def draw_clock(surf: pygame.Surface, rect: pygame.Rect,
                data: DataPoller, theme: Theme) -> None:
-    """Draw the main clock display.
+    """Draw the main clock display inside a bordered card.
 
-    Shows time in 12-hour format with date below.
-    No card background — the clock stands alone.
+    24-hour HH:MM, date below. Font sizes come from
+    ``_clock_font_sizes`` so the rendered block fits rect.w and rect.h.
+    Caller should size ``rect`` with ``measure_clock_height`` so the
+    card hugs the content.
     """
-    now: datetime = datetime.now()
-    hour: int = now.hour % 12 or 12
-    minute: int = now.minute
-    period: str = "AM" if now.hour < 12 else "PM"
+    _draw_card(surf, rect, theme)
 
-    # Time — large, clean sans-serif.
-    time_str: str = f"{hour}:{minute:02d}"
-    time_font = _sans(max(112, int(rect.h * 0.94)))
+    now: datetime = datetime.now()
+    time_str: str = f"{now.hour:02d}:{now.minute:02d}"
+    date_str: str = now.strftime("%A, %B %-d")
+
+    time_size, date_size = _clock_font_sizes(rect.w, rect.h, date_str)
+    time_font = _sans(time_size)
+    date_font = _sans(date_size)
+
     time_surf = time_font.render(time_str, True, theme.clock)
-    time_rect = time_surf.get_rect(
-        centerx=rect.centerx, centery=rect.centery - rect.h * 7 // 4 // 8,
-    )
+    date_surf = date_font.render(date_str, True, theme.date)
+
+    total_h: int = time_surf.get_height() + 4 + date_surf.get_height()
+    top_y: int = rect.y + max(0, (rect.h - total_h) // 2)
+
+    time_rect = time_surf.get_rect(centerx=rect.centerx, top=top_y)
     surf.blit(time_surf, time_rect)
 
-    # AM/PM — smaller, to the right of time.
-    ampm_font = _sans(max(20, rect.h * 7 // 4 // 8))
-    ampm_surf = ampm_font.render(period, True, theme.ampm)
-    surf.blit(ampm_surf, (time_rect.right + 6, time_rect.top + 4))
-
-    # Date — below the time.
-    date_str: str = now.strftime("%A, %B %-d")
-    date_font = _sans(max(16, rect.h * 7 // 4 // 7))
-    date_surf = date_font.render(date_str, True, theme.date)
     date_rect = date_surf.get_rect(
         centerx=rect.centerx, top=time_rect.bottom + 4,
     )
@@ -200,8 +257,8 @@ def draw_health(surf: pygame.Surface, rect: pygame.Rect,
             "OK" if ok else "DOWN",
             True, theme.ok if ok else theme.bad,
         )
-        surf.blit(name_surf, (rect.x + 12, y))
-        surf.blit(status_surf, (rect.right - 12 - status_surf.get_width(), y))
+        surf.blit(name_surf, (rect.x + 20, y))
+        surf.blit(status_surf, (rect.right - 20 - status_surf.get_width(), y))
         y += row_h
 
     # Summary line + page dots combined on one line at bottom.
@@ -211,13 +268,13 @@ def draw_health(surf: pygame.Surface, rect: pygame.Rect,
     sum_font = _sans(max(11, rect.h * 7 // 4 // 12))
     sum_surf = sum_font.render(summary, True, theme.dim)
     sum_y: int = rect.bottom - sum_surf.get_height() - 4
-    surf.blit(sum_surf, (rect.x + 12, sum_y))
+    surf.blit(sum_surf, (rect.x + 20, sum_y))
 
     # Page dots — right side of summary line.
     if total_pages > 1:
         dot_y: int = sum_y + sum_surf.get_height() // 2
         dot_total_w: int = total_pages * 10
-        dot_x: int = rect.right - 12 - dot_total_w
+        dot_x: int = rect.right - 20 - dot_total_w
         for p in range(total_pages):
             color = theme.text if p == _health_page % total_pages else theme.dim
             pygame.draw.circle(surf, color, (dot_x + p * 10 + 3, dot_y), 2)
@@ -238,10 +295,8 @@ def draw_locks(surf: pygame.Surface, rect: pygame.Rect,
     y: int = _draw_title(surf, rect, "Locks", theme)
 
     locks: list = locks_data.get("locks", [])
-    font = _sans(max(13, rect.h * 7 // 4 // 10))
-    row_h: int = font.get_height() + 4
-
-    small_font = _sans(max(11, rect.h * 7 // 4 // 14))
+    label_base: int = max(13, rect.h * 7 // 4 // 10)
+    small_base: int = max(11, rect.h * 7 // 4 // 14)
 
     for lock in locks:
         name: str = lock.get("name", "?")
@@ -252,14 +307,20 @@ def draw_locks(surf: pygame.Surface, rect: pygame.Rect,
         color = theme.locked if locked else theme.unlocked
 
         # Name + state on first line.
-        label = font.render(f"{name}: {state_str}", True, color)
-        surf.blit(label, (rect.x + 12, y))
-        y += font.get_height() + 5
+        label_text: str = f"{name}: {state_str}"
+        label_font = _fit_font_width(label_base, label_text, rect.w - 24)
+        label = label_font.render(label_text, True, color)
+        surf.blit(label, (rect.x + 20, y))
+        y += label_font.get_height() + 5
 
         # Battery on second line, smaller.
-        batt_surf = small_font.render(f"Battery {batt}%", True, theme.dim)
-        surf.blit(batt_surf, (rect.x + 20, y))
-        y += small_font.get_height() + 8
+        batt_text: str = f"Battery {batt}%"
+        batt_font = _fit_font_width(small_base, batt_text, rect.w - 32)
+        batt_surf = batt_font.render(batt_text, True, theme.dim)
+        surf.blit(batt_surf, (rect.x + 28, y))
+        y += batt_font.get_height() + 8
+        if y > rect.bottom - 10:
+            break
 
 
 # ---------------------------------------------------------------------------
@@ -299,24 +360,33 @@ def draw_weather(surf: pygame.Surface, rect: pygame.Rect,
     condition: str = _WMO.get(code, "Unknown")
 
     # Temperature — big.
-    temp_font = _sans(max(28, rect.h * 7 // 4 // 4))
-    temp_surf = temp_font.render(f"{temp:.0f}°F", True, theme.temp)
-    surf.blit(temp_surf, (rect.x + 12, y))
+    temp_text: str = f"{temp:.0f}°F"
+    temp_font = _fit_font_width(
+        max(28, rect.h * 7 // 4 // 4), temp_text, rect.w - 24,
+    )
+    temp_surf = temp_font.render(temp_text, True, theme.temp)
+    surf.blit(temp_surf, (rect.x + 20, y))
     y += temp_surf.get_height() + 2
 
     # Condition.
-    cond_font = _sans(max(14, rect.h * 7 // 4 // 8))
+    cond_font = _fit_font_width(
+        max(14, rect.h * 7 // 4 // 8), condition, rect.w - 24,
+    )
     cond_surf = cond_font.render(condition, True, theme.text)
-    surf.blit(cond_surf, (rect.x + 12, y))
+    surf.blit(cond_surf, (rect.x + 20, y))
     y += cond_surf.get_height() + 2
 
     # Humidity + wind — one per line.
-    detail_font = _sans(max(12, rect.h * 7 // 4 // 10))
-    hum_surf = detail_font.render(f"Humidity {humidity:.0f}%", True, theme.dim)
-    surf.blit(hum_surf, (rect.x + 12, y))
-    y += detail_font.get_height() + 2
-    wind_surf = detail_font.render(f"Wind {wind:.0f} mph", True, theme.dim)
-    surf.blit(wind_surf, (rect.x + 12, y))
+    detail_base: int = max(12, rect.h * 7 // 4 // 10)
+    hum_text: str = f"Humidity {humidity:.0f}%"
+    hum_font = _fit_font_width(detail_base, hum_text, rect.w - 24)
+    hum_surf = hum_font.render(hum_text, True, theme.dim)
+    surf.blit(hum_surf, (rect.x + 20, y))
+    y += hum_font.get_height() + 2
+    wind_text: str = f"Wind {wind:.0f} mph"
+    wind_font = _fit_font_width(detail_base, wind_text, rect.w - 24)
+    wind_surf = wind_font.render(wind_text, True, theme.dim)
+    surf.blit(wind_surf, (rect.x + 20, y))
 
 
 # ---------------------------------------------------------------------------
@@ -358,13 +428,13 @@ def draw_aqi(surf: pygame.Surface, rect: pygame.Rect,
     # AQI value — large.
     val_font = _sans(max(28, rect.h * 7 // 4 // 4))
     val_surf = val_font.render(str(int(aqi)), True, cat_color)
-    surf.blit(val_surf, (rect.x + 12, y))
+    surf.blit(val_surf, (rect.x + 20, y))
     y += val_surf.get_height() + 2
 
     # Category label.
     cat_font = _sans(max(14, rect.h * 7 // 4 // 8))
     cat_surf = cat_font.render(cat_name, True, cat_color)
-    surf.blit(cat_surf, (rect.x + 12, y))
+    surf.blit(cat_surf, (rect.x + 20, y))
     y += cat_surf.get_height() + 2
 
     # PM2.5 + PM10 — one per line.
@@ -372,10 +442,10 @@ def draw_aqi(surf: pygame.Surface, rect: pygame.Rect,
     pm10: float = current.get("pm10", 0)
     detail_font = _sans(max(12, rect.h * 7 // 4 // 10))
     pm25_surf = detail_font.render(f"PM2.5: {pm25:.0f}", True, theme.dim)
-    surf.blit(pm25_surf, (rect.x + 12, y))
+    surf.blit(pm25_surf, (rect.x + 20, y))
     y += detail_font.get_height() + 2
     pm10_surf = detail_font.render(f"PM10: {pm10:.0f}", True, theme.dim)
-    surf.blit(pm10_surf, (rect.x + 12, y))
+    surf.blit(pm10_surf, (rect.x + 20, y))
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +488,7 @@ def draw_soil(surf: pygame.Surface, rect: pygame.Rect,
     # Sensor name.
     name_font = _sans(max(14, rect.h * 7 // 4 // 8))
     name_surf = name_font.render(name, True, theme.text)
-    surf.blit(name_surf, (rect.x + 12, y))
+    surf.blit(name_surf, (rect.x + 20, y))
     y += name_surf.get_height() + 4
 
     # Moisture value — large.
@@ -432,7 +502,7 @@ def draw_soil(surf: pygame.Surface, rect: pygame.Rect,
             color = theme.soil_critical
         val_font = _sans(max(28, rect.h * 7 // 4 // 4))
         val_surf = val_font.render(f"{pct}%", True, color)
-        surf.blit(val_surf, (rect.x + 12, y))
+        surf.blit(val_surf, (rect.x + 20, y))
         y += val_surf.get_height() + 2
 
     # Temperature + battery.
@@ -445,7 +515,7 @@ def draw_soil(surf: pygame.Surface, rect: pygame.Rect,
     if details:
         det_font = _sans(max(12, rect.h * 7 // 4 // 10))
         det_surf = det_font.render("  ".join(details), True, theme.dim)
-        surf.blit(det_surf, (rect.x + 12, y))
+        surf.blit(det_surf, (rect.x + 20, y))
 
     # Page dots.
     if len(sensors) > 1:
@@ -554,32 +624,43 @@ def draw_moon(surf: pygame.Surface, rect: pygame.Rect,
 
 def draw_alerts(surf: pygame.Surface, rect: pygame.Rect,
                 data: DataPoller, theme: Theme) -> None:
-    """Draw NWS severe weather alerts."""
-    alerts: Optional[list] = data.get("alerts")
-    if not alerts:
-        return
+    """Draw NWS severe weather alerts (placeholder when none)."""
+    alerts: Optional[list] = data.get("alerts") or []
 
     _draw_card(surf, rect, theme)
+
+    if not alerts:
+        _draw_title(surf, rect, "Alerts", theme)
+        ok_text: str = "No active alerts"
+        ok_font = _fit_font_width(
+            max(18, rect.h * 7 // 4 // 8), ok_text, rect.w - 24,
+        )
+        ok_surf = ok_font.render(ok_text, True, theme.ok)
+        surf.blit(ok_surf, (
+            rect.centerx - ok_surf.get_width() // 2,
+            rect.centery - ok_surf.get_height() // 2,
+        ))
+        return
 
     # Blinking red title.
     blink: bool = int(time.monotonic() * 2) % 2 == 0
     title_color = theme.bad if blink else theme.warn
-    font = _sans(max(14, rect.h * 7 // 4 // 8))
-    title = font.render(f"⚠ {len(alerts)} Alert(s)", True, title_color)
-    surf.blit(title, (rect.x + 10, rect.y + 8))
-    y: int = rect.y + 8 + title.get_height() + 4
+    title_text: str = f"⚠ {len(alerts)} Alert(s)"
+    title_font = _fit_font_width(
+        max(14, rect.h * 7 // 4 // 8), title_text, rect.w - 20,
+    )
+    title = title_font.render(title_text, True, title_color)
+    surf.blit(title, (rect.x + 20, rect.y + 16))
+    y: int = rect.y + 16 + title.get_height() + 6
 
     # Show first 2 alerts.
-    detail_font = _sans(max(11, rect.h * 7 // 4 // 12))
+    detail_base: int = max(11, rect.h * 7 // 4 // 12)
     for alert in alerts[:2]:
         props = alert.get("properties", {})
         event: str = props.get("event", "Unknown")
-        headline: str = props.get("headline", "")
-        # Truncate to fit.
-        max_chars: int = max(20, rect.w // 8)
-        display: str = event if len(event) <= max_chars else event[:max_chars - 2] + "…"
-        alert_surf = detail_font.render(display, True, theme.warn)
-        surf.blit(alert_surf, (rect.x + 12, y))
+        detail_font = _fit_font_width(detail_base, event, rect.w - 24)
+        alert_surf = detail_font.render(event, True, theme.warn)
+        surf.blit(alert_surf, (rect.x + 20, y))
         y += detail_font.get_height() + 2
 
 
@@ -598,10 +679,13 @@ def draw_security(surf: pygame.Surface, rect: pygame.Rect,
     y: int = _draw_title(surf, rect, "Security", theme)
 
     alarm_state: str = security.get("alarm", "unknown")
+    state_text: str = alarm_state.upper()
     color = theme.ok if alarm_state == "disarmed" else theme.bad
 
-    state_font = _sans(max(18, rect.h * 7 // 4 // 6))
-    state_surf = state_font.render(alarm_state.upper(), True, color)
+    state_font = _fit_font_width(
+        max(18, rect.h * 7 // 4 // 6), state_text, rect.w - 20,
+    )
+    state_surf = state_font.render(state_text, True, color)
     surf.blit(state_surf, (
         rect.centerx - state_surf.get_width() // 2, y,
     ))
@@ -609,14 +693,16 @@ def draw_security(surf: pygame.Surface, rect: pygame.Rect,
 
     # Door sensors.
     doors: list = security.get("doors", [])
-    door_font = _sans(max(12, rect.h * 7 // 4 // 10))
+    door_base: int = max(12, rect.h * 7 // 4 // 10)
     for door in doors:
         name: str = door.get("name", "?")
         is_open: bool = door.get("open", False)
         state_str: str = "OPEN" if is_open else "Closed"
         door_color = theme.bad if is_open else theme.ok
-        door_surf = door_font.render(f"{name}: {state_str}", True, door_color)
-        surf.blit(door_surf, (rect.x + 12, y))
+        door_text: str = f"{name}: {state_str}"
+        door_font = _fit_font_width(door_base, door_text, rect.w - 24)
+        door_surf = door_font.render(door_text, True, door_color)
+        surf.blit(door_surf, (rect.x + 20, y))
         y += door_font.get_height() + 8
         if y > rect.bottom - 10:
             break

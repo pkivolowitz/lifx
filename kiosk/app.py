@@ -45,12 +45,12 @@ NIGHT_END: int = 6
 # Tile padding in pixels.
 TILE_PAD: int = 8
 
-# Clock tile height as fraction of screen height.
-CLOCK_HEIGHT_FRAC: float = 0.20
+# ---------------------------------------------------------------------------
+# Layout modes
+# ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Tile registry — order matters for grid layout
-# ---------------------------------------------------------------------------
+MODE_DESKTOP: str = "desktop"
+MODE_WALLCLOCK: str = "wallclock"
 
 # Each entry: (name, draw_function).
 # The grid fills left-to-right, top-to-bottom.
@@ -65,6 +65,29 @@ TILE_REGISTRY: list[tuple[str, Callable]] = [
     ("moon", tiles.draw_moon),
 ]
 
+# Wallclock mode: fewer tiles, viewed from across the room.
+WALLCLOCK_REGISTRY: list[tuple[str, Callable]] = [
+    ("weather", tiles.draw_weather),
+    ("alerts", tiles.draw_alerts),
+    ("locks", tiles.draw_locks),
+    ("security", tiles.draw_security),
+]
+
+MODE_CONFIG: dict[str, dict] = {
+    MODE_DESKTOP: {
+        "registry": TILE_REGISTRY,
+        "cols": 3,
+        "clock_frac": 0.20,
+        "tile_fill": 0.50,
+    },
+    MODE_WALLCLOCK: {
+        "registry": WALLCLOCK_REGISTRY,
+        "cols": 2,
+        "clock_frac": 0.40,
+        "tile_fill": 0.95,
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Grid layout
@@ -72,16 +95,17 @@ TILE_REGISTRY: list[tuple[str, Callable]] = [
 
 def _compute_grid(
     screen_w: int, screen_h: int, clock_h: int,
-    n_tiles: int, cols: int = 3,
+    n_tiles: int, cols: int = 3, fill_frac: float = 0.50,
 ) -> list[pygame.Rect]:
     """Compute tile rectangles in a grid below the clock.
 
     Args:
-        screen_w: Screen width in pixels.
-        screen_h: Screen height in pixels.
-        clock_h:  Height reserved for the clock at top.
-        n_tiles:  Number of tiles to lay out.
-        cols:     Number of grid columns.
+        screen_w:  Screen width in pixels.
+        screen_h:  Screen height in pixels.
+        clock_h:   Height reserved for the clock at top.
+        n_tiles:   Number of tiles to lay out.
+        cols:      Number of grid columns.
+        fill_frac: Fraction of available row height each tile occupies.
 
     Returns:
         List of Rects, one per tile.
@@ -89,8 +113,7 @@ def _compute_grid(
     avail_h: int = screen_h - clock_h
     rows: int = max(1, (n_tiles + cols - 1) // cols)
     tile_w: int = (screen_w - TILE_PAD * (cols + 1)) // cols
-    # 50% of natural height — snug fit around content.
-    tile_h: int = int((avail_h - TILE_PAD * (rows + 1)) / rows * 0.50)
+    tile_h: int = int((avail_h - TILE_PAD * (rows + 1)) / rows * fill_frac)
 
     rects: list[pygame.Rect] = []
     for i in range(n_tiles):
@@ -137,8 +160,17 @@ def main() -> None:
         help="Window height (windowed mode only)",
     )
     parser.add_argument(
-        "--cols", type=int, default=3,
-        help="Grid columns (default 3)",
+        "--cols", type=int, default=0,
+        help="Grid columns (0 = use mode default)",
+    )
+    parser.add_argument(
+        "--rotate", type=int, default=0, choices=[0, 90, 180, 270],
+        help="Rotate output clockwise (matches wlr-randr --transform)",
+    )
+    parser.add_argument(
+        "--mode", type=str, default=MODE_DESKTOP,
+        choices=[MODE_DESKTOP, MODE_WALLCLOCK],
+        help="Layout: desktop (3 cols, all tiles) or wallclock (2 cols, 4 tiles, big)",
     )
     args = parser.parse_args()
 
@@ -174,20 +206,47 @@ def main() -> None:
     else:
         screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
 
-    screen_w, screen_h = screen.get_size()
-    logger.info("Screen: %dx%d", screen_w, screen_h)
+    phys_w, phys_h = screen.get_size()
+    if args.rotate in (90, 270):
+        screen_w, screen_h = phys_h, phys_w
+    else:
+        screen_w, screen_h = phys_w, phys_h
+
+    if args.rotate == 0:
+        canvas = screen
+    else:
+        canvas = pygame.Surface((screen_w, screen_h))
+
+    logger.info(
+        "Screen: %dx%d physical, %dx%d logical, rotate=%d",
+        phys_w, phys_h, screen_w, screen_h, args.rotate,
+    )
+
+    # Resolve layout mode.
+    mode_cfg = MODE_CONFIG[args.mode]
+    registry: list[tuple[str, Callable]] = mode_cfg["registry"]
+    cols: int = args.cols if args.cols > 0 else mode_cfg["cols"]
+    clock_frac: float = mode_cfg["clock_frac"]
+    logger.info(
+        "Mode: %s — %d tiles, %d cols, clock_frac=%.2f",
+        args.mode, len(registry), cols, clock_frac,
+    )
 
     # Top margin — push everything down.
     TOP_MARGIN: int = 20
 
-    # Clock area at the top.
-    clock_h: int = int(screen_h * CLOCK_HEIGHT_FRAC)
+    # Clock area at the top. Measured from the actual font metrics so
+    # there is no dead space between date and first tile row — the old
+    # code reserved screen_h * clock_frac which was ~2x the real need.
+    target_h: int = int(screen_h * clock_frac)
+    clock_h: int = tiles.measure_clock_height(screen_w, target_h)
     clock_rect = pygame.Rect(0, TOP_MARGIN, screen_w, clock_h)
+    logger.info("Clock: target_h=%d measured=%d", target_h, clock_h)
 
     # Tile grid — offset by top margin.
     tile_rects: list[pygame.Rect] = _compute_grid(
         screen_w, screen_h, clock_h + TOP_MARGIN,
-        len(TILE_REGISTRY), args.cols,
+        len(registry), cols, mode_cfg["tile_fill"],
     )
 
     # Start data poller.
@@ -219,19 +278,23 @@ def main() -> None:
             else:
                 theme = DAY
 
-        # Clear screen.
-        screen.fill(theme.bg)
+        # Clear logical canvas.
+        canvas.fill(theme.bg)
 
         # Draw clock.
-        tiles.draw_clock(screen, clock_rect, poller, theme)
+        tiles.draw_clock(canvas, clock_rect, poller, theme)
 
         # Draw tiles.
-        for i, (name, draw_fn) in enumerate(TILE_REGISTRY):
+        for i, (name, draw_fn) in enumerate(registry):
             if i < len(tile_rects):
                 try:
-                    draw_fn(screen, tile_rects[i], poller, theme)
+                    draw_fn(canvas, tile_rects[i], poller, theme)
                 except Exception as exc:
                     logger.debug("Tile '%s' render error: %s", name, exc)
+
+        # Rotate canvas onto physical screen if needed.
+        if args.rotate != 0:
+            screen.blit(pygame.transform.rotate(canvas, -args.rotate), (0, 0))
 
         # Flip.
         pygame.display.flip()
