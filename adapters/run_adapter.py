@@ -256,10 +256,28 @@ def _create_nvr(
 
     NVR does not use SignalBus — it caches JPEG snapshots in memory,
     served via the HTTP sidecar started in ``_nvr_post_start()``.
+
+    The doorbell-boost feature needs to POST to the local server's
+    ``/api/devices/{ip}/play`` endpoint to trigger phone-style
+    overrides on the porch bulbs.  We inject the top-level
+    ``auth_token`` and a derived ``server_url`` into the nvr config
+    here so the adapter doesn't have to duplicate or re-read them.
     """
     from adapters.contrib.nvr_adapter import NvrAdapter
 
-    nvr_cfg: dict[str, Any] = config.get("nvr", {})
+    nvr_cfg: dict[str, Any] = dict(config.get("nvr", {}))
+
+    # Inject local server URL (from top-level host/port) and the
+    # auth token so the doorbell boost can call /play, /stop, /resume.
+    server_host: str = str(config.get("host", "localhost"))
+    server_port: int = int(config.get("port", 8420))
+    nvr_cfg.setdefault(
+        "server_url", f"http://{server_host}:{server_port}",
+    )
+    auth_token: str = str(config.get("auth_token", ""))
+    if auth_token:
+        nvr_cfg.setdefault("auth_token", auth_token)
+
     return NvrAdapter(config=nvr_cfg)
 
 

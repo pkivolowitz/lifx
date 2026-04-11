@@ -24,6 +24,7 @@ Usage::
 __version__ = "1.0"
 
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -41,6 +42,20 @@ from voice.protocol import encode
 from voice.satellite.capture import UtteranceCapture
 
 logger: logging.Logger = logging.getLogger("glowup.voice.satellite")
+
+# ---------------------------------------------------------------------------
+# Optional reolink_aio import — only required when a satellite instance is
+# configured with ``audio.sink = "baichuan"`` (e.g. the Front Doorbell
+# satellite pushing TTS audio into a Reolink doorbell via the Baichuan
+# talk protocol).  All other deployments must not see an ImportError.
+# ---------------------------------------------------------------------------
+
+try:
+    from reolink_aio.api import Host as _ReolinkHost
+    _HAS_REOLINK_AIO: bool = True
+except ImportError:
+    _ReolinkHost = None  # type: ignore[assignment,misc]
+    _HAS_REOLINK_AIO = False
 
 # ---------------------------------------------------------------------------
 # Optional imports
@@ -150,6 +165,32 @@ class SatelliteDaemon:
         )
         self._device_name: Optional[str] = audio_cfg.get("device_name")
         self._needs_resample: bool = False
+
+        # Explicit source/sink selection.  Legacy deployments omit these
+        # and fall through to the original ALSA/PyAudio auto-detection.
+        #
+        # audio.source:
+        #   None       — legacy auto-detect (Linux=ALSA, macOS=PyAudio)
+        #   "alsa"     — force ALSA arecord
+        #   "pyaudio"  — force PyAudio
+        #   "rtsp"     — pull audio from an RTSP URL via ffmpeg
+        # audio.sink:
+        #   "alsa"     — (default) aplay to ALSA default device
+        #   "baichuan" — push PCM to a Reolink camera via baichuan.talk
+        self._audio_source: Optional[str] = audio_cfg.get("source")
+        self._audio_sink: str = audio_cfg.get("sink", "alsa")
+
+        # RTSP source state — populated by _init_audio_rtsp when used.
+        self._rtsp_proc: Optional[subprocess.Popen] = None
+
+        # Baichuan TTS sink state — populated by _init_baichuan_sink when
+        # used.  The satellite daemon is synchronous, but reolink_aio is
+        # asyncio; we own a dedicated event loop on a background thread
+        # and dispatch talk() calls via run_coroutine_threadsafe.
+        self._bc_host: Any = None
+        self._bc_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._bc_thread: Optional[threading.Thread] = None
+        self._bc_channel: int = 0
 
         # TTS output routing — "local" (default) speaks through piper/espeak
         # on this device, "mqtt" publishes text to a topic for a remote
@@ -498,7 +539,25 @@ class SatelliteDaemon:
             logger.error("PiperPool failed to start")
 
     def _speak_local(self, text: str, generation: int = 0) -> None:
-        """Synthesize and play text through the local audio output.
+        """Synthesize TTS and play through the configured audio sink.
+
+        Dispatches on ``audio.sink``:
+
+        - ``"baichuan"`` — push PCM to a Reolink camera speaker via the
+          Baichuan talk protocol (``baichuan.talk``)
+        - anything else — the original aplay-to-ALSA path
+
+        Args:
+            text:       Text to speak.
+            generation: TTS generation counter at time of request.
+        """
+        if self._audio_sink == "baichuan":
+            self._speak_via_baichuan_sink(text, generation)
+        else:
+            self._speak_via_alsa_sink(text, generation)
+
+    def _speak_via_alsa_sink(self, text: str, generation: int = 0) -> None:
+        """Synthesize and play through the local ALSA output.
 
         Acquires a single-use piper process from the pool, writes
         the text, closes stdin, and streams PCM to aplay until EOF.
@@ -506,8 +565,6 @@ class SatelliteDaemon:
 
         On cancel, _cancel_speech kills both piper and aplay.  Piper's
         stdout closes, the read loop exits on EOF.  No orphaned PCM.
-
-        Falls back to espeak-ng if the piper pool is unavailable.
 
         Args:
             text:       Text to speak.
@@ -589,7 +646,9 @@ class SatelliteDaemon:
                     self._active_aplay = None
             return
 
-        # Fallback: espeak-ng.
+        # Fallback path — PiperPool unavailable.  Use espeak-ng so the
+        # satellite still produces *some* audible output when Piper is
+        # broken.  Only reachable when self._piper_pool is None.
         try:
             subprocess.run(
                 ["espeak-ng", "-s", "160", "--", text],
@@ -604,14 +663,244 @@ class SatelliteDaemon:
         except Exception as exc:
             logger.error("Local TTS failed: %s", exc)
 
+    def _speak_via_baichuan_sink(
+        self, text: str, generation: int = 0,
+    ) -> None:
+        """Synthesize TTS and push PCM to a Reolink camera speaker.
+
+        The Baichuan talk protocol (implemented by reolink_aio and
+        extended in PR #165) takes a complete PCM buffer per call at
+        16 kHz mono int16.  Piper emits PCM at its model's native rate
+        (22050 Hz for the medium voices), so this method:
+
+        1. Spawns a piper process and writes the text
+        2. Collects all PCM bytes from piper stdout until EOF
+        3. Resamples to 16 kHz if the model rate differs
+        4. Dispatches ``baichuan.talk`` on the asyncio loop thread
+           via ``run_coroutine_threadsafe``
+
+        Args:
+            text:       Text to speak.
+            generation: TTS generation counter at time of request.
+        """
+        if self._piper_pool is None:
+            logger.warning("Baichuan sink: no piper pool")
+            return
+        if self._bc_host is None or self._bc_loop is None:
+            logger.warning("Baichuan sink: Host not initialized")
+            return
+
+        # Discard stale TTS if a newer request has arrived.
+        if generation and generation != self._tts_generation:
+            logger.info(
+                "Discarding stale TTS (gen=%d, current=%d): '%s'",
+                generation, self._tts_generation, text[:40],
+            )
+            return
+
+        piper: subprocess.Popen = self._piper_pool.acquire()
+        piper_rate: int = self._piper_pool.sample_rate
+
+        with self._active_lock:
+            self._active_piper = piper
+
+        pcm_bytes: int = 0
+        try:
+            # Write text and close stdin — piper will produce PCM.
+            line: bytes = (text.strip() + "\n").encode("utf-8")
+            piper.stdin.write(line)
+            piper.stdin.close()
+
+            # Drain PCM from piper stdout until EOF.  Collect to a
+            # single buffer — talk() wants the whole audio at once.
+            # Typical utterances are 1–3 s = 32–96 KB of PCM, trivial.
+            fd: int = piper.stdout.fileno()
+            chunks: list[bytes] = []
+            try:
+                while True:
+                    data: bytes = os.read(fd, 65536)
+                    if not data:
+                        break
+                    chunks.append(data)
+                    pcm_bytes += len(data)
+            except (BrokenPipeError, OSError):
+                # piper was killed by _cancel_speech — treat as cancel.
+                pass
+
+            piper.wait(timeout=5)
+
+            if piper.returncode and piper.returncode < 0:
+                logger.info(
+                    "Speech cancelled: '%s' (%d PCM bytes before kill)",
+                    text[:40], pcm_bytes,
+                )
+                return
+
+            if not chunks:
+                logger.debug("Baichuan sink: empty PCM buffer, nothing to send")
+                return
+
+            pcm: bytes = b"".join(chunks)
+
+            # Resample to 16 kHz if Piper's native rate differs.
+            target_rate: int = 16000
+            if piper_rate != target_rate:
+                pcm = self._resample_pcm_bytes(pcm, piper_rate, target_rate)
+
+            # Dispatch talk() onto the asyncio loop thread.  Use a
+            # generous timeout — 1.08 s of audio takes about that long
+            # to send at 16 kHz, plus NVR round-trip and protocol setup.
+            # Cap at 30 s for safety.
+            fut = asyncio.run_coroutine_threadsafe(
+                self._bc_host.baichuan.talk(
+                    channel=self._bc_channel,
+                    audio_data=pcm,
+                ),
+                self._bc_loop,
+            )
+            try:
+                fut.result(timeout=30)
+                logger.info(
+                    "Spoke (baichuan ch%d): '%s' (%d PCM bytes, %d Hz)",
+                    self._bc_channel, text[:40], len(pcm), target_rate,
+                )
+            except Exception as exc:
+                logger.error("baichuan.talk failed: %s", exc)
+        except Exception as exc:
+            logger.warning("Baichuan speak failed: %s", exc)
+            if piper.poll() is None:
+                piper.kill()
+                piper.wait()
+        finally:
+            with self._active_lock:
+                self._active_piper = None
+
+    @staticmethod
+    def _resample_pcm_bytes(
+        pcm: bytes, src_rate: int, dst_rate: int,
+    ) -> bytes:
+        """Resample int16 mono PCM bytes between arbitrary rates.
+
+        Uses numpy linear interpolation — not audiophile-grade, but
+        sufficient for speech intelligibility through the doorbell's
+        IMA ADPCM codec, which is the quality ceiling here anyway.
+
+        Args:
+            pcm:      Raw int16 mono PCM.
+            src_rate: Source sample rate (e.g. 22050 from Piper).
+            dst_rate: Target sample rate (e.g. 16000 for baichuan.talk).
+
+        Returns:
+            Resampled int16 mono PCM bytes.
+        """
+        if src_rate == dst_rate:
+            return pcm
+        samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+        ratio: float = dst_rate / src_rate
+        new_len: int = max(1, int(len(samples) * ratio))
+        indices = np.linspace(0, len(samples) - 1, new_len)
+        resampled = np.interp(indices, np.arange(len(samples)), samples)
+        return resampled.astype(np.int16).tobytes()
+
+    def _init_baichuan_sink(self) -> None:
+        """Connect to the Reolink host for baichuan TTS output.
+
+        Spawns a dedicated asyncio event loop on a background thread,
+        instantiates a reolink_aio ``Host``, and blocks until
+        ``get_host_data()`` succeeds.  Raises if the reolink_aio
+        optional dependency is missing or the NVR refuses the
+        connection.
+        """
+        if not _HAS_REOLINK_AIO:
+            raise ImportError(
+                "reolink_aio not installed — required for audio.sink "
+                "'baichuan'. Install with: pip install reolink_aio",
+            )
+
+        bc_cfg: dict[str, Any] = self._config.get("audio", {}).get(
+            "baichuan", {},
+        )
+        host_addr: str = bc_cfg.get("host", "")
+        port: int = int(bc_cfg.get("port", 80))
+        username: str = bc_cfg.get("username", "")
+        password: str = bc_cfg.get("password", "")
+        self._bc_channel = int(bc_cfg.get("channel", 0))
+
+        if not host_addr:
+            raise RuntimeError(
+                "audio.baichuan.host required when audio.sink == 'baichuan'",
+            )
+
+        # Dedicated asyncio loop thread — owns the Reolink connection.
+        # The Host object must be constructed AND driven from the loop
+        # thread: reolink_aio's Host.__init__ calls
+        # ``asyncio.get_running_loop()`` internally, so constructing it
+        # from the sync init thread raises "no running event loop".
+        self._bc_loop = asyncio.new_event_loop()
+
+        def _run_loop() -> None:
+            assert self._bc_loop is not None
+            asyncio.set_event_loop(self._bc_loop)
+            self._bc_loop.run_forever()
+
+        self._bc_thread = threading.Thread(
+            target=_run_loop,
+            name="baichuan-loop",
+            daemon=True,
+        )
+        self._bc_thread.start()
+
+        assert _ReolinkHost is not None
+
+        async def _connect() -> Any:
+            """Construct the Host and fetch host data on the loop thread."""
+            host = _ReolinkHost(
+                host_addr, username, password, port=port,
+            )
+            await host.get_host_data()
+            return host
+
+        # Block until the host data is populated (talk() needs it).
+        # 60 s covers the observed 52 s worst-case when the NVR is
+        # under session pressure.
+        fut = asyncio.run_coroutine_threadsafe(_connect(), self._bc_loop)
+        self._bc_host = fut.result(timeout=60)
+        logger.info(
+            "Baichuan TTS sink connected: nvr=%s:%d channel=%d",
+            host_addr, port, self._bc_channel,
+        )
+
     def _init_audio(self) -> None:
         """Open the audio input stream.
 
-        On macOS: uses PyAudio with sample rate negotiation.
-        On Linux: uses ALSA arecord via subprocess (PyAudio's device
-        enumeration is broken for some USB mics on Linux — the Shure
-        MV88+ reports maxInputChannels=0 even though ALSA sees it).
+        Dispatches on ``audio.source`` in the config:
+
+        - ``"alsa"``    — ALSA arecord subprocess
+        - ``"pyaudio"`` — PyAudio stream
+        - ``"rtsp"``    — ffmpeg RTSP capture, stdout PCM pipe
+
+        If ``audio.source`` is absent (legacy deployments) falls back to
+        the original Linux-vs-macOS auto-detection so existing satellite
+        configs keep working without modification.
+
+        For ALSA and RTSP the main read loop uses pipe semantics
+        (``self._use_alsa == True``) — ``self._stream`` is a file-like
+        object that returns bytes.  For PyAudio ``self._use_alsa`` is
+        False and ``self._stream.read(n_frames)`` is called instead.
         """
+        if self._audio_source == "rtsp":
+            self._init_audio_rtsp()
+            return
+        if self._audio_source == "alsa":
+            self._use_alsa = True
+            self._init_audio_alsa()
+            return
+        if self._audio_source == "pyaudio":
+            self._use_alsa = False
+            self._init_audio_pyaudio()
+            return
+
+        # Legacy auto-detect — explicit audio.source unset.
         import platform
         self._use_alsa: bool = (
             platform.system() == "Linux"
@@ -625,6 +914,86 @@ class SatelliteDaemon:
             self._init_audio_alsa()
         else:
             self._init_audio_pyaudio()
+
+    def _init_audio_rtsp(self) -> None:
+        """Open audio via an ffmpeg RTSP subprocess.
+
+        Pulls the audio track from the configured RTSP URL, decodes to
+        16-bit little-endian mono PCM at the target sample rate, and
+        exposes ffmpeg's stdout as the read stream.  The main loop and
+        UtteranceCapture both read this stream as a byte pipe (same
+        pattern as the ALSA arecord source), so setting
+        ``self._use_alsa = True`` is a correct reuse of the pipe-read
+        code path even though this source is not ALSA.
+
+        Config (under ``audio.rtsp``)::
+
+            {
+                "url": "rtsp://user:pass@host:554/Preview_14_sub",
+                "ffmpeg_bin": "ffmpeg"   // optional
+            }
+        """
+        rtsp_cfg: dict[str, Any] = self._config.get("audio", {}).get(
+            "rtsp", {},
+        )
+        url: str = rtsp_cfg.get("url", "")
+        if not url:
+            raise RuntimeError(
+                "audio.rtsp.url is required when audio.source == 'rtsp'",
+            )
+        ffmpeg_bin: str = rtsp_cfg.get("ffmpeg_bin", "ffmpeg")
+
+        # RTSP source already outputs at target rate — no resample.
+        self._hw_rate = self._sample_rate
+        self._needs_resample = False
+        self._hw_chunk = self._chunk_samples
+
+        # ffmpeg command:
+        # -loglevel error        Quiet ffmpeg output (we own logging).
+        # -rtsp_transport tcp    TCP is more reliable than UDP over WiFi.
+        # -i <url>               Source RTSP stream.
+        # -vn                    Discard video tracks — audio only.
+        # -ac 1                  Force mono.
+        # -ar <rate>             Target sample rate.
+        # -acodec pcm_s16le      16-bit little-endian PCM.
+        # -f s16le -             Write raw PCM to stdout.
+        cmd: list[str] = [
+            ffmpeg_bin,
+            "-loglevel", "error",
+            "-rtsp_transport", "tcp",
+            "-i", url,
+            "-vn",
+            "-ac", "1",
+            "-ar", str(self._sample_rate),
+            "-acodec", "pcm_s16le",
+            "-f", "s16le",
+            "-",
+        ]
+        self._rtsp_proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        # Pipe-reader semantics; see docstring above.
+        self._stream = self._rtsp_proc.stdout  # type: ignore[assignment]
+        self._use_alsa = True
+        # Kept as a distinct attribute for parity with the ALSA path
+        # so stop() can find the arecord-or-equivalent process.
+        self._alsa_proc = None
+
+        # Redact the password before logging the URL.
+        safe_url: str = url
+        if "@" in safe_url and "://" in safe_url:
+            scheme, rest = safe_url.split("://", 1)
+            if "@" in rest:
+                creds, host_part = rest.split("@", 1)
+                if ":" in creds:
+                    user, _pw = creds.split(":", 1)
+                    safe_url = f"{scheme}://{user}:****@{host_part}"
+        logger.info(
+            "RTSP audio stream opened: url=%s rate=%d chunk=%d",
+            safe_url, self._sample_rate, self._hw_chunk,
+        )
 
     def _init_audio_alsa(self) -> None:
         """Open audio via ALSA arecord subprocess.
@@ -941,6 +1310,20 @@ class SatelliteDaemon:
             )
             return
 
+        # Baichuan TTS sink — only initialized when audio.sink is set
+        # to "baichuan".  Happens after wake init so a sink failure
+        # doesn't mask earlier misconfiguration errors.
+        if self._audio_sink == "baichuan":
+            try:
+                self._init_baichuan_sink()
+            except Exception as exc:
+                logger.error(
+                    "Baichuan TTS sink initialization failed: %s. "
+                    "Check audio.baichuan config and NVR reachability.",
+                    exc,
+                )
+                return
+
         logger.info(
             "Satellite [%s] listening%s...",
             self._room,
@@ -1018,7 +1401,19 @@ class SatelliteDaemon:
         """Stop the satellite daemon and release resources."""
         self._running = False
 
-        if hasattr(self, "_alsa_proc") and self._alsa_proc is not None:
+        # RTSP ffmpeg subprocess — terminate cleanly so the NVR sees
+        # the RTSP session end and doesn't hang onto a stale slot.
+        if self._rtsp_proc is not None:
+            self._rtsp_proc.terminate()
+            try:
+                self._rtsp_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                logger.warning("rtsp ffmpeg did not exit — killing")
+                self._rtsp_proc.kill()
+                self._rtsp_proc.wait(timeout=2)
+            self._rtsp_proc = None
+            self._stream = None
+        elif hasattr(self, "_alsa_proc") and self._alsa_proc is not None:
             self._alsa_proc.terminate()
             try:
                 self._alsa_proc.wait(timeout=5)
@@ -1048,6 +1443,25 @@ class SatelliteDaemon:
         if self._piper_pool is not None:
             self._piper_pool.stop()
             self._piper_pool = None
+
+        # Tear down the Baichuan TTS sink.  Logout first so the NVR
+        # releases the session slot, then stop the asyncio loop.
+        if self._bc_host is not None and self._bc_loop is not None:
+            try:
+                fut = asyncio.run_coroutine_threadsafe(
+                    self._bc_host.logout(), self._bc_loop,
+                )
+                fut.result(timeout=5)
+            except Exception as exc:
+                logger.debug("Baichuan logout error: %s", exc)
+            self._bc_host = None
+        if self._bc_loop is not None:
+            try:
+                self._bc_loop.call_soon_threadsafe(self._bc_loop.stop)
+            except Exception:
+                pass
+            self._bc_loop = None
+            self._bc_thread = None
 
         logger.info("Satellite [%s] stopped", self._room)
 
