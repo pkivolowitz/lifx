@@ -189,6 +189,15 @@ class ThermalLogger:
         if not node_id or not isinstance(node_id, str):
             logger.debug("thermal reading missing node_id, dropping")
             return
+        if node_id.startswith("itest-"):
+            # Integration tests synthesize node_ids of the form
+            # itest-<pid>-<ms>.  Tests publish on glowup/test/thermal/
+            # which this logger does not subscribe to, but a stale
+            # retained message on glowup/hardware/thermal/itest-* would
+            # replay on every reconnect.  Drop at the ingest boundary
+            # so the production dashboard can never show a test host.
+            logger.debug("dropping itest payload node_id=%s", node_id)
+            return
 
         now: float = time.time()
 
