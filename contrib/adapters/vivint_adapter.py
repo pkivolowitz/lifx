@@ -418,11 +418,22 @@ class VivintAdapter(AsyncPollingAdapterBase):
             logger.warning("Failed to save Vivint token: %s", exc)
 
     async def _read_locks(self) -> None:
-        """Read all devices: alarm panel, locks, and wireless sensors."""
+        """Read all devices: alarm panel, locks, and wireless sensors.
+
+        Calls ``system.refresh()`` first so the entities reflect the
+        Vivint cloud's current state, not just a stale PubNub cache.
+        Without this, a single missed PubNub message (e.g. a disarm
+        event) leaves the local state stuck until the adapter restarts.
+        """
         if not self._account:
             return
 
         for system in self._account.systems:
+            try:
+                await system.refresh()
+            except Exception as exc:
+                logger.warning("Vivint system refresh failed: %s", exc)
+
             for alarm_panel in system.alarm_panels:
                 self._process_alarm_panel(alarm_panel)
                 for device in alarm_panel.devices:
