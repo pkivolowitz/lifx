@@ -204,9 +204,38 @@ def _draw_giant_centered(
     surf.blit(text_surf, text_surf.get_rect(center=rect.center))
 
 
-# _draw_two_line_centered was removed when all wallclock tiles
-# collapsed to single-line phrases (more readable at night, in
-# either grid or stacked layout).
+def _draw_multiline_centered(
+    surf: pygame.Surface, rect: pygame.Rect,
+    lines: list[tuple[str, tuple[int, int, int]]],
+) -> None:
+    """Render 1-4 lines stacked vertically, each centered in ``rect``.
+
+    Height per line is divided evenly across the available rect height
+    with small gaps.  Each line is independently width-fitted and
+    colored.  Designed for the day-mode readability language: max 8-9
+    chars per line, max 4 lines per tile, all caps.
+    """
+    n: int = len(lines)
+    if n == 0:
+        return
+    target_w: int = int(rect.w * _GIANT_W_FRAC)
+    # Allocate ~85% of rect height to text, rest to gaps.
+    text_frac: float = 0.85
+    per_line_h: int = max(_GIANT_MIN_SIZE, int(rect.h * text_frac / n))
+
+    rendered: list[pygame.Surface] = []
+    for text, color in lines:
+        font = _fit_font_width(per_line_h, text, target_w, _GIANT_MIN_SIZE)
+        rendered.append(font.render(text, True, color))
+
+    total_h: int = sum(s.get_height() for s in rendered)
+    gap: int = max(2, (rect.h - total_h) // (n + 1))
+    top_y: int = rect.centery - (total_h + gap * (n - 1)) // 2
+
+    y: int = top_y
+    for s in rendered:
+        surf.blit(s, s.get_rect(centerx=rect.centerx, top=y))
+        y += s.get_height() + gap
 
 
 # ---------------------------------------------------------------------------
@@ -239,15 +268,16 @@ def _locks_phrase(
 ) -> Optional[tuple[str, tuple[int, int, int]]]:
     """Return (text, color) summarizing all locks in one phrase.
 
-    All locked → ``LOCKS OK`` (theme.ok).  Any open → ``UNLOCKED:
-    <first> +N`` (theme.bad).  None means data not yet available.
+    All locked → ``LOCKS OK`` (theme.ok).  Any unlocked → name of
+    first unlocked lock (theme.bad).  None means data not yet
+    available.  Used by night-stack rows (single-line context).
     """
     locks_data: Optional[dict] = data.get("locks")
     if locks_data is None:
         return None
     locks: list = locks_data.get("locks", [])
     open_names: list[str] = [
-        lock.get("name", "?") for lock in locks
+        lock.get("name", "?").upper() for lock in locks
         if not lock.get("locked", False)
     ]
     if not open_names:
@@ -257,6 +287,29 @@ def _locks_phrase(
     return f"UNLOCKED: {first}{extra}", theme.bad
 
 
+def _locks_lines(
+    data: DataPoller, theme: Theme,
+) -> Optional[list[tuple[str, tuple[int, int, int]]]]:
+    """Return multi-line lock status for the day-grid tile.
+
+    All locked → ["LOCKS", "OK"] in theme.ok.
+    Any unlocked → list each unlocked door name as its own line in
+    theme.bad (max 4 lines per tile design language).
+    """
+    locks_data: Optional[dict] = data.get("locks")
+    if locks_data is None:
+        return None
+    locks: list = locks_data.get("locks", [])
+    unlocked: list[str] = [
+        lock.get("name", "?").upper() for lock in locks
+        if not lock.get("locked", False)
+    ]
+    if not unlocked:
+        return [("LOCKS", theme.ok), ("OK", theme.ok)]
+    # Cap at 4 lines per design language.
+    return [(name, theme.bad) for name in unlocked[:4]]
+
+
 def _doors_phrase(
     data: DataPoller, theme: Theme,
 ) -> Optional[tuple[str, tuple[int, int, int]]]:
@@ -264,13 +317,14 @@ def _doors_phrase(
 
     All closed → ``DOORS OK`` (theme.ok).  Any open → ``OPEN: <first>
     +N`` (theme.bad).  None means security data not yet available.
+    Used by night-stack rows (single-line context).
     """
     security: Optional[dict] = data.get("security")
     if security is None:
         return None
     doors: list = security.get("doors", [])
     open_doors: list[str] = [
-        door.get("name", "?") for door in doors
+        door.get("name", "?").upper() for door in doors
         if door.get("open", False)
     ]
     if not open_doors:
@@ -278,6 +332,40 @@ def _doors_phrase(
     first: str = open_doors[0]
     extra: str = f" +{len(open_doors) - 1}" if len(open_doors) > 1 else ""
     return f"OPEN: {first}{extra}", theme.bad
+
+
+def _security_lines(
+    data: DataPoller, theme: Theme,
+) -> Optional[list[tuple[str, tuple[int, int, int]]]]:
+    """Return multi-line security status for the day-grid tile.
+
+    Line 1 is always the alarm state.  Line 2+ is door status:
+    ``DOORS OK`` when all closed, or each open door name on its own
+    line in theme.bad.  Capped at 4 lines per design language.
+    """
+    security: Optional[dict] = data.get("security")
+    if security is None:
+        return None
+    # Alarm state — always line 1.
+    raw: str = security.get("alarm", "unknown")
+    alarm_text: str = raw.upper().replace("_", " ")
+    alarm_color = theme.ok if raw.lower().startswith("armed") else theme.bad
+    result: list[tuple[str, tuple[int, int, int]]] = [
+        (alarm_text, alarm_color),
+    ]
+    # Door status — line 2+.
+    doors: list = security.get("doors", [])
+    open_doors: list[str] = [
+        door.get("name", "?").upper() for door in doors
+        if door.get("open", False)
+    ]
+    if not open_doors:
+        result.append(("DOORS OK", theme.ok))
+    else:
+        # Each open door on its own line, cap at 3 (alarm took line 1).
+        for name in open_doors[:3]:
+            result.append((name, theme.bad))
+    return result
 
 
 def _alarm_phrase(
@@ -324,6 +412,46 @@ def _alerts_phrase(
         alerts[0].get("properties", {}).get("event", "Unknown")
     )
     return f"{count}: {first_event}", color
+
+
+def _alerts_lines(
+    data: DataPoller, theme: Theme,
+) -> Optional[list[tuple[str, tuple[int, int, int]]]]:
+    """Return multi-line alert status for the day-grid tile.
+
+    No alerts → ["NO", "WEATHER", "ALERTS"] in theme.ok.
+    Active alerts → count on line 1, event name split across remaining
+    lines (capped at 4 total).
+    """
+    alerts: Optional[list] = data.get("alerts") or []
+    if not alerts:
+        return [
+            ("NO", theme.ok),
+            ("WEATHER", theme.ok),
+            ("ALERTS", theme.ok),
+        ]
+    blink: bool = int(time.monotonic() * 2) % 2 == 0
+    color = theme.bad if blink else theme.warn
+    count_word: str = "ALERT" if len(alerts) == 1 else "ALERTS"
+    first_event: str = (
+        alerts[0].get("properties", {}).get("event", "UNKNOWN").upper()
+    )
+    # Split event name into lines of ~9 chars max, cap at 4 total.
+    result: list[tuple[str, tuple[int, int, int]]] = [
+        (f"{len(alerts)} {count_word}", color),
+    ]
+    # Break event name into words, group into lines ≤ 9 chars.
+    words: list[str] = first_event.split()
+    line: str = ""
+    for word in words:
+        if line and len(line) + 1 + len(word) > 9:
+            result.append((line, color))
+            line = word
+        else:
+            line = f"{line} {word}".strip() if line else word
+    if line:
+        result.append((line, color))
+    return result[:4]
 
 
 # ---------------------------------------------------------------------------
@@ -440,17 +568,16 @@ def draw_health(surf: pygame.Surface, rect: pygame.Rect,
 
 def draw_locks(surf: pygame.Surface, rect: pygame.Rect,
                data: DataPoller, theme: Theme) -> None:
-    """Draw lock status as one giant single-line phrase.
+    """Draw lock status as multi-line tile.
 
-    Day-grid renderer.  Battery levels dropped — wallclock readability
-    over completeness.  See ``_locks_phrase`` for the text/color rules.
+    Day-grid renderer.  All locked → LOCKS / OK (two lines).
+    Any unlocked → each unlocked door name on its own line in red.
     """
-    phrase = _locks_phrase(data, theme)
-    if phrase is None:
+    lines = _locks_lines(data, theme)
+    if lines is None:
         return
     _draw_card(surf, rect, theme)
-    text, color = phrase
-    _draw_giant_centered(surf, rect, text, color)
+    _draw_multiline_centered(surf, rect, lines)
 
 
 # ---------------------------------------------------------------------------
@@ -719,20 +846,17 @@ def draw_moon(surf: pygame.Surface, rect: pygame.Rect,
 
 def draw_alerts(surf: pygame.Surface, rect: pygame.Rect,
                 data: DataPoller, theme: Theme) -> None:
-    """Draw NWS severe weather alerts as one giant single-line phrase.
+    """Draw NWS severe weather alerts as multi-line tile.
 
-    Day-grid renderer.  Blank card when nothing is active (no
-    placeholder text competing with the rest of the display).  When
-    alerts exist, render count + first event giant and blinking.
-    Night uses ``night_row_alerts`` instead, which shows ``NO ALERTS``
-    so the row stays present.
+    Day-grid renderer.  No alerts → NO / WEATHER / ALERTS (three
+    lines in theme.ok).  Active alerts → count + event name split
+    across lines, blinking.  Night uses ``night_row_alerts`` instead.
     """
-    phrase = _alerts_phrase(data, theme, blank_when_none=True)
+    lines = _alerts_lines(data, theme)
     _draw_card(surf, rect, theme)
-    if phrase is None:
+    if lines is None:
         return
-    text, color = phrase
-    _draw_giant_centered(surf, rect, text, color)
+    _draw_multiline_centered(surf, rect, lines)
 
 
 # ---------------------------------------------------------------------------
@@ -741,32 +865,18 @@ def draw_alerts(surf: pygame.Surface, rect: pygame.Rect,
 
 def draw_security(surf: pygame.Surface, rect: pygame.Rect,
                   data: DataPoller, theme: Theme) -> None:
-    """Draw security state as one giant single-line phrase.
+    """Draw security state as multi-line tile.
 
-    Day-grid renderer.  Combines alarm + door status with ``·`` so
-    one tile shows both.  Night uses two separate rows
-    (``night_row_alarm`` + ``night_row_doors``) per Perry's spec.
-    Color is theme.bad if either component is bad.
+    Day-grid renderer.  Line 1 is alarm state (DISARMED / ARMED STAY
+    etc.).  Line 2+ is door status: DOORS OK when all closed, or each
+    open door name on its own line in red.  Night uses separate
+    full-width rows (``night_row_alarm`` + ``night_row_doors``).
     """
-    alarm = _alarm_phrase(data, theme)
-    doors = _doors_phrase(data, theme)
-    if alarm is None and doors is None:
+    lines = _security_lines(data, theme)
+    if lines is None:
         return
     _draw_card(surf, rect, theme)
-
-    parts: list[str] = []
-    any_bad: bool = False
-    if alarm is not None:
-        parts.append(alarm[0])
-        if alarm[1] == theme.bad:
-            any_bad = True
-    if doors is not None:
-        parts.append(doors[0])
-        if doors[1] == theme.bad:
-            any_bad = True
-    text: str = " \u00b7 ".join(parts)
-    color = theme.bad if any_bad else theme.ok
-    _draw_giant_centered(surf, rect, text, color)
+    _draw_multiline_centered(surf, rect, lines)
 
 
 # ---------------------------------------------------------------------------

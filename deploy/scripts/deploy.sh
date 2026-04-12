@@ -34,11 +34,9 @@ GLOWUP_DEST="/home/a/lifx"
 
 # mbclock — Pi 4 bedroom kiosk (10.0.0.220).
 # No systemd unit; the kiosk launches from ~/.config/labwc/autostart as a
-# child of the labwc session.  The autostart script is a one-shot && chain
-# with a chromium fallback if python exits, so killing the python process
-# doesn't restart the kiosk — it drops the display into chromium.  The only
-# clean way to relaunch is to reboot the Pi, which re-runs labwc autostart
-# from scratch.
+# child of the labwc session.  deploy_mbclock() captures the running command
+# line, rsyncs, kills the kiosk process, relaunches with the same args, and
+# verifies all three services (kiosk, satellite, thermal) are healthy.
 MBCLOCK_HOST="a@10.0.0.220"
 MBCLOCK_DEST="/home/a/lifx"
 
@@ -236,22 +234,78 @@ deploy_glowup() {
 # ---------------------------------------------------------------------------
 
 deploy_mbclock() {
+    # 1. Capture the running kiosk command line before touching anything.
+    #    The kiosk runs as "python -m kiosk ..." under the labwc session.
+    #    /proc/<pid>/cmdline uses NUL separators; tr converts to spaces.
+    local kiosk_pid kiosk_cmd
+    kiosk_pid=$(ssh "$MBCLOCK_HOST" "pgrep -f 'python.*-m kiosk'" 2>/dev/null || true)
+    if [ -n "$kiosk_pid" ]; then
+        # Take first PID if pgrep returns multiple (parent + child).
+        kiosk_pid=$(echo "$kiosk_pid" | head -1)
+        kiosk_cmd=$(ssh "$MBCLOCK_HOST" "tr '\0' ' ' < /proc/$kiosk_pid/cmdline")
+        echo "==> mbclock: captured running kiosk (pid $kiosk_pid): $kiosk_cmd"
+    else
+        echo "==> mbclock: WARNING — no running kiosk process found, using default"
+        kiosk_cmd="$MBCLOCK_DEST/venv/bin/python -m kiosk --api http://10.0.0.214:8420 --rotate 0 --mode wallclock"
+    fi
+
+    # 2. Rsync (full tree, --delete, same as every other target).
     echo "==> mbclock: syncing to $MBCLOCK_HOST:$MBCLOCK_DEST"
     ssh "$MBCLOCK_HOST" "mkdir -p '$MBCLOCK_DEST'"
     do_rsync "$MBCLOCK_HOST" "$MBCLOCK_DEST"
     write_deployed "$MBCLOCK_HOST" "$MBCLOCK_DEST"
 
     if $dry_run; then
-        echo "[dry-run] would sudo reboot mbclock to relaunch labwc autostart"
+        echo "[dry-run] would kill and relaunch kiosk"
         return
     fi
 
-    # No systemd unit for the kiosk; reboot is the only clean restart.
-    # See the MBCLOCK_HOST comment block above for the full explanation.
-    echo "==> mbclock: rebooting (only clean restart path — labwc autostart re-runs)"
-    ssh "$MBCLOCK_HOST" 'sudo reboot' || true
+    # 3. Kill the running kiosk.
+    if [ -n "$kiosk_pid" ]; then
+        echo "==> mbclock: killing kiosk (pid $kiosk_pid)"
+        ssh "$MBCLOCK_HOST" "kill $kiosk_pid" 2>/dev/null || true
+        sleep 1
+    fi
 
-    echo "==> mbclock: deploy complete (display will be back in ~30s)"
+    # 4. Relaunch with the captured command line.
+    #    Run from the lifx directory, backgrounded, stdout/stderr to log.
+    echo "==> mbclock: relaunching kiosk"
+    ssh "$MBCLOCK_HOST" \
+        "cd '$MBCLOCK_DEST' && nohup $kiosk_cmd > /tmp/kiosk.log 2>&1 &"
+    sleep 2
+
+    # 5. Verify all three processes are healthy.
+    local ok=true
+
+    # Kiosk process.
+    if ssh "$MBCLOCK_HOST" "pgrep -f 'python.*-m kiosk'" > /dev/null 2>&1; then
+        echo "==> mbclock: kiosk running"
+    else
+        echo "==> mbclock: WARNING — kiosk did not come back"
+        ok=false
+    fi
+
+    # Voice satellite (systemd).
+    if ssh "$MBCLOCK_HOST" "systemctl is-active --quiet glowup-satellite"; then
+        echo "==> mbclock: satellite running"
+    else
+        echo "==> mbclock: WARNING — glowup-satellite not active"
+        ok=false
+    fi
+
+    # Thermal sensor (systemd).
+    if ssh "$MBCLOCK_HOST" "systemctl is-active --quiet pi-thermal"; then
+        echo "==> mbclock: thermal running"
+    else
+        echo "==> mbclock: WARNING — pi-thermal not active"
+        ok=false
+    fi
+
+    if $ok; then
+        echo "==> mbclock: deploy complete — all services healthy"
+    else
+        echo "==> mbclock: deploy complete — CHECK WARNINGS ABOVE"
+    fi
 }
 
 # ---------------------------------------------------------------------------
