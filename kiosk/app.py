@@ -73,6 +73,22 @@ WALLCLOCK_REGISTRY: list[tuple[str, Callable]] = [
     ("security", tiles.draw_security),
 ]
 
+# Night-stack registry — wallclock at night dumps the 2x2 grid and
+# uses a vertical stack of full-width single-line rows.  Order is the
+# render order top-to-bottom.  Security is split into alarm + doors
+# so each phrase gets its own row.
+NIGHT_STACK_REGISTRY: list[tuple[str, Callable]] = [
+    ("temp", tiles.night_row_temp),
+    ("locks", tiles.night_row_locks),
+    ("doors", tiles.night_row_doors),
+    ("alarm", tiles.night_row_alarm),
+    ("alerts", tiles.night_row_alerts),
+]
+
+# Night layout: clock takes a smaller fraction so the 5 rows below
+# get more room each.  0.22 leaves ~78% of screen height for rows.
+NIGHT_CLOCK_FRAC: float = 0.22
+
 MODE_CONFIG: dict[str, dict] = {
     MODE_DESKTOP: {
         "registry": TILE_REGISTRY,
@@ -92,6 +108,37 @@ MODE_CONFIG: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 # Grid layout
 # ---------------------------------------------------------------------------
+
+def _compute_night_stack(
+    screen_w: int, screen_h: int, top_offset: int, n_rows: int,
+) -> list[pygame.Rect]:
+    """Compute full-width row rects for the night stacked layout.
+
+    Args:
+        screen_w:   Screen width in pixels.
+        screen_h:   Screen height in pixels.
+        top_offset: Pixels reserved at the top (clock + margin).
+        n_rows:     Number of rows to lay out.
+
+    Returns:
+        List of Rects, one per row, vertically stacked below the clock,
+        each spanning the full screen width minus a small horizontal pad.
+    """
+    avail_h: int = screen_h - top_offset
+    row_h: int = max(
+        1, (avail_h - TILE_PAD * (n_rows + 1)) // n_rows,
+    )
+    rects: list[pygame.Rect] = []
+    for i in range(n_rows):
+        y: int = top_offset + TILE_PAD + i * (row_h + TILE_PAD)
+        rects.append(
+            pygame.Rect(
+                TILE_PAD, y,
+                screen_w - 2 * TILE_PAD, row_h,
+            )
+        )
+    return rects
+
 
 def _compute_grid(
     screen_w: int, screen_h: int, clock_h: int,
@@ -249,6 +296,26 @@ def main() -> None:
         len(registry), cols, mode_cfg["tile_fill"],
     )
 
+    # Night stack layout — pre-computed once.  Wallclock at night
+    # switches to this layout dynamically when the theme flips to NIGHT.
+    # Other modes (desktop) keep the grid even at night.
+    night_target_h: int = int(screen_h * NIGHT_CLOCK_FRAC)
+    night_clock_h: int = tiles.measure_clock_height(
+        screen_w, night_target_h,
+    )
+    night_clock_rect = pygame.Rect(0, TOP_MARGIN, screen_w, night_clock_h)
+    night_rects: list[pygame.Rect] = _compute_night_stack(
+        screen_w, screen_h, night_clock_h + TOP_MARGIN,
+        len(NIGHT_STACK_REGISTRY),
+    )
+    night_layout_active: bool = (args.mode == MODE_WALLCLOCK)
+    if night_layout_active:
+        logger.info(
+            "Night stack: clock_h=%d, %d rows, row_h~%d",
+            night_clock_h, len(NIGHT_STACK_REGISTRY),
+            night_rects[0].h if night_rects else 0,
+        )
+
     # Start data poller.
     poller = DataPoller(api_base=args.api)
     poller.start()
@@ -278,17 +345,30 @@ def main() -> None:
             else:
                 theme = DAY
 
+        # Pick layout: night stack (when wallclock + NIGHT theme) or
+        # the configured grid otherwise.  Night stack uses the
+        # NIGHT_STACK_REGISTRY with split alarm/doors rows.
+        use_night_stack: bool = night_layout_active and theme is NIGHT
+        if use_night_stack:
+            active_clock_rect = night_clock_rect
+            active_registry = NIGHT_STACK_REGISTRY
+            active_rects = night_rects
+        else:
+            active_clock_rect = clock_rect
+            active_registry = registry
+            active_rects = tile_rects
+
         # Clear logical canvas.
         canvas.fill(theme.bg)
 
         # Draw clock.
-        tiles.draw_clock(canvas, clock_rect, poller, theme)
+        tiles.draw_clock(canvas, active_clock_rect, poller, theme)
 
         # Draw tiles.
-        for i, (name, draw_fn) in enumerate(registry):
-            if i < len(tile_rects):
+        for i, (name, draw_fn) in enumerate(active_registry):
+            if i < len(active_rects):
                 try:
-                    draw_fn(canvas, tile_rects[i], poller, theme)
+                    draw_fn(canvas, active_rects[i], poller, theme)
                 except Exception as exc:
                     logger.debug("Tile '%s' render error: %s", name, exc)
 

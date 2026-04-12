@@ -143,13 +143,19 @@ def _draw_card(surf: pygame.Surface, rect: pygame.Rect,
     is opaque black, which caused the whole tile interior to blit as
     a dark rect over the canvas.
     """
+    # Skip the whole blit when both fill and border are fully
+    # transparent — happens at night where cards are intentionally
+    # invisible. Avoids a per-frame SRCALPHA surface allocation.
+    if theme.card_bg[3] == 0 and theme.card_border[3] == 0:
+        return
     card_surf = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
     card_surf.fill((0, 0, 0, 0))
     if theme.card_bg[3] > 0:
         pygame.draw.rect(card_surf, theme.card_bg,
                          (0, 0, rect.w, rect.h), border_radius=14)
-    pygame.draw.rect(card_surf, theme.card_border,
-                     (0, 0, rect.w, rect.h), width=3, border_radius=14)
+    if theme.card_border[3] > 0:
+        pygame.draw.rect(card_surf, theme.card_border,
+                         (0, 0, rect.w, rect.h), width=3, border_radius=14)
     surf.blit(card_surf, rect.topleft)
 
 
@@ -170,6 +176,154 @@ def _draw_title(surf: pygame.Surface, rect: pygame.Rect,
     text = font.render(title, True, theme.label)
     surf.blit(text, (rect.x + 20, rect.y + 16))
     return rect.y + 16 + text.get_height() + 6
+
+
+# Wallclock content padding — inset from card border so giant text
+# never crowds the rounded edges. 0.90 / 0.78 picked empirically.
+_GIANT_W_FRAC: float = 0.90
+_GIANT_H_FRAC: float = 0.78
+_TWO_LINE_H_FRAC: float = 0.42  # per line, leaves a small gap
+_GIANT_MIN_SIZE: int = 20  # never shrink below this — matches _fit_font_width default
+
+
+def _draw_giant_centered(
+    surf: pygame.Surface, rect: pygame.Rect,
+    text: str, color: tuple[int, int, int],
+) -> None:
+    """Render ``text`` as large as possible, centered in ``rect``.
+
+    Picks a font size whose rendered height fills ~78% of the card and
+    whose width fits inside ~90% of the card.  Used by the wallclock
+    tiles where one short phrase (e.g. "LOCKS OK", "67°F") owns the
+    entire tile.
+    """
+    target_h: int = max(_GIANT_MIN_SIZE, int(rect.h * _GIANT_H_FRAC))
+    target_w: int = int(rect.w * _GIANT_W_FRAC)
+    font = _fit_font_width(target_h, text, target_w, _GIANT_MIN_SIZE)
+    text_surf = font.render(text, True, color)
+    surf.blit(text_surf, text_surf.get_rect(center=rect.center))
+
+
+# _draw_two_line_centered was removed when all wallclock tiles
+# collapsed to single-line phrases (more readable at night, in
+# either grid or stacked layout).
+
+
+# ---------------------------------------------------------------------------
+# Wallclock phrase helpers — single source of truth for the strings
+# rendered by both the day-mode grid tiles (draw_X) and the night-mode
+# stacked rows (night_row_X).  Each returns ``(text, color)`` so the
+# caller only has to pick a rect and blit.
+# ---------------------------------------------------------------------------
+
+
+def _temp_phrase(
+    data: DataPoller, theme: Theme,
+) -> Optional[tuple[str, tuple[int, int, int]]]:
+    """Return (text, color) for the current temperature, or None.
+
+    None means "data not available yet" — caller should render nothing.
+    """
+    weather: Optional[dict] = data.get("weather")
+    if weather is None:
+        return None
+    current: dict = weather.get("current") or {}
+    if not current:
+        return None
+    temp: float = current.get("temperature_2m", 0)
+    return f"{temp:.0f}\u00b0F", theme.temp
+
+
+def _locks_phrase(
+    data: DataPoller, theme: Theme,
+) -> Optional[tuple[str, tuple[int, int, int]]]:
+    """Return (text, color) summarizing all locks in one phrase.
+
+    All locked → ``LOCKS OK`` (theme.ok).  Any open → ``UNLOCKED:
+    <first> +N`` (theme.bad).  None means data not yet available.
+    """
+    locks_data: Optional[dict] = data.get("locks")
+    if locks_data is None:
+        return None
+    locks: list = locks_data.get("locks", [])
+    open_names: list[str] = [
+        lock.get("name", "?") for lock in locks
+        if not lock.get("locked", False)
+    ]
+    if not open_names:
+        return "LOCKS OK", theme.ok
+    first: str = open_names[0]
+    extra: str = f" +{len(open_names) - 1}" if len(open_names) > 1 else ""
+    return f"UNLOCKED: {first}{extra}", theme.bad
+
+
+def _doors_phrase(
+    data: DataPoller, theme: Theme,
+) -> Optional[tuple[str, tuple[int, int, int]]]:
+    """Return (text, color) summarizing door sensors in one phrase.
+
+    All closed → ``DOORS OK`` (theme.ok).  Any open → ``OPEN: <first>
+    +N`` (theme.bad).  None means security data not yet available.
+    """
+    security: Optional[dict] = data.get("security")
+    if security is None:
+        return None
+    doors: list = security.get("doors", [])
+    open_doors: list[str] = [
+        door.get("name", "?") for door in doors
+        if door.get("open", False)
+    ]
+    if not open_doors:
+        return "DOORS OK", theme.ok
+    first: str = open_doors[0]
+    extra: str = f" +{len(open_doors) - 1}" if len(open_doors) > 1 else ""
+    return f"OPEN: {first}{extra}", theme.bad
+
+
+def _alarm_phrase(
+    data: DataPoller, theme: Theme,
+) -> Optional[tuple[str, tuple[int, int, int]]]:
+    """Return (text, color) for the alarm panel state.
+
+    ``armed*`` states are theme.ok (the safe state in this bedroom);
+    everything else is theme.bad.  Underscores in compound states
+    like ``armed_home`` become spaces for readability.
+    """
+    security: Optional[dict] = data.get("security")
+    if security is None:
+        return None
+    raw: str = security.get("alarm", "unknown")
+    text: str = raw.upper().replace("_", " ")
+    color = theme.ok if raw.lower().startswith("armed") else theme.bad
+    return text, color
+
+
+def _alerts_phrase(
+    data: DataPoller, theme: Theme, *, blank_when_none: bool,
+) -> Optional[tuple[str, tuple[int, int, int]]]:
+    """Return (text, color) for severe weather alerts.
+
+    When ``blank_when_none`` is True (day grid) and no alerts are
+    active, returns None so the caller draws nothing.  When False
+    (night stack), returns ``("NO ALERTS", theme.ok)`` so the row
+    is visible and reassuring.
+
+    Active alerts always render — count + first event, blinking
+    between bad and warn for attention.
+    """
+    alerts: Optional[list] = data.get("alerts") or []
+    if not alerts:
+        if blank_when_none:
+            return None
+        return "NO ALERTS", theme.ok
+    blink: bool = int(time.monotonic() * 2) % 2 == 0
+    color = theme.bad if blink else theme.warn
+    count_word: str = "ALERT" if len(alerts) == 1 else "ALERTS"
+    count: str = f"{len(alerts)} {count_word}"
+    first_event: str = (
+        alerts[0].get("properties", {}).get("event", "Unknown")
+    )
+    return f"{count}: {first_event}", color
 
 
 # ---------------------------------------------------------------------------
@@ -286,41 +440,17 @@ def draw_health(surf: pygame.Surface, rect: pygame.Rect,
 
 def draw_locks(surf: pygame.Surface, rect: pygame.Rect,
                data: DataPoller, theme: Theme) -> None:
-    """Draw lock status tile."""
-    locks_data: Optional[dict] = data.get("locks")
-    if locks_data is None:
+    """Draw lock status as one giant single-line phrase.
+
+    Day-grid renderer.  Battery levels dropped — wallclock readability
+    over completeness.  See ``_locks_phrase`` for the text/color rules.
+    """
+    phrase = _locks_phrase(data, theme)
+    if phrase is None:
         return
-
     _draw_card(surf, rect, theme)
-    y: int = _draw_title(surf, rect, "Locks", theme)
-
-    locks: list = locks_data.get("locks", [])
-    label_base: int = max(13, rect.h * 7 // 4 // 10)
-    small_base: int = max(11, rect.h * 7 // 4 // 14)
-
-    for lock in locks:
-        name: str = lock.get("name", "?")
-        locked: bool = lock.get("locked", False)
-        batt: int = lock.get("battery", 0)
-
-        state_str: str = "Locked" if locked else "OPEN"
-        color = theme.locked if locked else theme.unlocked
-
-        # Name + state on first line.
-        label_text: str = f"{name}: {state_str}"
-        label_font = _fit_font_width(label_base, label_text, rect.w - 24)
-        label = label_font.render(label_text, True, color)
-        surf.blit(label, (rect.x + 20, y))
-        y += label_font.get_height() + 5
-
-        # Battery on second line, smaller.
-        batt_text: str = f"Battery {batt}%"
-        batt_font = _fit_font_width(small_base, batt_text, rect.w - 32)
-        batt_surf = batt_font.render(batt_text, True, theme.dim)
-        surf.blit(batt_surf, (rect.x + 28, y))
-        y += batt_font.get_height() + 8
-        if y > rect.bottom - 10:
-            break
+    text, color = phrase
+    _draw_giant_centered(surf, rect, text, color)
 
 
 # ---------------------------------------------------------------------------
@@ -341,52 +471,17 @@ _WMO: dict[int, str] = {
 
 def draw_weather(surf: pygame.Surface, rect: pygame.Rect,
                  data: DataPoller, theme: Theme) -> None:
-    """Draw current weather conditions."""
-    weather: Optional[dict] = data.get("weather")
-    if weather is None:
-        return
+    """Draw current temperature as a single giant number.
 
-    current: dict = weather.get("current", {})
-    if not current:
+    Day-grid renderer.  No condition, no humidity, no wind — just the
+    temperature.  See ``_temp_phrase``.
+    """
+    phrase = _temp_phrase(data, theme)
+    if phrase is None:
         return
-
     _draw_card(surf, rect, theme)
-    y: int = _draw_title(surf, rect, "Weather", theme)
-
-    temp: float = current.get("temperature_2m", 0)
-    humidity: float = current.get("relative_humidity_2m", 0)
-    wind: float = current.get("wind_speed_10m", 0)
-    code: int = current.get("weather_code", 0)
-    condition: str = _WMO.get(code, "Unknown")
-
-    # Temperature — big.
-    temp_text: str = f"{temp:.0f}°F"
-    temp_font = _fit_font_width(
-        max(28, rect.h * 7 // 4 // 4), temp_text, rect.w - 24,
-    )
-    temp_surf = temp_font.render(temp_text, True, theme.temp)
-    surf.blit(temp_surf, (rect.x + 20, y))
-    y += temp_surf.get_height() + 2
-
-    # Condition.
-    cond_font = _fit_font_width(
-        max(14, rect.h * 7 // 4 // 8), condition, rect.w - 24,
-    )
-    cond_surf = cond_font.render(condition, True, theme.text)
-    surf.blit(cond_surf, (rect.x + 20, y))
-    y += cond_surf.get_height() + 2
-
-    # Humidity + wind — one per line.
-    detail_base: int = max(12, rect.h * 7 // 4 // 10)
-    hum_text: str = f"Humidity {humidity:.0f}%"
-    hum_font = _fit_font_width(detail_base, hum_text, rect.w - 24)
-    hum_surf = hum_font.render(hum_text, True, theme.dim)
-    surf.blit(hum_surf, (rect.x + 20, y))
-    y += hum_font.get_height() + 2
-    wind_text: str = f"Wind {wind:.0f} mph"
-    wind_font = _fit_font_width(detail_base, wind_text, rect.w - 24)
-    wind_surf = wind_font.render(wind_text, True, theme.dim)
-    surf.blit(wind_surf, (rect.x + 20, y))
+    text, color = phrase
+    _draw_giant_centered(surf, rect, text, color)
 
 
 # ---------------------------------------------------------------------------
@@ -624,44 +719,20 @@ def draw_moon(surf: pygame.Surface, rect: pygame.Rect,
 
 def draw_alerts(surf: pygame.Surface, rect: pygame.Rect,
                 data: DataPoller, theme: Theme) -> None:
-    """Draw NWS severe weather alerts (placeholder when none)."""
-    alerts: Optional[list] = data.get("alerts") or []
+    """Draw NWS severe weather alerts as one giant single-line phrase.
 
+    Day-grid renderer.  Blank card when nothing is active (no
+    placeholder text competing with the rest of the display).  When
+    alerts exist, render count + first event giant and blinking.
+    Night uses ``night_row_alerts`` instead, which shows ``NO ALERTS``
+    so the row stays present.
+    """
+    phrase = _alerts_phrase(data, theme, blank_when_none=True)
     _draw_card(surf, rect, theme)
-
-    if not alerts:
-        _draw_title(surf, rect, "Alerts", theme)
-        ok_text: str = "No active alerts"
-        ok_font = _fit_font_width(
-            max(18, rect.h * 7 // 4 // 8), ok_text, rect.w - 24,
-        )
-        ok_surf = ok_font.render(ok_text, True, theme.ok)
-        surf.blit(ok_surf, (
-            rect.centerx - ok_surf.get_width() // 2,
-            rect.centery - ok_surf.get_height() // 2,
-        ))
+    if phrase is None:
         return
-
-    # Blinking red title.
-    blink: bool = int(time.monotonic() * 2) % 2 == 0
-    title_color = theme.bad if blink else theme.warn
-    title_text: str = f"⚠ {len(alerts)} Alert(s)"
-    title_font = _fit_font_width(
-        max(14, rect.h * 7 // 4 // 8), title_text, rect.w - 20,
-    )
-    title = title_font.render(title_text, True, title_color)
-    surf.blit(title, (rect.x + 20, rect.y + 16))
-    y: int = rect.y + 16 + title.get_height() + 6
-
-    # Show first 2 alerts.
-    detail_base: int = max(11, rect.h * 7 // 4 // 12)
-    for alert in alerts[:2]:
-        props = alert.get("properties", {})
-        event: str = props.get("event", "Unknown")
-        detail_font = _fit_font_width(detail_base, event, rect.w - 24)
-        alert_surf = detail_font.render(event, True, theme.warn)
-        surf.blit(alert_surf, (rect.x + 20, y))
-        y += detail_font.get_height() + 2
+    text, color = phrase
+    _draw_giant_centered(surf, rect, text, color)
 
 
 # ---------------------------------------------------------------------------
@@ -670,39 +741,84 @@ def draw_alerts(surf: pygame.Surface, rect: pygame.Rect,
 
 def draw_security(surf: pygame.Surface, rect: pygame.Rect,
                   data: DataPoller, theme: Theme) -> None:
-    """Draw alarm panel state."""
-    security: Optional[dict] = data.get("security")
-    if security is None:
+    """Draw security state as one giant single-line phrase.
+
+    Day-grid renderer.  Combines alarm + door status with ``·`` so
+    one tile shows both.  Night uses two separate rows
+    (``night_row_alarm`` + ``night_row_doors``) per Perry's spec.
+    Color is theme.bad if either component is bad.
+    """
+    alarm = _alarm_phrase(data, theme)
+    doors = _doors_phrase(data, theme)
+    if alarm is None and doors is None:
         return
-
     _draw_card(surf, rect, theme)
-    y: int = _draw_title(surf, rect, "Security", theme)
 
-    alarm_state: str = security.get("alarm", "unknown")
-    state_text: str = alarm_state.upper()
-    color = theme.ok if alarm_state == "disarmed" else theme.bad
+    parts: list[str] = []
+    any_bad: bool = False
+    if alarm is not None:
+        parts.append(alarm[0])
+        if alarm[1] == theme.bad:
+            any_bad = True
+    if doors is not None:
+        parts.append(doors[0])
+        if doors[1] == theme.bad:
+            any_bad = True
+    text: str = " \u00b7 ".join(parts)
+    color = theme.bad if any_bad else theme.ok
+    _draw_giant_centered(surf, rect, text, color)
 
-    state_font = _fit_font_width(
-        max(18, rect.h * 7 // 4 // 6), state_text, rect.w - 20,
+
+# ---------------------------------------------------------------------------
+# Night-mode stacked-row renderers
+# ---------------------------------------------------------------------------
+# At night, the wallclock dumps the 2x2 grid in favor of a vertical
+# stack of full-width single-line rows.  Each row is one piece of
+# information, centered, sized to fill the row.  Security splits into
+# two rows (alarm + doors) so each phrase gets its own line.
+#
+# These functions intentionally do not call _draw_card — night theme
+# already disables card chrome (alpha 0) and the helper short-circuits.
+
+def _draw_night_row(
+    surf: pygame.Surface, rect: pygame.Rect,
+    phrase: Optional[tuple[str, tuple[int, int, int]]],
+) -> None:
+    """Render a night row's phrase, or skip if data not yet available."""
+    if phrase is None:
+        return
+    text, color = phrase
+    _draw_giant_centered(surf, rect, text, color)
+
+
+def night_row_temp(surf: pygame.Surface, rect: pygame.Rect,
+                   data: DataPoller, theme: Theme) -> None:
+    """Night row: current temperature."""
+    _draw_night_row(surf, rect, _temp_phrase(data, theme))
+
+
+def night_row_locks(surf: pygame.Surface, rect: pygame.Rect,
+                    data: DataPoller, theme: Theme) -> None:
+    """Night row: lock summary."""
+    _draw_night_row(surf, rect, _locks_phrase(data, theme))
+
+
+def night_row_doors(surf: pygame.Surface, rect: pygame.Rect,
+                    data: DataPoller, theme: Theme) -> None:
+    """Night row: door sensor summary."""
+    _draw_night_row(surf, rect, _doors_phrase(data, theme))
+
+
+def night_row_alarm(surf: pygame.Surface, rect: pygame.Rect,
+                    data: DataPoller, theme: Theme) -> None:
+    """Night row: alarm panel state."""
+    _draw_night_row(surf, rect, _alarm_phrase(data, theme))
+
+
+def night_row_alerts(surf: pygame.Surface, rect: pygame.Rect,
+                     data: DataPoller, theme: Theme) -> None:
+    """Night row: NWS alerts (shows ``NO ALERTS`` when none)."""
+    _draw_night_row(
+        surf, rect,
+        _alerts_phrase(data, theme, blank_when_none=False),
     )
-    state_surf = state_font.render(state_text, True, color)
-    surf.blit(state_surf, (
-        rect.centerx - state_surf.get_width() // 2, y,
-    ))
-    y += state_surf.get_height() + 6
-
-    # Door sensors.
-    doors: list = security.get("doors", [])
-    door_base: int = max(12, rect.h * 7 // 4 // 10)
-    for door in doors:
-        name: str = door.get("name", "?")
-        is_open: bool = door.get("open", False)
-        state_str: str = "OPEN" if is_open else "Closed"
-        door_color = theme.bad if is_open else theme.ok
-        door_text: str = f"{name}: {state_str}"
-        door_font = _fit_font_width(door_base, door_text, rect.w - 24)
-        door_surf = door_font.render(door_text, True, door_color)
-        surf.blit(door_surf, (rect.x + 20, y))
-        y += door_font.get_height() + 8
-        if y > rect.bottom - 10:
-            break

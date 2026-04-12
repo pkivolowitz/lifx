@@ -77,25 +77,39 @@ DAY = Theme(
     soil_critical=(178, 255, 235),
 )
 
-# Night theme — deep red/amber for bedroom dark adaptation.
+# Night theme — bedroom dark adaptation.
+# Two colors only, by request: a dim red for everything benign and an
+# alert red for anything dangerous.  No greens, no ambers, no per-role
+# tints — the wallclock at night should be readable but never bright,
+# and the eye should immediately see RED-RED as "something is wrong."
+# Background is near-black with a faint red tint so the bezel doesn't
+# look like a pure void next to the dim text.
+_NIGHT_DIM: tuple[int, int, int] = (70, 20, 10)
+_NIGHT_ALERT: tuple[int, int, int] = (180, 35, 15)
+_NIGHT_BG: tuple[int, int, int] = (10, 3, 2)
+
 NIGHT = Theme(
-    bg=(20, 5, 5),
-    clock=(140, 40, 30),
-    date=(120, 35, 25),
-    ampm=(80, 25, 15),
-    card_bg=(40, 12, 8, 180),
-    card_border=(80, 30, 20, 60),
-    text=(140, 50, 35),
-    label=(100, 35, 25),
-    dim=(70, 25, 15),
-    ok=(80, 50, 20),
-    bad=(140, 30, 20),
-    warn=(120, 50, 15),
-    locked=(80, 50, 20),
-    unlocked=(140, 30, 20),
-    temp=(140, 50, 35),
-    humid=(100, 35, 25),
-    soil_wet=(80, 50, 20),
-    soil_dry=(120, 50, 15),
-    soil_critical=(140, 30, 20),
+    bg=_NIGHT_BG,
+    clock=_NIGHT_DIM,
+    date=_NIGHT_DIM,
+    ampm=_NIGHT_DIM,  # unused — kept for Theme schema
+    # No card backgrounds and no borders at night — Perry's call.
+    # The dim text against the near-black canvas is the entire UI;
+    # extra rectangles only add visual noise and stray photons.
+    # _draw_card skips both when alpha is 0.
+    card_bg=(0, 0, 0, 0),
+    card_border=(0, 0, 0, 0),
+    text=_NIGHT_DIM,
+    label=_NIGHT_DIM,
+    dim=_NIGHT_DIM,
+    ok=_NIGHT_DIM,
+    bad=_NIGHT_ALERT,
+    warn=_NIGHT_ALERT,
+    locked=_NIGHT_DIM,
+    unlocked=_NIGHT_ALERT,
+    temp=_NIGHT_DIM,
+    humid=_NIGHT_DIM,
+    soil_wet=_NIGHT_DIM,
+    soil_dry=_NIGHT_DIM,
+    soil_critical=_NIGHT_ALERT,
 )

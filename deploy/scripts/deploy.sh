@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+# deploy.sh — Deploy GlowUp working tree to a target device
+#
+# Usage:   ./deploy.sh <target> [--dry-run]
+# Targets: daedalus, pi, judy, glowup, mbclock
+#
+# Deploys the current working tree (including uncommitted changes) to the
+# target device via rsync. A clean git state is NOT required — deploy freely
+# during active development and commit only when the feature is done.
+#
+# Machine-local configs (/etc/glowup/, ~/.glowup/) are outside the repo
+# and are never touched by this script.
+#
+# Pi services are restarted automatically (passwordless sudo).
+# Judy services must be restarted manually — Jetsons require interactive sudo.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Targets
+# ---------------------------------------------------------------------------
+
+DAEDALUS_HOST="perrykivolowitz@10.0.0.191"
+DAEDALUS_DEST="/Users/perrykivolowitz/lifx"
+
+PI_HOST="pi@10.0.0.48"
+PI_DEST="/home/pi/lifx"
+
+JUDY_HOST="a@10.0.0.63"
+JUDY_DEST="/home/a/lifx"
+
+GLOWUP_HOST="a@10.0.0.214"
+GLOWUP_DEST="/home/a/lifx"
+
+# mbclock — Pi 4 bedroom kiosk (10.0.0.220).
+# No systemd unit; the kiosk launches from ~/.config/labwc/autostart as a
+# child of the labwc session.  The autostart script is a one-shot && chain
+# with a chromium fallback if python exits, so killing the python process
+# doesn't restart the kiosk — it drops the display into chromium.  The only
+# clean way to relaunch is to reboot the Pi, which re-runs labwc autostart
+# from scratch.
+MBCLOCK_HOST="a@10.0.0.220"
+MBCLOCK_DEST="/home/a/lifx"
+
+# ---------------------------------------------------------------------------
+# Rsync exclusions — dev artifacts, docs, test suite, deploy templates.
+# Machine-local configs live outside the repo and are never affected.
+# DEPLOYED is written by this script on the remote; excluded from sync so it
+# survives subsequent deploys from any machine.
+# ---------------------------------------------------------------------------
+
+RSYNC_EXCLUDES=(
+    --exclude='.git'
+    --exclude='.claude'       # Claude Code settings — never leave dev machine
+    --exclude='.pytest_cache'
+    --exclude='__pycache__'
+    --exclude='*.pyc'
+    --exclude='*.pyo'
+    --exclude='.DS_Store'
+    --exclude='tests/'
+    --exclude='docs/'
+    --exclude='deploy/'
+    --exclude='tools/'
+    --exclude='ios/'          # Xcode project
+    --exclude='shortcuts/'    # macOS .command scripts
+    --exclude='*.example'
+    --exclude='DEPLOYED'      # written by this script on the remote; not source-controlled
+    --exclude='ble_pairing.json'  # machine-local BLE pairing data; gitignored, never in working tree
+)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+dry_run=false
+[[ "${2:-}" == "--dry-run" ]] && dry_run=true
+
+version_stamp() {
+    # Appends -dirty when the working tree has uncommitted changes,
+    # so DEPLOYED always reflects exact source state.
+    git describe --tags --always --dirty 2>/dev/null || echo "untagged"
+}
+
+do_rsync() {
+    local host="$1" dest="$2"
+    local opts=(-avz --delete "${RSYNC_EXCLUDES[@]}")
+    $dry_run && opts+=(--dry-run)
+    rsync "${opts[@]}" ./ "$host:$dest/"
+}
+
+write_deployed() {
+    local host="$1" dest="$2"
+    local stamp
+    stamp="$(version_stamp) deployed from $(hostname -s) at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    $dry_run && { echo "[dry-run] DEPLOYED would contain: $stamp"; return; }
+    ssh "$host" "echo '$stamp' > '$dest/DEPLOYED'"
+}
+
+# ---------------------------------------------------------------------------
+# Daedalus (Mac Studio — production GlowUp server)
+# ---------------------------------------------------------------------------
+
+deploy_daedalus() {
+    echo "==> daedalus: syncing to $DAEDALUS_HOST:$DAEDALUS_DEST"
+    do_rsync "$DAEDALUS_HOST" "$DAEDALUS_DEST"
+    write_deployed "$DAEDALUS_HOST" "$DAEDALUS_DEST"
+
+    if $dry_run; then
+        echo "[dry-run] would restart server on Daedalus"
+        return
+    fi
+
+    # Kill the running server; it will be restarted by the launchd/nohup
+    # wrapper.  If no server is running, that's fine — just deploy files.
+    ssh "$DAEDALUS_HOST" \
+        "pkill -f 'server.py.*server.json' || true"
+
+    # Give the old process a moment to release the port.
+    sleep 2
+
+    # Start the server.
+    ssh "$DAEDALUS_HOST" \
+        "cd '$DAEDALUS_DEST' && nohup ~/venv/bin/python server.py ~/glowup_config/server.json > ~/glowup_config/server.log 2>&1 &"
+
+    sleep 3
+
+    # Verify it came up.
+    local status
+    status=$(ssh "$DAEDALUS_HOST" "curl -s -o /dev/null -w '%{http_code}' http://localhost:8420/api/status" 2>/dev/null || echo "000")
+    if [ "$status" = "401" ] || [ "$status" = "200" ]; then
+        echo "==> daedalus: server running (HTTP $status)"
+    else
+        echo "==> daedalus: WARNING — server may not have started (HTTP $status)"
+    fi
+
+    echo "==> daedalus: $(ssh "$DAEDALUS_HOST" "cat '$DAEDALUS_DEST/DEPLOYED'")"
+    echo "==> daedalus: deploy complete"
+}
+
+# ---------------------------------------------------------------------------
+# Pi
+# ---------------------------------------------------------------------------
+
+deploy_pi() {
+    echo "==> pi: syncing to $PI_HOST:$PI_DEST"
+    ssh "$PI_HOST" "mkdir -p '$PI_DEST'"
+    do_rsync "$PI_HOST" "$PI_DEST"
+    write_deployed "$PI_HOST" "$PI_DEST"
+
+    if $dry_run; then
+        echo "[dry-run] would restart: glowup-server glowup-scheduler (+ ble-sensor if active)"
+        return
+    fi
+
+    ssh "$PI_HOST" "sudo systemctl restart glowup-server glowup-scheduler"
+
+    # ble-sensor may not be installed or enabled everywhere; only restart it
+    # if it is currently active so we don't fail on headless Pi installs.
+    ssh "$PI_HOST" \
+        "systemctl is-active --quiet glowup-ble-sensor \
+         && sudo systemctl restart glowup-ble-sensor \
+         || true"
+
+    # Restart Zigbee2MQTT if installed and active.
+    ssh "$PI_HOST" \
+        "systemctl is-active --quiet zigbee2mqtt \
+         && sudo systemctl restart zigbee2mqtt \
+         || true"
+
+    echo "==> pi: $(ssh "$PI_HOST" "cat '$PI_DEST/DEPLOYED'")"
+    echo "==> pi: deploy complete"
+}
+
+# ---------------------------------------------------------------------------
+# Judy
+# ---------------------------------------------------------------------------
+
+deploy_judy() {
+    echo "==> judy: syncing to $JUDY_HOST:$JUDY_DEST"
+    ssh "$JUDY_HOST" "mkdir -p '$JUDY_DEST'"
+    do_rsync "$JUDY_HOST" "$JUDY_DEST"
+    write_deployed "$JUDY_HOST" "$JUDY_DEST"
+
+    if $dry_run; then
+        echo "[dry-run] would print restart reminder"
+        return
+    fi
+
+    echo "==> judy: $(ssh "$JUDY_HOST" "cat '$JUDY_DEST/DEPLOYED'")"
+    echo "==> judy: files deployed"
+    echo ""
+    echo "    Judy requires interactive sudo — run this on Judy to restart the agent:"
+    echo "    sudo systemctl restart glowup-agent"
+}
+
+# ---------------------------------------------------------------------------
+# GlowUp (Pi 5 — primary server when Daedalus retires)
+# ---------------------------------------------------------------------------
+
+deploy_glowup() {
+    echo "==> glowup: syncing to $GLOWUP_HOST:$GLOWUP_DEST"
+    ssh "$GLOWUP_HOST" "mkdir -p '$GLOWUP_DEST'"
+    do_rsync "$GLOWUP_HOST" "$GLOWUP_DEST"
+    write_deployed "$GLOWUP_HOST" "$GLOWUP_DEST"
+
+    if $dry_run; then
+        echo "[dry-run] would restart: glowup-server glowup-satellite"
+        return
+    fi
+
+    ssh "$GLOWUP_HOST" "sudo systemctl restart glowup-server"
+
+    # Satellite may not be enabled yet (needs mic hardware).
+    ssh "$GLOWUP_HOST" \
+        "systemctl is-enabled --quiet glowup-satellite \
+         && sudo systemctl restart glowup-satellite \
+         || true"
+
+    sleep 3
+
+    # Verify server came up.
+    local status
+    status=$(ssh "$GLOWUP_HOST" "curl -s -o /dev/null -w '%{http_code}' http://localhost:8420/api/status" 2>/dev/null || echo "000")
+    if [ "$status" = "401" ] || [ "$status" = "200" ]; then
+        echo "==> glowup: server running (HTTP $status)"
+    else
+        echo "==> glowup: WARNING — server may not have started (HTTP $status)"
+    fi
+
+    echo "==> glowup: $(ssh "$GLOWUP_HOST" "cat '$GLOWUP_DEST/DEPLOYED'")"
+    echo "==> glowup: deploy complete"
+}
+
+# ---------------------------------------------------------------------------
+# mbclock (Pi 4 bedroom kiosk)
+# ---------------------------------------------------------------------------
+
+deploy_mbclock() {
+    echo "==> mbclock: syncing to $MBCLOCK_HOST:$MBCLOCK_DEST"
+    ssh "$MBCLOCK_HOST" "mkdir -p '$MBCLOCK_DEST'"
+    do_rsync "$MBCLOCK_HOST" "$MBCLOCK_DEST"
+    write_deployed "$MBCLOCK_HOST" "$MBCLOCK_DEST"
+
+    if $dry_run; then
+        echo "[dry-run] would sudo reboot mbclock to relaunch labwc autostart"
+        return
+    fi
+
+    # No systemd unit for the kiosk; reboot is the only clean restart.
+    # See the MBCLOCK_HOST comment block above for the full explanation.
+    echo "==> mbclock: rebooting (only clean restart path — labwc autostart re-runs)"
+    ssh "$MBCLOCK_HOST" 'sudo reboot' || true
+
+    echo "==> mbclock: deploy complete (display will be back in ~30s)"
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+case "${1:-}" in
+    daedalus) deploy_daedalus ;;
+    pi)       deploy_pi       ;;
+    judy)     deploy_judy     ;;
+    glowup)   deploy_glowup   ;;
+    mbclock)  deploy_mbclock  ;;
+    *)
+        echo "Usage: $0 <target> [--dry-run]"
+        echo "Targets: daedalus, pi, judy, glowup, mbclock"
+        exit 1
+        ;;
+esac
