@@ -69,6 +69,16 @@ from contrib.sensors.pi_thermal_sensor import PiThermalSensor, ThermalReading
 # bridge broker and must NOT be used for unrelated telemetry traffic.
 _DEFAULT_TEST_BROKER: str = "10.0.0.214:1883"
 
+# IMPORTANT: test topics use a dedicated prefix (glowup/test/thermal/)
+# that the production ThermalLogger does NOT subscribe to.  The logger
+# subscribes to glowup/hardware/thermal/+ and persists everything it
+# receives to SQLite with 7-day retention.  If tests published on the
+# production topic, the logger would ingest itest-* payloads and they
+# would appear as ghost hosts in the /thermal dashboard until manually
+# purged.  This happened on 2026-04-11 and left two stale itest-*
+# rows in thermal.db that had to be deleted by hand.
+_TEST_TOPIC_PREFIX: str = "glowup/test/thermal/"
+
 # How long to wait for a subscribe message in a test (seconds).
 _MESSAGE_WAIT_S: float = 3.0
 
@@ -275,7 +285,7 @@ class PiThermalIntegrationTest(unittest.TestCase):
             f"itest-{os.getpid()}-{int(time.monotonic() * 1000) % 100000}"
         )
         self._thermal_topic: str = (
-            f"glowup/hardware/thermal/{self._node_id}"
+            f"{_TEST_TOPIC_PREFIX}{self._node_id}"
         )
         self._status_topic: str = (
             f"glowup/node/{self._node_id}/status"
@@ -290,8 +300,13 @@ class PiThermalIntegrationTest(unittest.TestCase):
         ])
 
     def _make_sensor(self, interval_s: float = 0.25) -> PiThermalSensor:
-        """Build a sensor pointed at the integration broker."""
-        return PiThermalSensor(
+        """Build a sensor pointed at the integration broker.
+
+        Overrides the sensor's ``_thermal_topic`` to use the test-only
+        prefix so the production ThermalLogger (subscribed to
+        ``glowup/hardware/thermal/+``) never sees test payloads.
+        """
+        sensor: PiThermalSensor = PiThermalSensor(
             broker_host=self._host,
             broker_port=self._port,
             interval_s=interval_s,
@@ -301,6 +316,9 @@ class PiThermalIntegrationTest(unittest.TestCase):
             pi_model="Raspberry Pi 5 Model B Rev 1.0 (integration)",
             platform="pi5",
         )
+        # Redirect publishes to the test-only topic tree.
+        sensor._thermal_topic = self._thermal_topic
+        return sensor
 
     def _patch_readers(
         self,
