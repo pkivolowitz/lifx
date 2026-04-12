@@ -4,9 +4,11 @@
 > Licensed under the [MIT License](../LICENSE).
 
 These adapters bridge specific commercial products into the GlowUp
-platform.  They live in `adapters/contrib/` and are **fully optional** --
+platform.  They live in `contrib/adapters/` and are **fully optional** --
 the core system runs without any of them.  They also serve as examples
-of how to write adapters for your own hardware.
+of how to write adapters for your own hardware.  `contrib/` is a
+first-class top-level tree with sibling subdirectories for sensors,
+operators, and emitters contributed by users.
 
 | Adapter | Product | Base Class | Config Key |
 |---------|---------|------------|------------|
@@ -45,7 +47,7 @@ full API.  The short version:
   `AsyncPollingAdapterBase` (async loop with backoff)
 - Implement `_do_poll()` -- called on each cycle
 - Optionally implement `_check_prerequisites()` for config validation
-- Place the file in `adapters/contrib/`
+- Place the file in `contrib/adapters/`
 - Add a guarded import in `server.py` and a factory in
   `adapters/run_adapter.py`
 - Add a `server.json` config section gated on the sentinel

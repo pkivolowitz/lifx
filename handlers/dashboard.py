@@ -497,15 +497,16 @@ class DashboardHandlerMixin:
         Pages build the nav bar dynamically from this endpoint so
         no internal IPs are hardcoded in HTML.
 
-        Default links (Home, Dashboard, Power, I/O, Shopping) are
-        always included.  External links (e.g., Zigbee2MQTT) come
-        from config.
+        Default links (Home, Dashboard, Power, Thermal, I/O,
+        Shopping) are always included.  External links (e.g.,
+        Zigbee2MQTT) come from config.
         """
         # Built-in pages — always present.
         links: list[dict[str, str]] = [
             {"label": "Home", "href": "/home"},
             {"label": "Dashboard", "href": "/dashboard"},
             {"label": "Power", "href": "/power"},
+            {"label": "Thermal", "href": "/thermal"},
             {"label": "I/O", "href": "/io"},
             {"label": "Shopping", "href": "/shopping"},
         ]
@@ -1048,6 +1049,102 @@ class DashboardHandlerMixin:
             self._send_json(200, {"devices": []})
             return
         self._send_json(200, {"devices": pl.devices()})
+
+    # ---- Thermal dashboard ------------------------------------------------
+
+    def _handle_get_thermal_page(self) -> None:
+        """GET /thermal — serve the fleet thermal grid HTML.
+
+        Rigid columnar dashboard showing every node's most recent
+        thermal sample, false-colored by CPU temperature.
+        """
+        static_dir: str = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "static",
+        )
+        path: str = os.path.join(static_dir, "thermal.html")
+        try:
+            with open(path, "rb") as f:
+                content: bytes = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+        except FileNotFoundError:
+            self._send_json(404, {"error": "thermal.html not found"})
+
+    def _handle_get_thermal_detail_page(self, node_id: str) -> None:
+        """GET /thermal/host/{node_id} — per-host detail HTML.
+
+        The HTML file is static; ``node_id`` is read client-side from
+        ``location.pathname`` so there is no templating here.  We
+        ignore the captured ``node_id`` — it is validated at query
+        time by the ``/api/thermal/readings`` handler.
+
+        Args:
+            node_id: The captured URL segment (unused at this layer).
+        """
+        del node_id  # Consumed by the client-side script, not here.
+        static_dir: str = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "static",
+        )
+        path: str = os.path.join(static_dir, "thermal_detail.html")
+        try:
+            with open(path, "rb") as f:
+                content: bytes = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+        except FileNotFoundError:
+            self._send_json(404, {"error": "thermal_detail.html not found"})
+
+    def _handle_get_thermal_latest(self) -> None:
+        """GET /api/thermal/latest — fleet snapshot.
+
+        Returns a dict keyed by node_id with the most recent row for
+        each known host.  The fleet dashboard polls this every 5
+        seconds to refresh the grid.
+        """
+        tl: Any = getattr(self, "thermal_logger", None)
+        if tl is None:
+            self._send_json(200, {"hosts": {}})
+            return
+        self._send_json(200, {"hosts": tl.latest()})
+
+    def _handle_get_thermal_hosts(self) -> None:
+        """GET /api/thermal/hosts — distinct node_ids with any data."""
+        tl: Any = getattr(self, "thermal_logger", None)
+        if tl is None:
+            self._send_json(200, {"hosts": []})
+            return
+        self._send_json(200, {"hosts": tl.hosts()})
+
+    def _handle_get_thermal_readings(self) -> None:
+        """GET /api/thermal/readings?node=X&hours=N&resolution=N.
+
+        Returns a time-bucketed history for a single node, for the
+        per-host detail page charts.  ``hours`` and ``resolution``
+        default to 1 hour at 60-second resolution to match the
+        default dashboard range.
+        """
+        from urllib.parse import parse_qs, urlparse
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+        node: Optional[str] = params.get("node", [None])[0]
+        if not node:
+            self._send_json(400, {"error": "node parameter required"})
+            return
+        hours: float = float(params.get("hours", ["1"])[0])
+        resolution: int = int(params.get("resolution", ["60"])[0])
+
+        tl: Any = getattr(self, "thermal_logger", None)
+        if tl is None:
+            self._send_json(200, {"readings": []})
+            return
+        readings = tl.query(node_id=node, hours=hours, resolution=resolution)
+        self._send_json(200, {"readings": readings})
 
     def _handle_post_zigbee_set(self) -> None:
         """POST /api/zigbee/set — send a command to a Zigbee device.

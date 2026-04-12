@@ -148,7 +148,7 @@ HTTP and `json` for parsing.
 
 | File | Description |
 |------|-------------|
-| `adapters/contrib/hdhr_adapter.py` | HDHomeRunAdapter — PollingAdapterBase subclass |
+| `contrib/adapters/hdhr_adapter.py` | HDHomeRunAdapter — PollingAdapterBase subclass |
 
 ---
 

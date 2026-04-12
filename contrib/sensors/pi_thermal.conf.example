@@ -1,0 +1,33 @@
+# GlowUp Pi thermal sensor — example config.
+#
+# Deploy location on each Pi: /etc/glowup/pi_thermal.conf
+# Read by: contrib/sensors/pi_thermal_sensor.py
+#
+# All sections and keys are optional — anything missing falls back to
+# the module defaults in pi_thermal_sensor.py.  The only setting you
+# usually need to override is `fan_declared_present` on Pi 3B / Pi 4B
+# boxes where the fan is 5V-always-on and invisible to sysfs.
+
+[mqtt]
+# GlowUp canonical broker — Pi 5 "glowup" hub.  See reference_project_state.md.
+broker = 10.0.0.214
+port = 1883
+
+[sensor]
+# Publish interval in seconds.  30s is the default — change to 15 for
+# tighter trend resolution or 60 for less MQTT churn.
+interval = 30
+
+# Override the node identifier.  Blank = use short lowercase hostname.
+# Example: node_id = broker-2
+node_id =
+
+# Set to true on Pi 3B / Pi 4B where a fan is physically installed
+# but wired to 5V/GND always-on (no hwmon fan, no cooling_device).
+# The daemon still reports null for fan_rpm / fan_pwm_step, but
+# fan_declared_present makes the server-side operator treat the node
+# as fan-expected for "rising temp" alert logic.
+#
+# Pi 5 with the official Active Cooler or Geekworm H505: leave false.
+# Firmware auto-detects the PWM fan and populates hwmon directly.
+fan_declared_present = false

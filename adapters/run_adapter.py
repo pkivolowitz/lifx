@@ -235,7 +235,7 @@ def _create_vivint(
     Vivint uses the MQTT client for publishing lock/sensor state to
     ``glowup/vivint/`` topics on the GlowUp broker.
     """
-    from adapters.contrib.vivint_adapter import VivintAdapter
+    from contrib.adapters.vivint_adapter import VivintAdapter
 
     v_cfg: dict[str, Any] = config.get("vivint", {})
     return VivintAdapter(
@@ -263,7 +263,7 @@ def _create_nvr(
     ``auth_token`` and a derived ``server_url`` into the nvr config
     here so the adapter doesn't have to duplicate or re-read them.
     """
-    from adapters.contrib.nvr_adapter import NvrAdapter
+    from contrib.adapters.nvr_adapter import NvrAdapter
 
     nvr_cfg: dict[str, Any] = dict(config.get("nvr", {}))
 
@@ -293,7 +293,7 @@ def _create_printer(
     Printer uses the MQTT client for publishing status to
     ``glowup/printer/`` topics on the GlowUp broker.
     """
-    from adapters.contrib.printer_adapter import PrinterAdapter
+    from contrib.adapters.printer_adapter import PrinterAdapter
 
     p_cfg: dict[str, Any] = config.get("printer", {})
     return PrinterAdapter(

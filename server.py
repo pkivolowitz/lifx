@@ -122,18 +122,18 @@ except ImportError:
     _HAS_ZIGBEE = False
 
 try:
-    from adapters.contrib.vivint_adapter import VivintAdapter
+    from contrib.adapters.vivint_adapter import VivintAdapter
     _HAS_VIVINT: bool = True
 except ImportError:
     _HAS_VIVINT = False
 
 try:
-    from adapters.contrib.nvr_adapter import NvrAdapter
+    from contrib.adapters.nvr_adapter import NvrAdapter
     _HAS_NVR: bool = True
 except ImportError:
     _HAS_NVR = False
 try:
-    from adapters.contrib.printer_adapter import PrinterAdapter
+    from contrib.adapters.printer_adapter import PrinterAdapter
     _HAS_PRINTER: bool = True
 except ImportError:
     _HAS_PRINTER = False
@@ -304,6 +304,16 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_power_summary", requires_auth=False),
     _Route("GET", ("api", "power", "devices"),
            "_handle_get_power_devices", requires_auth=False),
+    _Route("GET", ("thermal",),
+           "_handle_get_thermal_page", requires_auth=False),
+    _Route("GET", ("thermal", "host", "{node_id}"),
+           "_handle_get_thermal_detail_page", requires_auth=False),
+    _Route("GET", ("api", "thermal", "latest"),
+           "_handle_get_thermal_latest", requires_auth=False),
+    _Route("GET", ("api", "thermal", "hosts"),
+           "_handle_get_thermal_hosts", requires_auth=False),
+    _Route("GET", ("api", "thermal", "readings"),
+           "_handle_get_thermal_readings", requires_auth=False),
     _Route("POST", ("api", "zigbee", "set"),
            "_handle_post_zigbee_set", requires_auth=False),
     _Route("GET", ("api", "operators"),
@@ -594,6 +604,7 @@ class GlowUpRequestHandler(
     ble_adapter: Optional[Any] = None
     signal_bus: Optional[SignalBus] = None
     power_logger: Optional[Any] = None
+    thermal_logger: Optional[Any] = None
 
     # Active /api/command/identify pulses: {ip: stop_event}.
     # Populated by _handle_post_command_identify; cleared when pulse ends.
@@ -2518,6 +2529,29 @@ def main() -> None:
             except Exception as exc:
                 logging.warning("Power logger unavailable: %s", exc)
                 power_log = None
+
+            # Thermal logger — SQLite + paho-mqtt subscriber for the
+            # hardware thermal telemetry published by the per-Pi
+            # contrib/sensors/pi_thermal_sensor.py daemons on topic
+            # glowup/hardware/thermal/<node_id>.  Guarded against
+            # missing paho-mqtt per the optional-modules architecture
+            # rule — if paho is not importable the subscriber is a
+            # no-op and the /thermal dashboard degrades to whatever
+            # historical data was already on disk.
+            try:
+                from infrastructure.thermal_logger import ThermalLogger
+                thermal_db_path: str = os.path.join(
+                    config_dir_local, "thermal.db",
+                )
+                thermal_log = ThermalLogger(db_path=thermal_db_path)
+                thermal_log.start_subscriber(
+                    broker_host=broker_addr,
+                    broker_port=broker_port,
+                )
+                GlowUpRequestHandler.thermal_logger = thermal_log
+            except Exception as exc:
+                logging.warning("Thermal logger unavailable: %s", exc)
+                thermal_log = None
 
             # Auto-migrate automations[] → trigger operators in operators[].
             config["_config_path"] = GlowUpRequestHandler.config_path

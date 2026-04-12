@@ -299,6 +299,11 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "power", "readings"),
             ("api", "power", "summary"),
             ("api", "power", "devices"),
+            ("thermal",),
+            ("thermal", "host", "{node_id}"),
+            ("api", "thermal", "latest"),
+            ("api", "thermal", "hosts"),
+            ("api", "thermal", "readings"),
             ("api", "zigbee", "set"),
             ("photos", "{filename}"),
             ("api", "media", "stream", "{source_name}"),
@@ -334,8 +339,8 @@ class TestRouteCount(unittest.TestCase):
         """GET routes should match the expected count."""
         get_routes: list[_Route] = [r for r in _ROUTES if r.method == "GET"]
         self.assertEqual(
-            len(get_routes), 50,
-            f"Expected 50 GET routes, got {len(get_routes)}",
+            len(get_routes), 55,
+            f"Expected 55 GET routes, got {len(get_routes)}",
         )
 
     def test_post_route_count(self) -> None:

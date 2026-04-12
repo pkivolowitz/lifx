@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlowUp Thermal Fleet</title>
+<style>
+:root {
+    --bg: #1a1410;
+    --card-bg: rgba(255,255,255,0.04);
+    --text: #c4b49a;
+    --label: #8a7a60;
+    --gold: #c4a44a;
+    --green: #6aaa90;
+    --red: #c45a3a;
+    --border: rgba(196,164,74,0.15);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "SF Mono", "Menlo", "Consolas", monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    padding: 24px;
+}
+h1 {
+    font-size: 1.8rem;
+    font-weight: 300;
+    color: var(--gold);
+    margin-bottom: 24px;
+}
+.meta {
+    font-size: 0.8rem;
+    color: var(--label);
+    margin-bottom: 12px;
+    font-family: var(--mono);
+}
+/* The RIGID columnar grid — fixed px widths, no reflow.  Scroll
+   horizontally on narrow screens rather than wrap. */
+.grid-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--card-bg);
+}
+.grid {
+    display: grid;
+    grid-template-columns:
+        160px   /* host */
+        72px    /* platform */
+        88px    /* cpu °C */
+        88px    /* fan rpm */
+        64px    /* step */
+        88px    /* load 1m */
+        120px   /* uptime */
+        104px   /* throttle */
+        180px;  /* timestamp */
+    min-width: 1000px;
+}
+.grid > .cell {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.grid > .cell.header {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--label);
+    font-weight: 500;
+    background: rgba(0,0,0,0.2);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+}
+.grid > .cell.num {
+    font-family: var(--mono);
+    text-align: right;
+}
+.grid > .cell.host {
+    font-weight: 600;
+    color: var(--text);
+}
+.grid > .row-group {
+    display: contents;
+    cursor: pointer;
+}
+.grid > .row-group:hover > .cell {
+    background: rgba(196,164,74,0.06);
+}
+.grid > .cell.platform {
+    color: var(--label);
+    font-family: var(--mono);
+    font-size: 0.85rem;
+}
+/* Temperature cell — color is set inline via JS (HSL gradient). */
+.grid > .cell.temp {
+    font-family: var(--mono);
+    text-align: right;
+    font-weight: 600;
+}
+/* Throttle-flag cell — gets a red border pulse when flags != 0x0. */
+.grid > .cell.throttle {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    text-align: right;
+}
+.grid > .cell.throttle.flagged {
+    color: var(--red);
+    font-weight: 700;
+    animation: throttle-pulse 2s ease-in-out infinite;
+}
+@keyframes throttle-pulse {
+    0%, 100% { background: rgba(196, 90, 58, 0.1); }
+    50%      { background: rgba(196, 90, 58, 0.3); }
+}
+.grid > .cell.stale {
+    color: var(--label);
+    font-style: italic;
+}
+.grid > .cell.unknown {
+    color: var(--label);
+}
+.legend {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 16px;
+    font-size: 0.75rem;
+    color: var(--label);
+    font-family: var(--mono);
+}
+.legend .bar {
+    width: 240px;
+    height: 12px;
+    border-radius: 6px;
+    background: linear-gradient(90deg,
+        hsl(120,60%,45%),
+        hsl(80,65%,45%),
+        hsl(40,75%,50%),
+        hsl(18,80%,52%),
+        hsl(0,85%,55%));
+}
+.footer-note {
+    font-size: 0.75rem;
+    color: var(--label);
+    margin-top: 12px;
+}
+.empty {
+    padding: 40px;
+    text-align: center;
+    color: var(--label);
+    font-style: italic;
+}
+</style>
+</head>
+<body>
+
+<!-- Site nav — built dynamically from /api/config/nav. -->
+<nav id="siteNav" style="display:flex;gap:18px;padding:6px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:0.8rem;letter-spacing:0.04em;"></nav>
+<script>
+(function(){var n=document.getElementById("siteNav"),p=location.pathname;
+fetch("/api/config/nav").then(function(r){return r.json()}).then(function(d){
+(d.links||[]).forEach(function(l){var a=document.createElement("a");a.href=l.href;
+a.textContent=l.label;a.style.textDecoration="none";
+var active=l.href===p||(p.indexOf(l.href)===0&&l.href!=="/"&&l.href.length>1);
+a.style.color=active?"rgba(255,255,255,0.7)":"rgba(255,255,255,0.35)";
+if(active)a.style.fontWeight="600";n.appendChild(a)})}).catch(function(){})})();
+</script>
+
+<h1>Thermal Fleet</h1>
+<div class="meta" id="metaLine">Loading …</div>
+
+<div class="grid-wrap">
+    <div class="grid" id="grid">
+        <div class="cell header">host</div>
+        <div class="cell header">platform</div>
+        <div class="cell header num">cpu °C</div>
+        <div class="cell header num">fan rpm</div>
+        <div class="cell header num">step</div>
+        <div class="cell header num">load 1m</div>
+        <div class="cell header num">uptime</div>
+        <div class="cell header num">throttle</div>
+        <div class="cell header">last sample</div>
+    </div>
+</div>
+
+<div class="legend">
+    <span>30°C</span>
+    <div class="bar"></div>
+    <span>85°C</span>
+    <span style="margin-left:16px">throttle flag != 0x0 = red pulse</span>
+</div>
+
+<div class="footer-note">
+    Click a row for per-host graphs.  Stale rows (&gt; 2× publish
+    interval since last sample) show grey italic.  Cells marked
+    <span style="font-family:var(--mono)">—</span> had no value in the
+    last reading.
+</div>
+
+<script>
+var POLL_MS = 5000;
+
+/* Match the pi_thermal_sensor.py default interval.  A row is "stale"
+   if its last sample is older than 2× this. */
+var SENSOR_INTERVAL_S = 30;
+var STALE_FACTOR = 2.0;
+
+/* Temperature false-color gradient, 30°C (green) to 85°C (red).
+   HSL hue interpolates from 120 (green) through 60 (yellow) to 0 (red).
+   Below 30°C clamps green; above 85°C clamps red.  85°C is the Pi 5
+   thermal-throttle threshold — above it the firmware starts clocking
+   down, so red is the "you are actively damaging hardware" color. */
+function tempToColor(t) {
+    if (t == null) return "var(--label)";
+    var clamped = Math.max(30, Math.min(85, t));
+    var frac = (clamped - 30) / 55;
+    var hue = 120 - (120 * frac);
+    var sat = 60 + (25 * frac);
+    var lit = 45 + (10 * frac);
+    return "hsl(" + hue.toFixed(0) + "," + sat.toFixed(0) + "%," + lit.toFixed(0) + "%)";
+}
+
+function formatUptime(seconds) {
+    if (seconds == null) return "—";
+    var s = Math.floor(seconds);
+    var days = Math.floor(s / 86400);
+    var hours = Math.floor((s % 86400) / 3600);
+    var mins = Math.floor((s % 3600) / 60);
+    if (days > 0) return days + "d " + hours + "h";
+    if (hours > 0) return hours + "h " + mins + "m";
+    return mins + "m";
+}
+
+function formatTimestamp(epochSeconds) {
+    if (epochSeconds == null) return "—";
+    var d = new Date(epochSeconds * 1000);
+    return d.toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+    });
+}
+
+function makeCell(cls, text) {
+    var el = document.createElement("div");
+    el.className = "cell " + cls;
+    el.textContent = text;
+    return el;
+}
+
+function renderRow(nodeId, reading, nowSeconds) {
+    var group = document.createElement("div");
+    group.className = "row-group";
+    group.addEventListener("click", function () {
+        window.location.href = "/thermal/host/" + encodeURIComponent(nodeId);
+    });
+
+    var stale = false;
+    if (reading && reading.timestamp != null) {
+        stale = (nowSeconds - reading.timestamp) > (SENSOR_INTERVAL_S * STALE_FACTOR);
+    }
+    var staleCls = stale ? " stale" : "";
+
+    group.appendChild(makeCell("host" + staleCls, nodeId));
+    group.appendChild(makeCell("platform" + staleCls,
+        reading && reading.platform ? reading.platform : "—"));
+
+    /* cpu °C */
+    var tempCell = document.createElement("div");
+    tempCell.className = "cell temp" + staleCls;
+    if (reading && reading.cpu_temp_c != null) {
+        tempCell.textContent = reading.cpu_temp_c.toFixed(1);
+        if (!stale) {
+            tempCell.style.color = tempToColor(reading.cpu_temp_c);
+        }
+    } else {
+        tempCell.textContent = "—";
+        tempCell.classList.add("unknown");
+    }
+    group.appendChild(tempCell);
+
+    /* fan rpm */
+    var fanCell = document.createElement("div");
+    fanCell.className = "cell num" + staleCls;
+    if (reading && reading.fan_rpm != null) {
+        fanCell.textContent = Math.round(reading.fan_rpm);
+    } else if (reading && reading.fan_declared_present) {
+        /* Fan is present but invisible to sysfs (Pi 3B/4B 5V fan). */
+        fanCell.textContent = "●";
+        fanCell.classList.add("unknown");
+        fanCell.title = "fan declared present (no tach)";
+    } else {
+        fanCell.textContent = "—";
+        fanCell.classList.add("unknown");
+    }
+    group.appendChild(fanCell);
+
+    /* step */
+    group.appendChild(makeCell("num" + staleCls,
+        reading && reading.fan_pwm_step != null ? reading.fan_pwm_step : "—"));
+
+    /* load 1m */
+    group.appendChild(makeCell("num" + staleCls,
+        reading && reading.load_1m != null ? reading.load_1m.toFixed(2) : "—"));
+
+    /* uptime */
+    group.appendChild(makeCell("num" + staleCls,
+        formatUptime(reading ? reading.uptime_s : null)));
+
+    /* throttle */
+    var throttleCell = document.createElement("div");
+    throttleCell.className = "cell throttle" + staleCls;
+    if (reading && reading.throttled_flags) {
+        throttleCell.textContent = reading.throttled_flags;
+        if (reading.throttled_flags !== "0x0") {
+            throttleCell.classList.add("flagged");
+        }
+    } else {
+        throttleCell.textContent = "—";
+        throttleCell.classList.add("unknown");
+    }
+    group.appendChild(throttleCell);
+
+    /* timestamp */
+    group.appendChild(makeCell("num" + staleCls,
+        formatTimestamp(reading ? reading.timestamp : null)));
+
+    return group;
+}
+
+function removeRows() {
+    var grid = document.getElementById("grid");
+    /* Remove everything except the 9 header cells. */
+    while (grid.children.length > 9) {
+        grid.removeChild(grid.lastChild);
+    }
+}
+
+function fetchLatest() {
+    fetch("/api/thermal/latest")
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            var hosts = data.hosts || {};
+            var keys = Object.keys(hosts).sort();
+            var meta = document.getElementById("metaLine");
+            var grid = document.getElementById("grid");
+            var now = Date.now() / 1000;
+
+            removeRows();
+
+            if (keys.length === 0) {
+                meta.textContent = "No thermal data yet.  Is pi-thermal.service running on the Pis?";
+                var empty = document.createElement("div");
+                empty.className = "empty";
+                empty.style.gridColumn = "1 / -1";
+                empty.textContent = "no hosts reporting";
+                grid.appendChild(empty);
+                return;
+            }
+
+            meta.textContent = keys.length + " host" + (keys.length === 1 ? "" : "s") +
+                " · updated " + new Date().toLocaleTimeString();
+
+            keys.forEach(function (k) {
+                grid.appendChild(renderRow(k, hosts[k], now));
+            });
+        })
+        .catch(function (err) {
+            var meta = document.getElementById("metaLine");
+            meta.textContent = "fetch failed: " + err;
+        });
+}
+
+fetchLatest();
+setInterval(fetchLatest, POLL_MS);
+</script>
+</body>
+</html>

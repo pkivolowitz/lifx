@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlowUp Thermal Detail</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+:root {
+    --bg: #1a1410;
+    --card-bg: rgba(255,255,255,0.04);
+    --text: #c4b49a;
+    --label: #8a7a60;
+    --gold: #c4a44a;
+    --green: #6aaa90;
+    --red: #c45a3a;
+    --border: rgba(196,164,74,0.15);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "SF Mono", "Menlo", "Consolas", monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    padding: 24px;
+}
+h1 {
+    font-size: 1.8rem;
+    font-weight: 300;
+    color: var(--gold);
+    margin-bottom: 4px;
+}
+.subtitle {
+    font-size: 0.85rem;
+    color: var(--label);
+    margin-bottom: 24px;
+    font-family: var(--mono);
+}
+.back-link {
+    display: inline-block;
+    margin-bottom: 16px;
+    color: var(--label);
+    text-decoration: none;
+    font-size: 0.85rem;
+}
+.back-link:hover { color: var(--gold); }
+.stats-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+.stat-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 24px;
+    flex: 1;
+    min-width: 140px;
+}
+.stat-value {
+    font-family: var(--mono);
+    font-size: 2rem;
+    font-weight: 200;
+    color: var(--gold);
+}
+.stat-unit {
+    font-size: 0.9rem;
+    color: var(--label);
+    margin-left: 4px;
+}
+.stat-label {
+    font-size: 0.75rem;
+    color: var(--label);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+.chart-container {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 24px;
+}
+.chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+.chart-title {
+    font-size: 1.1rem;
+    color: var(--text);
+}
+.chart-controls {
+    display: flex;
+    gap: 8px;
+}
+.chart-btn {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    color: var(--label);
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+.chart-btn.active {
+    color: var(--gold);
+    border-color: var(--gold);
+}
+.throttle-alert {
+    background: rgba(196, 90, 58, 0.15);
+    border: 1px solid rgba(196, 90, 58, 0.4);
+    color: var(--red);
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    display: none;
+}
+</style>
+</head>
+<body>
+
+<!-- Site nav — built dynamically from /api/config/nav. -->
+<nav id="siteNav" style="display:flex;gap:18px;padding:6px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:0.8rem;letter-spacing:0.04em;"></nav>
+<script>
+(function(){var n=document.getElementById("siteNav"),p=location.pathname;
+fetch("/api/config/nav").then(function(r){return r.json()}).then(function(d){
+(d.links||[]).forEach(function(l){var a=document.createElement("a");a.href=l.href;
+a.textContent=l.label;a.style.textDecoration="none";
+var active=l.href===p||(p.indexOf(l.href)===0&&l.href!=="/"&&l.href.length>1);
+a.style.color=active?"rgba(255,255,255,0.7)":"rgba(255,255,255,0.35)";
+if(active)a.style.fontWeight="600";n.appendChild(a)})}).catch(function(){})})();
+</script>
+
+<a href="/thermal" class="back-link">← Thermal Fleet</a>
+<h1 id="pageTitle">—</h1>
+<div class="subtitle" id="pageSubtitle">—</div>
+
+<div class="throttle-alert" id="throttleAlert"></div>
+
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="stat-value" id="currentTemp">—</div>
+        <div class="stat-label">CPU Temperature</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="currentFan">—</div>
+        <div class="stat-label">Fan RPM</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="currentStep">—</div>
+        <div class="stat-label">Fan Step</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="currentLoad">—</div>
+        <div class="stat-label">Load 1m</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="currentUptime">—</div>
+        <div class="stat-label">Uptime</div>
+    </div>
+</div>
+
+<div class="chart-container">
+    <div class="chart-header">
+        <div class="chart-title">CPU Temperature (°C)</div>
+        <div class="chart-controls">
+            <button class="chart-btn active" data-hours="1" data-res="10">1h</button>
+            <button class="chart-btn" data-hours="6" data-res="60">6h</button>
+            <button class="chart-btn" data-hours="24" data-res="300">24h</button>
+            <button class="chart-btn" data-hours="168" data-res="1800">7d</button>
+        </div>
+    </div>
+    <div style="position:relative;height:280px"><canvas id="tempChart"></canvas></div>
+</div>
+
+<div class="chart-container">
+    <div class="chart-header">
+        <div class="chart-title">Fan RPM</div>
+    </div>
+    <div style="position:relative;height:220px"><canvas id="fanChart"></canvas></div>
+</div>
+
+<div class="chart-container">
+    <div class="chart-header">
+        <div class="chart-title">Load Average</div>
+    </div>
+    <div style="position:relative;height:220px"><canvas id="loadChart"></canvas></div>
+</div>
+
+<script>
+/* Extract node_id from the URL path.  Route is /thermal/host/{node_id}. */
+var nodeId = (function () {
+    var parts = location.pathname.split("/").filter(function (p) { return p.length > 0; });
+    return parts[parts.length - 1] || "";
+})();
+
+var POLL_MS = 15000;
+var currentHours = 1;
+var currentRes = 10;
+
+var tempChart = null;
+var fanChart = null;
+var loadChart = null;
+
+/* 85°C is the Pi 5 thermal-throttle threshold.  Draw it as a red
+   dashed line on the temperature chart so the eye catches any
+   approach to it. */
+var THROTTLE_TEMP_C = 85;
+
+document.getElementById("pageTitle").textContent = nodeId;
+document.title = "thermal: " + nodeId;
+
+function formatUptime(seconds) {
+    if (seconds == null) return "—";
+    var s = Math.floor(seconds);
+    var days = Math.floor(s / 86400);
+    var hours = Math.floor((s % 86400) / 3600);
+    var mins = Math.floor((s % 3600) / 60);
+    if (days > 0) return days + "d " + hours + "h";
+    if (hours > 0) return hours + "h " + mins + "m";
+    return mins + "m";
+}
+
+function formatTime(ts) {
+    var d = new Date(ts * 1000);
+    if (currentHours <= 6) {
+        return d.toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+    }
+    if (currentHours <= 24) {
+        return d.toLocaleTimeString([], {hour: "numeric"});
+    }
+    return d.toLocaleDateString([], {weekday: "short"}) + " " +
+        d.toLocaleTimeString([], {hour: "numeric"});
+}
+
+function baseOpts(yLabel, extraYOpts) {
+    var y = {
+        ticks: { color: "#8a7a60" },
+        grid: { color: "rgba(255,255,255,0.05)" },
+        title: { display: true, text: yLabel, color: "#8a7a60" }
+    };
+    if (extraYOpts) {
+        for (var k in extraYOpts) y[k] = extraYOpts[k];
+    }
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 200 },
+        scales: {
+            x: {
+                ticks: { color: "#8a7a60", maxTicksLimit: 10 },
+                grid: { color: "rgba(255,255,255,0.05)" }
+            },
+            y: y
+        },
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                callbacks: {
+                    label: function (ctx) {
+                        if (ctx.parsed.y == null) return "—";
+                        return ctx.parsed.y.toFixed(2);
+                    }
+                }
+            }
+        }
+    };
+}
+
+function initTempChart() {
+    var ctx = document.getElementById("tempChart").getContext("2d");
+    tempChart = new Chart(ctx, {
+        type: "line",
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: "CPU °C",
+                    data: [],
+                    borderColor: "#c4a44a",
+                    backgroundColor: "rgba(196,164,74,0.1)",
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 0,
+                    borderWidth: 2
+                },
+                {
+                    label: "throttle line",
+                    data: [],
+                    borderColor: "rgba(196,90,58,0.7)",
+                    borderDash: [6, 4],
+                    borderWidth: 1,
+                    pointRadius: 0,
+                    fill: false
+                }
+            ]
+        },
+        options: baseOpts("°C", { suggestedMin: 30, suggestedMax: 90 })
+    });
+}
+
+function initFanChart() {
+    var ctx = document.getElementById("fanChart").getContext("2d");
+    fanChart = new Chart(ctx, {
+        type: "line",
+        data: {
+            labels: [],
+            datasets: [{
+                label: "fan rpm",
+                data: [],
+                borderColor: "#6aaa90",
+                backgroundColor: "rgba(106,170,144,0.1)",
+                fill: true,
+                tension: 0.3,
+                pointRadius: 0,
+                borderWidth: 2
+            }]
+        },
+        options: baseOpts("rpm", { beginAtZero: true })
+    });
+}
+
+function initLoadChart() {
+    var ctx = document.getElementById("loadChart").getContext("2d");
+    loadChart = new Chart(ctx, {
+        type: "line",
+        data: {
+            labels: [],
+            datasets: [
+                { label: "1m",  data: [], borderColor: "#c4a44a", pointRadius: 0, borderWidth: 2, tension: 0.3 },
+                { label: "5m",  data: [], borderColor: "#8a7a60", pointRadius: 0, borderWidth: 1.5, tension: 0.3 },
+                { label: "15m", data: [], borderColor: "#5a4a30", pointRadius: 0, borderWidth: 1, tension: 0.3 }
+            ]
+        },
+        options: (function () {
+            var o = baseOpts("load", { beginAtZero: true });
+            o.plugins.legend.display = true;
+            o.plugins.legend.labels = { color: "#8a7a60", boxWidth: 16, font: { size: 11 } };
+            return o;
+        })()
+    });
+}
+
+function fetchReadings() {
+    if (!nodeId) return;
+    var url = "/api/thermal/readings?node=" + encodeURIComponent(nodeId) +
+        "&hours=" + currentHours + "&resolution=" + currentRes;
+    fetch(url)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            var readings = data.readings || [];
+            var labels = [];
+            var temps = [];
+            var throttles = [];
+            var fans = [];
+            var l1 = [];
+            var l5 = [];
+            var l15 = [];
+            var sawThrottle = false;
+
+            for (var i = 0; i < readings.length; i++) {
+                var r = readings[i];
+                labels.push(formatTime(r.bucket));
+                temps.push(r.cpu_temp_c == null ? null : r.cpu_temp_c);
+                /* Constant throttle-line overlay so the 85°C limit is
+                 * visually parked at the top of the chart.  Kept as a
+                 * separate dataset rather than a plugin annotation to
+                 * avoid pulling another Chart.js plugin via CDN. */
+                throttles.push(THROTTLE_TEMP_C);
+                fans.push(r.fan_rpm == null ? null : r.fan_rpm);
+                l1.push(r.load_1m == null ? null : r.load_1m);
+                l5.push(r.load_5m == null ? null : r.load_5m);
+                l15.push(r.load_15m == null ? null : r.load_15m);
+                if (r.throttled_flags && r.throttled_flags !== "0x0") {
+                    sawThrottle = true;
+                }
+            }
+
+            tempChart.data.labels = labels;
+            tempChart.data.datasets[0].data = temps;
+            tempChart.data.datasets[1].data = throttles;
+            tempChart.update();
+
+            fanChart.data.labels = labels;
+            fanChart.data.datasets[0].data = fans;
+            fanChart.update();
+
+            loadChart.data.labels = labels;
+            loadChart.data.datasets[0].data = l1;
+            loadChart.data.datasets[1].data = l5;
+            loadChart.data.datasets[2].data = l15;
+            loadChart.update();
+
+            /* Throttle alert banner for any non-zero flag in the window. */
+            var banner = document.getElementById("throttleAlert");
+            if (sawThrottle) {
+                banner.style.display = "";
+                banner.textContent =
+                    "THROTTLE FLAG SET in this window — firmware has recorded " +
+                    "undervoltage or thermal throttling on this host.  Check PSU " +
+                    "and cooling.";
+            } else {
+                banner.style.display = "none";
+            }
+
+            /* Latest reading populates the stat cards. */
+            if (readings.length > 0) {
+                var last = readings[readings.length - 1];
+                var t = last.cpu_temp_c;
+                document.getElementById("currentTemp").innerHTML =
+                    (t == null ? "—" : t.toFixed(1)) +
+                    '<span class="stat-unit">°C</span>';
+                document.getElementById("currentFan").innerHTML =
+                    (last.fan_rpm == null ? "—" : Math.round(last.fan_rpm)) +
+                    '<span class="stat-unit">rpm</span>';
+                document.getElementById("currentStep").textContent =
+                    last.fan_pwm_step == null ? "—" : last.fan_pwm_step;
+                document.getElementById("currentLoad").textContent =
+                    last.load_1m == null ? "—" : last.load_1m.toFixed(2);
+                document.getElementById("currentUptime").textContent =
+                    formatUptime(last.uptime_s);
+            }
+        })
+        .catch(function () {});
+}
+
+function fetchSubtitle() {
+    /* Pull the latest fleet snapshot once to render the platform /
+     * model subtitle.  Cheaper than a dedicated per-node metadata
+     * endpoint and always current. */
+    fetch("/api/thermal/latest")
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            var reading = (data.hosts || {})[nodeId];
+            if (!reading) return;
+            var parts = [];
+            if (reading.platform) parts.push(reading.platform);
+            if (reading.model) parts.push(reading.model);
+            if (reading.fan_declared_present != null) {
+                parts.push("fan " + (reading.fan_declared_present ? "declared" : "absent"));
+            }
+            document.getElementById("pageSubtitle").textContent =
+                parts.join("  ·  ") || "—";
+        })
+        .catch(function () {});
+}
+
+document.querySelectorAll(".chart-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+        document.querySelectorAll(".chart-btn").forEach(function (b) {
+            b.classList.remove("active");
+        });
+        btn.classList.add("active");
+        currentHours = parseFloat(btn.dataset.hours);
+        currentRes = parseInt(btn.dataset.res);
+        fetchReadings();
+    });
+});
+
+initTempChart();
+initFanChart();
+initLoadChart();
+fetchSubtitle();
+fetchReadings();
+setInterval(fetchReadings, POLL_MS);
+setInterval(fetchSubtitle, 60000);
+</script>
+</body>
+</html>
