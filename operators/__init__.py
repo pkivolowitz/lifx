@@ -1155,7 +1155,7 @@ class OperatorManager:
 # Auto-import concrete operators so they register via __init_subclass__.
 # Each import is guarded — a missing dependency in one operator must not
 # prevent the others (or the Operator ABC itself) from loading.
-for _mod_name in ("occupancy", "motion_gate", "trigger"):
+for _mod_name in ("occupancy", "motion_gate", "trigger", "tts_announce"):
     try:
         __import__(f"operators.{_mod_name}")
     except Exception as _exc:  # noqa: F841

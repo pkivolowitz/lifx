@@ -2572,6 +2572,7 @@ def main() -> None:
                 operator_mgr.configure(op_cfgs)
                 config["_config_path"] = GlowUpRequestHandler.config_path
                 config["_device_manager"] = dm
+                config["_mqtt_client"] = proc_mqtt
                 operator_mgr.start(full_config=config)
                 GlowUpRequestHandler.operator_manager = operator_mgr
 

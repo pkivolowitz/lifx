@@ -69,8 +69,12 @@ SECONDS_PER_MINUTE: float = 60.0
 # Condition operators are in operators/conditions.py (shared module).
 
 # Valid schedule-conflict policies.
+#   defer           — skip when schedule IS active (motion defers to mood)
+#   override        — fire regardless (always boost)
+#   coexist         — fire and let schedule resume afterwards
+#   require_schedule — only fire when schedule IS active (daytime = no boost)
 VALID_CONFLICT_POLICIES: frozenset[str] = frozenset({
-    "defer", "override", "coexist",
+    "defer", "override", "coexist", "require_schedule",
 })
 
 # Group identifier prefix (matches server.py GROUP_PREFIX).
@@ -355,6 +359,14 @@ class TriggerOperator(Operator):
             if self._is_schedule_active(self._group):
                 logger.info(
                     "TriggerOperator '%s' deferred — schedule active for %s",
+                    self.name, self._group,
+                )
+                return
+        elif self._schedule_conflict == "require_schedule":
+            if not self._is_schedule_active(self._group):
+                logger.info(
+                    "TriggerOperator '%s' suppressed — no schedule active "
+                    "for %s (daytime)",
                     self.name, self._group,
                 )
                 return
