@@ -462,7 +462,7 @@ class SatelliteDaemon:
             self._mqtt_client.publish(
                 self._gate_topic, payload, qos=1, retain=True,
             )
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             # Logged but not raised — failing to republish does not
             # stop the satellite from honoring the closed state locally.
             logger.warning(
@@ -561,7 +561,7 @@ class SatelliteDaemon:
                         logger.info("Working audio cancelled by incoming TTS")
                     else:
                         logger.info("Working audio finished")
-                except Exception as exc:
+                except (OSError, subprocess.SubprocessError) as exc:
                     logger.warning("Working audio failed: %s", exc)
                 finally:
                     with self._active_lock:
@@ -570,7 +570,7 @@ class SatelliteDaemon:
                         self._suppress_count = max(0, self._suppress_count - 1)
 
             threading.Thread(target=_play_working, daemon=True).start()
-        except Exception as exc:
+        except (json.JSONDecodeError, KeyError, TypeError, OSError) as exc:
             logger.error("Thinking message error: %s", exc)
 
     def _on_playback_message(self, msg: Any) -> None:
@@ -593,7 +593,7 @@ class SatelliteDaemon:
                 # New utterance being processed — cancel stale speech.
                 self._cancel_speech()
                 logger.info("New utterance — cancelled stale speech")
-        except Exception as exc:
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             logger.debug("Playback message parse error: %s", exc)
 
     def _on_tts_text_message(self, msg: Any) -> None:
@@ -649,7 +649,7 @@ class SatelliteDaemon:
                 args=(text, gen),
                 daemon=True,
             ).start()
-        except Exception as exc:
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError) as exc:
             logger.error("TTS text message error: %s", exc)
 
     def _speak_local_suppressed(self, text: str, generation: int) -> None:
@@ -798,7 +798,7 @@ class SatelliteDaemon:
                         "Spoke (piper): '%s' (%d PCM bytes)",
                         text[:40], pcm_bytes,
                     )
-            except Exception as exc:
+            except (OSError, subprocess.SubprocessError, ValueError) as exc:
                 logger.warning("Piper speak failed: %s", exc)
                 # Kill the piper process if it's still alive.
                 if piper.poll() is None:
@@ -824,7 +824,7 @@ class SatelliteDaemon:
             logger.error("No TTS engine installed (tried piper, espeak-ng)")
         except subprocess.TimeoutExpired:
             logger.error("espeak-ng timed out speaking: '%s'", text[:40])
-        except Exception as exc:
+        except (OSError, subprocess.SubprocessError) as exc:
             logger.error("Local TTS failed: %s", exc)
 
     def _speak_via_baichuan_sink(
@@ -928,9 +928,9 @@ class SatelliteDaemon:
                     "Spoke (baichuan ch%d): '%s' (%d PCM bytes, %d Hz)",
                     self._bc_channel, text[:40], len(pcm), target_rate,
                 )
-            except Exception as exc:
+            except (TimeoutError, asyncio.TimeoutError, ConnectionError, OSError) as exc:
                 logger.error("baichuan.talk failed: %s", exc)
-        except Exception as exc:
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
             logger.warning("Baichuan speak failed: %s", exc)
             if piper.poll() is None:
                 piper.kill()
@@ -1189,7 +1189,7 @@ class SatelliteDaemon:
                             alsa_device, line.strip(),
                         )
                         break
-            except Exception as exc:
+            except (OSError, subprocess.SubprocessError) as exc:
                 logger.error("arecord -l failed: %s", exc)
 
         if alsa_device is None:
@@ -1442,7 +1442,7 @@ class SatelliteDaemon:
                 "pip install paho-mqtt"
             )
             return
-        except Exception as exc:
+        except (OSError, ConnectionError, ValueError) as exc:
             logger.error(
                 "MQTT connection failed (%s:%d): %s. "
                 "Check that the broker is running.",
@@ -1452,7 +1452,7 @@ class SatelliteDaemon:
 
         try:
             self._init_audio()
-        except Exception as exc:
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
             logger.error(
                 "Audio initialization failed: %s. "
                 "Check that a microphone is connected and not in use "
@@ -1478,7 +1478,7 @@ class SatelliteDaemon:
                 exc,
             )
             return
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             logger.error(
                 "Wake word initialization failed: %s", exc,
             )
@@ -1490,11 +1490,29 @@ class SatelliteDaemon:
         if self._audio_sink == "baichuan":
             try:
                 self._init_baichuan_sink()
-            except Exception as exc:
+            except ImportError as exc:
                 logger.error(
-                    "Baichuan TTS sink initialization failed: %s. "
+                    "Baichuan TTS sink missing dependency: %s", exc,
+                )
+                return
+            except (TimeoutError, asyncio.TimeoutError) as exc:
+                logger.error(
+                    "Baichuan TTS sink timed out connecting to NVR: %s. "
+                    "NVR may be at connection max — reboot NVR to clear "
+                    "stale sessions.",
+                    exc,
+                )
+                return
+            except (ConnectionError, OSError) as exc:
+                logger.error(
+                    "Baichuan TTS sink connection refused by NVR: %s. "
                     "Check audio.baichuan config and NVR reachability.",
                     exc,
+                )
+                return
+            except RuntimeError as exc:
+                logger.error(
+                    "Baichuan TTS sink config error: %s", exc,
                 )
                 return
 
@@ -1525,7 +1543,7 @@ class SatelliteDaemon:
                             else self._chunk_samples,
                             exception_on_overflow=False,
                         )
-                except Exception as exc:
+                except (OSError, IOError) as exc:
                     logger.warning("Audio read error: %s", exc)
                     time.sleep(0.1)
                     continue
@@ -1609,7 +1627,7 @@ class SatelliteDaemon:
             try:
                 self._stream.stop_stream()
                 self._stream.close()
-            except Exception as exc:
+            except (OSError, RuntimeError) as exc:
                 logger.debug("Stream cleanup error: %s", exc)
             self._stream = None
 
@@ -1634,14 +1652,21 @@ class SatelliteDaemon:
                     self._bc_host.logout(), self._bc_loop,
                 )
                 fut.result(timeout=5)
-            except Exception as exc:
-                logger.debug("Baichuan logout error: %s", exc)
+                logger.info("Baichuan logout successful")
+            except (TimeoutError, asyncio.TimeoutError):
+                logger.warning(
+                    "Baichuan logout timed out — NVR session may leak",
+                )
+            except (ConnectionError, OSError) as exc:
+                logger.warning("Baichuan logout connection error: %s", exc)
+            except asyncio.InvalidStateError as exc:
+                logger.debug("Baichuan logout loop state error: %s", exc)
             self._bc_host = None
         if self._bc_loop is not None:
             try:
                 self._bc_loop.call_soon_threadsafe(self._bc_loop.stop)
-            except Exception:
-                pass
+            except RuntimeError as exc:
+                logger.debug("Baichuan loop stop error: %s", exc)
             self._bc_loop = None
             self._bc_thread = None
 
