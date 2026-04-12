@@ -220,6 +220,22 @@ identify_room:
   handler: identify_room
   speak: true
 
+# Voice gate — enable/disable a gated satellite's mic from a trusted
+# interior room.  Allowlist and duration enforcement are in the
+# handler, not here, because the rules are security-critical and must
+# not be overrideable from YAML.
+enable_voice_gate:
+  type: query
+  label: voice gate
+  handler: enable_voice_gate
+  speak: true
+
+disable_voice_gate:
+  type: query
+  label: voice gate
+  handler: disable_voice_gate
+  speak: true
+
 shopping_add:
   type: query
   label: shopping list

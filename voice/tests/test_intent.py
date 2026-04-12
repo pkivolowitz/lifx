@@ -94,6 +94,32 @@ class TestIntentParserPrompt(unittest.TestCase):
         ]:
             self.assertIn(action, prompt, f"Missing action: {action}")
 
+    def test_prompt_includes_voice_gate_actions(self) -> None:
+        """System prompt documents the voice-gate enable/disable actions.
+
+        Regression guard: these lines drive the Ollama parser for the
+        doorbell gate feature.  Accidentally removing them would
+        silently downgrade "enable the porch" into a chat action.
+        """
+        parser = IntentParser.__new__(IntentParser)
+        parser._model = "test"
+        parser._ollama_host = "http://localhost:11434"
+        parser._timeout = 10.0
+        parser._max_retries = 1
+        parser._capabilities_text = ""
+        parser._capabilities_last_refresh = 0.0
+
+        prompt = parser._build_system_prompt()
+        self.assertIn("enable_voice_gate", prompt)
+        self.assertIn("disable_voice_gate", prompt)
+        # Duration parameter must be advertised so the LLM emits it.
+        self.assertIn("duration_seconds", prompt)
+        # An example containing "two hours" -> 7200 pins the unit.
+        self.assertIn("7200", prompt)
+        # A zero-duration fall-through example must exist so the
+        # executor can ask "how long?" instead of silently defaulting.
+        self.assertIn('"duration_seconds": 0', prompt)
+
 
 class TestIntentParserParse(unittest.TestCase):
     """Tests for IntentParser.parse() with mocked Ollama."""

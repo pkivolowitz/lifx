@@ -153,3 +153,30 @@ FLUSH_PATTERNS: frozenset[str] = frozenset({
 
 # How often each satellite publishes a heartbeat (seconds).
 HEARTBEAT_INTERVAL_S: float = 60.0
+
+# ---------------------------------------------------------------------------
+# Voice gate — default-off mic gating for untrusted satellites
+# ---------------------------------------------------------------------------
+
+# Retained MQTT topic prefix for per-room gate state.  Full topic is
+# ``glowup/voice/gate/<room_slug>`` where room_slug = room name lowercased
+# with spaces replaced by underscores.  Payload is JSON
+# ``{"enabled": bool, "expires_at": <unix_ts>}``, retained so a
+# restarting satellite recovers its last known gate state.
+TOPIC_VOICE_GATE_PREFIX: str = "glowup/voice/gate"
+
+# Hard cap on how long a gate can be held open in a single enable.
+# Any requested duration longer than this is clamped to this value,
+# with a spoken acknowledgement.  Perry's rule 2026-04-11: never
+# silently accept an open-ended gate.  Two hours is the ceiling.
+VOICE_GATE_MAX_SECONDS: int = 2 * 60 * 60
+
+# Hardcoded allowlist of interior rooms permitted to enable a voice
+# gate.  Hardcoded (not config-driven) so an exterior satellite that
+# somehow bypasses its own gate cannot enable itself or another
+# exterior satellite.  Room names are matched exactly (case-sensitive)
+# against the ``room`` field of the originating utterance.
+VOICE_GATE_ALLOWED_ROOMS: frozenset[str] = frozenset({
+    "Dining Room",
+    "Main Bedroom",
+})

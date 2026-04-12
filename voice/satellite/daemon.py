@@ -256,6 +256,28 @@ class SatelliteDaemon:
         self._pa: Optional["pyaudio.PyAudio"] = None
         self._stream: Optional["pyaudio.Stream"] = None
 
+        # Voice-gate state.  When ``gated`` is true, the satellite
+        # discards audio before it reaches the wake detector unless a
+        # retained MQTT gate message has explicitly opened the gate
+        # with a bounded expiry.  Default-off: gated satellites boot
+        # closed and stay closed until an interior room opens them.
+        # The ring buffer is still fed even when closed so the RTSP
+        # or ALSA source never backs up.
+        #
+        # Gate slug is the room name lowercased with spaces replaced
+        # by underscores — used as the MQTT topic suffix.
+        gate_cfg: dict[str, Any] = config.get("voice_gate", {})
+        self._gated: bool = bool(gate_cfg.get("gated", False))
+        self._gate_slug: str = (
+            self._room.lower().replace(" ", "_")
+        )
+        self._gate_topic: str = (
+            f"{C.TOPIC_VOICE_GATE_PREFIX}/{self._gate_slug}"
+        )
+        self._gate_open: bool = False
+        self._gate_expires: float = 0.0
+        self._gate_lock: threading.Lock = threading.Lock()
+
     def _init_mqtt(self) -> None:
         """Connect to the MQTT broker.
 
@@ -281,6 +303,15 @@ class SatelliteDaemon:
         self._mqtt_client.subscribe(C.TOPIC_TTS_TEXT, qos=0)
         self._mqtt_client.subscribe(C.TOPIC_FLUSH, qos=1)
         self._mqtt_client.subscribe(C.TOPIC_THINKING, qos=0)
+        # Only gated satellites subscribe to a gate topic.  Non-gated
+        # rooms (Dining Room, Main Bedroom, etc.) never see a gate
+        # message and their audio loop never consults gate state.
+        if self._gated:
+            self._mqtt_client.subscribe(self._gate_topic, qos=1)
+            logger.info(
+                "Voice gate enabled — subscribed to %s (default closed)",
+                self._gate_topic,
+            )
         self._mqtt_client.loop_start()
         logger.info(
             "MQTT connected: %s:%d as %s",
@@ -305,6 +336,139 @@ class SatelliteDaemon:
             self._on_flush_message(msg)
         elif msg.topic == C.TOPIC_THINKING:
             self._on_thinking_message(msg)
+        elif self._gated and msg.topic == self._gate_topic:
+            self._on_gate_message(msg)
+
+    def _on_gate_message(self, msg: Any) -> None:
+        """Handle a voice-gate retained message.
+
+        Parses ``{"enabled": bool, "expires_at": <unix_ts>}`` and
+        updates ``self._gate_open`` / ``self._gate_expires`` under the
+        gate lock.  Clamps ``expires_at - now`` to
+        :data:`C.VOICE_GATE_MAX_SECONDS` as a belt-and-suspenders
+        check — the coordinator is expected to clamp at publish time,
+        but the satellite re-checks because the coordinator is outside
+        the satellite's trust boundary.  A malformed payload closes
+        the gate (fail-safe).
+
+        Args:
+            msg: MQTT message with JSON payload.
+        """
+        now: float = time.time()
+        try:
+            data: dict[str, Any] = json.loads(msg.payload)
+            enabled: bool = bool(data.get("enabled", False))
+            expires_at: float = float(data.get("expires_at", 0.0))
+        except (ValueError, TypeError) as exc:
+            # Corrupt payload — fail safe to closed per Rule #1.
+            logger.warning(
+                "Gate message parse error on %s: %s — closing gate",
+                self._gate_topic, exc,
+            )
+            with self._gate_lock:
+                self._gate_open = False
+                self._gate_expires = 0.0
+            return
+
+        if enabled:
+            # Clamp to the hard max.  The coordinator should already
+            # have clamped, but the satellite must not trust upstream.
+            max_expires: float = now + float(C.VOICE_GATE_MAX_SECONDS)
+            if expires_at > max_expires:
+                logger.warning(
+                    "Gate expires_at %.0f > max %.0f — clamping",
+                    expires_at, max_expires,
+                )
+                expires_at = max_expires
+
+            if expires_at <= now:
+                # Past-expiry enable arrives — treat as closed.
+                with self._gate_lock:
+                    was_open: bool = self._gate_open
+                    self._gate_open = False
+                    self._gate_expires = 0.0
+                if was_open:
+                    logger.info("Gate already expired on receipt — closed")
+                return
+
+            with self._gate_lock:
+                self._gate_open = True
+                self._gate_expires = expires_at
+            remaining: float = expires_at - now
+            logger.info(
+                "Gate OPEN on %s for %.0fs (until %s)",
+                self._gate_topic, remaining,
+                time.strftime("%H:%M:%S", time.localtime(expires_at)),
+            )
+        else:
+            with self._gate_lock:
+                was_open = self._gate_open
+                self._gate_open = False
+                self._gate_expires = 0.0
+            if was_open:
+                logger.info("Gate CLOSED on %s", self._gate_topic)
+
+    def _gate_permits_audio(self) -> bool:
+        """Return True if the main audio loop may feed the wake detector.
+
+        Non-gated satellites always return True.  Gated satellites
+        return True only while the gate is open and not yet expired;
+        an auto-expiry transition publishes a retained closed message
+        back so the dashboard and other listeners see the state change.
+
+        Returns:
+            True if wake detection should run, False to discard audio.
+        """
+        if not self._gated:
+            return True
+
+        now: float = time.time()
+        with self._gate_lock:
+            if not self._gate_open:
+                return False
+            if now >= self._gate_expires:
+                # Auto-expiry.  Flip state and fall through to publish
+                # the retained close outside the lock.
+                self._gate_open = False
+                self._gate_expires = 0.0
+                expired: bool = True
+            else:
+                expired = False
+
+        if expired:
+            logger.info(
+                "Gate auto-expired on %s — republishing closed",
+                self._gate_topic,
+            )
+            self._publish_gate_closed()
+            return False
+
+        return True
+
+    def _publish_gate_closed(self) -> None:
+        """Publish a retained gate-closed message.
+
+        Called on auto-expiry so downstream listeners (dashboard,
+        other satellites, audits) see the gate transition without
+        having to poll.  Retained so a reconnecting client gets the
+        current (closed) state immediately.
+        """
+        if self._mqtt_client is None:
+            return
+        payload: bytes = json.dumps(
+            {"enabled": False, "expires_at": 0}
+        ).encode("utf-8")
+        try:
+            self._mqtt_client.publish(
+                self._gate_topic, payload, qos=1, retain=True,
+            )
+        except Exception as exc:
+            # Logged but not raised — failing to republish does not
+            # stop the satellite from honoring the closed state locally.
+            logger.warning(
+                "Failed to republish gate closed on %s: %s",
+                self._gate_topic, exc,
+            )
 
     def _cancel_speech(self) -> None:
         """Kill any in-progress piper and aplay processes.
@@ -1238,10 +1402,20 @@ class SatelliteDaemon:
         if self._mqtt_client is None:
             return
 
+        # Snapshot gate state for the heartbeat payload so a dashboard
+        # tile can render without subscribing to the gate topic.
+        # Non-gated satellites report ``gated: false`` and null expiry.
+        with self._gate_lock:
+            gate_open: bool = self._gate_open
+            gate_expires: float = self._gate_expires
+
         status: dict[str, Any] = {
             "room": self._room,
             "timestamp": time.time(),
             "mock_wake": self._mock_wake,
+            "gated": self._gated,
+            "gate_open": gate_open if self._gated else True,
+            "gate_expires_at": gate_expires if self._gated else 0.0,
         }
         topic: str = f"{C.TOPIC_STATUS_PREFIX}/{self._room}"
         self._mqtt_client.publish(
@@ -1356,8 +1530,16 @@ class SatelliteDaemon:
                     time.sleep(0.1)
                     continue
 
-                # Feed pre-wake ring buffer.
+                # Feed pre-wake ring buffer.  This runs even when the
+                # gate is closed so RTSP/ALSA sources never back up.
                 self._capture.feed_ring(raw)
+
+                # Voice gate — default-off for untrusted satellites.
+                # When closed, no wake detection, no capture, no
+                # publish.  The ring buffer above still drains the
+                # source so ffmpeg/ALSA doesn't stall.
+                if self._gated and not self._gate_permits_audio():
+                    continue
 
                 # Skip wake detection while speaker is playing TTS
                 # to prevent the mic from re-triggering on its own output.

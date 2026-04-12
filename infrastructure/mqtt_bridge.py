@@ -177,6 +177,14 @@ class MqttBridge:
         self._last_states: dict[str, str] = {}
         self._last_devices: Optional[str] = None
 
+        # Voice-gate state cache — mirrors retained
+        # ``glowup/voice/gate/<slug>`` messages so the HTTP API can
+        # answer ``/api/voice/gates`` without subscribing on every
+        # request.  Keyed by slug (e.g. ``doorbell``), value is the
+        # most recent ``{enabled, expires_at}`` payload.
+        self._gate_lock: threading.Lock = threading.Lock()
+        self._gates: dict[str, dict[str, Any]] = {}
+
     # -- Topic helpers ------------------------------------------------------
 
     def _topic(self, *segments: str) -> str:
@@ -336,6 +344,15 @@ class MqttBridge:
             client.subscribe(sub_topic, qos=QOS_AT_LEAST_ONCE)
             logger.info("MQTT subscribed to %s", sub_topic)
 
+            # Subscribe to voice-gate retained topic so the dashboard
+            # can show a red "doorbell is listening" banner.  Topic is
+            # hardcoded under ``glowup/voice/gate/+`` — not under
+            # self.topic_prefix — because the voice subsystem always
+            # uses the ``glowup`` root.
+            gate_sub: str = "glowup/voice/gate/+"
+            client.subscribe(gate_sub, qos=QOS_AT_LEAST_ONCE)
+            logger.info("MQTT subscribed to %s", gate_sub)
+
             # Publish online availability (retained).
             client.publish(
                 self._topic(TOPIC_STATUS),
@@ -374,13 +391,78 @@ class MqttBridge:
         userdata: Any,
         msg: Any,
     ) -> None:
-        """Dispatch incoming command messages to the DeviceManager."""
+        """Dispatch incoming messages by topic.
+
+        Device command topics go to the DeviceManager.  Voice-gate
+        topics update the in-memory gate cache consumed by the HTTP
+        API.  Unknown topics are logged and dropped.
+        """
+        topic: str = msg.topic
         try:
-            self._dispatch_command(msg.topic, msg.payload)
+            if topic.startswith("glowup/voice/gate/"):
+                self._update_gate_cache(topic, msg.payload)
+                return
+            self._dispatch_command(topic, msg.payload)
         except Exception:
             logger.exception(
-                "Error handling MQTT message on %s", msg.topic,
+                "Error handling MQTT message on %s", topic,
             )
+
+    def _update_gate_cache(self, topic: str, payload: bytes) -> None:
+        """Record the latest gate state for a room slug.
+
+        Args:
+            topic:   Full ``glowup/voice/gate/<slug>`` topic.
+            payload: JSON ``{enabled, expires_at}`` bytes.
+
+        A malformed or empty payload clears the slot rather than
+        raising — the bridge must never crash on a bad retained
+        message from an unrelated publisher.
+        """
+        slug: str = topic.rsplit("/", 1)[-1]
+        if not slug:
+            return
+
+        if not payload:
+            with self._gate_lock:
+                self._gates.pop(slug, None)
+            return
+
+        try:
+            data: dict[str, Any] = json.loads(payload)
+            enabled: bool = bool(data.get("enabled", False))
+            expires_at: float = float(data.get("expires_at", 0.0))
+        except (ValueError, TypeError) as exc:
+            logger.warning(
+                "Gate cache: malformed payload on %s: %s", topic, exc,
+            )
+            with self._gate_lock:
+                self._gates.pop(slug, None)
+            return
+
+        with self._gate_lock:
+            self._gates[slug] = {
+                "enabled": enabled,
+                "expires_at": expires_at,
+            }
+
+    def get_gates(self) -> dict[str, dict[str, Any]]:
+        """Return a snapshot of current voice-gate state.
+
+        Expired gates are filtered out at read time so the HTTP
+        consumer never has to reason about clock skew.  Returns an
+        empty dict if MQTT is unavailable or no gates have ever
+        published state.
+        """
+        now: float = time_mod.time()
+        with self._gate_lock:
+            snapshot: dict[str, dict[str, Any]] = {
+                slug: dict(entry)
+                for slug, entry in self._gates.items()
+                if entry.get("enabled")
+                and entry.get("expires_at", 0.0) > now
+            }
+        return snapshot
 
     # -- Command dispatch ---------------------------------------------------
 

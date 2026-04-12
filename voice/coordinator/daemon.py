@@ -588,6 +588,13 @@ class CoordinatorDaemon:
             )
             return
 
+        # Give executor access to the MQTT client so gate handlers
+        # can publish retained state on ``glowup/voice/gate/*``.
+        # Must happen after ``_init_mqtt`` — before this point the
+        # client is None and gate commands would fail fast.
+        if self._executor and self._mqtt_client is not None:
+            self._executor.set_mqtt_client(self._mqtt_client)
+
         logger.info(
             "Coordinator running (workers=%d, broker=%s:%d)",
             self._max_workers, self._mqtt_broker, self._mqtt_port,

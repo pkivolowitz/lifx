@@ -514,6 +514,51 @@
 
 <!-- Site nav — built dynamically from /api/config/nav. -->
 <nav id="siteNav" style="display:flex;gap:18px;padding:6px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:0.8rem;letter-spacing:0.04em;"></nav>
+
+<!-- Voice-gate banner.  Present only when at least one gated
+     satellite has an open, unexpired gate — absent otherwise so the
+     header stays clean.  Driven by /api/voice/gates, polled every 2s
+     in the block below.  Styling is inline (bright red, bold, full
+     width) so a cold page-load still shows the warning before any
+     stylesheet is parsed. -->
+<div id="voiceGateBanner" style="display:none;background:#c00;color:#fff;font-weight:700;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:0.95rem;letter-spacing:0.05em;text-align:center;padding:8px 16px;border-bottom:1px solid #800;"></div>
+<script>
+(function(){
+  // Poll /api/voice/gates and toggle the banner.  Shows the
+  // longest-remaining gate because there is usually only one
+  // (the doorbell).  Unauthed endpoint — banner works on both
+  // the public /home pages and the authed dashboard.
+  var el = document.getElementById("voiceGateBanner");
+  function fmt(sec){
+    if(sec<=0)return "0s";
+    var h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=Math.floor(sec%60);
+    if(h>0)return h+"h "+m+"m";
+    if(m>0)return m+"m "+s+"s";
+    return s+"s";
+  }
+  function tick(){
+    fetch("/api/voice/gates",{cache:"no-store"}).then(function(r){return r.json()}).then(function(d){
+      var now=Date.now()/1000,best=0,slug=null;
+      Object.keys(d||{}).forEach(function(k){
+        var e=d[k];
+        if(e&&e.enabled&&e.expires_at>now){
+          var rem=e.expires_at-now;
+          if(rem>best){best=rem;slug=k}
+        }
+      });
+      if(best>0){
+        var label=slug==="doorbell"?"DOORBELL":(slug||"").toUpperCase();
+        el.textContent=label+" IS LISTENING — "+fmt(best)+" remaining";
+        el.style.display="block";
+      }else{
+        el.style.display="none";
+      }
+    }).catch(function(){ /* keep last-known state on transient errors */ });
+  }
+  tick();
+  setInterval(tick,2000);
+})();
+</script>
 <script>
 (function(){var n=document.getElementById("siteNav"),p=location.pathname;
 fetch("/api/config/nav").then(function(r){return r.json()}).then(function(d){

@@ -75,6 +75,8 @@ Available actions:
 - list_groups: enumerate light groups. Use when someone says "list groups", "what groups do I have?", "what are my groups?", etc.
 - list_doors: enumerate door sensors. Use when someone says "list doors", "what doors do you know about?", etc.
 - list_locks: enumerate locks. Use when someone says "list locks", "what locks do you know about?", etc.
+- enable_voice_gate: temporarily enable listening on a gated satellite (the porch/doorbell). Target is the gate slug ("doorbell" for the front porch). Params MUST include a duration in seconds. If the user does not say a duration, still emit this action with params.duration_seconds = 0 so the system can ask. Use when someone says "enable the porch for two hours", "open the doorbell for thirty minutes", "turn on the porch mic for ten minutes", etc. Convert spoken durations to integer seconds: "two hours" -> 7200, "thirty minutes" -> 1800, "one hour" -> 3600, "ninety seconds" -> 90.
+- disable_voice_gate: immediately disable listening on a gated satellite. Target is the gate slug ("doorbell"). Use when someone says "disable the porch", "close the doorbell", "turn off the porch mic", "shut the porch", etc.
 - scene: activate a named scene or preset
 - chat: general conversation, questions, or anything NOT related to controlling devices or querying sensors (params: message=<the user's full message>)
 
@@ -158,6 +160,12 @@ Examples:
 - "what groups do I have?" -> {{"action": "list_groups", "target": "all", "params": {{}}}}
 - "list doors" -> {{"action": "list_doors", "target": "all", "params": {{}}}}
 - "list locks" -> {{"action": "list_locks", "target": "all", "params": {{}}}}
+- "enable the porch for two hours" -> {{"action": "enable_voice_gate", "target": "doorbell", "params": {{"duration_seconds": 7200}}}}
+- "open the doorbell for thirty minutes" -> {{"action": "enable_voice_gate", "target": "doorbell", "params": {{"duration_seconds": 1800}}}}
+- "turn on the porch mic for ten minutes" -> {{"action": "enable_voice_gate", "target": "doorbell", "params": {{"duration_seconds": 600}}}}
+- "enable the porch" -> {{"action": "enable_voice_gate", "target": "doorbell", "params": {{"duration_seconds": 0}}}}
+- "disable the porch" -> {{"action": "disable_voice_gate", "target": "doorbell", "params": {{}}}}
+- "close the doorbell" -> {{"action": "disable_voice_gate", "target": "doorbell", "params": {{}}}}
 - "tell me about the battle of Gettysburg" -> {{"action": "chat", "target": "all", "params": {{"message": "tell me about the battle of Gettysburg"}}}}
 """
 

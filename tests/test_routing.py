@@ -311,6 +311,7 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "shopping", "{id}", "check"),
             ("api", "shopping", "{id}"),
             ("api", "shopping", "checked"),
+            ("api", "voice", "gates"),
         }
         for route in _ROUTES:
             if route.pattern in AUTH_FREE_PATTERNS:
@@ -333,8 +334,8 @@ class TestRouteCount(unittest.TestCase):
         """GET routes should match the expected count."""
         get_routes: list[_Route] = [r for r in _ROUTES if r.method == "GET"]
         self.assertEqual(
-            len(get_routes), 49,
-            f"Expected 49 GET routes, got {len(get_routes)}",
+            len(get_routes), 50,
+            f"Expected 50 GET routes, got {len(get_routes)}",
         )
 
     def test_post_route_count(self) -> None:

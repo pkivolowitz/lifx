@@ -719,5 +719,167 @@ class TestHandlePowerSummary(unittest.TestCase):
         self.assertIn("50", result["confirmation"])
 
 
+class TestVoiceGateHandlers(unittest.TestCase):
+    """Tests for enable_voice_gate / disable_voice_gate handlers."""
+
+    def _make_gated_executor(self) -> "GlowUpExecutor":
+        """Build an executor with a mock MQTT client attached."""
+        ex = _MockExecutor.make({
+            "enable_voice_gate": {
+                "type": "query", "label": "voice gate",
+                "handler": "enable_voice_gate", "speak": True,
+            },
+            "disable_voice_gate": {
+                "type": "query", "label": "voice gate",
+                "handler": "disable_voice_gate", "speak": True,
+            },
+        })
+        ex.set_mqtt_client(MagicMock())
+        return ex
+
+    def test_parse_duration_seconds_int(self) -> None:
+        self.assertEqual(
+            GlowUpExecutor._parse_duration_seconds(
+                {"duration_seconds": 3600},
+            ), 3600,
+        )
+
+    def test_parse_duration_words_hours(self) -> None:
+        self.assertEqual(
+            GlowUpExecutor._parse_duration_seconds(
+                {"duration": "two hours"},
+            ), 7200,
+        )
+
+    def test_parse_duration_words_minutes(self) -> None:
+        self.assertEqual(
+            GlowUpExecutor._parse_duration_seconds(
+                {"duration": "thirty minutes"},
+            ), 1800,
+        )
+
+    def test_parse_duration_compact(self) -> None:
+        self.assertEqual(
+            GlowUpExecutor._parse_duration_seconds({"duration": "2h"}),
+            7200,
+        )
+
+    def test_parse_duration_missing(self) -> None:
+        self.assertEqual(
+            GlowUpExecutor._parse_duration_seconds({}), 0,
+        )
+
+    def test_parse_duration_malformed(self) -> None:
+        self.assertEqual(
+            GlowUpExecutor._parse_duration_seconds(
+                {"duration": "forever"},
+            ), 0,
+        )
+
+    def test_enable_rejects_untrusted_room(self) -> None:
+        ex = self._make_gated_executor()
+        ex._current_room = "Doorbell"  # gated exterior room
+        result = ex._handle_enable_voice_gate(
+            {}, "doorbell", "doorbell", "doorbell",
+            {"duration_seconds": 600},
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("can't enable", result["confirmation"].lower())
+        ex._mqtt_client.publish.assert_not_called()
+
+    def test_enable_rejects_missing_duration(self) -> None:
+        ex = self._make_gated_executor()
+        ex._current_room = "Main Bedroom"
+        result = ex._handle_enable_voice_gate(
+            {}, "doorbell", "doorbell", "doorbell", {},
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("how long", result["confirmation"].lower())
+        ex._mqtt_client.publish.assert_not_called()
+
+    def test_enable_rejects_zero_duration(self) -> None:
+        ex = self._make_gated_executor()
+        ex._current_room = "Dining Room"
+        result = ex._handle_enable_voice_gate(
+            {}, "doorbell", "doorbell", "doorbell",
+            {"duration_seconds": 0},
+        )
+        self.assertEqual(result["status"], "error")
+        ex._mqtt_client.publish.assert_not_called()
+
+    def test_enable_publishes_retained_on_success(self) -> None:
+        ex = self._make_gated_executor()
+        ex._current_room = "Main Bedroom"
+        before: float = time.time()
+        result = ex._handle_enable_voice_gate(
+            {}, "doorbell", "doorbell", "doorbell",
+            {"duration_seconds": 600},
+        )
+        self.assertEqual(result["status"], "ok")
+        ex._mqtt_client.publish.assert_called_once()
+        args, kwargs = ex._mqtt_client.publish.call_args
+        self.assertEqual(args[0], "glowup/voice/gate/doorbell")
+        payload: dict[str, Any] = json.loads(args[1])
+        self.assertTrue(payload["enabled"])
+        self.assertGreaterEqual(payload["expires_at"], before + 599)
+        self.assertTrue(kwargs.get("retain"))
+        self.assertEqual(kwargs.get("qos"), 1)
+
+    def test_enable_clamps_to_two_hours(self) -> None:
+        ex = self._make_gated_executor()
+        ex._current_room = "Main Bedroom"
+        before: float = time.time()
+        result = ex._handle_enable_voice_gate(
+            {}, "doorbell", "doorbell", "doorbell",
+            {"duration_seconds": 99999},
+        )
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("two hours", result["confirmation"].lower())
+        args, _ = ex._mqtt_client.publish.call_args
+        payload = json.loads(args[1])
+        # expires_at is at most 7200s from now (allow slack for clock).
+        self.assertLessEqual(payload["expires_at"], before + 7200 + 1)
+        self.assertGreaterEqual(payload["expires_at"], before + 7200 - 5)
+
+    def test_enable_porch_alias_resolves_to_doorbell_slug(self) -> None:
+        ex = self._make_gated_executor()
+        ex._current_room = "Main Bedroom"
+        ex._handle_enable_voice_gate(
+            {}, "porch", "porch", "porch",
+            {"duration_seconds": 600},
+        )
+        args, _ = ex._mqtt_client.publish.call_args
+        self.assertEqual(args[0], "glowup/voice/gate/doorbell")
+
+    def test_disable_ignores_allowlist(self) -> None:
+        """Closing a gate is always safe — no room check."""
+        ex = self._make_gated_executor()
+        ex._current_room = "Doorbell"  # untrusted room
+        result = ex._handle_disable_voice_gate(
+            {}, "doorbell", "doorbell", "doorbell", {},
+        )
+        self.assertEqual(result["status"], "ok")
+        args, kwargs = ex._mqtt_client.publish.call_args
+        self.assertEqual(args[0], "glowup/voice/gate/doorbell")
+        payload = json.loads(args[1])
+        self.assertFalse(payload["enabled"])
+        self.assertEqual(payload["expires_at"], 0)
+        self.assertTrue(kwargs.get("retain"))
+
+    def test_enable_without_mqtt_client_errors(self) -> None:
+        ex = _MockExecutor.make({
+            "enable_voice_gate": {
+                "type": "query", "label": "voice gate",
+                "handler": "enable_voice_gate", "speak": True,
+            },
+        })
+        ex._current_room = "Main Bedroom"
+        result = ex._handle_enable_voice_gate(
+            {}, "doorbell", "doorbell", "doorbell",
+            {"duration_seconds": 600},
+        )
+        self.assertEqual(result["status"], "error")
+
+
 if __name__ == "__main__":
     unittest.main()

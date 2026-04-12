@@ -362,6 +362,12 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_diag_history"),
     _Route("GET", ("api", "state"),
            "_handle_get_state"),
+    # Voice gate status for the dashboard header banner.  Unauthed so
+    # the banner renders before the user signs in — gate state is not
+    # sensitive, and hiding it would defeat the "always visible"
+    # contract of the banner.
+    _Route("GET", ("api", "voice", "gates"),
+           "_handle_get_voice_gates", requires_auth=False),
     _Route("GET", ("api", "discovered_bulbs"),
            "_handle_get_discovered_bulbs"),
     _Route("GET", ("api", "registry"),

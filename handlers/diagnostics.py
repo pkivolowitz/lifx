@@ -76,4 +76,25 @@ class DiagnosticsHandlerMixin:
             return
         self._send_json(200, store.get_all())
 
+    def _handle_get_voice_gates(self) -> None:
+        """GET /api/voice/gates — currently open voice gates.
+
+        Returns a dict keyed by room slug with the most recent
+        ``{enabled, expires_at}`` for each gate that is both enabled
+        and not yet expired.  Drives the dashboard's "DOORBELL IS
+        LISTENING" header banner.
+
+        Falls back to an empty dict if MQTT is unavailable or the
+        bridge has not yet seen a retained gate message.
+        """
+        bridge: Any = getattr(self.server, "_mqtt_bridge", None)
+        if bridge is None or not hasattr(bridge, "get_gates"):
+            self._send_json(200, {})
+            return
+        try:
+            self._send_json(200, bridge.get_gates())
+        except Exception as exc:
+            logging.warning("Voice gate query failed: %s", exc)
+            self._send_json(200, {})
+
 

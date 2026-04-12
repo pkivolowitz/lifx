@@ -28,6 +28,8 @@ from typing import Any, Optional
 
 import yaml
 
+from voice import constants as C
+
 logger: logging.Logger = logging.getLogger("glowup.voice.executor")
 
 # ---------------------------------------------------------------------------
@@ -138,10 +140,18 @@ class GlowUpExecutor:
             "list_groups": self._handle_list_groups,
             "list_doors": self._handle_list_doors,
             "list_locks": self._handle_list_locks,
+            "enable_voice_gate": self._handle_enable_voice_gate,
+            "disable_voice_gate": self._handle_disable_voice_gate,
         }
 
         # TTS reference — set after init by the coordinator daemon.
         self._tts: Any = None
+
+        # MQTT client reference — set after init by the coordinator
+        # daemon via :meth:`set_mqtt_client`.  Used by gate handlers
+        # to publish retained gate state.  None when running under
+        # unit tests that don't wire MQTT.
+        self._mqtt_client: Any = None
 
         logger.info(
             "Loaded %d action definitions from %s",
@@ -996,6 +1006,20 @@ class GlowUpExecutor:
         """
         self._tts = tts
 
+    def set_mqtt_client(self, client: Any) -> None:
+        """Set the MQTT client reference for gate publish handlers.
+
+        Called by the coordinator daemon after MQTT is connected.
+        Gate handlers use this client to publish retained state on
+        ``glowup/voice/gate/<room_slug>``.  Left as None in unit
+        tests — handlers detect the missing client and return an
+        error result instead of crashing.
+
+        Args:
+            client: paho-mqtt Client instance.
+        """
+        self._mqtt_client = client
+
     def _handle_set_voice(
         self,
         cfg: dict[str, Any],
@@ -1629,6 +1653,273 @@ class GlowUpExecutor:
             "confirmation": f"You are in the {room}.",
             "speak": True,
         }
+
+    # ------------------------------------------------------------------
+    # Voice gate handlers — enable/disable the doorbell (and any other
+    # gated satellite) from an interior trusted room, time-bounded.
+    # ------------------------------------------------------------------
+
+    # Words that spell durations — allow "two hours", "2 hours", etc.
+    # Kept as a class constant so the handler is pure and testable.
+    _NUMBER_WORDS: dict[str, int] = {
+        "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+        "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+        "ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15,
+        "twenty": 20, "thirty": 30, "forty": 40, "fortyfive": 45,
+        "forty-five": 45, "sixty": 60, "ninety": 90,
+    }
+
+    @classmethod
+    def _parse_duration_seconds(
+        cls, params: dict[str, Any],
+    ) -> int:
+        """Extract a duration in seconds from intent params.
+
+        Accepts any of the following shapes (first match wins):
+        - ``duration_seconds`` (int or numeric string)
+        - ``duration_minutes``
+        - ``duration_hours``
+        - ``duration`` as a free-form string like ``"two hours"``,
+          ``"30 minutes"``, ``"10 min"``, ``"1h"``, ``"90s"``
+
+        Returns 0 when no recognizable duration is present so the
+        caller can reject the request.  Zero is deliberately returned
+        for missing OR malformed input — the handler must not invent
+        a default, per the approved design.
+        """
+        # Primary path: explicit seconds.
+        if "duration_seconds" in params:
+            try:
+                return max(0, int(params["duration_seconds"]))
+            except (TypeError, ValueError):
+                return 0
+
+        if "duration_minutes" in params:
+            try:
+                return max(0, int(params["duration_minutes"]) * 60)
+            except (TypeError, ValueError):
+                return 0
+
+        if "duration_hours" in params:
+            try:
+                return max(0, int(params["duration_hours"]) * 3600)
+            except (TypeError, ValueError):
+                return 0
+
+        raw: Any = params.get("duration")
+        if not isinstance(raw, str) or not raw.strip():
+            return 0
+
+        text: str = raw.strip().lower()
+        # Tokenize on whitespace; handle "1h", "30m", "90s" as units.
+        tokens: list[str] = text.replace(",", " ").split()
+        value: int = 0
+        unit_multiplier: int = 0
+
+        for tok in tokens:
+            # Compact forms: "2h", "30m", "90s".
+            if tok.endswith("h") and tok[:-1].isdigit():
+                return int(tok[:-1]) * 3600
+            if tok.endswith("m") and tok[:-1].isdigit():
+                return int(tok[:-1]) * 60
+            if tok.endswith("s") and tok[:-1].isdigit():
+                return int(tok[:-1])
+
+            if tok.isdigit():
+                value = int(tok)
+                continue
+            if tok in cls._NUMBER_WORDS:
+                value = cls._NUMBER_WORDS[tok]
+                continue
+            if tok.startswith("hour"):
+                unit_multiplier = 3600
+            elif tok.startswith("min"):
+                unit_multiplier = 60
+            elif tok.startswith("sec"):
+                unit_multiplier = 1
+
+        if value > 0 and unit_multiplier > 0:
+            return value * unit_multiplier
+        return 0
+
+    def _gate_slug_for_target(self, target_raw: str) -> str:
+        """Map an intent target onto a gate room slug.
+
+        The intent parser returns targets like ``"doorbell"``,
+        ``"porch"``, ``"front porch"``, etc.  The satellite's gate
+        topic uses the slug of its room name — Doorbell → ``doorbell``.
+        We treat "porch" and "doorbell" as aliases for the Front
+        Doorbell gate.  Any other target becomes its own slug so
+        future gated rooms work without code changes.
+        """
+        t: str = (target_raw or "").strip().lower()
+        if t in ("doorbell", "porch", "front porch", "front door",
+                 "front doorbell"):
+            return "doorbell"
+        return t.replace(" ", "_")
+
+    def _handle_enable_voice_gate(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Enable a gated satellite's mic for a bounded duration.
+
+        Enforces three rules from the approved design:
+
+        - The originating room must be in
+          :data:`voice.constants.VOICE_GATE_ALLOWED_ROOMS`.  This
+          stops a gated exterior satellite from enabling itself.
+        - A duration is REQUIRED.  Missing/zero duration is a parse
+          error, not a silent default — the satellite speaks back
+          "how long?" and the caller re-issues with a duration.
+        - The duration is clamped to
+          :data:`voice.constants.VOICE_GATE_MAX_SECONDS`.  Any
+          longer request is trimmed and the spoken reply says so.
+        """
+        room: str = getattr(self, "_current_room", "unknown")
+        if room not in C.VOICE_GATE_ALLOWED_ROOMS:
+            logger.warning(
+                "Voice gate enable rejected: room %r not in allowlist",
+                room,
+            )
+            return {
+                "status": "error",
+                "confirmation": (
+                    "I can't enable the porch from here."
+                ),
+                "speak": True,
+            }
+
+        requested: int = self._parse_duration_seconds(params)
+        if requested <= 0:
+            return {
+                "status": "error",
+                "confirmation": (
+                    "How long should I open the porch for?"
+                ),
+                "speak": True,
+            }
+
+        clamped: int = min(requested, C.VOICE_GATE_MAX_SECONDS)
+        was_clamped: bool = clamped < requested
+
+        slug: str = self._gate_slug_for_target(target_raw)
+        topic: str = f"{C.TOPIC_VOICE_GATE_PREFIX}/{slug}"
+        expires_at: float = time.time() + float(clamped)
+
+        if self._mqtt_client is None:
+            logger.error(
+                "Gate enable requested but no MQTT client wired",
+            )
+            return {
+                "status": "error",
+                "confirmation": (
+                    "I can't reach the satellites right now."
+                ),
+                "speak": True,
+            }
+
+        payload: bytes = json.dumps({
+            "enabled": True,
+            "expires_at": expires_at,
+        }).encode("utf-8")
+
+        try:
+            self._mqtt_client.publish(topic, payload, qos=1, retain=True)
+        except Exception as exc:
+            logger.error("Gate enable publish failed: %s", exc)
+            return {
+                "status": "error",
+                "confirmation": "Publishing to the gate failed.",
+                "speak": True,
+            }
+
+        logger.info(
+            "Gate enabled on %s for %ds from room %r (requested=%ds, clamped=%s)",
+            topic, clamped, room, requested, was_clamped,
+        )
+
+        if was_clamped:
+            confirmation: str = (
+                "OK, opening the porch for two hours — "
+                "I can't do longer."
+            )
+        else:
+            confirmation = self._format_gate_duration(clamped)
+
+        return {
+            "status": "ok",
+            "confirmation": confirmation,
+            "speak": True,
+        }
+
+    def _handle_disable_voice_gate(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Close a gated satellite's gate immediately.
+
+        No allowlist check — closing is always safe.  Publishes a
+        retained ``{"enabled": false, "expires_at": 0}`` message so
+        a reconnecting satellite picks up the closed state.
+        """
+        slug: str = self._gate_slug_for_target(target_raw)
+        topic: str = f"{C.TOPIC_VOICE_GATE_PREFIX}/{slug}"
+
+        if self._mqtt_client is None:
+            logger.error(
+                "Gate disable requested but no MQTT client wired",
+            )
+            return {
+                "status": "error",
+                "confirmation": (
+                    "I can't reach the satellites right now."
+                ),
+                "speak": True,
+            }
+
+        payload: bytes = json.dumps({
+            "enabled": False,
+            "expires_at": 0,
+        }).encode("utf-8")
+
+        try:
+            self._mqtt_client.publish(topic, payload, qos=1, retain=True)
+        except Exception as exc:
+            logger.error("Gate disable publish failed: %s", exc)
+            return {
+                "status": "error",
+                "confirmation": "Publishing to the gate failed.",
+                "speak": True,
+            }
+
+        logger.info("Gate closed on %s", topic)
+        return {
+            "status": "ok",
+            "confirmation": "Porch closed.",
+            "speak": True,
+        }
+
+    @staticmethod
+    def _format_gate_duration(seconds: int) -> str:
+        """Render a gate duration as a spoken confirmation."""
+        if seconds % 3600 == 0 and seconds >= 3600:
+            h: int = seconds // 3600
+            noun: str = "hour" if h == 1 else "hours"
+            return f"Opening the porch for {h} {noun}."
+        if seconds % 60 == 0 and seconds >= 60:
+            m: int = seconds // 60
+            noun = "minute" if m == 1 else "minutes"
+            return f"Opening the porch for {m} {noun}."
+        return f"Opening the porch for {seconds} seconds."
 
     # ------------------------------------------------------------------
     # Commands / help / list handlers
