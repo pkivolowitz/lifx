@@ -94,21 +94,11 @@ MAX_RECONNECT_DELAY: float = 300.0
 # a brief approach, slow enough to avoid hammering the NVR.
 DEFAULT_DOORBELL_POLL_INTERVAL: float = 0.5
 
-# How long to hold the boost after the person clears before reverting
-# to scheduler control.  Gives visitors time to step back without the
-# lights flickering off and on.
-DEFAULT_DOORBELL_HOLD_SECONDS: float = 15.0
-
 # The AI detection type we key on.  Reolink reports this as "people"
 # (plural) for doorbell-family cameras — verified empirically on the
 # Reolink Video Doorbell WiFi-W.
 DOORBELL_AI_TYPE: str = "people"
 
-# HTTP timeout for server API calls from the boost loop (seconds).
-BOOST_HTTP_TIMEOUT: float = 5.0
-
-# Default local server URL if not injected from top-level config.
-DEFAULT_SERVER_URL: str = "http://localhost:8420"
 
 # ---------------------------------------------------------------------------
 # Optional dependency check
@@ -133,14 +123,17 @@ class NvrAdapter(AsyncPollingAdapterBase):
         config: The ``"nvr"`` section of server.json.
     """
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        mqtt_client: Any = None,
+    ) -> None:
         """Initialize the NVR adapter.
 
         Args:
-            config: NVR config section from server.json, with two
-                fields (``server_url`` and ``auth_token``) injected
-                by ``run_adapter._create_nvr`` for the doorbell boost
-                path.
+            config:      NVR config section from server.json.
+            mqtt_client: Optional paho MQTT client for publishing
+                         doorbell person-detection signals to the bus.
         """
         super().__init__(
             thread_name="nvr-adapter",
@@ -158,54 +151,32 @@ class NvrAdapter(AsyncPollingAdapterBase):
         )
 
         self._host: Any = None
+        self._mqtt_client: Any = mqtt_client
 
         # Snapshot cache: channel_id → (jpeg_bytes, timestamp).
         self._lock: threading.Lock = threading.Lock()
         self._snapshots: dict[int, tuple[bytes, float]] = {}
 
-        # -- Doorbell boost config --------------------------------------
-        # Pulled out of a nested "doorbell_boost" block so the feature
-        # can ship disabled by default and cleanly evolve.
+        # -- Doorbell person-detection config ---------------------------
+        # Publishes doorbell:person signal (1.0 / 0.0) to the MQTT bus
+        # so TriggerOperators can handle porch lights through the
+        # standard SOE pipeline.
         boost_cfg: dict[str, Any] = config.get("doorbell_boost", {}) or {}
         self._db_enabled: bool = bool(boost_cfg.get("enabled", False))
         self._db_channels: list[dict[str, Any]] = list(
             boost_cfg.get("channels", []) or [],
-        )
-        self._db_devices: list[str] = list(boost_cfg.get("devices", []) or [])
-        self._db_effect: str = str(boost_cfg.get("effect", "on"))
-        self._db_params: dict[str, Any] = dict(
-            boost_cfg.get("params", {"brightness": 100}) or {},
-        )
-        self._db_hold: float = float(
-            boost_cfg.get("hold_seconds", DEFAULT_DOORBELL_HOLD_SECONDS),
         )
         self._db_poll_interval: float = float(
             boost_cfg.get(
                 "poll_interval_seconds", DEFAULT_DOORBELL_POLL_INTERVAL,
             ),
         )
-        # server_url / auth_token injected by run_adapter, but fall back
-        # to explicit config if the caller set them by hand.
-        self._db_server_url: str = str(
-            boost_cfg.get("server_url")
-            or config.get("server_url")
-            or DEFAULT_SERVER_URL,
-        )
-        self._db_auth_token: str = str(
-            boost_cfg.get("auth_token")
-            or config.get("auth_token")
-            or "",
-        )
 
-        # Per-channel edge-detection state for the boost loop.
-        # ch_id → {"present": bool, "cleared_at": float}
-        #   - present: True while ai_detected(ch, "people") is True
-        #   - cleared_at: wall time when the falling edge happened,
-        #                 0.0 means "not in hold window"
+        # Per-channel edge-detection state.
+        # ch_id → {"present": float (0.0 or 1.0)}
         self._db_state: dict[int, dict[str, float]] = {}
 
-        # Handle to the async task that runs the doorbell loop, so
-        # _disconnect can cancel it cleanly.
+        # Handle to the async task that runs the doorbell loop.
         self._db_task: Optional[asyncio.Task] = None
 
     def _check_prerequisites(self) -> bool:
@@ -316,49 +287,32 @@ class NvrAdapter(AsyncPollingAdapterBase):
             return False
         if not self._db_channels:
             logger.info(
-                "Doorbell boost enabled but no channels configured — skipping",
-            )
-            return False
-        if not self._db_devices:
-            logger.info(
-                "Doorbell boost enabled but no devices configured — skipping",
-            )
-            return False
-        if not self._db_auth_token:
-            logger.warning(
-                "Doorbell boost enabled but auth_token missing — skipping. "
-                "run_adapter._create_nvr should inject it from server.json.",
+                "Doorbell detection enabled but no channels configured — skipping",
             )
             return False
         return True
 
     async def _run_doorbell_loop(self) -> None:
-        """Poll AI people-detection on doorbell channels and drive boost.
+        """Poll AI people-detection and publish ``doorbell:person`` signal.
 
-        On a rising edge (``False → True``) for ``ai[people]`` on any
-        configured doorbell channel, calls the boost-on path once.
-        On a falling edge, starts a ``hold_seconds`` timer; if people
-        reappears during the hold, the timer is cancelled.  When the
-        hold expires with people still absent, the boost is released.
+        Publishes 1.0 on rising edge (person detected), 0.0 on falling
+        edge (person gone).  The TriggerOperator watching this signal
+        handles porch lights through the standard SOE pipeline —
+        play/stop/resume, debounce, schedule conflict.
         """
-        # Seed per-channel edge state.
         channel_ids: list[int] = [
             int(c["id"]) for c in self._db_channels if "id" in c
         ]
         for cid in channel_ids:
-            self._db_state[cid] = {"present": 0.0, "cleared_at": 0.0}
+            self._db_state[cid] = {"present": 0.0}
 
         logger.info(
-            "Doorbell boost active: channels=%s devices=%s hold=%.0fs "
-            "effect=%s params=%s",
-            channel_ids, self._db_devices, self._db_hold,
-            self._db_effect, self._db_params,
+            "Doorbell person detection active: channels=%s",
+            channel_ids,
         )
 
-        # Any-channel "present" aggregation — the boost should be
-        # on if *any* configured doorbell channel currently sees a
-        # person, off only when *all* are clear and holds expired.
-        any_boost_on: bool = False
+        # Aggregate across channels — any channel seeing a person = 1.0.
+        last_published: float = 0.0
 
         try:
             while self._running:
@@ -369,10 +323,7 @@ class NvrAdapter(AsyncPollingAdapterBase):
                     await asyncio.sleep(1.0)
                     continue
 
-                now: float = time.time()
-                any_present_now: bool = False
-                any_in_hold: bool = False
-
+                any_present: bool = False
                 for cid in channel_ids:
                     state = self._db_state[cid]
                     try:
@@ -386,135 +337,54 @@ class NvrAdapter(AsyncPollingAdapterBase):
                         )
                         continue
 
-                    present_prev: bool = bool(state["present"])
-
-                    if present_now and not present_prev:
+                    prev: bool = bool(state["present"])
+                    if present_now and not prev:
                         logger.info("Doorbell ch%d people -> detected", cid)
-                        state["present"] = 1.0
-                        state["cleared_at"] = 0.0
-                    elif (
-                        present_now and present_prev
-                        and state["cleared_at"] > 0.0
-                    ):
-                        # Re-entered during a hold window — cancel the
-                        # pending release so the lights stay on.
-                        logger.info(
-                            "Doorbell ch%d re-detected during hold, "
-                            "cancelling revert", cid,
-                        )
-                        state["cleared_at"] = 0.0
-                    elif not present_now and present_prev:
-                        if state["cleared_at"] == 0.0:
-                            state["cleared_at"] = now
-                            logger.info(
-                                "Doorbell ch%d cleared, holding %.0fs",
-                                cid, self._db_hold,
-                            )
+                    elif not present_now and prev:
+                        logger.info("Doorbell ch%d people -> cleared", cid)
+                    state["present"] = 1.0 if present_now else 0.0
 
-                    # Count toward the boost aggregate.
-                    if state["present"] > 0.0:
-                        if state["cleared_at"] == 0.0:
-                            any_present_now = True
-                        elif now - state["cleared_at"] < self._db_hold:
-                            any_in_hold = True
-                        else:
-                            # Hold expired — release this channel.
-                            logger.info(
-                                "Doorbell ch%d hold expired",
-                                cid,
-                            )
-                            state["present"] = 0.0
-                            state["cleared_at"] = 0.0
+                    if present_now:
+                        any_present = True
 
-                boost_should_be_on: bool = any_present_now or any_in_hold
-
-                if boost_should_be_on and not any_boost_on:
-                    await asyncio.to_thread(self._http_boost_on)
-                    any_boost_on = True
-                elif not boost_should_be_on and any_boost_on:
-                    await asyncio.to_thread(self._http_boost_off)
-                    any_boost_on = False
+                # Publish signal on edge change only.
+                signal_value: float = 1.0 if any_present else 0.0
+                if signal_value != last_published:
+                    self._publish_signal("doorbell:person", signal_value)
+                    last_published = signal_value
 
                 await asyncio.sleep(self._db_poll_interval)
         except asyncio.CancelledError:
-            # Normal shutdown path — release the boost if we're holding
-            # it so we don't leave the porch bulbs overridden after a
-            # reconnect cycle.
-            if any_boost_on:
-                try:
-                    await asyncio.to_thread(self._http_boost_off)
-                except Exception as exc:
-                    logger.warning(
-                        "Doorbell boost-off on shutdown failed: %s", exc,
-                    )
+            # Publish 0 on shutdown so the trigger clears.
+            if last_published > 0.0:
+                self._publish_signal("doorbell:person", 0.0)
             raise
 
-    # --- Boost HTTP calls (sync, called via to_thread) ---------------------
+    # --- MQTT signal publishing -------------------------------------------
 
-    def _http_boost_on(self) -> None:
-        """Start the boost effect on every configured device.
+    def _publish_signal(self, signal_name: str, value: float) -> None:
+        """Publish a signal value to the MQTT bus.
 
-        Uses ``/api/devices/{ip}/play`` which already marks each device
-        as phone-overridden so the scheduler will not clobber the
-        boost while it's active.
-        """
-        body: dict[str, Any] = {
-            "effect": self._db_effect,
-            "params": self._db_params,
-        }
-        logger.info("Doorbell boost ON -> %s", self._db_devices)
-        for ip in self._db_devices:
-            try:
-                self._http_post(f"/api/devices/{ip}/play", body)
-            except Exception as exc:
-                logger.warning("boost play %s failed: %s", ip, exc)
-
-    def _http_boost_off(self) -> None:
-        """Stop the boost effect and release override to the scheduler.
-
-        Calls ``/stop`` (effect off, override still marked) immediately
-        followed by ``/resume`` (override cleared).  The explicit stop
-        matters when the scheduled window is not currently active —
-        without it, the bulbs would stay at boost brightness until the
-        next scheduled entry triggered.
-        """
-        logger.info("Doorbell boost OFF -> %s", self._db_devices)
-        for ip in self._db_devices:
-            try:
-                self._http_post(f"/api/devices/{ip}/stop", None)
-            except Exception as exc:
-                logger.warning("boost stop %s failed: %s", ip, exc)
-            try:
-                self._http_post(f"/api/devices/{ip}/resume", None)
-            except Exception as exc:
-                logger.warning("boost resume %s failed: %s", ip, exc)
-
-    def _http_post(self, path: str, body: Optional[dict[str, Any]]) -> int:
-        """POST to the local server and return the HTTP status.
+        Topic: ``glowup/signals/{signal_name}`` so the server's
+        remote-signal subscriber writes it to the local SignalBus.
+        Matches the convention used by vivint_adapter and other adapters.
 
         Args:
-            path: URL path starting with ``/``.
-            body: JSON body, or ``None`` for an empty POST.
-
-        Returns:
-            HTTP status code.
-
-        Raises:
-            urllib.error.URLError: network or server failure.
+            signal_name: Signal name (e.g., ``"doorbell:person"``).
+            value:       Signal value (0.0 or 1.0).
         """
-        url: str = f"{self._db_server_url}{path}"
-        headers: dict[str, str] = {
-            "Authorization": f"Bearer {self._db_auth_token}",
-        }
-        data: Optional[bytes] = None
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-            data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(
-            url, data=data, headers=headers, method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=BOOST_HTTP_TIMEOUT) as resp:
-            return int(resp.status)
+        if not self._mqtt_client:
+            logger.debug(
+                "No MQTT client — cannot publish %s=%s",
+                signal_name, value,
+            )
+            return
+        topic: str = f"glowup/signals/{signal_name}"
+        try:
+            self._mqtt_client.publish(topic, str(value), qos=1)
+            logger.info("Published %s = %s", topic, value)
+        except Exception as exc:
+            logger.warning("MQTT publish %s failed: %s", topic, exc)
 
     async def _run_cycle(self) -> None:
         """Periodically pull snapshots from all channels."""
