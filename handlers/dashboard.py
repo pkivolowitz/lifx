@@ -399,6 +399,92 @@ class DashboardHandlerMixin:
             self._send_json(200, {"operators": []})
 
 
+    # --- Binding CRUD endpoints -------------------------------------------
+
+    def _handle_get_bindings(self) -> None:
+        """GET /api/signals/bindings — list all active param bindings.
+
+        Response::
+
+            {"bindings": [
+                {"operator": "occ", "param": "away_confirm_seconds",
+                 "target": "occ:away_confirm_seconds",
+                 "source": "house:occupancy:state",
+                 "scale": [5.0, 1.0]},
+                ...
+            ]}
+        """
+        om: Optional[OperatorManager] = self.operator_manager
+        if om is not None:
+            self._send_json(200, {"bindings": om.get_all_bindings()})
+        else:
+            self._send_json(200, {"bindings": []})
+
+    def _handle_post_binding(self) -> None:
+        """POST /api/signals/bindings — create or replace a binding.
+
+        Request body::
+
+            {"operator": "cylon_runner", "param": "speed",
+             "signal": "breathe_runner:speed",
+             "scale": [0.1, 30.0], "reduce": "max"}
+
+        Responds 400 if the binding would create a cycle, the operator
+        is not found, or the param does not exist.
+        """
+        om: Optional[OperatorManager] = self.operator_manager
+        if om is None:
+            self._send_json(503, {"error": "Operator manager not running"})
+            return
+        body: dict = self._read_json_body()
+        if not body:
+            self._send_json(400, {"error": "Missing request body"})
+            return
+        op_name: str = body.get("operator", "")
+        param_name: str = body.get("param", "")
+        source: str = body.get("signal", "")
+        if not op_name or not param_name or not source:
+            self._send_json(400, {
+                "error": "Required fields: operator, param, signal",
+            })
+            return
+        spec: dict = {"signal": source}
+        if "scale" in body:
+            spec["scale"] = body["scale"]
+        if "reduce" in body:
+            spec["reduce"] = body["reduce"]
+        try:
+            om.create_binding(op_name, param_name, spec)
+            self._send_json(200, {"ok": True, "binding": {
+                "target": f"{op_name}:{param_name}",
+                "source": source,
+            }})
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc)})
+
+    def _handle_delete_binding(self, target: str) -> None:
+        """DELETE /api/signals/bindings/{target} — remove a binding.
+
+        The *target* path segment is ``operator:param`` (e.g.,
+        ``cylon_runner:speed``).  Param keeps its last bound value.
+        """
+        om: Optional[OperatorManager] = self.operator_manager
+        if om is None:
+            self._send_json(503, {"error": "Operator manager not running"})
+            return
+        parts: list[str] = target.split(":", 1)
+        if len(parts) != 2:
+            self._send_json(400, {
+                "error": "Target must be operator:param (e.g., occ:speed)",
+            })
+            return
+        op_name, param_name = parts
+        try:
+            om.remove_binding(op_name, param_name)
+            self._send_json(200, {"ok": True})
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc)})
+
     def _handle_get_home_mode(self) -> None:
         """GET /api/home/mode — display mode for the /home dashboard.
 

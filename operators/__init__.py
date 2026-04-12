@@ -74,6 +74,9 @@ logger: logging.Logger = logging.getLogger("glowup.operators")
 # A signal value: scalar float or list of floats (matching SignalBus).
 SignalValue = Union[float, list[float]]
 
+# A single binding specification: source signal → target param.
+BindingSpec = dict[str, Any]  # {"signal": str, "scale": [lo, hi], "reduce": str}
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -104,6 +107,81 @@ TICK_POLL_INTERVAL: float = 1.0 / TICK_POLL_HZ
 
 # Floor for operator tick_hz to prevent division by zero.
 MIN_TICK_HZ: float = 0.01
+
+# ---------------------------------------------------------------------------
+# Binding resolution — shared by OperatorManager and Engine
+# ---------------------------------------------------------------------------
+
+
+def resolve_binding(
+    source_value: SignalValue,
+    param_def: Optional[Param],
+    binding: BindingSpec,
+) -> float:
+    """Reduce, scale, and validate a bound signal value for a param.
+
+    Args:
+        source_value: Raw value read from the source signal on the bus.
+        param_def:    The target Param definition (for range info).
+        binding:      Binding spec with optional ``scale`` and ``reduce``.
+
+    Returns:
+        Scalar float suitable for ``setattr`` on the target operator.
+    """
+    value: float
+    # Reduce array signals to scalar.
+    if isinstance(source_value, list):
+        reduce_fn: str = binding.get("reduce", "max")
+        if not source_value:
+            value = 0.0
+        elif reduce_fn == "mean":
+            value = sum(source_value) / len(source_value)
+        elif reduce_fn == "sum":
+            value = min(1.0, sum(source_value))
+        else:  # "max" or unknown
+            value = max(source_value)
+    else:
+        value = float(source_value)
+
+    # Scale normalised [0, 1] to target range.
+    scale = binding.get("scale")
+    if scale and len(scale) >= 2:
+        lo, hi = float(scale[0]), float(scale[1])
+    elif param_def and param_def.min is not None:
+        lo, hi = float(param_def.min), float(param_def.max)
+    else:
+        lo, hi = 0.0, 1.0
+    return lo + value * (hi - lo)
+
+
+def check_circular_binding(
+    target: str,
+    source: str,
+    all_bindings: dict[str, str],
+) -> bool:
+    """Return True if adding target←source would create a cycle.
+
+    Walks the binding chain from *source* — if it reaches *target*,
+    the binding is circular.
+
+    Args:
+        target:       Signal name of the target param (e.g. ``"cylon:speed"``).
+        source:       Signal name of the proposed source.
+        all_bindings: Dict mapping ``target_signal → source_signal`` for
+                      every active binding across all operators.
+
+    Returns:
+        ``True`` if a cycle would result.
+    """
+    visited: set[str] = {target}
+    cursor: str = source
+    while cursor in all_bindings:
+        if cursor in visited:
+            return True
+        visited.add(cursor)
+        cursor = all_bindings[cursor]
+    return cursor in visited
+
 
 # ---------------------------------------------------------------------------
 # Operator registry
@@ -285,6 +363,13 @@ class Operator:
                 else:
                     setattr(self, attr_name, val.default)
 
+        # Param-as-signal bindings — loaded from config ``"bindings"`` key.
+        # Each entry maps a param name to a BindingSpec:
+        #   {"signal": "source:signal", "scale": [lo, hi], "reduce": "max"}
+        self._bindings: dict[str, BindingSpec] = dict(
+            config.get("bindings", {}),
+        )
+
         # Allow config to override tick_mode and tick_hz.
         if "tick_mode" in config:
             mode: str = config["tick_mode"]
@@ -402,20 +487,115 @@ class Operator:
     def set_params(self, **kwargs: Any) -> None:
         """Update parameters at runtime.
 
-        Unknown parameter names are silently ignored.
+        Unknown parameter names are silently ignored.  Also writes the
+        new value to the signal bus so bound consumers see it.
 
         Args:
             **kwargs: Parameter names mapped to new values.
         """
         for name, value in kwargs.items():
             if name in self._param_defs:
-                setattr(self, name, self._param_defs[name].validate(value))
+                validated = self._param_defs[name].validate(value)
+                setattr(self, name, validated)
+                # Publish to bus so other operators can bind to this param.
+                if self._bus and isinstance(validated, (int, float)):
+                    self._bus.write(f"{self.name}:{name}", float(validated))
+
+    # --- Param-as-signal registration ------------------------------------
+
+    def register_param_signals(self) -> None:
+        """Write all numeric params to the bus as ``{name}:{param}`` signals.
+
+        Called by :class:`OperatorManager` after ``on_start()``.  Seeds
+        the bus with current param values so other operators can bind to
+        them immediately.
+        """
+        if not self._bus:
+            return
+        for pname, pdef in self._param_defs.items():
+            value = getattr(self, pname, pdef.default)
+            if isinstance(value, (int, float)):
+                signal_name: str = f"{self.name}:{pname}"
+                self._bus.write(signal_name, float(value))
+
+    # --- Binding management ----------------------------------------------
+
+    def add_binding(self, param_name: str, spec: BindingSpec) -> None:
+        """Add or replace a binding for a param.
+
+        Args:
+            param_name: Param name on this operator.
+            spec:       Binding spec with at least ``"signal"`` key.
+
+        Raises:
+            ValueError: If *param_name* is not a declared Param.
+        """
+        if param_name not in self._param_defs:
+            raise ValueError(
+                f"'{param_name}' is not a declared param on operator "
+                f"'{self.name}' (available: {list(self._param_defs)})"
+            )
+        self._bindings[param_name] = dict(spec)
+        logger.info(
+            "Binding added: %s:%s <- %s",
+            self.name, param_name, spec.get("signal", "?"),
+        )
+
+    def remove_binding(self, param_name: str) -> None:
+        """Remove a binding for a param.  Param keeps its last value.
+
+        Args:
+            param_name: Param name to unbind.
+        """
+        removed: Optional[BindingSpec] = self._bindings.pop(param_name, None)
+        if removed:
+            logger.info(
+                "Binding removed: %s:%s (was <- %s)",
+                self.name, param_name, removed.get("signal", "?"),
+            )
+
+    def get_bindings(self) -> dict[str, BindingSpec]:
+        """Return a copy of all active bindings on this operator.
+
+        Returns:
+            Dict mapping param names to their binding specs.
+        """
+        return dict(self._bindings)
+
+    def resolve_bindings(self) -> None:
+        """Read bound source signals and apply to params.
+
+        Called by :class:`OperatorManager` tick loop before
+        ``on_tick()``.  Binding wins over manual ``set_params()`` —
+        the bound value is reapplied every tick.  Missing source
+        signals leave the param unchanged.
+        """
+        if not self._bus or not self._bindings:
+            return
+        for param_name, spec in self._bindings.items():
+            source: str = spec.get("signal", "")
+            if not source:
+                continue
+            source_value = self._bus.read(source, None)
+            if source_value is None:
+                continue  # Source not yet on bus — keep current value.
+            pdef: Optional[Param] = self._param_defs.get(param_name)
+            scaled: float = resolve_binding(source_value, pdef, spec)
+            # Write to bus (so downstream bindings chain).
+            param_signal: str = f"{self.name}:{param_name}"
+            self._bus.write(param_signal, scaled)
+            # Set the attribute.
+            if pdef:
+                setattr(self, param_name, pdef.validate(scaled))
+            else:
+                setattr(self, param_name, scaled)
 
     def get_status(self) -> dict[str, Any]:
         """Return JSON-serializable status for API responses.
 
         Returns:
-            Dict with operator identity, state, params, and signal info.
+            Dict with operator identity, state, params, signal info,
+            and active bindings.
         """
         return {
             "name": self.name,
@@ -427,6 +607,7 @@ class Operator:
             "input_signals": list(self.input_signals),
             "output_signals": list(self.output_signals),
             "params": self.get_params(),
+            "bindings": self.get_bindings(),
         }
 
 
@@ -615,6 +796,8 @@ class OperatorManager:
                     slot.operator.on_configure(full_config)
                 slot.operator.on_start()
                 slot.operator._is_started = True
+                # Seed bus with param signals so bindings can resolve.
+                slot.operator.register_param_signals()
                 slot.last_tick = now
                 logger.info("Started operator: %s", slot.operator.name)
             except Exception as exc:
@@ -770,6 +953,120 @@ class OperatorManager:
                 result.append(status)
         return result
 
+    # --- Binding CRUD (runtime API) ----------------------------------------
+
+    def _find_operator(self, operator_name: str) -> Optional[Operator]:
+        """Find an operator by instance name.
+
+        Args:
+            operator_name: The ``name`` field of the operator.
+
+        Returns:
+            The :class:`Operator` instance, or ``None``.
+        """
+        for slot in self._slots:
+            if slot.operator.name == operator_name:
+                return slot.operator
+        return None
+
+    def get_all_bindings(self) -> list[dict[str, Any]]:
+        """Return all active bindings across all operators.
+
+        Returns:
+            List of dicts, each with ``"target"``, ``"source"``,
+            ``"operator"``, ``"param"``, and optional ``"scale"``/``"reduce"``.
+        """
+        result: list[dict[str, Any]] = []
+        with self._lock:
+            for slot in self._slots:
+                op: Operator = slot.operator
+                for pname, spec in op.get_bindings().items():
+                    entry: dict[str, Any] = {
+                        "operator": op.name,
+                        "param": pname,
+                        "target": f"{op.name}:{pname}",
+                        "source": spec.get("signal", ""),
+                    }
+                    if "scale" in spec:
+                        entry["scale"] = spec["scale"]
+                    if "reduce" in spec:
+                        entry["reduce"] = spec["reduce"]
+                    result.append(entry)
+        return result
+
+    def _all_binding_map(self) -> dict[str, str]:
+        """Build a flat target→source map for circular detection.
+
+        Returns:
+            Dict mapping ``"op:param"`` → ``"source_signal"`` for every
+            active binding.
+        """
+        result: dict[str, str] = {}
+        for slot in self._slots:
+            for pname, spec in slot.operator.get_bindings().items():
+                source: str = spec.get("signal", "")
+                if source:
+                    result[f"{slot.operator.name}:{pname}"] = source
+        return result
+
+    def create_binding(
+        self,
+        operator_name: str,
+        param_name: str,
+        spec: BindingSpec,
+    ) -> None:
+        """Create or replace a binding at runtime.
+
+        Args:
+            operator_name: Target operator instance name.
+            param_name:    Target param name.
+            spec:          Binding spec with ``"signal"`` key.
+
+        Raises:
+            ValueError: If operator not found, param not found, or
+                        binding would create a cycle.
+        """
+        with self._lock:
+            op: Optional[Operator] = self._find_operator(operator_name)
+            if op is None:
+                raise ValueError(f"Operator '{operator_name}' not found")
+            if param_name not in op._param_defs:
+                raise ValueError(
+                    f"Param '{param_name}' not found on '{operator_name}'"
+                )
+            source: str = spec.get("signal", "")
+            if not source:
+                raise ValueError("Binding spec must include 'signal' key")
+            # Circular detection.
+            target_signal: str = f"{operator_name}:{param_name}"
+            binding_map: dict[str, str] = self._all_binding_map()
+            if check_circular_binding(target_signal, source, binding_map):
+                raise ValueError(
+                    f"Circular binding: {target_signal} <- {source} "
+                    f"would create a cycle"
+                )
+            op.add_binding(param_name, spec)
+
+    def remove_binding(
+        self,
+        operator_name: str,
+        param_name: str,
+    ) -> None:
+        """Remove a binding at runtime.  Param keeps its last value.
+
+        Args:
+            operator_name: Target operator instance name.
+            param_name:    Target param name.
+
+        Raises:
+            ValueError: If operator not found.
+        """
+        with self._lock:
+            op: Optional[Operator] = self._find_operator(operator_name)
+            if op is None:
+                raise ValueError(f"Operator '{operator_name}' not found")
+            op.remove_binding(param_name)
+
     # --- Internal tick loop ------------------------------------------------
 
     def _tick_loop(self) -> None:
@@ -797,6 +1094,25 @@ class OperatorManager:
                 self._prev_signals = current
             except Exception as exc:
                 logger.debug("Signal poll error: %s", exc)
+
+            # --- Resolve param-as-signal bindings ---
+            # Bindings are resolved BEFORE periodic ticks so on_tick()
+            # sees the bound param values.  Resolution order follows
+            # topological sort — chained bindings (A→B→C) resolve in
+            # dependency order.
+            with self._lock:
+                for slot in self._slots:
+                    if not slot.enabled:
+                        continue
+                    if slot.operator.tick_mode == TICK_ENGINE:
+                        continue  # Engine handles effect bindings.
+                    try:
+                        slot.operator.resolve_bindings()
+                    except Exception as exc:
+                        logger.debug(
+                            "Binding resolution error in '%s': %s",
+                            slot.operator.name, exc,
+                        )
 
             # --- Dispatch periodic ticks ---
             with self._lock:

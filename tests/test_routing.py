@@ -339,16 +339,16 @@ class TestRouteCount(unittest.TestCase):
         """GET routes should match the expected count."""
         get_routes: list[_Route] = [r for r in _ROUTES if r.method == "GET"]
         self.assertEqual(
-            len(get_routes), 55,
-            f"Expected 55 GET routes, got {len(get_routes)}",
+            len(get_routes), 56,
+            f"Expected 56 GET routes, got {len(get_routes)}",
         )
 
     def test_post_route_count(self) -> None:
         """POST routes should match the expected count."""
         post_routes: list[_Route] = [r for r in _ROUTES if r.method == "POST"]
         self.assertEqual(
-            len(post_routes), 33,
-            f"Expected 33 POST routes, got {len(post_routes)}",
+            len(post_routes), 34,
+            f"Expected 34 POST routes, got {len(post_routes)}",
         )
 
     def test_put_route_count(self) -> None:
@@ -363,8 +363,8 @@ class TestRouteCount(unittest.TestCase):
         """DELETE routes should match the expected count."""
         del_routes: list[_Route] = [r for r in _ROUTES if r.method == "DELETE"]
         self.assertEqual(
-            len(del_routes), 7,
-            f"Expected 7 DELETE routes, got {len(del_routes)}",
+            len(del_routes), 8,
+            f"Expected 8 DELETE routes, got {len(del_routes)}",
         )
 
 

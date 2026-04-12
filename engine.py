@@ -690,6 +690,8 @@ class Engine:
         effect_name: str = effect.name or "unknown"
 
         # First pass: apply bindings (source → param signal routing).
+        # Uses shared resolve_binding() from operators package.
+        from operators import resolve_binding as _resolve_one
         if bindings:
             for param_name, binding in bindings.items():
                 source_signal: str = binding.get("signal", "")
@@ -697,33 +699,8 @@ class Engine:
                     continue
 
                 value = signal_bus.read(source_signal, 0.0)
-
-                # Reduce array signals to a scalar.
-                if isinstance(value, list):
-                    reduce_fn: str = binding.get("reduce", "max")
-                    if not value:
-                        value = 0.0
-                    elif reduce_fn == "max":
-                        value = max(value)
-                    elif reduce_fn == "mean":
-                        value = sum(value) / len(value)
-                    elif reduce_fn == "sum":
-                        value = min(1.0, sum(value))
-                    else:
-                        value = max(value)
-
-                # Scale the normalized [0, 1] value to the param's range.
-                scale = binding.get("scale")
-                if scale and len(scale) >= 2:
-                    lo, hi = float(scale[0]), float(scale[1])
-                else:
-                    param_def = effect._param_defs.get(param_name)
-                    if param_def and param_def.min is not None:
-                        lo, hi = float(param_def.min), float(param_def.max)
-                    else:
-                        lo, hi = 0.0, 1.0
-
-                scaled: float = lo + float(value) * (hi - lo)
+                param_def = effect._param_defs.get(param_name)
+                scaled: float = _resolve_one(value, param_def, binding)
                 # Write the routed value to the param signal on the bus.
                 param_signal: str = f"{effect_name}:{param_name}"
                 signal_bus.write(param_signal, scaled)
