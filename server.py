@@ -2455,16 +2455,38 @@ def main() -> None:
                     # "{device}:{property}" (e.g. "ML_Power:power").
                     # PowerLogger.record() filters for power properties
                     # internally and throttles writes per device.
+                    #
+                    # Special case: "{device}:_availability" is a
+                    # control signal from the Zigbee adapter indicating
+                    # that Z2M's availability tracker has flipped the
+                    # device online (1.0) or offline (0.0).  On an
+                    # offline signal, call mark_offline() so the
+                    # logger writes a NULL sentinel row and clears its
+                    # carry-forward state — this is the defense
+                    # against retained-MQTT replays reviving a plug
+                    # that has actually been switched off.  See
+                    # feedback_retained_mqtt_replays.md.
                     if GlowUpRequestHandler.power_logger is not None:
                         sig_parts: list[str] = sig_name.split(":", 1)
                         if len(sig_parts) == 2:
-                            try:
-                                GlowUpRequestHandler.power_logger.record(
-                                    sig_parts[0], sig_parts[1],
-                                    float(sig_value),
-                                )
-                            except (ValueError, TypeError):
-                                pass
+                            device_name: str = sig_parts[0]
+                            prop_name: str = sig_parts[1]
+                            if prop_name == "_availability":
+                                try:
+                                    if float(sig_value) == 0.0:
+                                        GlowUpRequestHandler.power_logger.mark_offline(
+                                            device_name,
+                                        )
+                                except (ValueError, TypeError):
+                                    pass
+                            else:
+                                try:
+                                    GlowUpRequestHandler.power_logger.record(
+                                        device_name, prop_name,
+                                        float(sig_value),
+                                    )
+                                except (ValueError, TypeError):
+                                    pass
 
                 proc_mqtt.subscribe("glowup/signals/#", qos=0)
                 proc_mqtt.message_callback_add(

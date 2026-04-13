@@ -148,7 +148,9 @@ class TestZigbeeAvailabilityGate(unittest.TestCase):
     def test_base_payload_dropped_when_offline(self) -> None:
         """A payload on zigbee2mqtt/<device> is ignored if device is offline."""
         adapter, bus, power_logger = _make_adapter()
-        # Mark offline via availability message.
+        # Mark offline via availability message.  This write itself
+        # legitimately produces a ``_availability`` bus signal, which
+        # we capture and ignore when asserting on the base-payload gate.
         adapter._handle_message(
             "zigbee2mqtt/ML_Power/availability",
             b'{"state":"offline"}',
@@ -156,6 +158,9 @@ class TestZigbeeAvailabilityGate(unittest.TestCase):
         # mark_offline should have been called exactly once on the transition.
         self.assertEqual(power_logger.mark_offline.call_count, 1)
         power_logger.reset_mock()
+        # Snapshot writes made by the availability transition so we can
+        # assert nothing *new* gets appended by the dropped base payload.
+        writes_after_availability: list[tuple[str, float]] = list(bus.writes)
 
         # Now simulate a retained replay on the base topic.
         adapter._handle_message(
@@ -163,9 +168,16 @@ class TestZigbeeAvailabilityGate(unittest.TestCase):
             self._offline_payload(),
         )
 
-        # Bus should see no writes and logger should see no record() calls.
-        self.assertEqual(bus.writes, [])
+        # Bus writes should be unchanged (no property-based signals
+        # emitted) and logger should see no record() calls.
+        self.assertEqual(bus.writes, writes_after_availability)
         power_logger.record.assert_not_called()
+        # No property signal like "ML_Power:power" should be present.
+        property_signals: list[str] = [
+            name for name, _ in bus.writes
+            if not name.endswith(":_availability")
+        ]
+        self.assertEqual(property_signals, [])
 
     def test_base_payload_accepted_when_online(self) -> None:
         """A payload on zigbee2mqtt/<device> is processed normally when online."""
@@ -257,6 +269,48 @@ class TestZigbeeOfflineTransitionMarksLogger(unittest.TestCase):
             adapter._availability["ML_Power"],
             AVAILABILITY_OFFLINE,
         )
+
+
+class TestZigbeeAvailabilityBusSignal(unittest.TestCase):
+    """The adapter must propagate availability as a bus signal so the
+    main server's ``_on_remote_signal`` handler can act on it — in
+    the process-isolated architecture, the adapter subprocess has no
+    direct handle to the server's PowerLogger and must use the
+    ``glowup/signals/{device}:_availability`` MQTT path."""
+
+    def test_offline_writes_zero_availability_signal(self) -> None:
+        adapter, bus, _ = _make_adapter()
+        adapter._handle_message(
+            "zigbee2mqtt/ML_Power/availability",
+            b'{"state":"offline"}',
+        )
+        self.assertIn(
+            ("ML_Power:_availability", 0.0),
+            bus.writes,
+            "expected ML_Power:_availability=0.0 signal on offline",
+        )
+
+    def test_online_writes_one_availability_signal(self) -> None:
+        adapter, bus, _ = _make_adapter()
+        adapter._handle_message(
+            "zigbee2mqtt/ML_Power/availability",
+            b'{"state":"online"}',
+        )
+        self.assertIn(
+            ("ML_Power:_availability", 1.0),
+            bus.writes,
+            "expected ML_Power:_availability=1.0 signal on online",
+        )
+
+    def test_availability_signal_registered_on_bus(self) -> None:
+        """Signal is registered so downstream consumers can introspect
+        its metadata (transport, source_name)."""
+        adapter, bus, _ = _make_adapter()
+        adapter._handle_message(
+            "zigbee2mqtt/ML_Power/availability",
+            b'{"state":"offline"}',
+        )
+        self.assertIn("ML_Power:_availability", bus.registrations)
 
 
 if __name__ == "__main__":

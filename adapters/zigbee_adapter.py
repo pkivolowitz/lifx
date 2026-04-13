@@ -269,10 +269,34 @@ class ZigbeeAdapter(MqttAdapterBase):
         previous: Optional[str] = self._availability.get(friendly_name)
         self._availability[friendly_name] = state
 
+        # Propagate the state as a bus signal so the main server
+        # process's _on_remote_signal handler can act on it (the
+        # adapter process has no direct handle to PowerLogger — they
+        # live in different OS processes since the 2026-04 process
+        # isolation refactor).  Signal naming: ``{device}:_availability``
+        # with value 0.0 = offline, 1.0 = online.  The leading
+        # underscore is a convention so downstream handlers can tell
+        # this is a control signal, not a plug property.
+        signal_value: float = (
+            1.0 if state == AVAILABILITY_ONLINE else 0.0
+        )
+        signal_name: str = f"{friendly_name}:_availability"
+        if hasattr(self._bus, "register"):
+            self._bus.register(signal_name, SignalMeta(
+                signal_type="scalar",
+                description=f"Zigbee {friendly_name} availability",
+                source_name=friendly_name,
+                transport=TRANSPORT,
+            ))
+        self._bus.write(signal_name, signal_value)
+
         if state == AVAILABILITY_OFFLINE and previous != AVAILABILITY_OFFLINE:
             logger.info(
                 "zigbee: %s transitioned online → offline", friendly_name,
             )
+            # In-process fallback for unit tests and the monolithic
+            # server path — in the process-isolated adapter this is
+            # always None and the bus write above carries the edge.
             if self._power_logger is not None:
                 try:
                     self._power_logger.mark_offline(friendly_name)
