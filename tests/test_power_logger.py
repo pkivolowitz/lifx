@@ -192,6 +192,93 @@ class TestPowerLoggerRecord(unittest.TestCase):
         self.assertGreater(self.pl._write_count, 0)
 
 
+class TestPowerLoggerMarkOffline(unittest.TestCase):
+    """Tests for mark_offline() — the retained-MQTT-replay defense."""
+
+    def setUp(self) -> None:
+        self._tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._path = self._tmpfile.name
+        self._tmpfile.close()
+        self.pl = PowerLogger(db_path=self._path)
+        self.pl._last_write.clear()
+
+    def tearDown(self) -> None:
+        self.pl.close()
+        os.unlink(self._path)
+
+    def test_mark_offline_writes_null_sentinel_row(self) -> None:
+        """mark_offline writes a row with NULL values at the current time."""
+        # Prime with a real reading.
+        self.pl.record("ML_Power", "power", 168.5)
+        self.pl.record("ML_Power", "voltage", 121.6)
+        self.pl._last_write["ML_Power"] = 0.0
+        self.pl.record("ML_Power", "power", 168.5)
+
+        # Now mark offline.
+        self.pl.mark_offline("ML_Power")
+
+        # Query the raw row table directly — `query()` averages within
+        # time buckets, and two rows recorded in the same second would
+        # collapse to a non-null average.  What matters for the
+        # dashboard is that the *absolute most recent* raw row has
+        # NULL power, because the frontend reads the last bucket of
+        # the time-series and we want that bucket's average to be
+        # NULL-only (no live values mixed in) on the next real query.
+        cursor = self.pl._conn.execute(
+            "SELECT power, voltage, current_a, energy, power_factor "
+            "FROM power_readings WHERE device = ? "
+            "ORDER BY timestamp DESC LIMIT 1",
+            ("ML_Power",),
+        )
+        row = cursor.fetchone()
+        self.assertIsNotNone(row, "expected at least one row")
+        self.assertTrue(
+            all(v is None for v in row),
+            f"expected newest raw row to be all-NULL, got {row}",
+        )
+
+    def test_mark_offline_clears_pending_carry_forward(self) -> None:
+        """After mark_offline, _pending for the device is empty so a
+        later flush_pending cannot resurrect pre-offline values."""
+        self.pl.record("ML_Power", "power", 168.5)
+        self.pl.record("ML_Power", "voltage", 121.6)
+        # _pending should now contain ML_Power.
+        self.assertIn("ML_Power", self.pl._pending)
+        self.assertEqual(self.pl._pending["ML_Power"]["power"], 168.5)
+
+        self.pl.mark_offline("ML_Power")
+
+        # _pending no longer holds the stale values.
+        self.assertNotIn("ML_Power", self.pl._pending)
+        self.assertNotIn("ML_Power", self.pl._dirty)
+
+    def test_mark_offline_does_not_affect_other_devices(self) -> None:
+        """mark_offline on one device leaves other devices' pending state alone."""
+        self.pl.record("ML_Power", "power", 168.5)
+        self.pl.record("LRTV", "power", 100.0)
+        self.assertIn("LRTV", self.pl._pending)
+
+        self.pl.mark_offline("ML_Power")
+
+        self.assertIn("LRTV", self.pl._pending)
+        self.assertEqual(self.pl._pending["LRTV"]["power"], 100.0)
+
+    def test_mark_offline_on_unknown_device_writes_sentinel(self) -> None:
+        """mark_offline on a device never seen before still records
+        the transition — valid for the adapter-side case where a
+        device comes up already offline and we have no prior row."""
+        self.pl.mark_offline("NeverSeen")
+        rows = self.pl.query(device="NeverSeen", hours=1, resolution=1)
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]["power"])
+
+    def test_mark_offline_with_none_conn_is_noop(self) -> None:
+        """Closed/failed connection path must not crash."""
+        self.pl._conn = None
+        # Must not raise.
+        self.pl.mark_offline("ML_Power")
+
+
 class TestPowerLoggerPrune(unittest.TestCase):
     """Tests for automatic data pruning."""
 

@@ -51,6 +51,16 @@ TRANSPORT: str = "zigbee"
 # Z2M bridge subtopic — internal coordination, skip these.
 BRIDGE_SUBTOPIC: str = "bridge"
 
+# Subtopic name for per-device availability announcements.  Z2M
+# publishes ``{"state": "online"}`` or ``{"state": "offline"}`` to
+# ``zigbee2mqtt/<device>/availability`` when it detects that a router
+# device has stopped responding to pings (default ~2-hour check).
+AVAILABILITY_SUBTOPIC: str = "availability"
+
+# Availability state strings.
+AVAILABILITY_ONLINE: str = "online"
+AVAILABILITY_OFFLINE: str = "offline"
+
 # MQTT QoS for normalized messages (at-most-once for low-latency sensors).
 MQTT_QOS: int = 0
 
@@ -112,6 +122,14 @@ class ZigbeeAdapter(MqttAdapterBase):
         )
         # Optional power logger — set by server.py after construction.
         self._power_logger: Any = None
+        # Per-device online/offline state, keyed by friendly_name.
+        # Populated by ``zigbee2mqtt/<device>/availability`` messages.
+        # Devices default to online — a never-seen device is assumed
+        # reachable until Z2M tells us otherwise — but any base-topic
+        # payload received while availability is ``"offline"`` is
+        # dropped so stale retained-MQTT replays cannot land in the
+        # SignalBus or the power logger.
+        self._availability: dict[str, str] = {}
 
     # --- Message handling --------------------------------------------------
 
@@ -133,8 +151,33 @@ class ZigbeeAdapter(MqttAdapterBase):
 
         friendly_name: str = parts[1]
 
-        # Skip subtopics like zigbee2mqtt/{name}/set or /get.
+        # Availability subtopic — flip online/offline state for the
+        # device and, on an online → offline transition, mark it
+        # offline in the power logger so the dashboard renders the
+        # transition (instead of holding the last pre-offline value
+        # from a retained-MQTT replay).
+        if len(parts) == 3 and parts[2] == AVAILABILITY_SUBTOPIC:
+            self._handle_availability(friendly_name, payload)
+            return
+
+        # Skip all other subtopics like zigbee2mqtt/{name}/set or /get.
         if len(parts) > 2:
+            return
+
+        # Drop base-topic payloads for devices currently marked
+        # offline.  Z2M's mosquitto broker holds the last
+        # ``zigbee2mqtt/<device>`` payload as retained by default,
+        # and every adapter reconnect (after a Flint flap, a service
+        # restart, or a broker-2 reboot) will redeliver that stale
+        # payload.  Without this gate it is re-parsed, re-written to
+        # the SignalBus, and re-logged to ``power.db`` as if it were
+        # a fresh live read.  See feedback_retained_mqtt_replays.md.
+        if self._availability.get(friendly_name) == AVAILABILITY_OFFLINE:
+            logger.debug(
+                "zigbee: dropping retained/stale payload for %s "
+                "(device currently offline per Z2M availability)",
+                friendly_name,
+            )
             return
 
         # Parse JSON payload.
@@ -180,6 +223,68 @@ class ZigbeeAdapter(MqttAdapterBase):
                     )
                 except Exception:
                     pass  # Best-effort.
+
+    def _handle_availability(
+        self,
+        friendly_name: str,
+        payload: bytes,
+    ) -> None:
+        """Update per-device online state from a Z2M availability message.
+
+        Z2M publishes availability as either a JSON object
+        ``{"state": "online"}`` (newer Z2M versions) or a bare string
+        ``"online"`` / ``"offline"`` (older versions).  Accept both.
+
+        On an online → offline transition, call
+        :meth:`PowerLogger.mark_offline` so a sentinel NULL row lands
+        in ``power.db`` at the transition moment and the dashboard
+        stops rendering the stale last-known power reading.
+
+        Args:
+            friendly_name: Device friendly name from the topic.
+            payload:       Raw MQTT payload bytes.
+        """
+        try:
+            text: str = payload.decode("utf-8", errors="replace").strip()
+        except Exception:
+            return
+
+        # Parse state from either JSON or bare string form.
+        state: Optional[str] = None
+        if text.startswith("{"):
+            try:
+                data: Any = json.loads(text)
+                if isinstance(data, dict):
+                    raw: Any = data.get("state")
+                    if isinstance(raw, str):
+                        state = raw.strip().lower()
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return
+        else:
+            state = text.strip('"').lower()
+
+        if state not in (AVAILABILITY_ONLINE, AVAILABILITY_OFFLINE):
+            return
+
+        previous: Optional[str] = self._availability.get(friendly_name)
+        self._availability[friendly_name] = state
+
+        if state == AVAILABILITY_OFFLINE and previous != AVAILABILITY_OFFLINE:
+            logger.info(
+                "zigbee: %s transitioned online → offline", friendly_name,
+            )
+            if self._power_logger is not None:
+                try:
+                    self._power_logger.mark_offline(friendly_name)
+                except Exception as exc:
+                    logger.warning(
+                        "zigbee: power_logger.mark_offline(%s) failed: %s",
+                        friendly_name, exc,
+                    )
+        elif state == AVAILABILITY_ONLINE and previous == AVAILABILITY_OFFLINE:
+            logger.info(
+                "zigbee: %s transitioned offline → online", friendly_name,
+            )
 
     def _normalize_value(
         self,

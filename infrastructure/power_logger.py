@@ -253,6 +253,72 @@ class PowerLogger:
             except Exception as exc:
                 logger.warning("Power logger write failed: %s", exc)
 
+    def mark_offline(self, device: str) -> None:
+        """Mark a device as offline and record the transition.
+
+        Called by the Zigbee adapter when a device's availability
+        flips from online to offline.  Two effects:
+
+        1.  The carry-forward state (``_pending``) is cleared for the
+            device so any subsequent retained-MQTT replay of a stale
+            ``zigbee2mqtt/<device>`` payload cannot revive the old
+            values.  If a retained replay does land after an offline
+            mark, the adapter's availability gate drops it; this
+            method is the second line of defense in case the gate
+            fails.
+        2.  A sentinel row is written to ``power_readings`` with
+            ``timestamp=now`` and every numeric column ``NULL``.  This
+            row sits as the most recent entry for the device, so the
+            dashboard's last-reading render resolves to ``NULL``
+            (rendered as the em-dash placeholder in the frontend)
+            rather than the stale pre-offline values.  Existing
+            historical rows are untouched — time-series charts keep
+            their full history and the transition point is visible
+            as a gap where the device went dark.
+
+        The fix is specifically for the retained-MQTT-replay failure
+        mode observed 2026-04-12: ML_Power's ``zigbee2mqtt/ML_Power``
+        topic retained ``state=ON power=168.5`` from before broker-2's
+        04-09 death, and every adapter reconnect replayed the same
+        payload into ``power.db``, so the /power dashboard showed
+        "ON 168.5 W" hours after the plug had been physically switched
+        off.  The combination of the adapter-side availability gate
+        plus this sentinel row eliminates both the ingest path
+        (payload drop) and the render path (null rendering) of the
+        bug.
+
+        Args:
+            device: Device friendly name (e.g., ``ML_Power``).
+        """
+        if self._conn is None:
+            return
+        now: float = time.time()
+        with self._lock:
+            # Drop carry-forward state so no subsequent flush_pending
+            # resurrects pre-offline values.
+            self._pending.pop(device, None)
+            self._dirty.pop(device, None)
+            self._last_write[device] = now
+            try:
+                self._conn.execute(
+                    """INSERT INTO power_readings
+                       (device, timestamp, power, voltage, current_a,
+                        energy, power_factor)
+                       VALUES (?, ?, NULL, NULL, NULL, NULL, NULL)""",
+                    (device, now),
+                )
+                self._conn.commit()
+                self._write_count += 1
+                logger.info(
+                    "Power logger: marked %s offline (sentinel NULL row)",
+                    device,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Power logger offline mark failed for %s: %s",
+                    device, exc,
+                )
+
     def flush_pending(self) -> None:
         """Flush any pending dirty carry-forward state on a timer.
 
