@@ -506,6 +506,10 @@ class HubPublisher:
             logger.info("Hub publisher disabled (no GLZ_HUB_BROKER)")
             return
         logger.info("Hub publisher connecting to %s:%d", HUB_BROKER, HUB_PORT)
+        # Wire paho's own logger so we see protocol-level detail.
+        self._client.enable_logger(
+            logging.getLogger("glowup.zigbee_service.paho_hub"),
+        )
         # connect_async + loop_start gives us automatic reconnects on
         # publish failures with no code on our side.
         self._client.connect_async(HUB_BROKER, HUB_PORT, keepalive=30)
@@ -536,7 +540,12 @@ class HubPublisher:
     def publish_properties(self, device: str, payload: dict[str, Any]) -> None:
         """Emit <device>:<prop> signals for every known numeric property."""
         if not self._enabled or self._client is None:
+            logger.debug(
+                "publish skipped — enabled=%s client=%s",
+                self._enabled, self._client,
+            )
             return
+        published: list[str] = []
         for prop in _SIGNAL_PROPS:
             if prop not in payload:
                 continue
@@ -546,13 +555,17 @@ class HubPublisher:
             except (TypeError, ValueError):
                 continue
             topic: str = f"{HUB_SIGNAL_PREFIX}/{device}:{prop}"
-            self._client.publish(topic, f"{fval}", qos=SIGNAL_QOS)
+            info = self._client.publish(topic, f"{fval}", qos=SIGNAL_QOS)
+            published.append(f"{prop}={fval} rc={info.rc}")
         # state: ON/OFF → 1.0/0.0
         raw_state: Any = payload.get("state")
         if isinstance(raw_state, str) and raw_state.upper() in _STATE_NUMERIC:
             fval = _STATE_NUMERIC[raw_state.upper()]
             topic = f"{HUB_SIGNAL_PREFIX}/{device}:state"
-            self._client.publish(topic, f"{fval}", qos=SIGNAL_QOS)
+            info = self._client.publish(topic, f"{fval}", qos=SIGNAL_QOS)
+            published.append(f"state={fval} rc={info.rc}")
+        if published:
+            logger.info("pub %s → %s", device, ", ".join(published))
 
     def publish_availability(self, device: str, online: bool) -> None:
         if not self._enabled or self._client is None:
