@@ -982,7 +982,7 @@ class DashboardHandlerMixin:
             for signal_name, meta in all_signals.items():
                 parts = signal_name.split(":")
                 if len(parts) == 2 and parts[0] in sensors_map:
-                    sensors_map[parts[0]][parts[1]] = meta.value
+                    sensors_map[parts[0]][parts[1]] = meta
             soil_list: list[dict[str, Any]] = list(sensors_map.values())
             result["soil"] = {"sensors": soil_list}
         else:
