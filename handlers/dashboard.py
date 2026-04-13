@@ -58,6 +58,55 @@ class DashboardHandlerMixin:
             self._send_json(404, {"error": "Dashboard page not found"})
 
 
+    def _handle_get_vivint_page(self) -> None:
+        """GET /vivint — serve the full Vivint status dashboard page.
+
+        Reads ``static/vivint.html`` and returns it as text/html.
+        The page fetches ``/api/home/vivint`` (unauthenticated) and
+        renders the complete adapter state: alarm panel, locks, and
+        every sensor grouped by parent detector with full metadata.
+        """
+        vivint_path: str = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "static", "vivint.html",
+        )
+        try:
+            with open(vivint_path, "r") as f:
+                html: str = f.read()
+            body: bytes = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self._send_json(404, {"error": "Vivint dashboard page not found"})
+
+
+    def _handle_get_home_vivint(self) -> None:
+        """GET /api/home/vivint — full Vivint adapter state, no auth.
+
+        Returns the complete vivint adapter status dict (alarm panel,
+        locks, sensors with all metadata) for the unauthenticated
+        /vivint dashboard page.  Safe to expose: contains no secrets,
+        no passwords, no remote-control endpoints — purely read-only
+        state already visible on the control panel in the hallway.
+        """
+        va: Any = getattr(self.server, "_vivint_adapter", None)
+        if va is None:
+            self._send_json(200, {
+                "connected": False,
+                "alarm_state": "unknown",
+                "locks": {},
+                "sensors": {},
+            })
+            return
+        self._send_json(200, va.get_status())
+
+
     def _handle_get_home(self) -> None:
         """GET /home — serve the sensor display dashboard.
 
@@ -987,6 +1036,21 @@ class DashboardHandlerMixin:
             result["soil"] = {"sensors": soil_list}
         else:
             result["soil"] = {"sensors": []}
+
+        # Hints — derived flags for consumers (e.g. mbclock kiosk).
+        # night_mode is produced by a CombineOperator reading
+        # time:is_night AND NOT group:main_bedroom:any_on.  Consumers
+        # should honor this instead of making their own time-of-day
+        # decision so operator config (schedule, per-room gating) is
+        # the single source of truth.
+        hints: dict[str, Any] = {}
+        if bus is not None:
+            try:
+                night_val = bus.read("kiosk:night_mode", 0.0)
+                hints["night_mode"] = bool(float(night_val) >= 0.5)
+            except (TypeError, ValueError):
+                hints["night_mode"] = False
+        result["hints"] = hints
 
         self._send_json(200, result)
 

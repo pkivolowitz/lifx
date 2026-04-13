@@ -116,6 +116,11 @@ class DeviceManager:
         self._emitters: dict[str, Emitter] = {}
         self._controllers: dict[str, Controller] = {}
         self._lock: threading.Lock = threading.Lock()
+        # SignalBus for publishing group power state signals
+        # (group:{name}:any_on / all_off).  Attached post-construction
+        # via attach_signal_bus once the bus exists.  Optional — if
+        # unset, group signal publishing is a no-op.
+        self._signal_bus: Optional[Any] = None
         # Override tracking: maps device ID (IP or group:name) to the
         # schedule entry name that was active when the phone took over.
         self._overrides: dict[str, Optional[str]] = {}
@@ -213,6 +218,9 @@ class DeviceManager:
             sum(1 for v in self._power_states.values() if v),
             sum(1 for v in self._power_states.values() if not v),
         )
+        # Republish group signals — this is how out-of-band changes
+        # (physical switch, LIFX app, HomeKit) get reflected on the bus.
+        self._publish_group_power_signals()
 
     def load_devices(self) -> list[dict[str, Any]]:
         """Query each configured device IP and cache the results.
@@ -956,6 +964,51 @@ class DeviceManager:
             "devices": [em_snapshot.get_info()],
         }
 
+    def attach_signal_bus(self, bus: Any) -> None:
+        """Attach a SignalBus for publishing group power state signals.
+
+        Called by the server after the bus is created.  Once attached,
+        every :meth:`set_power` call also writes ``group:{name}:any_on``
+        and ``group:{name}:all_off`` signals for every configured group
+        the affected device belongs to.  Also publishes an initial
+        snapshot so downstream operators have values immediately.
+
+        Args:
+            bus: A :class:`~media.SignalBus` instance.
+        """
+        self._signal_bus = bus
+        self._publish_group_power_signals()
+
+    def _publish_group_power_signals(self) -> None:
+        """Write ``group:{name}:any_on`` / ``all_off`` for every group.
+
+        Derives signal values from ``self._power_states``.  A device
+        with no cached power state is treated as OFF (safe default).
+        Called by :meth:`attach_signal_bus` for the initial snapshot
+        and by :meth:`set_power` after every power change.
+        """
+        bus = self._signal_bus
+        if bus is None:
+            return
+        for group_name, member_ips in self._group_config.items():
+            any_on: bool = False
+            all_off: bool = True
+            for ip in member_ips:
+                if self._power_states.get(ip, False):
+                    any_on = True
+                    all_off = False
+                    break
+            # Slugify the group name so signal tokens are whitespace-free
+            # and survive RPN expression splitting ("Main Bedroom" →
+            # "main_bedroom").  The human-readable group name is still
+            # the key in self._group_config; this is purely the bus
+            # naming convention.
+            slug: str = group_name.lower().replace(" ", "_")
+            bus.write(f"group:{slug}:any_on",
+                      1.0 if any_on else 0.0)
+            bus.write(f"group:{slug}:all_off",
+                      1.0 if all_off else 0.0)
+
     def set_power(self, ip: str, on: bool) -> dict[str, Any]:
         """Turn a device on or off.
 
@@ -1029,6 +1082,10 @@ class DeviceManager:
         if isinstance(em, VirtualMultizoneEmitter):
             for member in em.get_emitter_list():
                 self._power_states[member.emitter_id] = on
+
+        # Republish group power signals so combinators (e.g. the
+        # clock night-mode gate) see the fresh state immediately.
+        self._publish_group_power_signals()
 
         return {"ip": ip, "power": "on" if on else "off"}
 

@@ -164,7 +164,7 @@ class DataPoller:
         data = self._api_get("/api/home/all")
         if data is not None:
             for key in ("locks", "security", "health", "cameras",
-                        "printer", "soil"):
+                        "printer", "soil", "hints"):
                 if key in data:
                     self._set(key, data[key])
 

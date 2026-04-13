@@ -334,16 +334,25 @@ def main() -> None:
                     running = False
 
         # Determine theme.
+        # Night mode is driven by the server's CombineOperator via
+        # hints.night_mode (time:is_night AND NOT main_bedroom lights).
+        # Fall back to the local hour check only when the server is
+        # unreachable (hints absent) or the bus signal hasn't populated
+        # yet — so the kiosk still behaves sanely in a cold start.
         if args.night:
             theme = NIGHT
         elif args.day:
             theme = DAY
         else:
-            hour: int = datetime.now().hour
-            if hour >= NIGHT_START or hour < NIGHT_END:
-                theme = NIGHT
+            hints = poller.get("hints") or {}
+            if "night_mode" in hints:
+                theme = NIGHT if hints["night_mode"] else DAY
             else:
-                theme = DAY
+                hour: int = datetime.now().hour
+                if hour >= NIGHT_START or hour < NIGHT_END:
+                    theme = NIGHT
+                else:
+                    theme = DAY
 
         # Pick layout: night stack (when wallclock + NIGHT theme) or
         # the configured grid otherwise.  Night stack uses the

@@ -1269,9 +1269,25 @@ class GlowUpExecutor:
         display_target: str,
         params: dict[str, Any],
     ) -> dict[str, Any]:
-        """Report devices with low batteries.
+        """Report Vivint devices that are audibly complaining.
 
-        Checks Vivint sensors via /api/status (adapter health).
+        Answers "any low batteries?" and "are any sensors chirping?".
+        A Vivint sensor chirps when its low_battery flag is set, when
+        it is reporting tampered, or (on smoke/CO units) when it is
+        bypassed.  This handler walks the Vivint adapter's sensor and
+        lock state and reports every "attention needed" reason with
+        the human-readable sensor name so Perry can locate the one
+        that is actually beeping without hunting by ear.
+
+        Checked signals (per sensor, via /api/status):
+          - ``low_battery`` boolean (vivintpy authoritative chirp reason)
+          - ``is_tampered`` boolean (audible on most Vivint gear)
+          - ``is_bypassed`` boolean (panel announces bypassed zones)
+          - ``battery`` percent <30%   (legacy fallback for sensors that
+                                         report a numeric level)
+
+        First Alert detectors are NOT on the network and cannot be
+        queried — they are excluded from this response.
         """
         try:
             data: dict[str, Any] = self._request("GET", "/api/status")
@@ -1282,36 +1298,64 @@ class GlowUpExecutor:
                 "speak": True,
             }
 
-        # Low battery threshold (percentage).
+        # Legacy percent threshold for sensors/locks that report a
+        # numeric battery level.  Smoke detectors report boolean low
+        # only, so the bool path below is the authoritative source.
         LOW_THRESHOLD: int = 30
 
-        low: list[str] = []
+        attention: list[str] = []  # Human-readable reasons, one per issue.
         vivint: dict[str, Any] = data.get("adapters", {}).get("vivint", {})
 
-        # Check locks.
+        # Check locks — percent battery only, no tamper/bypass fields.
         for name, info in vivint.get("locks", {}).items():
             batt: float = info.get("battery", 1.0)
             pct: int = int(batt * 100) if batt <= 1.0 else int(batt)
             if pct < LOW_THRESHOLD:
                 label: str = name.replace("_", " ").title()
-                low.append(f"{label} at {pct}%")
+                attention.append(f"{label} at {pct} percent")
 
-        # Check sensors.
+        # Check sensors — percent AND the new boolean fault fields
+        # (low_battery / is_tampered / is_bypassed) published by the
+        # vivint adapter as of 2026-04-12.  The booleans catch smoke
+        # detectors which only report "low yes/no," not a percentage.
         for name, info in vivint.get("sensors", {}).items():
-            batt_val: Any = info.get("battery")
-            if batt_val is None:
-                continue
-            pct = int(batt_val)
-            if pct < LOW_THRESHOLD:
-                label = info.get("name", name)
-                low.append(f"{label} at {pct}%")
+            label = info.get("name", name)
 
-        if not low:
-            confirmation: str = "All batteries are good."
+            # Boolean low-battery → authoritative chirp reason.
+            if info.get("low_battery"):
+                attention.append(f"{label} low battery")
+
+            # Tamper → audible beep until cleared.
+            if info.get("is_tampered"):
+                attention.append(f"{label} tampered")
+
+            # Bypassed → panel chirps to remind you a zone is off.
+            if info.get("is_bypassed"):
+                attention.append(f"{label} bypassed")
+
+            # Numeric battery percent, for sensors that report one.
+            batt_val: Any = info.get("battery")
+            if batt_val is not None:
+                pct = int(batt_val)
+                # Only flag on percent if we did NOT already flag on
+                # the boolean — avoid saying the same thing twice.
+                if pct < LOW_THRESHOLD and not info.get("low_battery"):
+                    attention.append(f"{label} at {pct} percent")
+
+        if not attention:
+            confirmation: str = (
+                "All Vivint sensors are reporting clean. "
+                "If you still hear chirping, check a First Alert unit."
+            )
         else:
-            confirmation = f"{len(low)} low: " + ", ".join(low[:5])
-            if len(low) > 5:
-                confirmation += f", and {len(low) - 5} more"
+            # Speak the first few by name so Perry can walk straight
+            # to the offender; summarize the tail.
+            head: list[str] = attention[:5]
+            confirmation = (
+                f"{len(attention)} need attention: " + ", ".join(head)
+            )
+            if len(attention) > 5:
+                confirmation += f", and {len(attention) - 5} more"
             confirmation += "."
 
         return {

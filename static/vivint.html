@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GlowUp · Vivint</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14181d;
+    --border: #222a33;
+    --text: #e6edf3;
+    --dim: #8b949e;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+    --accent: #79c0ff;
+    --mono: ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 16px;
+    font: 14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 20px 0 8px; color: var(--accent); }
+  .hdr { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+  .meta { color: var(--dim); font-family: var(--mono); font-size: 12px; }
+  .alarm {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-family: var(--mono);
+    text-transform: uppercase;
+  }
+  .alarm.armed_stay, .alarm.armed_away { background: #1b2a1b; color: var(--ok); }
+  .alarm.disarmed { background: #2a2416; color: var(--warn); }
+  .alarm.unknown { background: #2a1616; color: var(--bad); }
+  .alarm.triggered { background: #3a1515; color: var(--bad); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: 0.4; } }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 10px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .card.tripped { border-color: var(--bad); }
+  .card.fault { border-color: var(--warn); }
+  .card .name { font-weight: 600; margin-bottom: 4px; }
+  .card .type {
+    color: var(--dim);
+    font-size: 11px;
+    font-family: var(--mono);
+    text-transform: uppercase;
+  }
+  .flags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
+  .flag {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: var(--mono);
+    text-transform: uppercase;
+  }
+  .flag.state-clear { background: #152415; color: var(--ok); }
+  .flag.state-tripped { background: #3a1515; color: var(--bad); }
+  .flag.tamper { background: #3a1515; color: var(--bad); }
+  .flag.bypass { background: #2a2416; color: var(--warn); }
+  .flag.lowbat { background: #2a2416; color: var(--warn); }
+  .flag.offline { background: #3a1515; color: var(--bad); }
+  .flag.battfull { background: #152415; color: var(--ok); }
+  .details {
+    margin-top: 6px;
+    color: var(--dim);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.3;
+  }
+  .details div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .children {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .child {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .child .cname { flex: 1; }
+  .err { color: var(--bad); padding: 12px; }
+  .empty { color: var(--dim); font-style: italic; padding: 12px; }
+  .locks .card { padding: 8px 12px; }
+  .locks .bar { display: flex; align-items: center; gap: 8px; }
+  .locks .pct {
+    flex: 1;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .locks .pct > div { height: 100%; background: var(--ok); }
+  .locks .pct > div.warn { background: var(--warn); }
+  .locks .pct > div.bad { background: var(--bad); }
+</style>
+</head>
+<body>
+<div class="hdr">
+  <div>
+    <h1>Vivint</h1>
+    <div class="meta" id="meta">loading…</div>
+  </div>
+  <div><span class="alarm unknown" id="alarm">LOADING</span></div>
+</div>
+
+<h2>Locks</h2>
+<div class="grid locks" id="locks"><div class="empty">loading…</div></div>
+
+<h2>Sensors</h2>
+<div class="grid" id="sensors"><div class="empty">loading…</div></div>
+
+<script>
+const POLL_MS = 5000;
+
+function esc(s) {
+  if (s == null) return "";
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+  }[c]));
+}
+
+function battClass(pct) {
+  if (pct == null) return "";
+  if (pct < 30) return "bad";
+  if (pct < 60) return "warn";
+  return "";
+}
+
+function renderLocks(locks) {
+  const el = document.getElementById("locks");
+  const keys = Object.keys(locks || {}).sort();
+  if (!keys.length) { el.innerHTML = '<div class="empty">no locks reported</div>'; return; }
+  el.innerHTML = keys.map(k => {
+    const l = locks[k];
+    const state = l.lock_state === 1 || l.lock_state === 1.0 ? "LOCKED" : "UNLOCKED";
+    const stateCls = state === "LOCKED" ? "state-clear" : "state-tripped";
+    let batt = l.battery;
+    if (batt != null && batt <= 1.0) batt = Math.round(batt * 100);
+    const bc = battClass(batt);
+    const label = k.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    return `
+      <div class="card">
+        <div class="name">${esc(label)}</div>
+        <div class="bar">
+          <span class="flag ${stateCls}">${state}</span>
+          <span class="pct"><div class="${bc}" style="width:${batt || 0}%"></div></span>
+          <span class="details" style="margin:0">${batt == null ? "?" : batt + "%"}</span>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function renderSensors(sensors) {
+  const el = document.getElementById("sensors");
+  const all = sensors || {};
+  const keys = Object.keys(all);
+  if (!keys.length) { el.innerHTML = '<div class="empty">no sensors reported</div>'; return; }
+
+  // Group: parent → list of children. Top-level = no parent OR parent not in set.
+  const childrenOf = {};
+  const topLevel = [];
+  for (const k of keys) {
+    const s = all[k];
+    const p = s.parent;
+    if (p && all[p]) {
+      if (!childrenOf[p]) childrenOf[p] = [];
+      childrenOf[p].push(k);
+    } else {
+      topLevel.push(k);
+    }
+  }
+  topLevel.sort((a, b) => (all[a].name || a).localeCompare(all[b].name || b));
+
+  el.innerHTML = topLevel.map(k => {
+    const s = all[k];
+    const kids = (childrenOf[k] || []).sort();
+    const cardFlags = [];
+
+    const tripped = !!s.is_on;
+    cardFlags.push(`<span class="flag ${tripped ? 'state-tripped' : 'state-clear'}">${tripped ? 'TRIPPED' : 'clear'}</span>`);
+    if (s.is_tampered) cardFlags.push('<span class="flag tamper">TAMPER</span>');
+    if (s.is_bypassed) cardFlags.push('<span class="flag bypass">BYPASS</span>');
+    if (s.low_battery) cardFlags.push('<span class="flag lowbat">LOW BATT</span>');
+    if (s.online === false) cardFlags.push('<span class="flag offline">OFFLINE</span>');
+
+    let cardClass = "card";
+    if (tripped) cardClass += " tripped";
+    else if (s.is_tampered || s.is_bypassed || s.low_battery || s.online === false) cardClass += " fault";
+
+    const details = [];
+    if (s.equipment_type) details.push(`type: ${esc(s.equipment_type)}`);
+    if (s.equipment_code) details.push(`model: ${esc(s.equipment_code)}`);
+    if (s.sensor_type) details.push(`zone: ${esc(s.sensor_type)}`);
+    if (s.serial_number) details.push(`sn: ${esc(s.serial_number)}`);
+    if (s.software_version) details.push(`fw: ${esc(s.software_version)}`);
+    if (s.battery != null) details.push(`batt: ${s.battery}${typeof s.battery === 'number' && s.battery <= 1 ? '' : '%'}`);
+
+    const childHtml = kids.map(ck => {
+      const c = all[ck];
+      const cf = [];
+      cf.push(`<span class="flag ${c.is_on ? 'state-tripped' : 'state-clear'}">${c.is_on ? 'TRIP' : 'clear'}</span>`);
+      if (c.is_tampered) cf.push('<span class="flag tamper">TAMP</span>');
+      if (c.low_battery) cf.push('<span class="flag lowbat">LOW</span>');
+      const suffix = (c.name || ck).replace(s.name || "", "").replace(/^\s*-\s*/, "") || c.name || ck;
+      return `<div class="child"><span class="cname">${esc(suffix)}</span><span>${cf.join(" ")}</span></div>`;
+    }).join("");
+
+    return `
+      <div class="${cardClass}">
+        <div class="name">${esc(s.name || k)}</div>
+        <div class="type">${esc(s.equipment_type || s.sensor_type || "sensor")}</div>
+        <div class="flags">${cardFlags.join("")}</div>
+        ${details.length ? `<div class="details">${details.map(d => `<div>${d}</div>`).join("")}</div>` : ""}
+        ${childHtml ? `<div class="children">${childHtml}</div>` : ""}
+      </div>`;
+  }).join("");
+}
+
+async function refresh() {
+  try {
+    const resp = await fetch("/api/home/vivint", { cache: "no-store" });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const d = await resp.json();
+
+    const alarmEl = document.getElementById("alarm");
+    const state = (d.alarm_state || "unknown").toLowerCase();
+    alarmEl.className = "alarm " + state;
+    alarmEl.textContent = state.replace(/_/g, " ");
+
+    const meta = [];
+    meta.push(d.connected ? "connected" : "disconnected");
+    if (d.poll_interval_seconds) meta.push(`poll ${d.poll_interval_seconds}s`);
+    meta.push(`updated ${new Date().toLocaleTimeString()}`);
+    document.getElementById("meta").textContent = meta.join(" · ");
+
+    renderLocks(d.locks);
+    renderSensors(d.sensors);
+  } catch (e) {
+    document.getElementById("meta").innerHTML = `<span class="err">error: ${esc(e.message)}</span>`;
+  }
+}
+
+refresh();
+setInterval(refresh, POLL_MS);
+</script>
+</body>
+</html>

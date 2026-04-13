@@ -39,6 +39,9 @@ GLOWUP_DEST="/home/a/lifx"
 # verifies all three services (kiosk, satellite, thermal) are healthy.
 MBCLOCK_HOST="a@10.0.0.220"
 MBCLOCK_DEST="/home/a/lifx"
+# Venv lives at ~/venv (NOT under $MBCLOCK_DEST) — the kiosk's default
+# command line uses this absolute path when no prior kiosk is found.
+MBCLOCK_PY="/home/a/venv/bin/python"
 
 # ---------------------------------------------------------------------------
 # Rsync exclusions — dev artifacts, docs, test suite, deploy templates.
@@ -237,16 +240,25 @@ deploy_mbclock() {
     # 1. Capture the running kiosk command line before touching anything.
     #    The kiosk runs as "python -m kiosk ..." under the labwc session.
     #    /proc/<pid>/cmdline uses NUL separators; tr converts to spaces.
+    # Match ONLY the real python kiosk process — not the bash wrapper
+    # that launched it.  A previous implementation used `pgrep -f
+    # 'python.*-m kiosk'` which matched both the python child AND the
+    # enclosing `bash -c 'cd ... && nohup ... python -m kiosk ...'`
+    # wrapper (because the wrapper's cmdline literally contains the
+    # regex).  `head -1` then picked the bash PID, the kill killed the
+    # wrapper, and the python child was orphaned — every deploy left
+    # another zombie kiosk on the framebuffer.  Requiring the basename
+    # to start with `python` fixes it.
     local kiosk_pid kiosk_cmd
-    kiosk_pid=$(ssh "$MBCLOCK_HOST" "pgrep -f 'python.*-m kiosk'" 2>/dev/null || true)
+    kiosk_pid=$(ssh "$MBCLOCK_HOST" \
+        "pgrep -f '^[^ ]*python[^ ]* -m kiosk'" 2>/dev/null || true)
     if [ -n "$kiosk_pid" ]; then
-        # Take first PID if pgrep returns multiple (parent + child).
         kiosk_pid=$(echo "$kiosk_pid" | head -1)
         kiosk_cmd=$(ssh "$MBCLOCK_HOST" "tr '\0' ' ' < /proc/$kiosk_pid/cmdline")
         echo "==> mbclock: captured running kiosk (pid $kiosk_pid): $kiosk_cmd"
     else
         echo "==> mbclock: WARNING — no running kiosk process found, using default"
-        kiosk_cmd="$MBCLOCK_DEST/venv/bin/python -m kiosk --api http://10.0.0.214:8420 --rotate 0 --mode wallclock"
+        kiosk_cmd="$MBCLOCK_PY -m kiosk --api http://10.0.0.214:8420 --rotate 0 --mode wallclock"
     fi
 
     # 2. Rsync (full tree, --delete, same as every other target).
@@ -269,9 +281,14 @@ deploy_mbclock() {
 
     # 4. Relaunch with the captured command line.
     #    Run from the lifx directory, backgrounded, stdout/stderr to log.
+    #    ssh -n disconnects the ssh client's stdin so the backgrounded
+    #    kiosk doesn't inherit it; `< /dev/null` on the remote command
+    #    ensures the kiosk has no stdin to keep the ssh channel open.
+    #    Without both, ssh waits forever on the inherited stdin FD and
+    #    the deploy script hangs indefinitely after the relaunch.
     echo "==> mbclock: relaunching kiosk"
-    ssh "$MBCLOCK_HOST" \
-        "cd '$MBCLOCK_DEST' && nohup $kiosk_cmd > /tmp/kiosk.log 2>&1 &"
+    ssh -n "$MBCLOCK_HOST" \
+        "cd '$MBCLOCK_DEST' && nohup $kiosk_cmd < /dev/null > /tmp/kiosk.log 2>&1 &"
     sleep 2
 
     # 5. Verify all three processes are healthy.

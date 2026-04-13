@@ -575,14 +575,43 @@ class VivintAdapter(AsyncPollingAdapterBase):
         is_on: bool = device.is_on if hasattr(device, 'is_on') else False
         on_value: float = 1.0 if is_on else 0.0
         battery: Optional[int] = device.battery_level if hasattr(device, 'battery_level') else None
-        sensor_type: str = ""
-        if hasattr(device, 'sensor_type') and device.sensor_type is not None:
-            st: Any = device.sensor_type
-            # May be an enum (SensorType.EXIT_ENTRY_1) or a raw int.
-            if hasattr(st, 'name'):
-                sensor_type = st.name.lower()
-            else:
-                sensor_type = str(st)
+        # Fault / bypass state — exposed by vivintpy.BypassTamperDevice
+        # base class and read from the raw device.data dict.  Dropping
+        # these was the reason a smoke detector sitting loose on a desk
+        # showed up as "clear, 100% battery" for weeks — the adapter
+        # was ignoring tamper.  2026-04-12.
+        is_tampered: bool = bool(getattr(device, 'is_tampered', False))
+        is_bypassed: bool = bool(getattr(device, 'is_bypassed', False))
+        low_battery: bool = bool(getattr(device, 'low_battery', False))
+
+        # Extended metadata — equipment code/type identify the hardware
+        # (useful for battery-type lookup), serial number for RMA, firmware
+        # for update tracking, online for dead-sensor detection, parent for
+        # subdevice grouping (the Heat and Freeze channels on a smoke
+        # detector are children of the main unit).  All optional.
+        def _enum_name(val: Any) -> str:
+            if val is None:
+                return ""
+            return val.name.lower() if hasattr(val, "name") else str(val)
+
+        sensor_type: str = _enum_name(getattr(device, "sensor_type", None))
+        equipment_code: str = _enum_name(getattr(device, "equipment_code", None))
+        equipment_type: str = _enum_name(getattr(device, "equipment_type", None))
+        serial_number: Optional[str] = getattr(device, "serial_number", None)
+        software_version: Optional[str] = getattr(device, "software_version", None)
+        # Online flag lives in raw data as "ol"; vivintpy doesn't wrap it.
+        online: Optional[bool] = None
+        raw_data: Any = getattr(device, "data", None)
+        if isinstance(raw_data, dict) and "ol" in raw_data:
+            online = bool(raw_data.get("ol"))
+        # Parent (subdevice grouping).  vivintpy exposes a `parent`
+        # attribute on VivintDevice that resolves to the parent device
+        # or None.  Store just the parent's key so the UI can group.
+        parent_key: Optional[str] = None
+        parent_dev: Any = getattr(device, "parent", None)
+        if parent_dev is not None and hasattr(parent_dev, "name"):
+            pname: str = parent_dev.name or ""
+            parent_key = pname.lower().replace(" ", "_").replace("&", "and")
 
         # Track state.
         prev: dict[str, Any] = self._sensor_states.get(key, {})
@@ -591,6 +620,15 @@ class VivintAdapter(AsyncPollingAdapterBase):
             "is_on": is_on,
             "battery": battery,
             "sensor_type": sensor_type,
+            "is_tampered": is_tampered,
+            "is_bypassed": is_bypassed,
+            "low_battery": low_battery,
+            "equipment_code": equipment_code,
+            "equipment_type": equipment_type,
+            "serial_number": serial_number,
+            "software_version": software_version,
+            "online": online,
+            "parent": parent_key,
         }
 
         # Signal: {key}:state (1.0 = open/triggered, 0.0 = closed/clear).
@@ -603,6 +641,25 @@ class VivintAdapter(AsyncPollingAdapterBase):
                 transport=TRANSPORT,
             ))
         self._bus.write(signal_name, on_value)
+
+        # Fault signals — published alongside state so combinators can
+        # compose alarm logic (any smoke tripped, any sensor tampered,
+        # any battery low, etc.).  Signals are 1.0 when the fault is
+        # active and 0.0 otherwise.
+        for attr_name, fault_val in (
+            ("tampered", is_tampered),
+            ("bypassed", is_bypassed),
+            ("low_battery", low_battery),
+        ):
+            fault_signal: str = f"{key}:{attr_name}"
+            if hasattr(self._bus, 'register'):
+                self._bus.register(fault_signal, SignalMeta(
+                    signal_type="scalar",
+                    description=f"Vivint {name} {attr_name}",
+                    source_name=key,
+                    transport=TRANSPORT,
+                ))
+            self._bus.write(fault_signal, 1.0 if fault_val else 0.0)
 
         # MQTT publish.
         if self._mqtt_client:
@@ -622,6 +679,19 @@ class VivintAdapter(AsyncPollingAdapterBase):
         if prev.get("is_on") != is_on:
             state_label: str = "OPEN/ON" if is_on else "closed/off"
             logger.info("Sensor %s (%s): %s", key, name, state_label)
+        # Log fault-state transitions so the journal shows when a
+        # sensor starts or stops reporting tampered / bypassed / low.
+        for attr_name, fault_val in (
+            ("tampered", is_tampered),
+            ("bypassed", is_bypassed),
+            ("low_battery", low_battery),
+        ):
+            if prev.get("is_" + attr_name, prev.get(attr_name)) != fault_val:
+                logger.info(
+                    "Sensor %s (%s): %s %s",
+                    key, name, attr_name.upper(),
+                    "ACTIVE" if fault_val else "clear",
+                )
 
     # --- Introspection -----------------------------------------------------
 

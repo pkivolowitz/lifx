@@ -268,6 +268,10 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_dashboard", requires_auth=False),
     _Route("GET", ("home",),
            "_handle_get_home", requires_auth=False),
+    _Route("GET", ("vivint",),
+           "_handle_get_vivint_page", requires_auth=False),
+    _Route("GET", ("api", "home", "vivint"),
+           "_handle_get_home_vivint", requires_auth=False),
     _Route("GET", ("api", "home", "photos"),
            "_handle_get_home_photos", requires_auth=False),
     _Route("GET", ("api", "home", "lights"),
@@ -2402,6 +2406,10 @@ def main() -> None:
                 signal_bus = SignalBus()
                 logging.info("Created standalone SignalBus for operators")
             GlowUpRequestHandler.signal_bus = signal_bus
+            # Let DeviceManager publish group:{name}:any_on / all_off
+            # signals on every power change so combinators can gate on
+            # bulb state (see operators/combine.py).
+            dm.attach_signal_bus(signal_bus)
 
             mqtt_cfg: dict = config.get("mqtt", {})
             broker_addr: str = mqtt_cfg.get("broker", "localhost")

@@ -55,7 +55,7 @@ Available actions:
 - query_locks: ask about lock status. Use when someone says "are the doors locked?", "is the front door locked?", "lock status", "check the locks", etc.
 - query_doors: ask about door open/closed status. Use when someone says "are any doors open?", "is the back door open?", "check the doors", etc.
 - query_alarm: ask about the alarm/security system. Use when someone says "is the alarm on?", "alarm status", "is the house armed?", etc.
-- query_batteries: ask about low batteries. Use when someone says "any low batteries?", "battery status", "what needs batteries?", etc.
+- query_batteries: ask about low batteries, chirping, or beeping sensors. Use when someone says "any low batteries?", "battery status", "what needs batteries?", "are any sensors chirping?", "which sensor is beeping?", "what's that chirping?", "which smoke detector is dying?", etc. This also covers tampered/bypassed sensors because those audibly beep too.
 - query_printer: ask about the printer. Use when someone says "how's the printer?", "printer status", "does the printer need toner?", "any printer alerts?", etc.
 - query_schedule: ask about the lighting schedule. Use when someone says "what's scheduled?", "what's on the schedule?", "any schedules tonight?", etc.
 - query_uptime: ask about server uptime or how long the system has been running. Use when someone says "how long have you been running?", "uptime", "when did you start?", etc.
@@ -128,6 +128,9 @@ Examples:
 - "is the back door open?" -> {{"action": "query_doors", "target": "back door", "params": {{}}}}
 - "is the alarm on?" -> {{"action": "query_alarm", "target": "all", "params": {{}}}}
 - "any low batteries?" -> {{"action": "query_batteries", "target": "all", "params": {{}}}}
+- "are any sensors chirping?" -> {{"action": "query_batteries", "target": "all", "params": {{}}}}
+- "which smoke detector is chirping?" -> {{"action": "query_batteries", "target": "all", "params": {{}}}}
+- "what's that beeping?" -> {{"action": "query_batteries", "target": "all", "params": {{}}}}
 - "how's the printer?" -> {{"action": "query_printer", "target": "all", "params": {{}}}}
 - "what's on the schedule?" -> {{"action": "query_schedule", "target": "all", "params": {{}}}}
 - "how long have you been running?" -> {{"action": "query_uptime", "target": "all", "params": {{}}}}
