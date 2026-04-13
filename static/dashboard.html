@@ -559,15 +559,7 @@
   setInterval(tick,2000);
 })();
 </script>
-<script>
-(function(){var n=document.getElementById("siteNav"),p=location.pathname;
-fetch("/api/config/nav").then(function(r){return r.json()}).then(function(d){
-(d.links||[]).forEach(function(l){var a=document.createElement("a");a.href=l.href;
-a.textContent=l.label;a.style.textDecoration="none";
-var active=l.href===p||(p==="/"&&l.href==="/home");
-a.style.color=active?"rgba(255,255,255,0.7)":"rgba(255,255,255,0.35)";
-if(active)a.style.fontWeight="600";n.appendChild(a)})}).catch(function(){})})();
-</script>
+<script src="/js/site_nav.js" defer></script>
 
 <div id="auth-form">
   <h1>GlowUp Dashboard</h1>

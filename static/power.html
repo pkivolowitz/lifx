@@ -218,15 +218,7 @@ h1 {
 
 <!-- Site nav — built dynamically from /api/config/nav. -->
 <nav id="siteNav" style="display:flex;gap:18px;padding:6px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:0.8rem;letter-spacing:0.04em;"></nav>
-<script>
-(function(){var n=document.getElementById("siteNav"),p=location.pathname;
-fetch("/api/config/nav").then(function(r){return r.json()}).then(function(d){
-(d.links||[]).forEach(function(l){var a=document.createElement("a");a.href=l.href;
-a.textContent=l.label;a.style.textDecoration="none";
-var active=l.href===p||(p==="/"&&l.href==="/home");
-a.style.color=active?"rgba(255,255,255,0.7)":"rgba(255,255,255,0.35)";
-if(active)a.style.fontWeight="600";n.appendChild(a)})}).catch(function(){})})();
-</script>
+<script src="/js/site_nav.js" defer></script>
 
 <h1>Power Monitor</h1>
 
@@ -569,33 +561,33 @@ function setDeviceState(device, state) {
 }
 
 function updateControls() {
-    /* Fetch latest readings for each device to get current state + power. */
-    fetch("/api/power/readings?hours=0.01&resolution=1")
+    /* Authoritative state comes from /api/power/plug_states, which
+     * proxies broker-2's zigbee_service /devices endpoint — that is
+     * the plug's real genOnOff relay attribute, not an inference
+     * from power draw.  Earlier revisions of this function inferred
+     * state as "power > 1 W", which misreported any ON plug drawing
+     * less than 1 W (dark TV, idle charger, empty outlet) as OFF on
+     * every refresh. */
+    fetch("/api/power/plug_states")
         .then(function (r) { return r.json(); })
         .then(function (data) {
-            var readings = data.readings || [];
-            /* Group by device, take the latest. */
-            var latest = {};
-            for (var i = 0; i < readings.length; i++) {
-                var r = readings[i];
-                if (!latest[r.device] || r.bucket > latest[r.device].bucket) {
-                    latest[r.device] = r;
-                }
-            }
-            for (var dev in latest) {
-                var p = latest[dev].power;
+            var plugs = data.plugs || {};
+            for (var dev in plugs) {
+                var p = plugs[dev];
+                /* Power draw display — formatted from the live field
+                 * rather than the time-series DB, so the number and
+                 * the toggle can never disagree. */
                 var el = document.getElementById("ctrl-power-" + dev);
                 if (el) {
-                    /* Show "—" for unknown rather than fake "0.0 W". */
-                    el.textContent = (p == null ? '—' : p.toFixed(1) + " W");
+                    el.textContent = (p.power_w == null
+                        ? '—'
+                        : p.power_w.toFixed(1) + " W");
                 }
-                /* Infer state: power > 1W = ON.  When p is null we
-                 * have NO information about the device state — leave
-                 * the toggle as the user / a previous fetch left it,
-                 * do not flip it to OFF based on absent data. */
+                /* State toggle — never flip while the user is
+                 * actively clicking the switch. */
                 var chk = document.getElementById("ctrl-check-" + dev);
-                if (chk && !chk.matches(":focus") && p != null) {
-                    chk.checked = p > 1;
+                if (chk && !chk.matches(":focus") && p.state) {
+                    chk.checked = (p.state === "ON");
                 }
             }
         })

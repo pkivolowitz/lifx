@@ -308,6 +308,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_power_summary", requires_auth=False),
     _Route("GET", ("api", "power", "devices"),
            "_handle_get_power_devices", requires_auth=False),
+    _Route("GET", ("api", "power", "plug_states"),
+           "_handle_get_power_plug_states", requires_auth=False),
     _Route("GET", ("thermal",),
            "_handle_get_thermal_page", requires_auth=False),
     _Route("GET", ("thermal", "host", "{node_id}"),
@@ -346,6 +348,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_delete_shopping_checked", requires_auth=False),
     _Route("GET", ("photos", "{filename}"),
            "_handle_get_photo", requires_auth=False),
+    _Route("GET", ("js", "{filename}"),
+           "_handle_get_static_js", requires_auth=False),
 
     # -- GET: static ---------------------------------------------------------
     _Route("GET", ("api", "status"),

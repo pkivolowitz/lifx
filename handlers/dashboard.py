@@ -644,6 +644,7 @@ class DashboardHandlerMixin:
             {"label": "Thermal", "href": "/thermal"},
             {"label": "I/O", "href": "/io"},
             {"label": "Shopping", "href": "/shopping"},
+            {"label": "Vivint", "href": "/vivint"},
         ]
         # External links from config.
         extra: list[dict[str, str]] = self.config.get("nav_links", [])
@@ -1054,6 +1055,41 @@ class DashboardHandlerMixin:
 
         self._send_json(200, result)
 
+    def _handle_get_static_js(self, filename: str) -> None:
+        """GET /js/{filename} — serve a shared JavaScript file from static/js/.
+
+        All dashboards share reusable client-side code (site nav bar,
+        future shared widgets).  Mirrors ``_handle_get_photo`` for path
+        validation and MIME handling.  Only ``.js`` files are served.
+        Directory traversal is rejected.
+        """
+        # Reject any path traversal attempts.
+        if "/" in filename or "\\" in filename or ".." in filename:
+            self._send_json(400, {"error": "Invalid filename"})
+            return
+        # Only serve .js — this handler is not a general static server.
+        if not filename.endswith(".js"):
+            self._send_json(400, {"error": "Only .js files are served"})
+            return
+        js_path: str = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "static", "js", filename,
+        )
+        try:
+            with open(js_path, "rb") as f:
+                data: bytes = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            # 5-minute cache — short enough for fast iteration,
+            # long enough to matter on multi-tab kiosks.
+            self.send_header("Cache-Control", "public, max-age=300")
+            self.end_headers()
+            self.wfile.write(data)
+        except FileNotFoundError:
+            self._send_json(404, {"error": f"JS file not found: {filename}"})
+
+
     def _handle_get_photo(self, filename: str) -> None:
         """GET /photos/{filename} — serve a photo from static/photos/.
 
@@ -1199,6 +1235,82 @@ class DashboardHandlerMixin:
             self._send_json(200, {"devices": []})
             return
         self._send_json(200, {"devices": pl.devices()})
+
+    def _handle_get_power_plug_states(self) -> None:
+        """GET /api/power/plug_states — live ON/OFF state for every smart plug.
+
+        Proxies the zigbee_service REST endpoint on broker-2
+        (``http://{broker}:8422/devices``) and distills its response
+        into a device-keyed map.  The dashboard uses this to render
+        the on/off toggle accurately — inferring state from power
+        draw misreported any ON plug drawing under 1 W (dark TV, idle
+        charger, empty outlet) as OFF on every refresh.
+
+        The state chain (source of truth → UI) is::
+
+            Zigbee plug relay (genOnOff attribute)
+              → Z2M publishes on zigbee2mqtt/{device}
+              → zigbee_service maintains in-memory DeviceState
+              → HTTP /devices returns {state, power_w, online, ...}
+              → this proxy strips to {state, power_w, online, age_sec}
+              → /power.html renders the toggle
+
+        Returns::
+
+            {
+              "plugs": {
+                "LRTV":     {"state": "ON",  "power_w": 0.0, "online": true,  "age_sec": 12.3},
+                "BYIR":     {"state": "ON",  "power_w": 2.3, "online": true,  "age_sec":  3.1},
+                "ML_Power": {"state": null,  "power_w": null, "online": false, "age_sec": 24838.9}
+              },
+              "source": "http://10.0.0.123:8422/devices"
+            }
+
+        On proxy failure the endpoint still returns 200 with
+        ``{"plugs": {}, "error": "..."}`` so the dashboard degrades
+        gracefully rather than breaking the whole page.
+        """
+        # Broker-2 owns Zigbee end-to-end (commit 1d3d8df).  Its
+        # HTTP host is the same as its MQTT broker host in config.
+        zigbee_cfg: dict[str, Any] = self.config.get("zigbee", {}) or {}
+        broker_host: str = zigbee_cfg.get("broker", "localhost")
+        # Port 8422 is the zigbee_service default (GLZ_HTTP_PORT).
+        zigbee_http_port: int = int(zigbee_cfg.get("http_port", 8422))
+        url: str = f"http://{broker_host}:{zigbee_http_port}/devices"
+
+        import urllib.request
+        import urllib.error
+        plugs: dict[str, dict[str, Any]] = {}
+        try:
+            # Short timeout — the dashboard refreshes this; if broker-2
+            # is unreachable we return an empty map rather than stall.
+            with urllib.request.urlopen(url, timeout=2.0) as resp:
+                raw: bytes = resp.read()
+            data: dict[str, Any] = json.loads(raw)
+            for dev in data.get("devices", []):
+                name: Optional[str] = dev.get("name")
+                if not isinstance(name, str) or not name:
+                    continue
+                # Only expose plugs — devices that carry a ``state``
+                # attribute at all (sensors do not).  A null state on
+                # an offline device is still reported so the UI can
+                # show it as greyed-out rather than dropping it.
+                plugs[name] = {
+                    "state": dev.get("state"),
+                    "power_w": dev.get("power_w"),
+                    "online": bool(dev.get("online", False)),
+                    "age_sec": dev.get("age_sec"),
+                }
+            self._send_json(200, {"plugs": plugs, "source": url})
+        except (urllib.error.URLError, TimeoutError,
+                json.JSONDecodeError, ValueError) as exc:
+            # Fail open — dashboard keeps working, just without
+            # authoritative state.
+            self._send_json(200, {
+                "plugs": {},
+                "source": url,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
 
     # ---- Thermal dashboard ------------------------------------------------
 
