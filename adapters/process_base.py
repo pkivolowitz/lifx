@@ -176,13 +176,23 @@ class ProcessAdapterBase:
     def publish_signal(self, name: str, value: Any) -> None:
         """Publish a signal value to MQTT.
 
+        Signals named ``{device}:_availability`` are published with
+        ``retain=True`` so a server subscribing to ``glowup/signals/#``
+        after the adapter has already seen the availability edge
+        still receives the current state at subscribe time.  Every
+        other signal uses ``retain=False`` — retained readings would
+        be actively harmful (stale data replayed as ground truth), so
+        retention is an opt-in for the specific class of signals
+        where "last-known state" is the semantics.
+
         Args:
             name:  Signal name (e.g., "Office Motion:occupancy").
             value: Signal value (JSON-serializable).
         """
         topic: str = TOPIC_SIGNALS.format(name=name)
         payload: str = json.dumps(value)
-        self._client.publish(topic, payload, qos=QOS_SIGNAL)
+        retain: bool = name.endswith(":_availability")
+        self._client.publish(topic, payload, qos=QOS_SIGNAL, retain=retain)
 
     # ------------------------------------------------------------------
     # Override points

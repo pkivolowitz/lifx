@@ -300,6 +300,27 @@ class PowerLogger:
             self._dirty.pop(device, None)
             self._last_write[device] = now
             try:
+                # Idempotency: if the most recent row for this device
+                # is already a NULL sentinel, skip writing another
+                # one.  Retained ``:_availability`` signals will
+                # deliver an offline state to every subscriber on
+                # reconnect, and without this check every server
+                # restart would append a fresh NULL row and pollute
+                # the DB with duplicates.
+                row = self._conn.execute(
+                    "SELECT power, voltage, current_a, energy, "
+                    "power_factor FROM power_readings "
+                    "WHERE device = ? ORDER BY timestamp DESC LIMIT 1",
+                    (device,),
+                ).fetchone()
+                if row is not None and all(v is None for v in row):
+                    logger.debug(
+                        "Power logger: %s already marked offline "
+                        "(most recent row is a NULL sentinel)",
+                        device,
+                    )
+                    return
+
                 self._conn.execute(
                     """INSERT INTO power_readings
                        (device, timestamp, power, voltage, current_a,

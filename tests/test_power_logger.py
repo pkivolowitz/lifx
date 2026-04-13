@@ -278,6 +278,70 @@ class TestPowerLoggerMarkOffline(unittest.TestCase):
         # Must not raise.
         self.pl.mark_offline("ML_Power")
 
+    def test_mark_offline_is_idempotent(self) -> None:
+        """Repeated mark_offline calls do not append duplicate NULL rows.
+
+        Retained ``_availability`` signals replay on every server
+        reconnect; without idempotency every restart would append a
+        new NULL sentinel and pollute the DB indefinitely.
+        """
+        self.pl.record("ML_Power", "power", 168.5)
+        self.pl._last_write["ML_Power"] = 0.0
+        self.pl.record("ML_Power", "power", 168.5)
+
+        # First mark_offline writes a sentinel row.
+        self.pl.mark_offline("ML_Power")
+
+        # Count rows right after the first mark.
+        def count_rows() -> int:
+            return self.pl._conn.execute(
+                "SELECT COUNT(*) FROM power_readings WHERE device = ?",
+                ("ML_Power",),
+            ).fetchone()[0]
+
+        first_count: int = count_rows()
+
+        # Repeated calls should be no-ops — the most recent row is
+        # already a NULL sentinel.
+        for _ in range(5):
+            self.pl.mark_offline("ML_Power")
+
+        self.assertEqual(
+            count_rows(), first_count,
+            "repeated mark_offline calls must not append duplicate "
+            "NULL sentinel rows",
+        )
+
+    def test_mark_offline_writes_new_row_after_real_reading(self) -> None:
+        """A fresh NULL sentinel must be written if the most recent
+        row contains real (non-NULL) values — e.g. the plug came back
+        online, published a reading, then went offline again."""
+        self.pl.record("ML_Power", "power", 168.5)
+        self.pl._last_write["ML_Power"] = 0.0
+        self.pl.record("ML_Power", "power", 168.5)
+
+        # Mark offline once.
+        self.pl.mark_offline("ML_Power")
+        before_count: int = self.pl._conn.execute(
+            "SELECT COUNT(*) FROM power_readings WHERE device = ?",
+            ("ML_Power",),
+        ).fetchone()[0]
+
+        # Simulate plug coming back online with a real reading.
+        self.pl._last_write["ML_Power"] = 0.0
+        self.pl.record("ML_Power", "power", 75.0)
+
+        # Now it goes offline again — should write a new sentinel.
+        self.pl.mark_offline("ML_Power")
+
+        after_count: int = self.pl._conn.execute(
+            "SELECT COUNT(*) FROM power_readings WHERE device = ?",
+            ("ML_Power",),
+        ).fetchone()[0]
+
+        # +1 real + +1 new null sentinel = +2 rows.
+        self.assertEqual(after_count, before_count + 2)
+
 
 class TestPowerLoggerPrune(unittest.TestCase):
     """Tests for automatic data pruning."""
