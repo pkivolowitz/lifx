@@ -204,37 +204,10 @@ class TestC5_GetStatusEmitterSnapshot(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# C10: Automation watchdog fires spuriously on startup
+# C10 retired: tested ``_AutomationState`` from the deleted
+# AutomationManager.  The trigger-operator equivalent is covered
+# by tests/test_trigger_operator.py.
 # ---------------------------------------------------------------------------
-
-class TestC10_WatchdogStartupSpurious(unittest.TestCase):
-    """Verify watchdog doesn't fire before any trigger event arrives."""
-
-    def test_last_trigger_zero_skipped(self) -> None:
-        """Watchdog must skip automations with last_trigger == 0."""
-        from automation import _AutomationState
-        state: _AutomationState = _AutomationState()
-        # Default last_trigger is 0.0 — never triggered.
-        self.assertEqual(state.last_trigger, 0.0)
-        self.assertFalse(state.active)
-        # The watchdog should skip this automation because
-        # last_trigger == 0 means "never heard from sensor."
-        # Simulate the watchdog check:
-        #   if not state.active: continue
-        # Since active is False, watchdog skips it. Correct.
-        # But what if active is True and last_trigger is 0?
-        # That shouldn't happen, but let's verify the watchdog
-        # logic handles it.
-        state.active = True
-        state.last_trigger = 0.0
-        now: float = time.time()
-        elapsed: float = now - state.last_trigger
-        # elapsed would be huge (decades). Without the fix,
-        # the watchdog would fire immediately. The fix should
-        # check for last_trigger == 0 and skip.
-        # This test documents the expected behavior.
-        self.assertGreater(elapsed, 1000000,
-                           "Uninitialized last_trigger produces huge elapsed")
 
 
 # ---------------------------------------------------------------------------
@@ -516,58 +489,14 @@ class TestAutomationMigration(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Automation trigger evaluation
+# Automation trigger evaluation and watchdog timer reset tests
+# retired: both tested helpers from the deleted AutomationManager
+# (``_evaluate_condition`` and ``_AutomationState``).  The
+# operator-framework equivalents are tested in
+# tests/test_operators.py and tests/test_trigger_operator.py
+# (operators.conditions.evaluate_condition is the new home of the
+# condition logic, and TriggerOperator owns the watchdog state).
 # ---------------------------------------------------------------------------
-
-class TestAutomationTriggerEval(unittest.TestCase):
-    """Verify trigger condition evaluation."""
-
-    def test_all_operators(self) -> None:
-        """All condition operators must work correctly."""
-        from automation import _evaluate_condition
-        self.assertTrue(_evaluate_condition("eq", 1, 1))
-        self.assertFalse(_evaluate_condition("eq", 1, 2))
-        self.assertTrue(_evaluate_condition("gt", 5, 10))
-        self.assertFalse(_evaluate_condition("gt", 5, 3))
-        self.assertTrue(_evaluate_condition("lt", 5, 3))
-        self.assertFalse(_evaluate_condition("lt", 5, 10))
-        self.assertTrue(_evaluate_condition("gte", 5, 5))
-        self.assertTrue(_evaluate_condition("gte", 5, 6))
-        self.assertFalse(_evaluate_condition("gte", 5, 4))
-        self.assertTrue(_evaluate_condition("lte", 5, 5))
-        self.assertTrue(_evaluate_condition("lte", 5, 4))
-        self.assertFalse(_evaluate_condition("lte", 5, 6))
-
-    def test_unknown_operator_returns_false(self) -> None:
-        """Unknown operator must return False, not crash."""
-        from automation import _evaluate_condition
-        self.assertFalse(_evaluate_condition("xor", 1, 1))
-
-    def test_type_mismatch_returns_false(self) -> None:
-        """Comparing incompatible types must return False."""
-        from automation import _evaluate_condition
-        self.assertFalse(_evaluate_condition("eq", 1, "abc"))
-
-
-# ---------------------------------------------------------------------------
-# Watchdog timer reset behavior
-# ---------------------------------------------------------------------------
-
-class TestWatchdogTimerReset(unittest.TestCase):
-    """Verify watchdog timer resets only on trigger match."""
-
-    def test_only_matching_events_reset_timer(self) -> None:
-        """last_trigger must update only when condition matches."""
-        from automation import _AutomationState
-        state: _AutomationState = _AutomationState()
-        # Simulate: motion=1 should update last_trigger.
-        state.last_trigger = 100.0
-        # Simulate: motion=0 should NOT update last_trigger.
-        # The fix moved last_trigger update inside the `if matched:` block.
-        # We verify the state model supports this.
-        original: float = state.last_trigger
-        # If we don't update, it stays at 100.0.
-        self.assertEqual(state.last_trigger, original)
 
 
 # ---------------------------------------------------------------------------

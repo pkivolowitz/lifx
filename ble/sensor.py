@@ -1,28 +1,63 @@
 """BLE sensor daemon — encrypted HAP-BLE reads published to MQTT.
 
-Standalone daemon for Raspberry Pi.  Connects to paired HomeKit BLE
-accessories, runs pair-verify to establish an encrypted session, and
-polls sensor characteristics (motion, temperature, humidity).
+Standalone daemon ("service" pattern — see
+docs/35-service-vs-adapter.md) running on broker-2.  Connects to
+paired HomeKit BLE accessories, runs pair-verify to establish an
+encrypted session, and polls sensor characteristics (motion,
+temperature, humidity).
 
-Events are published to MQTT for the GlowUp server to act on.
-The server subscribes and triggers group actions (lights on/off,
-brightness changes) based on the ``ble_triggers`` configuration.
+Events are published cross-host **directly to the hub mosquitto**.
+The hub does not subscribe to broker-2 — that direction is the
+failure mode that motivated the service-pattern pivot.  Publishers
+see network errors immediately (paho returns a non-zero rc on the
+publish call); subscribers cannot.  See
+feedback_read_the_producer_first.md for the incident history.
 
 Architecture (distributed):
-    Pi near sensor → BLE → encrypted HAP reads → MQTT publish
-    GlowUp server  → MQTT subscribe → trigger group actions
 
-MQTT topics::
+    broker-2: Pi near sensor → BLE → encrypted HAP reads
+                                      ↓
+                             this MqttPublisher
+                                      ↓
+                            cross-host MQTT publish
+                                      ↓
+                              hub mosquitto (.214)
+                                      ↓
+                       _on_remote_signal → SignalBus
+                       glowup/ble/status/{label} → status store
 
-    glowup/ble/{label}/motion       — "1" or "0"
-    glowup/ble/{label}/temperature  — float Celsius
-    glowup/ble/{label}/humidity     — float percentage
-    glowup/ble/{label}/status       — JSON health/status
+MQTT topics published::
+
+    glowup/signals/{label}:motion       — "1.0" / "0.0"  (qos=0, no retain)
+    glowup/signals/{label}:temperature  — Celsius float (qos=0, no retain)
+    glowup/signals/{label}:humidity     — percent float (qos=0, no retain)
+    glowup/ble/status/{label}           — JSON health blob (qos=0, no retain)
+
+Numeric subtopics use the colon convention because the hub's
+_on_remote_signal callback splits the topic on ``/`` then expects
+``{name}:{prop}`` for the SignalBus key.  This is the same shape
+glowup-zigbee-service uses; the hub treats both producers identically.
+
+The status JSON blob rides a separate topic schema (``glowup/ble/status/``)
+so it does not contaminate the SignalBus namespace.  The hub
+subscribes to it with a dedicated callback that stores the latest
+blob per label for the /api/ble/sensors endpoint.
+
+**Retain is FALSE for every publish.**  Retained sensor data is an
+anti-pattern: it lets stale values lie about the world after a
+restart.  The 2026-04-15 BLE outage was masked for ~8 hours because
+the hub kept reading retained messages from a dead bridge.  Never
+retain sensor data — let absence be visible as absence.
 
 Usage::
 
     python3 -m ble.sensor
     python3 -m ble.sensor --config /path/to/ble_pairing.json
+    python3 -m ble.sensor --hub-broker 10.0.0.214 --hub-port 1883
+
+The systemd unit owns configuration via the ``GLB_HUB_BROKER`` and
+``GLB_HUB_PORT`` environment variables — never hand-edit (see
+feedback_installer_owns_config).
 
 Press Ctrl+C to stop.
 """
@@ -30,13 +65,14 @@ Press Ctrl+C to stop.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "2.0"
+__version__ = "3.0"
 
 import argparse
 import asyncio
 import hashlib
 import json
 import logging
+import os
 import signal
 import struct
 import time
@@ -48,19 +84,54 @@ logger: logging.Logger = logging.getLogger("glowup.ble.sensor")
 # Constants
 # ---------------------------------------------------------------------------
 
-# MQTT topic prefix.
-MQTT_PREFIX: str = "glowup/ble"
+# --- MQTT topic conventions -------------------------------------------------
+#
+# The BLE sensor service follows the same service-vs-adapter pattern as
+# glowup-zigbee-service (see docs/35-service-vs-adapter.md): it runs on
+# the host that owns the radio (broker-2 / .123) and PUBLISHES signals
+# cross-host directly to the hub mosquitto.  The hub never subscribes
+# across the network for BLE data — that was the failure mode that bit
+# us on 2026-04-15.  See feedback_read_the_producer_first.md and
+# feedback_service_vs_adapter_rule.md.
+#
+# Two distinct topic schemas coexist by design:
+#
+#   glowup/signals/{label}:{prop}   — numeric scalar signals consumed
+#                                     by the hub's _on_remote_signal
+#                                     callback and fed into the
+#                                     SignalBus.  Same convention as
+#                                     glowup-zigbee-service.  qos=0,
+#                                     retain=False (retained sensor
+#                                     data is an anti-pattern — it
+#                                     lets stale values lie about
+#                                     the world after a restart).
+#
+#   glowup/ble/status/{label}       — JSON status blobs (state,
+#                                     paired sensors, last_values,
+#                                     timestamp).  These are diagnostic
+#                                     metadata, not signals, so they
+#                                     ride a separate topic schema
+#                                     that the hub subscribes to with
+#                                     a dedicated callback.  qos=0,
+#                                     retain=False.
+SIGNAL_PREFIX: str = "glowup/signals"
+STATUS_PREFIX: str = "glowup/ble/status"
 
-# Default MQTT broker — pulled from network_config (which reads
-# ~/.glowup/network.json or the GLOWUP_NETWORK env var).
-try:
-    from network_config import net as _net
-    DEFAULT_BROKER: str = _net.broker
-except Exception:
-    DEFAULT_BROKER: str = "localhost"
+# Subtopics that produce SignalBus signals (the rest are diagnostic).
+# Keep this in sync with handlers/sensors.py and infrastructure/ble_trigger.py.
+NUMERIC_SUBTOPICS: frozenset[str] = frozenset({
+    "motion", "temperature", "humidity",
+})
+
+# Default hub broker — read from the GLB_HUB_BROKER environment
+# variable so the systemd unit owns the configuration (per the
+# installer-owns-config rule in feedback_installer_owns_config).  The
+# fallback 10.0.0.214 is the production hub IP; do not bake any other
+# value here without also updating the systemd unit on broker-2.
+DEFAULT_HUB_BROKER: str = os.environ.get("GLB_HUB_BROKER", "10.0.0.214")
 
 # Default MQTT port.
-DEFAULT_MQTT_PORT: int = 1883
+DEFAULT_MQTT_PORT: int = int(os.environ.get("GLB_HUB_PORT", "1883"))
 
 # Seconds between motion polls.  Keep short for responsiveness.
 # Temperature/humidity are read every 30s regardless of this value.
@@ -486,20 +557,39 @@ async def discover_sensor_iids(
 # ---------------------------------------------------------------------------
 
 class MqttPublisher:
-    """Publishes BLE sensor events to MQTT."""
+    """Publishes BLE sensor events to the hub mosquitto.
+
+    Service-pattern producer (see docs/35-service-vs-adapter.md):
+    opens its own paho client to the hub broker and publishes signals
+    cross-host.  Numeric subtopics go on glowup/signals/{label}:{prop}
+    and feed the hub's _on_remote_signal callback.  The status JSON
+    blob goes on glowup/ble/status/{label} for diagnostic UI.
+
+    Both schemas use qos=0 retain=False — sensor data must NEVER be
+    retained, because retained MQTT messages let stale values lie
+    about reality after a restart (this exact bug took 8 hours to
+    diagnose on 2026-04-15; see feedback_multi_topic_config_deletion).
+    """
 
     def __init__(
         self,
-        broker: str = DEFAULT_BROKER,
-        port: int = DEFAULT_MQTT_PORT,
+        hub_broker: str = DEFAULT_HUB_BROKER,
+        hub_port: int = DEFAULT_MQTT_PORT,
     ) -> None:
-        self._broker: str = broker
-        self._port: int = port
+        self._broker: str = hub_broker
+        self._port: int = hub_port
         self._client: Any = None
         self._connected: bool = False
 
     def connect(self) -> None:
-        """Connect to MQTT broker."""
+        """Open the cross-host paho client to the hub broker.
+
+        connect_async + loop_start hands reconnect/backoff to paho
+        itself, matching the resilience pattern in
+        zigbee_service/service.py.  An initial network failure does
+        not raise — paho keeps trying in the background — so the
+        BLE sensor poll loops can start regardless of hub state.
+        """
         try:
             import paho.mqtt.client as mqtt
         except ImportError:
@@ -511,13 +601,25 @@ class MqttPublisher:
         )
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
+        # Cap reconnect backoff so a hub reboot doesn't push us into
+        # 30-minute reconnect windows.  Mirrors zigbee_service.
+        self._client.reconnect_delay_set(min_delay=1, max_delay=30)
         self._client.connect_async(self._broker, self._port)
         self._client.loop_start()
+        logger.info(
+            "BLE→hub publisher connecting to %s:%d "
+            "(signals=%s, status=%s)",
+            self._broker, self._port, SIGNAL_PREFIX, STATUS_PREFIX,
+        )
 
     def _on_connect(self, client, userdata, flags, rc, properties=None):
         if rc == 0:
             self._connected = True
             logger.info("MQTT connected to %s:%d", self._broker, self._port)
+        else:
+            logger.warning(
+                "MQTT connect failed rc=%s — paho will retry", rc,
+            )
 
     def _on_disconnect(self, client, userdata, flags, rc, properties=None):
         self._connected = False
@@ -525,18 +627,47 @@ class MqttPublisher:
             logger.warning("MQTT disconnected (rc=%d), will reconnect", rc)
 
     def publish(self, label: str, subtopic: str, payload: str) -> None:
-        """Publish an event.
+        """Publish a single BLE event to the hub.
+
+        Routes by subtopic:
+          - "status"  → glowup/ble/status/{label} (JSON blob)
+          - numeric   → glowup/signals/{label}:{subtopic} (scalar)
+          - other     → silently dropped (defensive — unknown
+                        subtopics must not be published on either
+                        schema lest they pollute the SignalBus or
+                        the diagnostic store)
 
         Uses try/except rather than checking the _connected flag to
-        avoid a TOCTOU race during broker reconnection.
+        avoid a TOCTOU race during broker reconnection.  Logs the
+        paho rc on failure so a silently-dead publisher is visible
+        in journalctl — publishers see network errors, subscribers
+        do not (the whole point of the service pattern).
         """
-        topic: str = f"{MQTT_PREFIX}/{label}/{subtopic}"
         if not self._client:
             return
+        if subtopic == "status":
+            topic: str = f"{STATUS_PREFIX}/{label}"
+        elif subtopic in NUMERIC_SUBTOPICS:
+            topic = f"{SIGNAL_PREFIX}/{label}:{subtopic}"
+        else:
+            logger.debug(
+                "Unknown subtopic %r for %s — dropping",
+                subtopic, label,
+            )
+            return
         try:
-            self._client.publish(topic, payload, qos=1, retain=True)
-        except Exception:
-            logger.debug("MQTT publish failed — dropping %s", topic)
+            info = self._client.publish(
+                topic, payload, qos=0, retain=False,
+            )
+            if info.rc != 0:
+                logger.warning(
+                    "publish %s rc=%s — hub broker unreachable",
+                    topic, info.rc,
+                )
+        except Exception as exc:
+            logger.warning(
+                "publish %s raised: %s", topic, exc,
+            )
 
     def disconnect(self) -> None:
         """Disconnect."""
@@ -854,8 +985,8 @@ async def _monitor_gsn(
 
 async def run_daemon(
     config_path: str = "ble_pairing.json",
-    broker: str = DEFAULT_BROKER,
-    mqtt_port: int = DEFAULT_MQTT_PORT,
+    hub_broker: str = DEFAULT_HUB_BROKER,
+    hub_port: int = DEFAULT_MQTT_PORT,
     poll_interval: float = POLL_INTERVAL,
 ) -> None:
     """Run the BLE sensor daemon with concurrent multi-device support.
@@ -890,7 +1021,7 @@ async def run_daemon(
         logger.error("No paired devices in %s", config_path)
         return
 
-    publisher = MqttPublisher(broker=broker, port=mqtt_port)
+    publisher = MqttPublisher(hub_broker=hub_broker, hub_port=hub_port)
     publisher.connect()
 
     parts: list[str] = []
@@ -949,15 +1080,20 @@ def main() -> None:
         help="Path to ble_pairing.json",
     )
     parser.add_argument(
-        "--broker",
-        default=DEFAULT_BROKER,
-        help=f"MQTT broker (default: {DEFAULT_BROKER})",
+        "--hub-broker",
+        default=DEFAULT_HUB_BROKER,
+        help=(
+            f"Hub mosquitto address (default: {DEFAULT_HUB_BROKER}, "
+            "from GLB_HUB_BROKER env var).  This service publishes "
+            "cross-host directly to the hub — do NOT point it at "
+            "broker-2's localhost mosquitto."
+        ),
     )
     parser.add_argument(
-        "--port",
+        "--hub-port",
         type=int,
         default=DEFAULT_MQTT_PORT,
-        help=f"MQTT port (default: {DEFAULT_MQTT_PORT})",
+        help=f"Hub mosquitto port (default: {DEFAULT_MQTT_PORT})",
     )
     parser.add_argument(
         "--poll-interval",
@@ -991,8 +1127,8 @@ def main() -> None:
         loop.run_until_complete(
             run_daemon(
                 config_path=args.config,
-                broker=args.broker,
-                mqtt_port=args.port,
+                hub_broker=args.hub_broker,
+                hub_port=args.hub_port,
                 poll_interval=args.poll_interval,
             )
         )

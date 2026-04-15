@@ -191,37 +191,6 @@ class AdapterProcess(ProcessAdapterBase):
 # Factory functions — one per adapter, lazy imports
 # ---------------------------------------------------------------------------
 
-def _create_zigbee(
-    config: dict[str, Any],
-    bus: Optional[MqttSignalBus],
-    mqtt_client: Any,
-    broker: str,
-    port: int,
-) -> Any:
-    """Create a ZigbeeAdapter with Z2M broker from config.
-
-    The Z2M broker may differ from the GlowUp broker.  The adapter
-    creates its own MQTT client for Z2M subscription.
-    """
-    from adapters.zigbee_adapter import ZigbeeAdapter
-
-    z_cfg: dict[str, Any] = config.get("zigbee", {})
-    z_broker: str = z_cfg.get("broker", broker)
-    z_port: int = z_cfg.get("port", port)
-
-    adapter: Any = ZigbeeAdapter(
-        config=z_cfg,
-        bus=bus,
-        broker=z_broker,
-        port=z_port,
-    )
-
-    logger.info(
-        "[zigbee] Z2M broker=%s:%d, GlowUp broker=%s:%d",
-        z_broker, z_port, broker, port,
-    )
-    return adapter
-
 
 def _create_vivint(
     config: dict[str, Any],
@@ -310,59 +279,9 @@ def _create_matter(
     )
 
 
-def _create_ble(
-    config: dict[str, Any],
-    bus: Optional[MqttSignalBus],
-    mqtt_client: Any,
-    broker: str,
-    port: int,
-) -> Any:
-    """Create a BleAdapter with BLE broker from config.
-
-    The BLE broker may differ from the GlowUp broker (e.g. broker-2
-    at 10.0.0.123).  The adapter creates its own MQTT client for
-    BLE topic subscription.
-    """
-    from adapters.ble_adapter import BleAdapter
-
-    ble_cfg: dict[str, Any] = config.get("ble", {})
-    ble_broker: str = ble_cfg.get("broker", broker)
-    ble_port: int = ble_cfg.get("port", port)
-
-    return BleAdapter(
-        bus=bus,
-        broker=ble_broker,
-        port=ble_port,
-        config=ble_cfg,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
-
-def _handle_zigbee_command(
-    adapter: Any, action: str, params: dict[str, Any],
-) -> Optional[dict[str, Any]]:
-    """Handle Zigbee-specific commands.
-
-    Supported:
-        - ``"send"``: Publish a command to a Zigbee device.
-          Requires ``params["device"]`` and ``params["payload"]``.
-    """
-    if action != "send":
-        return None
-
-    device: Optional[str] = params.get("device")
-    payload: dict[str, Any] = params.get("payload", {})
-    if not device:
-        return {"status": "error", "error": "missing 'device' param"}
-
-    ok: bool = adapter.send_command(device, payload)
-    return {"status": "ok"} if ok else {
-        "status": "error", "error": "MQTT publish failed",
-    }
-
 
 def _handle_printer_command(
     adapter: Any, action: str, params: dict[str, Any],
@@ -415,26 +334,6 @@ def _handle_matter_command(
         }
 
     return None
-
-
-def _handle_ble_command(
-    adapter: Any, action: str, params: dict[str, Any],
-) -> Optional[dict[str, Any]]:
-    """Handle BLE-specific commands.
-
-    Supported:
-        - ``"get_status_blob"``: Return the cached health JSON for a sensor.
-          Requires ``params["label"]``.
-    """
-    if action != "get_status_blob":
-        return None
-
-    label: Optional[str] = params.get("label")
-    if not label:
-        return {"status": "error", "error": "missing 'label' param"}
-
-    blob: Optional[dict[str, Any]] = adapter.get_status_blob(label)
-    return {"status": "ok", "blob": blob}
 
 
 # ---------------------------------------------------------------------------
@@ -521,26 +420,17 @@ def _enabled_by_host(config: dict[str, Any], key: str) -> bool:
     return bool(config.get(key, {}).get("host"))
 
 
-def _ble_enabled(config: dict[str, Any]) -> bool:
-    """BLE is enabled if paho-mqtt is available and config exists."""
-    try:
-        import paho.mqtt.client  # noqa: F401
-    except ImportError:
-        return False
-    return True
-
-
 # ---------------------------------------------------------------------------
 # Dispatch table
 # ---------------------------------------------------------------------------
 
+# Zigbee is intentionally absent from this dispatch table.  It used
+# to run as an out-of-process adapter here, but on 2026-04 it moved
+# to broker-2 as the standalone glowup-zigbee-service which publishes
+# cross-host directly to the hub on glowup/signals/*.  Do not
+# re-introduce a "zigbee" entry without also reading
+# zigbee_service/service.py and feedback_read_the_producer_first.md.
 ADAPTERS: dict[str, AdapterSpec] = {
-    "zigbee": AdapterSpec(
-        config_key="zigbee",
-        factory=_create_zigbee,
-        command_handler=_handle_zigbee_command,
-        enabled_check=lambda c: _enabled_by_key(c, "zigbee"),
-    ),
     "vivint": AdapterSpec(
         config_key="vivint",
         factory=_create_vivint,
@@ -566,12 +456,13 @@ ADAPTERS: dict[str, AdapterSpec] = {
         command_handler=_handle_matter_command,
         enabled_check=lambda c: _enabled_by_key(c, "matter"),
     ),
-    "ble": AdapterSpec(
-        config_key="ble",
-        factory=_create_ble,
-        command_handler=_handle_ble_command,
-        enabled_check=_ble_enabled,
-    ),
+    # No "ble" entry: BLE moved to the service pattern on
+    # 2026-04-15 (glowup-ble-sensor on broker-2 publishes
+    # cross-host directly to the hub).  See
+    # docs/35-service-vs-adapter.md and
+    # feedback_service_vs_adapter_rule.md before re-introducing
+    # one.  An out-of-process BLE adapter on the hub cannot work
+    # — the hub has no BT radio.
 }
 
 

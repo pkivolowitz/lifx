@@ -33,100 +33,93 @@ class SensorHandlerMixin:
     def _handle_get_ble_sensors(self) -> None:
         """GET /api/ble/sensors — all BLE sensor readings.
 
-        Reads from the SignalBus (populated by BleAdapter).  Signals
-        are named ``ble:{label}:{characteristic}`` — this endpoint
-        reconstructs the per-label grouped view and adds location and
-        status metadata.
-        """
-        bus: Optional[SignalBus] = self.signal_bus
-        if bus is None:
-            self._send_json(200, {})
-            return
+        Source of truth: ``infrastructure.ble_trigger.sensor_data``,
+        the in-process store hydrated by ``BleTriggerManager``'s
+        local MQTT subscriber.  After the 2026-04-15 service-pattern
+        pivot, the BLE sensor daemon (``glowup-ble-sensor`` on
+        broker-2) publishes signals cross-host directly to the hub
+        mosquitto on ``glowup/signals/{label}:{prop}`` and JSON
+        status blobs on ``glowup/ble/status/{label}``.
+        ``BleTriggerManager`` subscribes locally on the hub broker
+        and writes both into ``BleSensorData`` — so this endpoint
+        reads the same store the watchdog logic does.
 
+        See:
+          - docs/35-service-vs-adapter.md
+          - docs/28-ble-sensors.md
+          - feedback_service_vs_adapter_rule.md
+
+        Per-label payload includes the latest motion (int), float
+        temperature, float humidity, optional location string,
+        last_update epoch, optional status JSON blob, and watchdog
+        countdown from BleTriggerManager (when configured).
+        """
+        # Local import — avoids a top-level circular import via
+        # the server bootstrap order, and keeps the handler module
+        # importable in tests that don't pull in BleTriggerManager.
+        from infrastructure.ble_trigger import sensor_data as ble_sensor_data
+
+        all_data: dict[str, dict[str, Any]] = ble_sensor_data.get_all()
         locations: dict[str, str] = self.config.get(
             "sensor_locations", {},
         )
-        ble_signals: dict = bus.signals_by_transport("ble")
 
-        # Group by label: {label}:{char} → {label: {char: val, ...}}
+        # Build the response from the canonical store, enriching
+        # with location strings from server.json.  Watchdog state
+        # is appended via the trigger manager's public accessor.
         grouped: dict[str, dict[str, Any]] = {}
-        boot: float = time_mod.monotonic()
-        now_wall: float = time_mod.time()
-        for name, (value, ts) in ble_signals.items():
-            parts: list[str] = name.split(":")
-            if len(parts) != 2:
-                continue
-            label: str = parts[0]
-            char: str = parts[1]
-            if label not in grouped:
-                grouped[label] = {}
-            # Convert value to int for motion (legacy compat).
-            if char == "motion":
-                grouped[label][char] = int(value)
-            else:
-                grouped[label][char] = value
-            # Convert monotonic timestamp to wall-clock epoch.
-            if ts is not None:
-                wall_ts: float = now_wall - (boot - ts)
-                existing: float = grouped[label].get("last_update", 0.0)
-                if wall_ts > existing:
-                    grouped[label]["last_update"] = wall_ts
-
-        # Enrich with location and status blobs.
-        ble_proxy: Optional[Any] = self.ble_adapter
-        for lbl, readings in grouped.items():
-            loc: str = locations.get(lbl, "")
-            if loc:
-                readings["location"] = loc
-            if ble_proxy is not None and hasattr(ble_proxy, "send_command"):
+        for label, readings in all_data.items():
+            entry: dict[str, Any] = dict(readings)
+            # motion is stored as int by BleSensorData.update —
+            # preserve that contract for the legacy frontend.
+            if "motion" in entry:
                 try:
-                    result: dict = ble_proxy.send_command(
-                        "get_status_blob", {"label": lbl},
-                    )
-                    blob: Optional[dict] = result.get("blob")
-                    if blob is not None:
-                        readings["status"] = blob
-                except (TimeoutError, Exception):
+                    entry["motion"] = int(entry["motion"])
+                except (TypeError, ValueError):
                     pass
+            loc: str = locations.get(label, "")
+            if loc:
+                entry["location"] = loc
+            grouped[label] = entry
 
-        # Enrich with watchdog countdown data from automations.
-        auto_mgr: Optional[Any] = self.automation_manager
-        if auto_mgr is not None:
-            watchdog_states: dict[str, dict] = auto_mgr.get_watchdog_states()
-            for lbl, wd in watchdog_states.items():
-                if lbl in grouped:
-                    grouped[lbl]["watchdog"] = wd
+        # NOTE: the previous BleAdapter-era code attempted to
+        # enrich each entry with a "watchdog" countdown sourced
+        # from a now-defunct AutomationManager.  That enrichment
+        # was already dead (the manager was never instantiated)
+        # and is not restored here.  If you ever need motion
+        # watchdog state in this payload, add a get_watchdog_states()
+        # method to BleTriggerManager that returns
+        # {label: {seconds_until_off: float, configured_timeout: float}}
+        # and re-add the enrichment loop.  Stash the manager on
+        # GlowUpRequestHandler in server.py's _background_startup
+        # so the handler can reach it.
 
         self._send_json(200, grouped)
 
 
     def _handle_get_ble_sensor_detail(self, label: str) -> None:
-        """GET /api/ble/sensors/{label} — single sensor readings."""
-        bus: Optional[SignalBus] = self.signal_bus
-        if bus is None:
+        """GET /api/ble/sensors/{label} — single sensor readings.
+
+        Same source as ``_handle_get_ble_sensors`` but scoped to
+        one label.  Returns 404 if no data has been received for
+        the label since hub start (a satellite that has paired but
+        hasn't reported any value yet shows up as 404 — fall back
+        to the all-sensors endpoint to see registered-but-silent
+        labels).
+        """
+        from infrastructure.ble_trigger import sensor_data as ble_sensor_data
+
+        readings: dict[str, Any] = ble_sensor_data.get(label)
+        if not readings:
             self._send_json(404, {"error": f"No data for '{label}'"})
             return
 
-        prefix: str = f"{label}:"
-        signals: dict = bus.signals_by_prefix(prefix)
-        if not signals:
-            self._send_json(404, {"error": f"No data for '{label}'"})
-            return
-
-        data: dict[str, Any] = {}
-        boot: float = time_mod.monotonic()
-        now_wall: float = time_mod.time()
-        for name, (value, ts) in signals.items():
-            char: str = name.split(":")[-1]
-            if char == "motion":
-                data[char] = int(value)
-            else:
-                data[char] = value
-            if ts is not None:
-                wall_ts: float = now_wall - (boot - ts)
-                existing: float = data.get("last_update", 0.0)
-                if wall_ts > existing:
-                    data["last_update"] = wall_ts
+        data: dict[str, Any] = dict(readings)
+        if "motion" in data:
+            try:
+                data["motion"] = int(data["motion"])
+            except (TypeError, ValueError):
+                pass
 
         locations: dict[str, str] = self.config.get(
             "sensor_locations", {},
@@ -134,17 +127,7 @@ class SensorHandlerMixin:
         loc: str = locations.get(label, "")
         if loc:
             data["location"] = loc
-        ble_proxy2: Optional[Any] = self.ble_adapter
-        if ble_proxy2 is not None and hasattr(ble_proxy2, "send_command"):
-            try:
-                res: dict = ble_proxy2.send_command(
-                    "get_status_blob", {"label": label},
-                )
-                blob2: Optional[dict] = res.get("blob")
-                if blob2 is not None:
-                    data["status"] = blob2
-            except (TimeoutError, Exception):
-                pass
+
         self._send_json(200, data)
 
 

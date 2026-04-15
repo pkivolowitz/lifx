@@ -135,43 +135,21 @@ h1 {
     color: var(--label);
     margin-top: 2px;
 }
-/* Toggle switch. */
-.toggle {
-    position: relative;
-    width: 48px;
-    height: 26px;
-    cursor: pointer;
-    flex-shrink: 0;
-}
-.toggle input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-.toggle-slider {
-    position: absolute;
-    inset: 0;
+/* Read-only state pill — replaces the interactive toggle that
+ * was removed in 2026-04-15 along with the in-process Zigbee
+ * adapter.  See chapter 29 in the manual. */
+.toggle-disabled {
+    display: inline-block;
+    min-width: 36px;
+    padding: 4px 10px;
+    border-radius: 12px;
     background: #3a3020;
-    border-radius: 13px;
-    transition: background 0.3s ease;
-}
-.toggle-slider::before {
-    content: "";
-    position: absolute;
-    height: 20px;
-    width: 20px;
-    left: 3px;
-    bottom: 3px;
-    background: var(--label);
-    border-radius: 50%;
-    transition: transform 0.3s ease, background 0.3s ease;
-}
-.toggle input:checked + .toggle-slider {
-    background: rgba(106, 170, 144, 0.3);
-}
-.toggle input:checked + .toggle-slider::before {
-    transform: translateX(22px);
-    background: var(--green);
+    color: var(--label);
+    font-size: 11px;
+    font-weight: 600;
+    text-align: center;
+    flex-shrink: 0;
+    cursor: help;
 }
 
 /* Anomaly list. */
@@ -532,32 +510,26 @@ function buildControlCard(device) {
     info.appendChild(label);
     info.appendChild(powerSpan);
 
-    var toggle = document.createElement("label");
-    toggle.className = "toggle";
-    var input = document.createElement("input");
-    input.type = "checkbox";
-    input.id = "ctrl-check-" + device;
-    input.addEventListener("change", function () {
-        var newState = input.checked ? "ON" : "OFF";
-        setDeviceState(device, newState);
-    });
-    var slider = document.createElement("span");
-    slider.className = "toggle-slider";
-    toggle.appendChild(input);
-    toggle.appendChild(slider);
+    /* Plug on/off toggle was removed in 2026-04-15 along with the
+     * in-process Zigbee adapter on the hub.  The state-display
+     * column below still reads from /api/power/plug_states (which
+     * proxies broker-2's zigbee_service /devices endpoint), so the
+     * card still shows whether each plug is on or off — but the
+     * user can no longer flip it from this page until the
+     * hub→broker-2 publish path is restored.  See
+     * docs/29-zigbee-service.md "What's broken (follow-up)". */
+    var statePill = document.createElement("span");
+    statePill.className = "toggle-disabled";
+    statePill.id = "ctrl-state-" + device;
+    statePill.textContent = "—";
+    statePill.title = (
+        "Plug control disabled — zigbee_set endpoint removed " +
+        "with the broker-2 service pivot.  See chapter 29."
+    );
 
     card.appendChild(info);
-    card.appendChild(toggle);
+    card.appendChild(statePill);
     controlsRow.appendChild(card);
-}
-
-function setDeviceState(device, state) {
-    /* Publish via Z2M MQTT through GlowUp API. */
-    fetch("/api/zigbee/set", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ device: device, payload: { state: state } })
-    }).catch(function () {});
 }
 
 function updateControls() {
@@ -583,11 +555,15 @@ function updateControls() {
                         ? '—'
                         : p.power_w.toFixed(1) + " W");
                 }
-                /* State toggle — never flip while the user is
-                 * actively clicking the switch. */
-                var chk = document.getElementById("ctrl-check-" + dev);
-                if (chk && !chk.matches(":focus") && p.state) {
-                    chk.checked = (p.state === "ON");
+                /* State pill — read-only indicator since the
+                 * Zigbee plug-control endpoint was removed in
+                 * the 2026-04-15 service pivot.  The label
+                 * mirrors broker-2's authoritative plug state
+                 * so the user can still see whether the plug
+                 * is on or off. */
+                var pill = document.getElementById("ctrl-state-" + dev);
+                if (pill && p.state) {
+                    pill.textContent = p.state;
                 }
             }
         })

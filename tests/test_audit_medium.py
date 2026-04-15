@@ -171,65 +171,15 @@ class TestM8M9MqttBridge(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# M10: automation.py — schedule conflict import error handling
+# M10/M11/M12 retired: tested AutomationManager methods that were
+# deleted in the 2026-04 cleanup when AutomationManager was retired
+# in favour of the operator framework (operators/trigger.py).  The
+# regressions they guarded against are no longer reachable —
+# inspect.getsource() on a deleted class would raise ImportError.
+# Do not restore these tests against the operator framework here;
+# operator-level tests live in tests/test_operators.py and
+# tests/test_trigger_operator.py.
 # ---------------------------------------------------------------------------
-
-class TestM10AutomationImportError(unittest.TestCase):
-    """_is_schedule_active must raise on ImportError, not silently swallow."""
-
-    def test_import_error_raised(self) -> None:
-        """ImportError from missing server module should propagate."""
-        import inspect
-        from automation import AutomationManager
-        src = inspect.getsource(AutomationManager._is_schedule_active)
-        # Should have separate try blocks: ImportError raises,
-        # runtime Exception is caught.
-        self.assertIn("raise", src)
-
-
-# ---------------------------------------------------------------------------
-# M11: automation.py — debounce in _fire_off_action
-# ---------------------------------------------------------------------------
-
-class TestM11OffActionDebounce(unittest.TestCase):
-    """_fire_off_action must update last_action for debounce."""
-
-    def test_last_action_updated(self) -> None:
-        """Verify _fire_off_action sets state.last_action."""
-        import inspect
-        from automation import AutomationManager
-        src = inspect.getsource(AutomationManager._fire_off_action)
-        self.assertIn("last_action", src)
-
-
-# ---------------------------------------------------------------------------
-# M12: automation.py — integer/float parse ambiguity
-# ---------------------------------------------------------------------------
-
-class TestM12ParseValue(unittest.TestCase):
-    """_parse_value should handle "1.0" when reference is int."""
-
-    def test_float_string_to_int(self) -> None:
-        """Payload "1.0" with int reference should parse to 1."""
-        from automation import AutomationManager
-        mgr = AutomationManager.__new__(AutomationManager)
-        result = mgr._parse_value("1.0", 1)
-        self.assertEqual(result, 1)
-        self.assertIsInstance(result, int)
-
-    def test_int_string_to_int(self) -> None:
-        """Payload "42" with int reference should parse to 42."""
-        from automation import AutomationManager
-        mgr = AutomationManager.__new__(AutomationManager)
-        result = mgr._parse_value("42", 1)
-        self.assertEqual(result, 42)
-
-    def test_float_string_to_float(self) -> None:
-        """Payload "3.14" with float reference should parse to 3.14."""
-        from automation import AutomationManager
-        mgr = AutomationManager.__new__(AutomationManager)
-        result = mgr._parse_value("3.14", 1.0)
-        self.assertAlmostEqual(result, 3.14)
 
 
 # ---------------------------------------------------------------------------

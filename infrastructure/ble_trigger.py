@@ -43,8 +43,31 @@ logger: logging.Logger = logging.getLogger("glowup.ble_trigger")
 # Constants
 # ---------------------------------------------------------------------------
 
-# MQTT topic prefix matching ble/sensor.py.
-MQTT_PREFIX: str = "glowup/ble"
+# MQTT topic prefixes — must match what ble/sensor.py publishes.
+#
+# After the 2026-04-15 service-pattern pivot, the BLE sensor daemon
+# (running on broker-2) publishes cross-host directly to the hub
+# mosquitto on TWO topic schemas:
+#
+#   - glowup/signals/{label}:{subtopic}  for numeric sensor values
+#     (motion / temperature / humidity).  This is the same schema
+#     used by glowup-zigbee-service, so the hub's _on_remote_signal
+#     callback feeds these into the SignalBus and PowerLogger.
+#   - glowup/ble/status/{label}          for JSON status blobs.
+#     Diagnostic only — not on the SignalBus.
+#
+# This module subscribes to BOTH on the hub's localhost mosquitto
+# (cross-host subscribes are forbidden — see
+# docs/35-service-vs-adapter.md and feedback_service_vs_adapter_rule).
+# It hydrates the per-label BleSensorData store that backs the
+# /api/ble/sensors endpoint, and runs the motion-trigger watchdog.
+SIGNAL_PREFIX: str = "glowup/signals"
+STATUS_PREFIX: str = "glowup/ble/status"
+
+# Subtopics that arrive as numeric scalars on the signal bus.
+NUMERIC_SUBTOPICS: frozenset[str] = frozenset({
+    "motion", "temperature", "humidity",
+})
 
 # Default watchdog timeout (minutes).
 DEFAULT_WATCHDOG_MINUTES: float = 30.0
@@ -142,17 +165,35 @@ class BleTriggerManager:
         self._watchdog_thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
-        """Start the MQTT subscriber and watchdog thread."""
+        """Start the MQTT subscriber and watchdog thread.
+
+        This manager has TWO responsibilities and they are gated
+        independently:
+
+        1. **Always-on:** subscribe to the BLE service's signal and
+           status topics on the hub broker and hydrate
+           ``BleSensorData``.  This is the in-process source of
+           truth for ``/api/ble/sensors`` after the 2026-04-15
+           service-pattern pivot, so it must run regardless of
+           whether any motion triggers are configured.  Otherwise
+           the diagnostic endpoint silently returns ``{}``.
+
+        2. **Config-gated:** for any label present in the
+           ``ble_triggers`` block of ``server.json``, fire group
+           power-on actions on motion and run a watchdog that
+           turns the group off after ``watchdog_minutes`` of
+           silence.  No config = observe-only mode.
+
+        Calling ``start()`` with an empty config is fine — the
+        manager runs in observe-only mode and the watchdog thread
+        iterates an empty dict (effectively a no-op).
+        """
         try:
             import paho.mqtt.client as mqtt
         except ImportError:
             logger.warning(
-                "BLE triggers require paho-mqtt — triggers disabled"
+                "BLE subsystem requires paho-mqtt — disabled"
             )
-            return
-
-        if not self._config:
-            logger.info("No ble_triggers configured — skipping")
             return
 
         self._running = True
@@ -185,44 +226,109 @@ class BleTriggerManager:
             self._client.disconnect()
 
     def _on_connect(self, client, userdata, flags, rc, properties=None):
-        """Subscribe to all BLE sensor topics on connect."""
+        """Subscribe to BLE signal + status topics on connect.
+
+        Subscribes to two wildcard topics rather than per-label per-
+        subtopic combinations, so a newly-added BLE label in
+        ble_pairing.json starts flowing without a hub restart.
+        Filtering by label happens in _on_message against
+        self._config.
+
+        These are LOCAL subscribes on the hub's own broker — the
+        broker-2 BLE service publishes cross-host into this same
+        broker.  Cross-host subscribes are forbidden (see
+        docs/35-service-vs-adapter.md).
+        """
         if rc != 0:
             logger.warning("BLE trigger MQTT connect failed: rc=%d", rc)
             return
 
-        # Subscribe to motion, temperature, humidity for each configured label.
-        for label in self._config:
-            for subtopic in ("motion", "temperature", "humidity", "status"):
-                topic: str = f"{MQTT_PREFIX}/{label}/{subtopic}"
-                client.subscribe(topic)
-                logger.debug("Subscribed to %s", topic)
-
-        logger.info("BLE trigger MQTT connected and subscribed")
+        client.subscribe(f"{SIGNAL_PREFIX}/#")
+        client.subscribe(f"{STATUS_PREFIX}/#")
+        logger.info(
+            "BLE trigger MQTT connected and subscribed to %s/# and %s/#",
+            SIGNAL_PREFIX, STATUS_PREFIX,
+        )
 
     def _on_message(self, client, userdata, msg):
-        """Handle incoming MQTT messages from BLE sensors."""
+        """Handle incoming BLE signal / status messages.
+
+        Two topic shapes are routed:
+
+          glowup/signals/{label}:{subtopic}  → numeric sensor values
+              published by ble/sensor.py.  ALL labels are stored
+              in BleSensorData so /api/ble/sensors sees every BLE
+              sensor on the network, not just the ones with motion
+              triggers configured.  Trigger evaluation is a
+              SEPARATE step that is gated by ``self._config``.
+              Other producers' signals on the same prefix
+              (glowup-zigbee-service, etc.) are filtered out by
+              shape — only labels with subtopics in
+              ``NUMERIC_SUBTOPICS`` are accepted, and the BLE
+              service publishes that exact set.
+
+          glowup/ble/status/{label}          → JSON diagnostic
+              blob, also stored in BleSensorData unconditionally.
+        """
         try:
-            # Parse topic: glowup/ble/{label}/{subtopic}
-            parts: list[str] = msg.topic.split("/")
-            if len(parts) != 4:
-                return
-            label: str = parts[2]
-            subtopic: str = parts[3]
+            topic: str = msg.topic
             payload: str = msg.payload.decode("utf-8", errors="replace")
 
-            if label not in self._config:
+            if topic.startswith(STATUS_PREFIX + "/"):
+                # glowup/ble/status/{label}
+                label: str = topic[len(STATUS_PREFIX) + 1:]
+                if label:
+                    try:
+                        sensor_data.update(
+                            label, "status", json.loads(payload),
+                        )
+                    except json.JSONDecodeError:
+                        pass
                 return
 
-            trigger_cfg: dict[str, Any] = self._config[label]
+            if not topic.startswith(SIGNAL_PREFIX + "/"):
+                return
+            # glowup/signals/{name} where {name} may or may not
+            # contain a colon.  We only react to names whose
+            # subtopic half is a known BLE numeric subtopic — that
+            # both excludes signals from other producers (e.g.,
+            # glowup-zigbee-service publishes BYIR:power, which
+            # has subtopic "power" not in NUMERIC_SUBTOPICS) and
+            # protects BleSensorData from being polluted by
+            # arbitrary signal names.
+            sig_name: str = topic[len(SIGNAL_PREFIX) + 1:]
+            if ":" not in sig_name:
+                return
+            label, _, subtopic = sig_name.partition(":")
+            if subtopic not in NUMERIC_SUBTOPICS:
+                return
 
+            # Always store the data, regardless of trigger config —
+            # /api/ble/sensors reads from this store.
             if subtopic == "motion":
-                self._handle_motion(label, payload, trigger_cfg)
+                try:
+                    sensor_data.update(label, "motion", int(payload))
+                except (ValueError, TypeError):
+                    return
             elif subtopic == "temperature":
-                sensor_data.update(label, "temperature", float(payload))
+                try:
+                    sensor_data.update(
+                        label, "temperature", float(payload),
+                    )
+                except (ValueError, TypeError):
+                    return
             elif subtopic == "humidity":
-                sensor_data.update(label, "humidity", float(payload))
-            elif subtopic == "status":
-                sensor_data.update(label, "status", json.loads(payload))
+                try:
+                    sensor_data.update(
+                        label, "humidity", float(payload),
+                    )
+                except (ValueError, TypeError):
+                    return
+
+            # Trigger evaluation is config-gated.  Labels not in
+            # self._config are observed but never fire actions.
+            if subtopic == "motion" and label in self._config:
+                self._handle_motion(label, payload, self._config[label])
 
         except Exception as exc:
             logger.error(
@@ -232,10 +338,15 @@ class BleTriggerManager:
     def _handle_motion(
         self, label: str, payload: str, cfg: dict[str, Any]
     ) -> None:
-        """Process a motion event."""
+        """Process a motion event.
+
+        Called only for labels with an entry in ``self._config``.
+        The caller has already written the motion value into
+        ``BleSensorData`` — this method's job is to fire the
+        trigger action, not to store data.
+        """
         now: float = time.time()
         self._last_motion_time[label] = now
-        sensor_data.update(label, "motion", int(payload))
 
         detected: bool = payload.strip() == "1"
 

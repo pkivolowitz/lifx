@@ -104,22 +104,18 @@ from emitters.virtual_grid import VirtualGridEmitter
 from engine import Controller
 from infrastructure.mqtt_bridge import MqttBridge, PAHO_AVAILABLE as _MQTT_AVAILABLE
 from infrastructure.ble_trigger import BleTriggerManager
-from automation import (
-    AutomationManager, sensor_data as ble_sensor_data,
-    validate_automation, migrate_ble_triggers,
-)
+# automation.py is largely retired (its AutomationManager was
+# replaced by the trigger operator framework — see the comment on
+# the call to migrate_ble_triggers in _background_startup), but
+# the validation helper and the legacy-config migration helper are
+# still load-bearing on every startup.
+from automation import validate_automation, migrate_ble_triggers
 from operators import OperatorManager
 try:
     from infrastructure.lock_manager import LockManager
     _HAS_LOCK_MANAGER: bool = True
 except ImportError:
     _HAS_LOCK_MANAGER = False
-
-try:
-    from adapters.zigbee_adapter import ZigbeeAdapter
-    _HAS_ZIGBEE: bool = True
-except ImportError:
-    _HAS_ZIGBEE = False
 
 try:
     from contrib.adapters.vivint_adapter import VivintAdapter
@@ -142,15 +138,29 @@ try:
     _HAS_MATTER: bool = True
 except ImportError:
     _HAS_MATTER = False
-try:
-    from adapters.ble_adapter import BleAdapter
-    _HAS_BLE_ADAPTER: bool = True
-except ImportError:
-    _HAS_BLE_ADAPTER = False
+# BLE is no longer an in-process adapter on the hub.  After the
+# 2026-04-15 service-pattern pivot, glowup-ble-sensor on broker-2
+# publishes cross-host directly to the hub mosquitto on
+# glowup/signals/{label}:{prop} (consumed by _on_remote_signal)
+# and glowup/ble/status/{label} (consumed by BleTriggerManager
+# locally on the hub broker).  See:
+#   - docs/35-service-vs-adapter.md
+#   - docs/29-zigbee-service.md (the canonical service example)
+#   - docs/28-ble-sensors.md
+# Do NOT re-add a `from adapters.ble_adapter import BleAdapter`
+# without first reading those docs and the feedback memories.
+
 from media import MediaManager, SignalBus
 from media.source import AudioStreamServer
 from solar import SunTimes, sun_times
 from transport import LifxDevice, SendMode, SOCKET_TIMEOUT, SINGLE_ZONE_COUNT
+
+# Voice-subsystem constants — topic names and staleness thresholds
+# used by the satellite health probe wiring below.  voice.constants
+# is a pure-constants module (no side effects on import) so this is
+# safe at top level and avoids duplicating magic strings across
+# server.py, handlers/dashboard.py, and voice/satellite/daemon.py.
+from voice import constants as _voice_c
 
 # Optional distributed compute subsystem.
 try:
@@ -320,8 +330,10 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_thermal_hosts", requires_auth=False),
     _Route("GET", ("api", "thermal", "readings"),
            "_handle_get_thermal_readings", requires_auth=False),
-    _Route("POST", ("api", "zigbee", "set"),
-           "_handle_post_zigbee_set", requires_auth=False),
+    # POST /api/zigbee/set was removed in 2026-04-15 along with
+    # the in-process Zigbee adapter.  Plug control will return as
+    # a hub→broker-2 cross-host publish path; see
+    # docs/29-zigbee-service.md.
     _Route("GET", ("api", "operators"),
            "_handle_get_operators", requires_auth=True),
     _Route("GET", ("api", "signals", "bindings"),
@@ -333,6 +345,15 @@ _ROUTES: tuple[_Route, ...] = (
            unquote_params=("target",)),
     _Route("GET", ("api", "config", "nav"),
            "_handle_get_nav_config", requires_auth=False),
+    # Satellite health — continuous view of every known satellite,
+    # and on-demand deep check for a single room.  Both are
+    # auth-free so the /home dashboard and future tooling can poll
+    # without a token.  See handlers/dashboard.py for handler bodies.
+    _Route("GET", ("api", "satellites", "health"),
+           "_handle_get_satellites_health", requires_auth=False),
+    _Route("POST", ("api", "satellites", "{room}", "health", "check"),
+           "_handle_post_satellite_health_check",
+           requires_auth=False, unquote_params=("room",)),
     _Route("GET", ("shopping",),
            "_handle_get_shopping_page", requires_auth=False),
     _Route("GET", ("api", "shopping"),
@@ -610,16 +631,62 @@ class GlowUpRequestHandler(
     config: dict[str, Any] = {}
     config_path: Optional[str] = None
     media_manager: Optional[MediaManager] = None
-    automation_manager: Optional[AutomationManager] = None
     orchestrator: Optional[Any] = None
     keepalive: Optional[KeepaliveProxy] = None
     registry: Optional[DeviceRegistry] = None
     operator_manager: Optional[OperatorManager] = None
     lock_manager: Optional[Any] = None
-    ble_adapter: Optional[Any] = None
+    # Hub-side BLE state.  After the 2026-04-15 service-pattern
+    # pivot, BLE no longer has an in-process adapter.  The handler
+    # dict that used to be `ble_adapter` is gone; /api/ble/sensors
+    # reads from `infrastructure.ble_trigger.sensor_data` directly.
+    # See docs/35-service-vs-adapter.md.
     signal_bus: Optional[SignalBus] = None
     power_logger: Optional[Any] = None
     thermal_logger: Optional[Any] = None
+    # Timestamp of the most recent non-time signal seen on
+    # glowup/signals/#.  Populated by the _on_remote_signal callback
+    # in _background_startup below.  Used by _handle_get_home_health
+    # as the liveness probe for broker-2 — currently the sole
+    # producer of device-origin signals (glowup-zigbee-service and
+    # glowup-ble-sensor).  time:* signals are excluded because they
+    # originate from the hub's own scheduler and would mask a silent
+    # broker-2 outage.  None means "never seen since server start."
+    broker2_signals_last_ts: Optional[float] = None
+
+    # -- Satellite health state (populated by the MQTT callbacks
+    # wired in _background_startup and by the periodic prober
+    # thread).  Handlers read these dicts to answer
+    # GET /api/satellites/health, POST /api/satellites/{room}/health/check,
+    # and the "satellites" block in /api/home/health.
+    #
+    # satellite_heartbeats: {room: {"ts": float, "payload": dict}}
+    #     Updated every time a message lands on
+    #     glowup/voice/status/{room}.  "ts" is server wall-clock
+    #     receive time, not the satellite-published timestamp —
+    #     we care about freshness relative to the hub's clock.
+    #
+    # satellite_health_replies: {room: dict}
+    #     Full report dict published by the satellite in response
+    #     to either a periodic hub probe or an on-demand request.
+    #     Preserves the correlation id so on-demand handlers can
+    #     match replies to requests.
+    #
+    # satellite_health_events: {corr_id: threading.Event}
+    #     Used by on-demand POST handlers to block until the reply
+    #     for their specific correlation id arrives (or the wait
+    #     times out).  Entries are removed by the waiter once set.
+    #
+    # Locks protect concurrent mutation from the MQTT callback
+    # thread, the periodic prober thread, and handler threads.
+    satellite_heartbeats: dict[str, dict[str, Any]] = {}
+    satellite_health_replies: dict[str, dict[str, Any]] = {}
+    satellite_health_events: dict[str, threading.Event] = {}
+    satellite_state_lock: threading.Lock = threading.Lock()
+    # The proc_mqtt client used to publish health requests on
+    # behalf of on-demand handlers.  Assigned in _background_startup
+    # once proc_mqtt is up — handlers check for None before publishing.
+    satellite_probe_client: Any = None
 
     # Active /api/command/identify pulses: {ip: stop_event}.
     # Populated by _handle_post_command_identify; cleared when pulse ends.
@@ -2060,18 +2127,18 @@ def main() -> None:
     # MQTT bridge reference — set by _background_startup if configured.
     mqtt_bridge: Optional[MqttBridge] = None
     ble_trigger_mgr: Optional[BleTriggerManager] = None
-    automation_mgr: Optional[AutomationManager] = None
     # MediaManager reference — set by _background_startup if configured.
     media_mgr: Optional[MediaManager] = None
     # Orchestrator reference — set by _background_startup if configured.
     orch: Optional[Any] = None
     keepalive: Optional[KeepaliveProxy] = None
     # Adapter proxies — out-of-process adapters communicate via MQTT.
-    # Set by _background_startup.
-    zigbee_proxy: Optional[AdapterProxy] = None
+    # Set by _background_startup.  No zigbee proxy: Zigbee now runs
+    # entirely on broker-2 (glowup-zigbee-service) and publishes
+    # cross-host directly to the hub on glowup/signals/*.  See
+    # zigbee_service/service.py header for the architecture.
     vivint_proxy: Optional[AdapterProxy] = None
     nvr_proxy: Optional[AdapterProxy] = None
-    ble_proxy: Optional[AdapterProxy] = None
     printer_proxy: Optional[AdapterProxy] = None
     matter_proxy: Optional[AdapterProxy] = None
     # Process communication MQTT client — used by all AdapterProxy instances.
@@ -2091,8 +2158,8 @@ def main() -> None:
         5. Populate DeviceManager and load devices.
         6. Start scheduler, MQTT, orchestrator, media pipeline.
         """
-        nonlocal mqtt_bridge, media_mgr, orch, keepalive, ble_trigger_mgr, automation_mgr
-        nonlocal zigbee_proxy, vivint_proxy, nvr_proxy, ble_proxy, printer_proxy, matter_proxy
+        nonlocal mqtt_bridge, media_mgr, orch, keepalive, ble_trigger_mgr
+        nonlocal vivint_proxy, nvr_proxy, printer_proxy, matter_proxy
         nonlocal proc_mqtt, operator_mgr, lock_mgr
 
         try:
@@ -2341,9 +2408,22 @@ def main() -> None:
                     except Exception as exc:
                         logging.warning("Failed to persist migration: %s", exc)
 
-            # Start BLE trigger manager if configured (legacy path).
-            ble_trigger_cfg: dict = config.get("ble_triggers", {})
-            if ble_trigger_cfg and _MQTT_AVAILABLE:
+            # Start BLE subsystem.  This is unconditional even when
+            # ble_triggers is empty, because BleTriggerManager has
+            # two responsibilities:
+            #   (1) ALWAYS hydrate BleSensorData from the
+            #       glowup-ble-sensor producer's signal + status
+            #       topics — this is the source of truth for
+            #       /api/ble/sensors.
+            #   (2) ONLY when a label has an entry in the ble_triggers
+            #       config block, fire group power-on actions and
+            #       run the watchdog timeout.
+            # An empty ble_triggers block leaves the manager in
+            # observe-only mode (data flows, no actions fire).
+            # See docs/28-ble-sensors.md and the comment block on
+            # BleTriggerManager.start().
+            if _MQTT_AVAILABLE:
+                ble_trigger_cfg: dict = config.get("ble_triggers", {})
                 mqtt_cfg = config.get("mqtt", {})
                 ble_trigger_mgr = BleTriggerManager(
                     config=ble_trigger_cfg,
@@ -2425,21 +2505,26 @@ def main() -> None:
             # to MQTT heartbeats, status, and command responses.
             # proc_mqtt was created in Step 0 above.
             if proc_mqtt is not None:
-                # Create proxies for each adapter type.
-                zigbee_proxy = AdapterProxy("zigbee", proc_mqtt)
+                # Create proxies for each adapter type.  No zigbee proxy
+                # — Zigbee runs as glowup-zigbee-service on broker-2
+                # and publishes cross-host direct to the hub on
+                # glowup/signals/*; the hub consumes it through the
+                # _on_remote_signal callback below.
                 vivint_proxy = AdapterProxy("vivint", proc_mqtt)
                 nvr_proxy = AdapterProxy("nvr", proc_mqtt)
-                ble_proxy = AdapterProxy("ble", proc_mqtt)
                 printer_proxy = AdapterProxy("printer", proc_mqtt)
                 matter_proxy = AdapterProxy("matter", proc_mqtt)
+                # No `ble` AdapterProxy: the BLE pipeline is the
+                # service-pattern producer glowup-ble-sensor on
+                # broker-2.  See the comment block above the BLE
+                # import at the top of this file, plus
+                # docs/35-service-vs-adapter.md.
 
                 # Store on server for handler access.
-                server._zigbee_adapter = zigbee_proxy
                 server._vivint_adapter = vivint_proxy
                 server._nvr_adapter = nvr_proxy
                 server._matter_adapter = matter_proxy
                 server._printer_adapter = printer_proxy
-                GlowUpRequestHandler.ble_adapter = ble_proxy
 
                 # Subscribe to signals from adapter processes.
                 # Adapter processes publish to glowup/signals/{name};
@@ -2455,6 +2540,23 @@ def main() -> None:
                     if len(parts) < 3:
                         return
                     sig_name: str = parts[2]
+                    # Liveness stamp for /api/home/health's "zigbee"
+                    # probe.  Every non-time signal on this topic
+                    # originates from a broker-2 producer (currently
+                    # glowup-zigbee-service and glowup-ble-sensor).
+                    # time:* signals come from the hub's own scheduler
+                    # and would mask a silent broker-2 outage, so they
+                    # are excluded.  Stamp before JSON parsing so
+                    # malformed payloads still count as "broker-2 is
+                    # alive and publishing."  See
+                    # feedback_read_the_producer_first.md for why this
+                    # probe lives on the consumer side of signals/#
+                    # rather than on glowup/zigbee/# (which has no
+                    # producer anywhere in the current architecture).
+                    if not sig_name.startswith("time:"):
+                        GlowUpRequestHandler.broker2_signals_last_ts = (
+                            time.time()
+                        )
                     try:
                         sig_value: Any = json.loads(message.payload)
                     except (json.JSONDecodeError, ValueError):
@@ -2509,41 +2611,149 @@ def main() -> None:
                     "feed into local SignalBus",
                 )
 
-                # Subscribe to the Zigbee adapter's direct per-property
-                # publishes for power recording.  These arrive on
-                # glowup/zigbee/{device}/{property} via the broker-2
-                # bridge and bypass MqttSignalBus dedup, so PowerLogger
-                # receives every reading even when values are unchanged.
-                # PowerLogger.record() throttles DB writes internally.
-                def _on_zigbee_power(
+                # -- Satellite health subscriptions --------------------
+                # Two topics, both feed into GlowUpRequestHandler's
+                # class-level dicts for /api/satellites/health and the
+                # "satellites" block in /api/home/health.
+                #
+                #   glowup/voice/status/{room}         — heartbeat
+                #   glowup/voice/health/reply/{room}   — deep-check reply
+                #
+                # The heartbeat callback tracks liveness; the reply
+                # callback stores the full subsystem report and wakes
+                # any on-demand waiter keyed by correlation id.  Both
+                # callbacks run on the paho network thread — they
+                # must be cheap and must not raise.
+
+                def _on_satellite_heartbeat(
                     client: Any, userdata: Any, message: Any,
                 ) -> None:
-                    # topic: glowup/zigbee/{device}/{property}
-                    parts: list[str] = message.topic.split("/")
+                    # topic: glowup/voice/status/{room}
+                    parts: list[str] = message.topic.split("/", 3)
                     if len(parts) < 4:
                         return
-                    device: str = parts[2]
-                    prop: str = parts[3]
-                    if GlowUpRequestHandler.power_logger is not None:
-                        try:
-                            value: float = float(
-                                json.loads(message.payload),
-                            )
-                            GlowUpRequestHandler.power_logger.record(
-                                device, prop, value,
-                            )
-                        except (ValueError, TypeError,
-                                json.JSONDecodeError):
-                            pass
+                    room: str = parts[3]
+                    try:
+                        payload: dict[str, Any] = json.loads(
+                            message.payload,
+                        )
+                    except (json.JSONDecodeError, ValueError):
+                        payload = {}
+                    with GlowUpRequestHandler.satellite_state_lock:
+                        GlowUpRequestHandler.satellite_heartbeats[room] = {
+                            "ts": time.time(),
+                            "payload": payload,
+                        }
 
-                proc_mqtt.subscribe("glowup/zigbee/#", qos=0)
+                proc_mqtt.subscribe(
+                    f"{_voice_c.TOPIC_STATUS_PREFIX}/#", qos=0,
+                )
                 proc_mqtt.message_callback_add(
-                    "glowup/zigbee/#", _on_zigbee_power,
+                    f"{_voice_c.TOPIC_STATUS_PREFIX}/#",
+                    _on_satellite_heartbeat,
                 )
+
+                def _on_satellite_health_reply(
+                    client: Any, userdata: Any, message: Any,
+                ) -> None:
+                    # topic: glowup/voice/health/reply/{room_slug}
+                    try:
+                        report: dict[str, Any] = json.loads(
+                            message.payload,
+                        )
+                    except (json.JSONDecodeError, ValueError):
+                        logging.warning(
+                            "Unparseable satellite health reply on %s",
+                            message.topic,
+                        )
+                        return
+                    room: str = str(report.get("room", ""))
+                    corr_id: str = str(report.get("id", ""))
+                    if not room:
+                        return
+                    # Stash the report keyed by room (latest reply
+                    # wins) and, if an on-demand waiter is watching
+                    # this correlation id, wake it.
+                    with GlowUpRequestHandler.satellite_state_lock:
+                        GlowUpRequestHandler.satellite_health_replies[room] = (
+                            report
+                        )
+                        waiter: Optional[threading.Event] = (
+                            GlowUpRequestHandler.satellite_health_events
+                            .get(corr_id)
+                        )
+                    if waiter is not None:
+                        waiter.set()
+
+                proc_mqtt.subscribe(
+                    f"{_voice_c.TOPIC_HEALTH_REPLY_PREFIX}/#", qos=1,
+                )
+                proc_mqtt.message_callback_add(
+                    f"{_voice_c.TOPIC_HEALTH_REPLY_PREFIX}/#",
+                    _on_satellite_health_reply,
+                )
+
+                # Hand the proc_mqtt client to the handler class so
+                # on-demand POST /api/satellites/{room}/health/check
+                # can publish requests without re-opening a client.
+                GlowUpRequestHandler.satellite_probe_client = proc_mqtt
+
+                # -- Periodic satellite prober --------------------------
+                # Every HUB_SATELLITE_PROBE_INTERVAL_S the hub
+                # broadcasts a TOPIC_HEALTH_REQUEST with room=null.
+                # Satellites answer on their reply topic.  Nobody has
+                # to remember to trigger it — continuous visibility.
+                # The thread is a daemon so it dies with the server
+                # process; no explicit shutdown needed.
+
+                def _satellite_probe_loop() -> None:
+                    """Broadcast a periodic satellite health request.
+
+                    Runs until the server process exits.  Failures
+                    are logged and retried on the next tick — the
+                    loop must not die on transient errors.
+                    """
+                    import uuid
+                    interval: float = (
+                        _voice_c.HUB_SATELLITE_PROBE_INTERVAL_S
+                    )
+                    # Small initial delay so the first probe lands
+                    # after satellites have had time to reconnect
+                    # across a server restart.
+                    time.sleep(15.0)
+                    while True:
+                        try:
+                            corr_id: str = f"hub-{uuid.uuid4().hex[:12]}"
+                            payload: bytes = json.dumps({
+                                "id": corr_id,
+                                "room": None,
+                            }).encode("utf-8")
+                            proc_mqtt.publish(
+                                _voice_c.TOPIC_HEALTH_REQUEST,
+                                payload, qos=1,
+                            )
+                            logging.debug(
+                                "Satellite probe broadcast id=%s",
+                                corr_id,
+                            )
+                        except Exception as exc:
+                            logging.warning(
+                                "Satellite probe broadcast failed: %s",
+                                exc,
+                            )
+                        time.sleep(interval)
+
+                probe_thread: threading.Thread = threading.Thread(
+                    target=_satellite_probe_loop,
+                    name="satellite-probe",
+                    daemon=True,
+                )
+                probe_thread.start()
                 logging.info(
-                    "Subscribed to glowup/zigbee/# — direct power "
-                    "recording bypasses signal dedup",
+                    "Satellite health prober running every %.0fs",
+                    _voice_c.HUB_SATELLITE_PROBE_INTERVAL_S,
                 )
+
 
                 # Wire Matter proxy into scheduler for matter: groups.
                 # MatterProxyWrapper provides the adapter-compatible
@@ -2648,8 +2858,9 @@ def main() -> None:
             media_mgr.shutdown()
         if orch is not None:
             orch.stop()
-        if automation_mgr is not None:
-            automation_mgr.stop()
+        # AutomationManager retired — its trigger logic moved to
+        # the operator framework (see operators/triggers).  No
+        # automation_mgr.stop() call here.
         if ble_trigger_mgr is not None:
             ble_trigger_mgr.stop()
         if mqtt_bridge is not None:

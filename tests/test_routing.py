@@ -306,7 +306,6 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "thermal", "latest"),
             ("api", "thermal", "hosts"),
             ("api", "thermal", "readings"),
-            ("api", "zigbee", "set"),
             ("photos", "{filename}"),
             ("js", "{filename}"),
             ("api", "media", "stream", "{source_name}"),
@@ -321,6 +320,10 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "shopping", "{id}"),
             ("api", "shopping", "checked"),
             ("api", "voice", "gates"),
+            # Satellite deep-health endpoints — diagnostic-only,
+            # no secrets in the payload; matches /api/home/health.
+            ("api", "satellites", "health"),
+            ("api", "satellites", "{room}", "health", "check"),
         }
         for route in _ROUTES:
             if route.pattern in AUTH_FREE_PATTERNS:
@@ -343,8 +346,8 @@ class TestRouteCount(unittest.TestCase):
         """GET routes should match the expected count."""
         get_routes: list[_Route] = [r for r in _ROUTES if r.method == "GET"]
         self.assertEqual(
-            len(get_routes), 60,
-            f"Expected 60 GET routes, got {len(get_routes)}",
+            len(get_routes), 61,
+            f"Expected 61 GET routes, got {len(get_routes)}",
         )
 
     def test_post_route_count(self) -> None:

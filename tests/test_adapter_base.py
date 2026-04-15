@@ -542,11 +542,20 @@ class TestMqttAdapterBaseOnConnect(unittest.TestCase):
     """Tests for _on_connect callback."""
 
     def test_successful_connect_subscribes(self) -> None:
-        """rc=0 triggers subscription to {prefix}/#."""
-        adapter = StubMqttAdapter(subscribe_prefix="glowup/ble")
+        """rc=0 triggers subscription to {prefix}/#.
+
+        Uses ``glowup/example`` as a generic stand-in prefix.  No
+        production adapter currently subscribes there; this test
+        exists to verify the base-class wiring, not any specific
+        adapter.  (Earlier revisions used ``glowup/ble`` as the
+        sample prefix, which became misleading after the BLE
+        pivot to the service pattern — see
+        docs/35-service-vs-adapter.md.)
+        """
+        adapter = StubMqttAdapter(subscribe_prefix="glowup/example")
         mock_client = MagicMock()
         adapter._on_connect(mock_client, None, None, 0)
-        mock_client.subscribe.assert_called_once_with("glowup/ble/#")
+        mock_client.subscribe.assert_called_once_with("glowup/example/#")
 
     def test_failed_connect_does_not_subscribe(self) -> None:
         """rc != 0 does not subscribe."""

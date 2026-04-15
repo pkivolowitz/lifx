@@ -59,7 +59,7 @@ SOE graph.
 
 - [Adapter Base Classes](27-adapter-base.md) — MqttAdapterBase, PollingAdapterBase, AsyncPollingAdapterBase
 - [BLE Sensors](28-ble-sensors.md) — BLE sensor daemon, MQTT bridge, ONVIS
-- [Zigbee Adapter](29-zigbee-adapter.md) — Zigbee2MQTT, soil/motion/contact sensors
+- [Zigbee Service](29-zigbee-service.md) — `glowup-zigbee-service` on broker-2; cross-host signal publish
 - [Vendor Integrations](CONTRIB.md) — Vivint, Reolink NVR, Brother printer, HDHomeRun (contrib adapters)
 
 **Automation & display:**
@@ -108,6 +108,7 @@ adapters.  Understand the engine internals or extend the platform.
 - [Effect Developer Guide](07-effect-dev-guide.md) — Architecture, base class, Param system, HSBK
 - [Engine & Controller API](09-engine-api.md) — Programmatic API, VirtualMultizoneDevice
 - [Emitter Developer Guide](22-emitter-dev-guide.md) — Emitter ABC, SynthBackend pattern
+- [Service vs Adapter — Decision Guide](35-service-vs-adapter.md) — **READ THIS BEFORE adding any new sensor or integration.** When to write an in-process adapter vs a standalone service.
 - [Testing](10-testing.md) — Test modules, 1000+ tests, how to run
 - [Test Interpretation Guide](TEST_GUIDE.md) — What tests prove, failure modes, triage
 - [Effect Gallery](13-gallery.md) — GitHub Pages gallery with animated GIF previews

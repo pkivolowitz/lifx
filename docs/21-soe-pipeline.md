@@ -286,8 +286,8 @@ and `AsyncPollingAdapterBase`.
 
 | Adapter | Source | Base class | Status |
 |---------|--------|-----------|--------|
-| BleAdapter | ONVIS BLE sensors | MqttAdapterBase | Deployed |
-| ZigbeeAdapter | Zigbee2MQTT devices | MqttAdapterBase | Deployed |
+| `glowup-ble-sensor` | ONVIS BLE sensors | Standalone broker-2 service (cross-host publish to hub on `glowup/signals/*`; **not** an `AdapterBase` subclass) | Deployed |
+| `glowup-zigbee-service` | Zigbee2MQTT devices | Standalone broker-2 service (not an `AdapterBase` subclass — publishes cross-host directly to the hub on `glowup/signals/*`) | Deployed |
 | VivintAdapter | Vivint locks and sensors | MqttAdapterBase | Deployed |
 | NvrAdapter | Reolink NVR snapshot proxy | PollingAdapterBase | Deployed |
 | PrinterAdapter | Brother printer monitor | AsyncPollingAdapterBase | Deployed |

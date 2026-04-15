@@ -158,8 +158,9 @@ Adapters publish sensor data to MQTT using the following topic patterns:
 
 | Topic pattern | Source | Data |
 |---------------|--------|------|
-| `glowup/ble/{label}/{property}` | BLE sensor adapter | Motion, temperature, humidity, status |
-| `glowup/zigbee/{device}/{property}` | Zigbee2MQTT adapter | Normalized Zigbee device signals |
+| `glowup/signals/{label}:{property}` | `glowup-ble-sensor` (broker-2) | BLE numeric signals (motion / temperature / humidity); same schema as `glowup-zigbee-service` and consumed by the hub's `_on_remote_signal` callback |
+| `glowup/ble/status/{label}` | `glowup-ble-sensor` (broker-2) | BLE diagnostic status JSON blob (state, paired sensor list, last_values); consumed by `BleTriggerManager` on the hub and surfaced via `/api/ble/sensors` |
+| `glowup/signals/{device}:{property}` | `glowup-zigbee-service` (broker-2) | Normalized Zigbee device signals — published cross-host directly to the hub mosquitto by the standalone service on broker-2; consumed by the hub's `_on_remote_signal` callback |
 | `glowup/vivint/{device}/{property}` | Vivint adapter | Lock and sensor states |
 | `glowup/printer/{property}` | Printer adapter | Printer status and details |
 

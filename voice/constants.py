@@ -19,6 +19,21 @@ TOPIC_UTTERANCE: str = "glowup/voice/utterance"
 # Satellite → coordinator: heartbeat (JSON, every HEARTBEAT_INTERVAL_S).
 TOPIC_STATUS_PREFIX: str = "glowup/voice/status"
 
+# Hub → satellite: deep health check request.  Broadcast topic; all
+# satellites receive every request and each decides whether to reply
+# based on the optional "room" filter in the payload.  Payload:
+# ``{"id": "<corr-id>", "room": "<target-room>|null}``.  A null or
+# missing "room" means every satellite replies.  QoS 1 so a request
+# can't be silently dropped under transient network trouble.
+TOPIC_HEALTH_REQUEST: str = "glowup/voice/health/request"
+
+# Satellite → hub: deep health reply.  Full topic is
+# ``glowup/voice/health/reply/<room_slug>``.  Payload is the JSON
+# dict returned by _run_deep_health_check() with the originating
+# correlation id echoed so the hub can correlate requests to
+# replies — see voice/satellite/daemon.py _publish_health_reply.
+TOPIC_HEALTH_REPLY_PREFIX: str = "glowup/voice/health/reply"
+
 # Coordinator → satellites: playback state (JSON with room + state).
 # Satellites suppress wake detection while their room is playing.
 TOPIC_PLAYBACK: str = "glowup/voice/playback"
@@ -153,6 +168,50 @@ FLUSH_PATTERNS: frozenset[str] = frozenset({
 
 # How often each satellite publishes a heartbeat (seconds).
 HEARTBEAT_INTERVAL_S: float = 60.0
+
+# ---------------------------------------------------------------------------
+# Satellite deep health probe — subsystem staleness thresholds
+# ---------------------------------------------------------------------------
+# These thresholds are interpreted by the satellite's
+# _run_deep_health_check().  Each check reports "ok" iff the
+# corresponding monotonic timestamp was updated within the threshold.
+# Tune per-subsystem — audio capture should be extremely fresh (ms
+# scale), wake inference only slightly staler, utterance publishes
+# can go long without being wrong (no one has spoken).
+
+# Max age (s) of the most recent raw PCM frame delivered by the
+# capture thread before the audio pipeline is considered dead.
+# Capture runs continuously at CHUNK_SAMPLES/SAMPLE_RATE cadence
+# (80 ms per frame), so 5s is >60 frames of slack.
+SAT_AUDIO_FRAME_STALE_S: float = 5.0
+
+# Max age (s) of the most recent wake-word inference evaluation.
+# Wake inference runs once per audio frame; same cadence as above.
+SAT_WAKE_EVAL_STALE_S: float = 5.0
+
+# Max age (s) after which the absence of an utterance publish is
+# notable but not a failure — reported as a duration, not a
+# pass/fail, because "nobody has spoken" is a valid silent state.
+SAT_UTTERANCE_IDLE_WARN_S: float = 3600.0
+
+# Hub-side staleness threshold for satellite heartbeats.  Longer
+# than HEARTBEAT_INTERVAL_S so a single dropped heartbeat (network
+# hiccup) doesn't flip the satellite to unhealthy.  Covers up to
+# three consecutive missed heartbeats.
+SAT_HEARTBEAT_STALE_S: float = 3 * HEARTBEAT_INTERVAL_S + 10.0
+
+# Hub-side periodic deep-check interval.  Every this many seconds
+# the hub publishes a broadcast TOPIC_HEALTH_REQUEST and collects
+# whatever replies arrive before the next cycle.  5 minutes is the
+# sweet spot — fast enough to catch a hung subsystem inside one
+# debugging session, slow enough that it never floods the bus.
+HUB_SATELLITE_PROBE_INTERVAL_S: float = 300.0
+
+# How long the hub waits for synchronous deep-check replies on an
+# on-demand POST /api/satellites/{room}/health/check.  Must comfortably
+# exceed the worst-case _run_deep_health_check() latency (audio
+# probe + module imports + MQTT round-trip).
+HUB_SATELLITE_PROBE_TIMEOUT_S: float = 5.0
 
 # ---------------------------------------------------------------------------
 # Voice gate — default-off mic gating for untrusted satellites

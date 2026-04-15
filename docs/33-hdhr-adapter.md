@@ -156,6 +156,9 @@ HTTP and `json` for parsing.
 
 - [Chapter 27: Adapter Base Classes](27-adapter-base.md) --
   PollingAdapterBase that HDHomeRunAdapter inherits from.
-- [Chapter 29: Zigbee Adapter](29-zigbee-adapter.md) -- Similar
-  pattern (adapter subscribes to external service, writes to
-  SignalBus).
+- [Chapter 29: Zigbee Service](29-zigbee-service.md) -- A different
+  pattern from HDHomeRunAdapter: instead of an in-process adapter
+  subclass, `glowup-zigbee-service` runs as a standalone systemd
+  unit on broker-2 and **publishes** signals cross-host to the hub.
+  Worth reading if you ever consider lifting another adapter out
+  of the hub for the same network-coupling reasons.

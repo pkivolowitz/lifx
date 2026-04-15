@@ -196,8 +196,11 @@ class DiscoveryHandlerMixin:
 
     # Adapter attribute names on the server object, keyed by the
     # user-facing name used in the REST API and voice commands.
+    # Zigbee is not listed: it runs as glowup-zigbee-service on
+    # broker-2 and cannot be restarted through this handler.  Use
+    # `ssh a@10.0.0.123 sudo systemctl restart glowup-zigbee-service`
+    # instead.
     _ADAPTER_ATTRS: dict[str, str] = {
-        "zigbee": "_zigbee_adapter",
         "vivint": "_vivint_adapter",
         "nvr": "_nvr_adapter",
         "printer": "_printer_adapter",

@@ -278,6 +278,26 @@ class SatelliteDaemon:
         self._gate_expires: float = 0.0
         self._gate_lock: threading.Lock = threading.Lock()
 
+        # -- Deep health probe state ------------------------------------
+        # Monotonic timestamps updated by the corresponding hot paths.
+        # Read by _run_deep_health_check() to prove each subsystem is
+        # still making forward progress even though the heartbeat
+        # loop could be alive on its own.  0.0 means "never seen"
+        # and is treated as unhealthy the moment a check is issued.
+        # Protected by _health_lock because the capture thread, wake
+        # thread, and MQTT callback thread all stamp concurrently.
+        self._last_audio_frame_ts: float = 0.0
+        self._last_wake_eval_ts: float = 0.0
+        self._last_utterance_ts: float = 0.0
+        self._audio_frames_total: int = 0
+        self._health_lock: threading.Lock = threading.Lock()
+
+        # Reply topic for deep-health responses — computed once from
+        # the room slug to match the hub's subscription pattern.
+        self._health_reply_topic: str = (
+            f"{C.TOPIC_HEALTH_REPLY_PREFIX}/{self._gate_slug}"
+        )
+
     def _init_mqtt(self) -> None:
         """Connect to the MQTT broker.
 
@@ -303,6 +323,11 @@ class SatelliteDaemon:
         self._mqtt_client.subscribe(C.TOPIC_TTS_TEXT, qos=0)
         self._mqtt_client.subscribe(C.TOPIC_FLUSH, qos=1)
         self._mqtt_client.subscribe(C.TOPIC_THINKING, qos=0)
+        # Deep health probe — hub broadcasts a request and every
+        # satellite replies with its own subsystem snapshot.  QoS 1
+        # so a single dropped packet does not silently hide a hung
+        # satellite from the hub's periodic prober.
+        self._mqtt_client.subscribe(C.TOPIC_HEALTH_REQUEST, qos=1)
         # Only gated satellites subscribe to a gate topic.  Non-gated
         # rooms (Dining Room, Main Bedroom, etc.) never see a gate
         # message and their audio loop never consults gate state.
@@ -336,6 +361,8 @@ class SatelliteDaemon:
             self._on_flush_message(msg)
         elif msg.topic == C.TOPIC_THINKING:
             self._on_thinking_message(msg)
+        elif msg.topic == C.TOPIC_HEALTH_REQUEST:
+            self._on_health_request_message(msg)
         elif self._gated and msg.topic == self._gate_topic:
             self._on_gate_message(msg)
 
@@ -1390,6 +1417,11 @@ class SatelliteDaemon:
         self._mqtt_client.publish(
             C.TOPIC_UTTERANCE, payload, qos=1,
         )
+        # Deep-health heartbeat: stamp after the publish so the
+        # utterance_publish check in _run_deep_health_check only
+        # counts successfully emitted audio, not capture attempts.
+        with self._health_lock:
+            self._last_utterance_ts = time.time()
 
         duration: float = len(pcm) / (self._sample_rate * C.BYTES_PER_SAMPLE)
         logger.info(
@@ -1423,6 +1455,281 @@ class SatelliteDaemon:
             json.dumps(status).encode("utf-8"),
             qos=0,
         )
+
+    # ---------------------------------------------------------------------
+    # Deep health probe — responds to hub-broadcast health requests.
+    # ---------------------------------------------------------------------
+    #
+    # Protocol:
+    #   Hub publishes C.TOPIC_HEALTH_REQUEST with payload
+    #     {"id": "<corr-id>", "room": "<target>|null}
+    #   Every satellite receives the broadcast.  Each decides whether
+    #   to reply based on the "room" filter (null/missing = all).
+    #   Replies go to self._health_reply_topic with payload
+    #     {"id": ..., "room": ..., "timestamp": ..., "ok": bool,
+    #      "checks": {name: {ok, detail, age_s, duration_ms}},
+    #      "recommended_action": str|null}
+    #
+    # The reply re-uses the satellite's own running state rather than
+    # re-importing modules — the running daemon IS the health check,
+    # which is stronger than a file-exists probe.
+
+    def _on_health_request_message(self, msg: Any) -> None:
+        """Handle a broadcast health-check request from the hub.
+
+        Args:
+            msg: MQTT message with JSON payload containing the
+                 correlation id and optional room filter.
+        """
+        try:
+            data: dict[str, Any] = json.loads(msg.payload)
+        except (ValueError, TypeError) as exc:
+            logger.warning(
+                "Health request parse error: %s — ignoring", exc,
+            )
+            return
+        corr_id: str = str(data.get("id", ""))
+        target_room: Optional[str] = data.get("room")
+        # Room filter: null/missing means "reply to all"; otherwise
+        # only the named room replies.  Case-sensitive exact match
+        # against self._room.
+        if target_room and target_room != self._room:
+            return
+        try:
+            report: dict[str, Any] = self._run_deep_health_check(corr_id)
+        except Exception as exc:
+            # Bullet/idiot-proof: never let a health check crash the
+            # satellite.  Log and reply with an error so the hub can
+            # still see "something answered."
+            logger.exception(
+                "Deep health check raised: %s", exc,
+            )
+            report = {
+                "id": corr_id,
+                "room": self._room,
+                "timestamp": time.time(),
+                "ok": False,
+                "checks": {},
+                "recommended_action": (
+                    f"deep health check crashed: {exc!r} — "
+                    f"inspect journalctl -u glowup-satellite on "
+                    f"the host running room {self._room!r}"
+                ),
+            }
+        self._publish_health_reply(report)
+
+    def _run_deep_health_check(self, corr_id: str) -> dict[str, Any]:
+        """Snapshot every satellite subsystem and return a report.
+
+        This runs in the MQTT callback thread and must be cheap.
+        It samples the subsystem monotonic timestamps under the
+        health lock, classifies each against its staleness
+        threshold, and synthesizes a single ``recommended_action``
+        string that future-Claude can act on without re-reading
+        the entire report.  Order of subsystem evaluation is the
+        order a human would triage: MQTT → audio capture → wake
+        inference → utterance publish pipeline.
+
+        Args:
+            corr_id: Correlation id from the originating request,
+                     echoed into the reply so the hub can match
+                     request → reply pairs.
+
+        Returns:
+            Dict shaped as documented in the protocol comment
+            above the calling handler.
+        """
+        now: float = time.time()
+        with self._health_lock:
+            audio_ts: float = self._last_audio_frame_ts
+            wake_ts: float = self._last_wake_eval_ts
+            utt_ts: float = self._last_utterance_ts
+            frames_total: int = self._audio_frames_total
+
+        def age_of(ts: float) -> float:
+            """Seconds since ``ts``; ``inf`` for never-seen (0.0)."""
+            return (now - ts) if ts > 0.0 else float("inf")
+
+        def mk(
+            ok: bool, detail: str, age_s: float,
+        ) -> dict[str, Any]:
+            """Build one check entry with consistent shape."""
+            return {
+                "ok": ok,
+                "detail": detail,
+                "age_s": age_s if age_s != float("inf") else None,
+            }
+
+        checks: dict[str, dict[str, Any]] = {}
+
+        # -- MQTT: is our own client still talking to the broker? --
+        mqtt_ok: bool = False
+        mqtt_detail: str = "client not initialised"
+        if self._mqtt_client is not None:
+            try:
+                mqtt_ok = bool(self._mqtt_client.is_connected())
+                mqtt_detail = (
+                    "connected"
+                    if mqtt_ok
+                    else "paho client reports disconnected"
+                )
+            except Exception as exc:
+                mqtt_ok = False
+                mqtt_detail = f"is_connected() raised: {exc!r}"
+        checks["mqtt"] = mk(mqtt_ok, mqtt_detail, 0.0)
+
+        # -- Audio capture: are PCM frames still arriving? --
+        audio_age: float = age_of(audio_ts)
+        audio_ok: bool = (
+            audio_ts > 0.0 and audio_age < C.SAT_AUDIO_FRAME_STALE_S
+        )
+        if audio_ts == 0.0:
+            audio_detail = (
+                "no audio frames ever received — capture thread "
+                "may have failed to start"
+            )
+        elif audio_ok:
+            audio_detail = (
+                f"last frame {audio_age:.2f}s ago "
+                f"({frames_total} frames total)"
+            )
+        else:
+            audio_detail = (
+                f"last frame {audio_age:.1f}s ago (threshold "
+                f"{C.SAT_AUDIO_FRAME_STALE_S}s) — capture thread "
+                "is hung or the audio device disappeared"
+            )
+        checks["audio_capture"] = mk(audio_ok, audio_detail, audio_age)
+
+        # -- Wake inference: has the detector evaluated recently? --
+        wake_age: float = age_of(wake_ts)
+        wake_ok: bool = (
+            wake_ts > 0.0 and wake_age < C.SAT_WAKE_EVAL_STALE_S
+        )
+        if wake_ts == 0.0:
+            wake_detail = (
+                "wake detector never ran — main loop may be "
+                "blocked before inference or mock_wake suppresses it"
+            )
+            # Mock wake never evaluates the detector; that's intended,
+            # not a failure.
+            if self._mock_wake:
+                wake_ok = True
+                wake_detail = (
+                    "mock_wake=true — detector is intentionally "
+                    "bypassed; no inference expected"
+                )
+        elif wake_ok:
+            wake_detail = f"last inference {wake_age:.2f}s ago"
+        else:
+            wake_detail = (
+                f"last inference {wake_age:.1f}s ago (threshold "
+                f"{C.SAT_WAKE_EVAL_STALE_S}s) — wake thread is hung"
+            )
+        checks["wake_inference"] = mk(wake_ok, wake_detail, wake_age)
+
+        # -- Utterance publish: informational, never a failure. --
+        utt_age: float = age_of(utt_ts)
+        if utt_ts == 0.0:
+            utt_detail = "no utterance published this session"
+        elif utt_age < C.SAT_UTTERANCE_IDLE_WARN_S:
+            utt_detail = f"last utterance {utt_age:.0f}s ago"
+        else:
+            utt_detail = (
+                f"last utterance {utt_age / 60:.0f}min ago "
+                "(no one has spoken — not a failure)"
+            )
+        checks["utterance_publish"] = mk(True, utt_detail, utt_age)
+
+        # -- Gate state (only meaningful for gated rooms). --
+        if self._gated:
+            with self._gate_lock:
+                gate_open: bool = self._gate_open
+                gate_expires: float = self._gate_expires
+            gate_ok: bool = True  # Closed or open, both are valid.
+            gate_detail: str = (
+                f"gate {'OPEN' if gate_open else 'closed'}"
+            )
+            if gate_open and gate_expires > 0:
+                gate_detail += f", expires in {gate_expires - now:.0f}s"
+            checks["voice_gate"] = mk(gate_ok, gate_detail, 0.0)
+
+        # -- Rollup: any failing check makes the satellite unhealthy.
+        all_ok: bool = all(
+            v["ok"] for v in checks.values()
+        )
+
+        # -- Recommended action — the single field future-me reads
+        # first on a degraded satellite.  Concatenates failing checks
+        # into an ordered triage instruction.  None means "nothing
+        # to do; the satellite is healthy."
+        recommended_action: Optional[str] = None
+        if not all_ok:
+            failing: list[str] = [
+                name for name, v in checks.items() if not v["ok"]
+            ]
+            # Prioritise the most upstream failure — a dead MQTT
+            # client masks everything else.
+            if "mqtt" in failing:
+                recommended_action = (
+                    f"room {self._room!r}: MQTT client is not "
+                    "connected.  Check broker reachability from the "
+                    "satellite host, then "
+                    "`sudo systemctl restart glowup-satellite` "
+                    "on that host."
+                )
+            elif "audio_capture" in failing:
+                recommended_action = (
+                    f"room {self._room!r}: audio capture thread is "
+                    "hung.  `sudo systemctl restart glowup-satellite` "
+                    "on the host.  If it recurs, check "
+                    "`arecord -l` and the ALSA default device."
+                )
+            elif "wake_inference" in failing:
+                recommended_action = (
+                    f"room {self._room!r}: wake-word inference is "
+                    "stale while audio capture is live.  The wake "
+                    "thread is hung; restart glowup-satellite on "
+                    "the host and watch for openwakeword errors in "
+                    "journalctl."
+                )
+            else:
+                recommended_action = (
+                    f"room {self._room!r}: failing checks "
+                    f"{failing} — inspect the individual check "
+                    "details in this report."
+                )
+
+        return {
+            "id": corr_id,
+            "room": self._room,
+            "timestamp": now,
+            "ok": all_ok,
+            "checks": checks,
+            "recommended_action": recommended_action,
+        }
+
+    def _publish_health_reply(self, report: dict[str, Any]) -> None:
+        """Publish a health report on the per-room reply topic.
+
+        Args:
+            report: Dict returned by ``_run_deep_health_check``.
+        """
+        if self._mqtt_client is None:
+            return
+        try:
+            self._mqtt_client.publish(
+                self._health_reply_topic,
+                json.dumps(report).encode("utf-8"),
+                qos=1,
+            )
+        except Exception as exc:
+            # Logged but not raised — the hub will simply observe
+            # a stale reply and fall back to heartbeat staleness.
+            logger.warning(
+                "Failed to publish health reply on %s: %s",
+                self._health_reply_topic, exc,
+            )
 
     def start(self) -> None:
         """Start the satellite daemon.
@@ -1552,6 +1859,15 @@ class SatelliteDaemon:
                 # gate is closed so RTSP/ALSA sources never back up.
                 self._capture.feed_ring(raw)
 
+                # Deep-health heartbeat: every successful raw read
+                # stamps the audio-capture liveness timestamp.  Put
+                # it here (not inside the gate/suppress branches) so
+                # a gated-closed satellite still proves its capture
+                # thread is alive.  See _run_deep_health_check.
+                with self._health_lock:
+                    self._last_audio_frame_ts = time.time()
+                    self._audio_frames_total += 1
+
                 # Voice gate — default-off for untrusted satellites.
                 # When closed, no wake detection, no capture, no
                 # publish.  The ring buffer above still drains the
@@ -1569,6 +1885,12 @@ class SatelliteDaemon:
                     raw, dtype=np.int16,
                 )
                 score: Optional[float] = self._wake.feed(audio_array)
+                # Deep-health heartbeat: the feed() call either ran
+                # the model (real detector) or polled the mock keyboard
+                # thread.  Either way, stamp — it proves the wake
+                # path is still reaching this point in the loop.
+                with self._health_lock:
+                    self._last_wake_eval_ts = time.time()
 
                 if score is not None:
                     # Wake word detected — capture utterance.

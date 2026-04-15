@@ -37,8 +37,6 @@ the `_running` flag and `running` read-only property.
 
 | Concrete Adapter | Base Class | Transport |
 |------------------|------------|-----------|
-| `BleAdapter` | `MqttAdapterBase` | MQTT subscription to BLE sensor topics |
-| `ZigbeeAdapter` | `MqttAdapterBase` | MQTT subscription to Zigbee2MQTT topics |
 | `PrinterAdapter` | `PollingAdapterBase` | SNMP/HTTP polling of network printers |
 | `VivintAdapter` | `AsyncPollingAdapterBase` | Asyncio websocket to Vivint cloud |
 | `NvrAdapter` | `AsyncPollingAdapterBase` | Asyncio polling of NVR camera feeds |

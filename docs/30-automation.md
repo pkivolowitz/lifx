@@ -279,11 +279,11 @@ awareness -- it falls out of the operator dependency chain.  See
 ## Module Constants
 
 ```python
-TRANSPORT_PREFIXES = {
-    "ble": "glowup/ble",
-    "zigbee": "glowup/zigbee",
-    "vivint": "glowup/vivint",
-}
+# AutomationManager has been retired in favour of TriggerOperator;
+# its TRANSPORT_PREFIXES dict is dead code preserved only because
+# tests still import the manager class.  The live-fire BLE/Zigbee
+# subscribers no longer use this dict — see Chapter 28 (BLE Sensors)
+# and Chapter 29 (Zigbee Service) for the current data paths.
 DEBOUNCE_SECONDS          = 2.0     # Min gap between repeated actions
 WATCHDOG_CHECK_INTERVAL   = 60.0    # Seconds between watchdog checks
 DEFAULT_WATCHDOG_MINUTES  = 30.0    # Default timeout when not specified
@@ -297,7 +297,7 @@ DEFAULT_WATCHDOG_MINUTES  = 30.0    # Default timeout when not specified
   `TriggerOperator` that replaces `AutomationManager`
 - [Chapter 28: BLE Sensors](28-ble-sensors.md) -- BLE sensor
   integration that feeds automation triggers
-- [Chapter 29: Zigbee Adapter](29-zigbee-adapter.md) -- Zigbee
-  sensor integration
+- [Chapter 29: Zigbee Service](29-zigbee-service.md) -- Zigbee
+  sensor integration via `glowup-zigbee-service` on broker-2
 - [Chapter 21: SOE Pipeline](21-soe-pipeline.md) -- how signals flow
   through the platform

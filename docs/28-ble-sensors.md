@@ -1,139 +1,179 @@
-# BLE Sensor Integration
+# Chapter 28: BLE Sensors (`glowup-ble-sensor`)
 
 > Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 > Licensed under the [MIT License](../LICENSE).
 
-GlowUp integrates Bluetooth Low Energy (BLE) sensors via a
-distributed architecture: a daemon on a remote Pi reads encrypted
-HomeKit Accessory Protocol (HAP-BLE) sensor data and publishes it
-to MQTT.  The server's `BleAdapter` subscribes and writes normalized
-signals to the `SignalBus`, where operators and emitters consume
-them like any other signal.
+> **What changed (2026-04-15):** Until this date the hub had an
+> in-process `BleAdapter` (an `MqttAdapterBase` subclass) that
+> consumed `glowup/ble/#` from a mosquitto bridge that forwarded
+> messages from broker-2.  That adapter has been deleted.  In its
+> place, `glowup-ble-sensor` runs as a standalone systemd unit on
+> broker-2 and **publishes signals cross-host directly to the
+> hub mosquitto** — same service pattern as
+> [`glowup-zigbee-service`](29-zigbee-service.md), and for the same
+> reason.  See [Chapter 35: Service vs. Adapter](35-service-vs-adapter.md)
+> for the architectural decision rule and the incident history.
 
-This separation keeps BLE hardware requirements off the server.  The
-server needs only `paho-mqtt`, not `bleak` or BLE hardware.  The
-BLE daemon can run on any Pi with Bluetooth within range of the
-sensors.
+GlowUp integrates Bluetooth Low Energy (BLE) sensors via a
+distributed service (not an in-process adapter).  The
+`glowup-ble-sensor` daemon runs on broker-2 — the host that
+physically owns the BT radio and the ONVIS sensor pairings — and
+publishes normalized readings cross-host to the hub mosquitto over
+its own paho client.  The hub does not subscribe across the network
+for BLE data; cross-host MQTT subscribes are forbidden in this
+codebase because they cannot detect their own silence.
+
+This separation keeps BLE hardware requirements off the hub.  The
+hub has no BT radio and never imports `bleak`, `cryptography`, or
+the HAP libraries.  It just receives `glowup/signals/*` messages
+the same way it receives signals from every other producer.
 
 ---
 
 ## Architecture
 
 ```
-+---------------------+          +---------------------+
-|  broker-2 (Pi)      |          |  GlowUp server (Pi) |
-|                     |   MQTT   |                     |
-|  BLE sensor daemon  | -------> |  BleAdapter         |
-|  (ble.sensor)       |          |  (ble_adapter.py)   |
-|                     |          |                     |
-|  bleak + crypto     |          |  paho-mqtt only     |
-+---------------------+          +---------------------+
-         |                                |
-    BLE radio                        SignalBus
-         |                                |
-  +-------------+                  +-----------+
-  | ONVIS SMS2  |                  | Operators |
-  | (HAP-BLE)   |                  | Emitters  |
-  +-------------+                  +-----------+
++---------------------------+              +-----------------------------+
+|  broker-2 (Pi 5, .123)    |              |  glowup hub (Pi 5, .214)    |
+|                           |              |                             |
+|  +---------------------+  |              |  +-----------------------+  |
+|  |  ONVIS SMS2 sensors |  |              |  |  hub mosquitto       |  |
+|  |  (HAP-BLE)          |  |              |  |  (localhost only)    |  |
+|  +---------+-----------+  |              |  +----------+------------+  |
+|            |              |              |             |               |
+|       BLE radio           |              |             |               |
+|            |              |              |             |               |
+|  +---------v-----------+  |  cross-host  |             |               |
+|  | glowup-ble-sensor   |--|--paho.publish|------------>|               |
+|  |  (this service)     |  |  glowup/signals/{l}:{p}    |               |
+|  |  bleak + crypto +   |  |  glowup/ble/status/{l}     |               |
+|  |  paho-mqtt          |  |              |             |               |
+|  +---------------------+  |              |             |               |
+|                           |              |             v               |
++---------------------------+              |  +-----------------------+  |
+                                           |  | _on_remote_signal     |  |
+                                           |  | (server.py)           |  |
+                                           |  |                       |  |
+                                           |  | + BleTriggerManager   |  |
+                                           |  | (infrastructure/...)  |  |
+                                           |  +----------+------------+  |
+                                           |             |               |
+                                           |             v               |
+                                           |       SignalBus +           |
+                                           |       BleSensorData store + |
+                                           |       /api/ble/sensors      |
+                                           +-----------------------------+
 ```
 
-- **broker-2** (10.0.0.123) — Raspberry Pi with Bluetooth, running
-  the BLE sensor daemon and the MQTT broker (Mosquitto).
-- **GlowUp server** (10.0.0.48) — Subscribes to BLE MQTT topics
-  via `BleAdapter`, writes signals to the bus.
-- **Sensors** — HomeKit BLE accessories (currently ONVIS SMS2).
-  Communicate using encrypted HAP-BLE GATT characteristics.
+Two distinct topic schemas, by design:
+
+- `glowup/signals/{label}:{prop}` — numeric scalars (motion,
+  temperature, humidity).  Same schema as `glowup-zigbee-service`,
+  consumed by the hub's `_on_remote_signal` callback in `server.py`,
+  which writes them into the `SignalBus` and feeds power-related
+  ones to `PowerLogger`.  Operators and automations see BLE
+  signals on the bus identically to any other signal source.
+
+- `glowup/ble/status/{label}` — JSON status blobs (state, paired
+  sensor list, last_values, timestamp).  These are diagnostic
+  metadata, not bus signals, so they ride a separate topic schema
+  and are not written to the `SignalBus`.  `BleTriggerManager` on
+  the hub subscribes to `glowup/ble/status/#` locally and stores
+  the latest blob per label in its in-process `BleSensorData` store
+  for the `/api/ble/sensors` diagnostic endpoint.
+
+**Both topic schemas are published with `qos=0, retain=False`.**
+Retained sensor data is an anti-pattern: it lets stale values lie
+about reality after a restart.  The 2026-04-15 BLE outage was
+masked for ~8 hours because the hub kept reading retained messages
+from a dead bridge — see `feedback_multi_topic_config_deletion.md`.
+Never retain sensor data.
 
 ---
 
 ## MQTT Topic Format
 
-The BLE daemon publishes to topics under the `glowup/ble/` prefix:
-
 ```
-glowup/ble/{label}/motion        "1" or "0"
-glowup/ble/{label}/temperature   float Celsius (e.g. "22.5")
-glowup/ble/{label}/humidity      float percentage (e.g. "48.2")
-glowup/ble/{label}/status        JSON health metadata blob
+glowup/signals/{label}:motion        "1" or "0"        (numeric)
+glowup/signals/{label}:temperature   float Celsius     (numeric, e.g. "22.5")
+glowup/signals/{label}:humidity      float percentage  (numeric, e.g. "48.2")
+glowup/ble/status/{label}            JSON blob         (diagnostic)
 ```
 
-The `{label}` segment is the device label from the pairing
-configuration (e.g. `hallway`, `bedroom`).
+The `{label}` segment is the device label from
+`/etc/glowup/ble_pairing.json` (e.g. `onvis_motion`,
+`hallway_motion`).  The colon between label and property in the
+signals schema is mandatory — that's what `_on_remote_signal`
+splits on to derive the bus key.
 
 ---
 
-## Signal Normalization
+## Hub-Side Consumption
 
-The `BleAdapter` (server-side) subscribes to `glowup/ble/#` and
-converts MQTT payloads into typed `SignalBus` signals:
+After the pivot, three independent code paths on the hub consume
+BLE data; all three are local subscribes on the hub's own broker
+(no cross-host subscribes anywhere).
 
-| Subtopic | Bus Signal Name | Value Type | Normalization |
-|----------|-----------------|------------|---------------|
-| `motion` | `{label}:motion` | `float` | `int(float(payload))` -- produces `1.0` or `0.0` |
-| `temperature` | `{label}:temperature` | `float` | Raw Celsius from payload, no conversion |
-| `humidity` | `{label}:humidity` | `float` | Raw percentage from payload, no conversion |
+1. **`_on_remote_signal` in `server.py`** subscribes to
+   `glowup/signals/#`.  Receives every BLE numeric reading,
+   writes it into the `SignalBus` under `{label}:{prop}`, and
+   stamps `broker2_signals_last_ts` for the `/api/home/health`
+   liveness probe.  This is the same callback that handles
+   `glowup-zigbee-service` traffic.
 
-All bus signals follow the `{source}:{signal}` naming convention.
-The transport identifier `ble` is recorded in the signal's
-`SignalMeta` for metadata queries, not in the signal name itself.
+2. **`BleTriggerManager`** (in
+   [`infrastructure/ble_trigger.py`](../infrastructure/ble_trigger.py))
+   subscribes to **both** `glowup/signals/#` and
+   `glowup/ble/status/#` locally on the hub broker.  It filters
+   the signals stream by label against its `ble_triggers`
+   configuration in `server.json`, hydrates the in-process
+   `BleSensorData` store with motion / temperature / humidity /
+   status fields, and runs the motion-trigger watchdog (no event
+   in N minutes → group lights off).
 
-### Status Blobs
+3. **`/api/ble/sensors`** in [`handlers/sensors.py`](../handlers/sensors.py)
+   reads the `BleSensorData` store directly (NOT the SignalBus).
+   The store is the single source of truth for that endpoint; if
+   you ever need to add fields, write them via
+   `infrastructure.ble_trigger.sensor_data.update(...)`.
 
-The `status` subtopic carries a JSON health metadata blob -- battery
-level, firmware version, connection quality, last-seen timestamp.
-Because it is a structured object (not a scalar), it is **not**
-written to the `SignalBus`.  Instead, the `BleAdapter` stores it
-in an internal `_status` dict, accessible via:
-
-```python
-blob = ble_adapter.get_status_blob("hallway")
-# Returns dict or None if no status received yet.
-```
-
-This keeps the bus clean (scalars only) while preserving health data
-for dashboard display and diagnostics.
+There is no in-process `BleAdapter` on the hub anymore.  Do not
+recreate one.  See
+[Chapter 35: Service vs. Adapter](35-service-vs-adapter.md) for
+the rule and the rationale.
 
 ---
 
 ## Server-Side Configuration
 
-The `BleAdapter` is instantiated by the server when a `"ble"` section
-is present in `server.json`:
+There is no `"ble"` block in `server.json` for the BLE producer
+itself — the producer lives on broker-2 and is configured by the
+systemd unit on that host (see "Daemon Configuration" below).
+
+`server.json` does still carry a `"ble_triggers"` block that
+configures the hub-side `BleTriggerManager`:
 
 ```json
 {
-    "ble": {
-        "broker": "10.0.0.123",
-        "port": 1883
+    "ble_triggers": {
+        "onvis_motion": {
+            "group": "group:living_room",
+            "on_motion": {"brightness": 70},
+            "watchdog_minutes": 30
+        }
     }
 }
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `broker` | `str` | `"localhost"` | MQTT broker hostname or IP where the BLE daemon publishes |
-| `port` | `int` | `1883` | MQTT broker port |
+| `group` | `str` | required | Device group to control on motion |
+| `on_motion.brightness` | `int` | `70` | Brightness % when motion detected |
+| `watchdog_minutes` | `float` | `30` | Minutes of silence before "lights off" fires |
 
-If the `"ble"` section is absent, the adapter is not created.  The
-server runs without BLE support, and no `paho-mqtt` connection is
-attempted.  This follows the project rule: everything above core is
-optional.
-
-### Guarded Import
-
-The `BleAdapter` is imported with a guard in `server.py`:
-
-```python
-try:
-    from ble_adapter import BleAdapter
-    _HAS_BLE_ADAPTER = True
-except ImportError:
-    _HAS_BLE_ADAPTER = False
-```
-
-If `paho-mqtt` is not installed, the import succeeds but
-`MqttAdapterBase.start()` logs a warning and returns without
-subscribing (see [Adapter Base Classes](27-adapter-base.md)).
+If the `"ble_triggers"` section is empty or absent, the manager
+logs "no triggers configured" and exits cleanly.  BLE signals are
+still received and stored — only the trigger logic is suppressed.
 
 ---
 
@@ -144,14 +184,20 @@ communication.
 
 ### Running the Daemon
 
+In production, the daemon runs as the `glowup-ble-sensor` systemd
+unit on broker-2.  For ad-hoc testing on broker-2:
+
 ```bash
-python3 -m ble.sensor --config ble_pairing.json --broker localhost
+python3 -m ble.sensor --config /etc/glowup/ble_pairing.json
 ```
 
-Or via the package entry point:
+The default hub broker target is `10.0.0.214` (read from the
+`GLB_HUB_BROKER` environment variable, set by the systemd unit).
+To point at a non-production hub, override it:
 
 ```bash
-python3 -m ble sensor --config ble_pairing.json
+GLB_HUB_BROKER=10.0.0.250 python3 -m ble.sensor \
+    --config /etc/glowup/ble_pairing.json
 ```
 
 ### CLI Arguments
@@ -159,8 +205,8 @@ python3 -m ble sensor --config ble_pairing.json
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--config` | `ble_pairing.json` | Path to the pairing configuration file |
-| `--broker` | value from `network_config` | MQTT broker address |
-| `--port` | `1883` | MQTT broker port |
+| `--hub-broker` | `$GLB_HUB_BROKER` or `10.0.0.214` | Hub mosquitto address — must point at the hub, NOT broker-2 localhost |
+| `--hub-port` | `$GLB_HUB_PORT` or `1883` | Hub mosquitto port |
 | `--poll-interval` | `1.0` | Seconds between motion polls (temperature/humidity polled every 30s regardless) |
 | `--verbose`, `-v` | off | Enable debug logging |
 
@@ -266,36 +312,42 @@ long-term keys to the pairing config file.
 
 ## systemd Service
 
-On the remote Pi, run the daemon as a persistent systemd service:
+The canonical unit file lives at
+[`deploy/broker-2/glowup-ble-sensor.service`](../deploy/broker-2/glowup-ble-sensor.service).
+Read its top-of-file comment block for the install commands and
+the rollback story.  The key bits:
 
-```ini
-[Unit]
-Description=GlowUp BLE sensor daemon
-After=network-online.target mosquitto.service
-Wants=network-online.target
+- `Environment=GLB_HUB_BROKER=10.0.0.214` — the unit owns the
+  hub address (per the installer-owns-config rule).  Change
+  here if the hub IP ever moves and re-install the unit.
+- `ExecStart=/usr/bin/python3 -m ble.sensor --config /etc/glowup/ble_pairing.json`
+  — no `--broker` argument; the producer publishes only to the
+  hub broker resolved from `GLB_HUB_BROKER`.
+- `User=a` / `WorkingDirectory=/opt/glowup-sensors` — broker-2
+  hosts the BLE service in `/opt/glowup-sensors/ble/` (NOT the
+  dev `~/lifx` checkout — broker-2 is a non-dev host with files
+  only, no repo).
 
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/lifx
-ExecStart=/usr/bin/python3 -m ble.sensor --config /etc/glowup/ble_pairing.json --broker localhost
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Save as `/etc/systemd/system/glowup-ble-sensor.service`, then:
+Install / update from a dev machine (per the comments in the unit
+file itself):
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable glowup-ble-sensor
-sudo systemctl start glowup-ble-sensor
+scp deploy/broker-2/glowup-ble-sensor.service \
+    a@10.0.0.123:/tmp/glowup-ble-sensor.service
+ssh a@10.0.0.123 \
+  'sudo install -o root -g root -m 0644 \
+     /tmp/glowup-ble-sensor.service \
+     /etc/systemd/system/glowup-ble-sensor.service && \
+   sudo systemctl daemon-reload && \
+   sudo systemctl restart glowup-ble-sensor'
 ```
 
+The python module itself (`ble/sensor.py` and friends) is deployed
+separately into `/opt/glowup-sensors/ble/` on broker-2.
+
 See [Persistent Services](24-persistent-services.md) for the full
-pattern.
+pattern, and [Chapter 35: Service vs. Adapter](35-service-vs-adapter.md)
+for why this lives on broker-2 rather than as an adapter on the hub.
 
 ---
 
@@ -371,16 +423,38 @@ python3 -m ble discover
 python3 -m ble pair <label> --code XXX-XX-XXX
 ```
 
-### MQTT messages not arriving at the server
+### MQTT messages not arriving at the hub
 
-- Verify the BLE daemon is publishing: subscribe directly on the
-  broker and watch for messages:
-  ```bash
-  mosquitto_sub -h 10.0.0.123 -t "glowup/ble/#" -v
-  ```
-- Check that the server's `server.json` has a `"ble"` section with
-  the correct broker address.
-- Verify network connectivity between the server Pi and broker-2.
+`feedback_read_the_producer_first.md` codifies the lesson here:
+**read the producer side first**.  The producer publishes
+cross-host directly to the hub mosquitto, so check those topics
+on the hub:
+
+```bash
+mosquitto_sub -h 10.0.0.214 -t 'glowup/signals/onvis_motion:#' -W 90 -v
+mosquitto_sub -h 10.0.0.214 -t 'glowup/ble/status/#'           -W 90 -v
+```
+
+If both are silent, walk the data path producer-side:
+
+1. Is `glowup-ble-sensor` running on broker-2?
+   ```bash
+   ssh a@10.0.0.123 'systemctl is-active glowup-ble-sensor'
+   ssh a@10.0.0.123 'sudo journalctl -u glowup-ble-sensor -n 30 --no-pager'
+   ```
+2. Is it publishing successfully?  Look for lines like
+   `pub onvis_motion → motion=1.0 rc=0` (rc=0 means the publish
+   reached the hub mosquitto cleanly; any non-zero rc is a
+   network-side failure visible in the log).
+3. Has the hub mosquitto rejected the connection?  Check
+   `journalctl -u mosquitto` on the hub for connect attempts
+   from 10.0.0.123.
+4. Is `GLB_HUB_BROKER` set correctly in the systemd unit?
+   `ssh a@10.0.0.123 'systemctl show -p Environment glowup-ble-sensor'`
+
+Do not poke at any in-process `BleAdapter` on the hub — it
+no longer exists.  Adapter-side debugging is the wrong direction
+for this architecture.
 
 ### Frequent BLE disconnections
 
@@ -414,11 +488,20 @@ If the problem persists, switch to `"gsn"` mode for that device.
 
 ## See Also
 
-- [Adapter Base Classes](27-adapter-base.md) — The `MqttAdapterBase`
-  that `BleAdapter` inherits from
-- [MQTT Integration](19-mqtt.md) — MQTT broker setup and topic
-  conventions
-- [SOE Pipeline](21-soe-pipeline.md) — How BLE signals flow through
-  operators to emitters
-- [Persistent Services](24-persistent-services.md) — systemd service
-  patterns for all GlowUp components
+- [Chapter 35: Service vs. Adapter](35-service-vs-adapter.md) —
+  The architectural decision rule and the "what changed and why"
+  story.  Read this first if you ever wonder whether a future
+  sensor type should live on the hub or on broker-2.
+- [Chapter 29: Zigbee Service](29-zigbee-service.md) — The other
+  service-pattern producer on broker-2; same architecture.
+- [Chapter 27: Adapter Base Classes](27-adapter-base.md) — Note
+  that `glowup-ble-sensor` is **not** an `AdapterBase` subclass.
+  Services join the SOE pipeline at the same point an adapter
+  would, but from the producer side of the wire.
+- [Chapter 19: MQTT Topology](19-mqtt.md) — Broker layout and
+  topic conventions.
+- [Chapter 21: SOE Pipeline](21-soe-pipeline.md) — How signals
+  flow through operators to emitters once a producer (adapter or
+  service) writes them.
+- [Persistent Services](24-persistent-services.md) — systemd
+  service patterns for all GlowUp components.

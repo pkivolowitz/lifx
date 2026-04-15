@@ -267,7 +267,9 @@ class TestRESTIntegration(unittest.TestCase):
         GlowUpRequestHandler.config_path = cls.config_path
         GlowUpRequestHandler.scheduler = None
         GlowUpRequestHandler.media_manager = None
-        GlowUpRequestHandler.automation_manager = None
+        # automation_manager class attribute was removed in
+        # 2026-04-15 along with AutomationManager itself; the
+        # operator framework owns trigger logic now.
         GlowUpRequestHandler.orchestrator = None
         GlowUpRequestHandler.keepalive = None
         GlowUpRequestHandler.registry = None

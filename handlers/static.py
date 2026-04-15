@@ -39,9 +39,11 @@ class StaticHandlerMixin:
         status: str = "ready" if ready else "loading"
 
         # Adapter/daemon health — each reports running/connected.
+        # Zigbee is absent: it runs on broker-2 as glowup-zigbee-service
+        # and is reported via the broker-2 signals liveness probe in
+        # _handle_get_home_health, not as a local adapter proxy.
         adapters: dict[str, dict[str, Any]] = {}
         for attr, label in [
-            ("_zigbee_adapter", "zigbee"),
             ("_vivint_adapter", "vivint"),
             ("_nvr_adapter", "nvr"),
             ("_printer_adapter", "printer"),

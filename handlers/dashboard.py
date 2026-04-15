@@ -26,6 +26,31 @@ from media import SignalBus
 from schedule_utils import parse_time_spec as _parse_time_spec
 from solar import sun_times
 
+# Voice-subsystem constants — pulled in so the satellite health
+# endpoints below can use the same thresholds and topic names as
+# server.py's subscription wiring and voice/satellite/daemon.py's
+# reply publisher.  Imported under short aliases to keep the
+# handler bodies readable.
+from voice.constants import (
+    HUB_SATELLITE_PROBE_TIMEOUT_S as _SAT_PROBE_TIMEOUT_S,
+    SAT_HEARTBEAT_STALE_S as _SAT_HEARTBEAT_STALE_S,
+    TOPIC_HEALTH_REQUEST as _VOICE_TOPIC_HEALTH_REQUEST,
+)
+
+# Max seconds without a non-time signal on glowup/signals/# before
+# broker-2 is reported unhealthy.  Zigbee and BLE both live on
+# broker-2 now (glowup-zigbee-service and glowup-ble-sensor), and
+# both publish cross-host to the hub using this topic prefix.  The
+# hub's _on_remote_signal callback stamps a class-level timestamp
+# on every non-time message.  120s covers the slowest expected
+# publisher cadence — plugs report at least once a minute, soil
+# sensors report less often, but any one producer being alive keeps
+# the timestamp fresh.  The /api/home/health endpoint still emits
+# this as the "zigbee" key for frontend-compat reasons — zigbee is
+# the dominant producer, and the BLE sensor daemon rarely stops
+# independently of the zigbee service.
+BROKER2_SIGNALS_STALE_SEC: float = 120.0
+
 
 class DashboardHandlerMixin:
     """Dashboard and /home UI endpoint handlers."""
@@ -731,9 +756,11 @@ class DashboardHandlerMixin:
             }
         """
         # Adapter health — reuse the same logic as /api/status.
+        # Zigbee is intentionally excluded from this loop — it is not
+        # a local adapter anymore.  See the separate liveness probe
+        # below that watches non-time traffic on glowup/signals/#.
         adapter_health: dict[str, bool] = {}
         for attr, label in [
-            ("_zigbee_adapter", "zigbee"),
             ("_vivint_adapter", "vivint"),
             ("_nvr_adapter", "nvr"),
             ("_printer_adapter", "printer"),
@@ -752,6 +779,25 @@ class DashboardHandlerMixin:
                     adapter_health[label] = healthy
                 except Exception:
                     adapter_health[label] = False
+
+        # Zigbee liveness — broker-2 owns both glowup-zigbee-service
+        # and glowup-ble-sensor.  The glowup server subscribes to
+        # glowup/signals/# and the _on_remote_signal callback stamps
+        # broker2_signals_last_ts on every non-time signal.  Healthy
+        # == a broker-2 signal arrived within BROKER2_SIGNALS_STALE_SEC.
+        # A None timestamp (server just started, no traffic yet)
+        # counts as unhealthy.  Exposed as "zigbee" in the response
+        # for frontend-compat: zigbee is the dominant producer and
+        # consumers already render this key.
+        b2_ts: Optional[float] = getattr(
+            self.__class__, "broker2_signals_last_ts", None,
+        )
+        if b2_ts is None:
+            adapter_health["zigbee"] = False
+        else:
+            adapter_health["zigbee"] = (
+                (time_mod.time() - b2_ts) < BROKER2_SIGNALS_STALE_SEC
+            )
 
         # Keepalive thread.
         ka: Any = getattr(self.__class__, "keepalive", None)
@@ -787,12 +833,266 @@ class DashboardHandlerMixin:
             except Exception:
                 pass
 
+        # Satellite summary — compact per-room rollup derived from
+        # the same data exposed in full by /api/satellites/health.
+        # Each entry is {ok, stale_reason|null} so the /home tile
+        # can render a simple pass/fail dot without deep-parsing.
+        satellites_summary: dict[str, dict[str, Any]] = (
+            self._satellite_health_summary()
+        )
+
         self._send_json(200, {
             "ready": getattr(self.device_manager, "ready", False),
             "adapters": adapter_health,
             "devices": device_count,
             "schedules": schedule_count,
+            "satellites": satellites_summary,
         })
+
+    # ---------------------------------------------------------------------
+    # Satellite health — continuous + on-demand deep probe
+    # ---------------------------------------------------------------------
+    #
+    # The hub subscribes to glowup/voice/status/# and
+    # glowup/voice/health/reply/# in server.py's _background_startup
+    # and populates GlowUpRequestHandler class-level dicts:
+    #
+    #   satellite_heartbeats[room]     — {"ts": float, "payload": dict}
+    #   satellite_health_replies[room] — full deep-check report dict
+    #
+    # These handlers derive their output entirely from those dicts
+    # plus a wall-clock read.  On-demand handlers also publish a
+    # fresh request via GlowUpRequestHandler.satellite_probe_client
+    # and wait for the matching reply (correlation id).
+
+    def _satellite_health_summary(self) -> dict[str, dict[str, Any]]:
+        """Rollup heartbeat + deep-check state for every known room.
+
+        Used by /api/home/health.  Each room entry has
+        ``{ok: bool, stale_reason: str|null}`` where ``ok`` is true
+        iff both the heartbeat is fresh *and* the most recent deep
+        check (if any) reported ``ok: true``.  ``stale_reason`` is
+        the first specific problem the caller needs to see, so the
+        front-end does not have to re-derive it from a fuller
+        report.  Future-Claude reads ``stale_reason`` first.
+        """
+        cls: Any = self.__class__
+        now: float = time_mod.time()
+        summary: dict[str, dict[str, Any]] = {}
+        with cls.satellite_state_lock:
+            heartbeats: dict[str, dict[str, Any]] = dict(
+                cls.satellite_heartbeats,
+            )
+            replies: dict[str, dict[str, Any]] = dict(
+                cls.satellite_health_replies,
+            )
+        rooms: set[str] = set(heartbeats.keys()) | set(replies.keys())
+        for room in rooms:
+            hb: Optional[dict[str, Any]] = heartbeats.get(room)
+            rp: Optional[dict[str, Any]] = replies.get(room)
+            hb_age: Optional[float] = None
+            hb_ok: bool = False
+            if hb is not None:
+                hb_age = now - float(hb.get("ts", 0.0))
+                hb_ok = hb_age < _SAT_HEARTBEAT_STALE_S
+            stale_reason: Optional[str] = None
+            if not hb_ok:
+                stale_reason = (
+                    f"no heartbeat in {hb_age:.0f}s"
+                    if hb_age is not None
+                    else "never heartbeated"
+                )
+                summary[room] = {"ok": False, "stale_reason": stale_reason}
+                continue
+            # Heartbeat is fresh — consult the last deep check.
+            if rp is None:
+                # We have a live satellite but no deep reply yet.
+                # Treat as ok=true with a note so future-me knows
+                # the next prober tick is still pending.
+                summary[room] = {
+                    "ok": True,
+                    "stale_reason": None,
+                }
+                continue
+            rp_ok: bool = bool(rp.get("ok", False))
+            rec_action: Optional[str] = rp.get("recommended_action")
+            summary[room] = {
+                "ok": rp_ok,
+                "stale_reason": rec_action if not rp_ok else None,
+            }
+        return summary
+
+    def _handle_get_satellites_health(self) -> None:
+        """GET /api/satellites/health — full per-room health view.
+
+        Combines heartbeat freshness with the latest deep-check
+        reply for every room the hub has seen.  No authentication
+        required — the payload is diagnostic only.
+
+        Response::
+
+            {
+              "now": <unix-ts>,
+              "rooms": {
+                "<room>": {
+                  "heartbeat": {
+                    "age_s": float,
+                    "ok": bool,
+                    "payload": {... last heartbeat dict ...}
+                  },
+                  "last_deep_check": {
+                    "age_s": float,
+                    "ok": bool,
+                    "checks": {... subsystem dict ...},
+                    "recommended_action": str|null
+                  }
+                }
+              }
+            }
+
+        Rooms with no heartbeat AND no deep-check reply are omitted.
+        Entries where one of the two is missing have that key set
+        to ``null`` — the consumer must tolerate both cases.
+        """
+        cls: Any = self.__class__
+        now: float = time_mod.time()
+        with cls.satellite_state_lock:
+            heartbeats: dict[str, dict[str, Any]] = dict(
+                cls.satellite_heartbeats,
+            )
+            replies: dict[str, dict[str, Any]] = dict(
+                cls.satellite_health_replies,
+            )
+        rooms: set[str] = set(heartbeats.keys()) | set(replies.keys())
+        out: dict[str, dict[str, Any]] = {}
+        for room in sorted(rooms):
+            hb: Optional[dict[str, Any]] = heartbeats.get(room)
+            rp: Optional[dict[str, Any]] = replies.get(room)
+            hb_block: Optional[dict[str, Any]] = None
+            if hb is not None:
+                hb_age: float = now - float(hb.get("ts", 0.0))
+                hb_block = {
+                    "age_s": hb_age,
+                    "ok": hb_age < _SAT_HEARTBEAT_STALE_S,
+                    "payload": hb.get("payload", {}),
+                }
+            deep_block: Optional[dict[str, Any]] = None
+            if rp is not None:
+                rp_ts: float = float(rp.get("timestamp", 0.0))
+                deep_block = {
+                    "age_s": now - rp_ts if rp_ts > 0 else None,
+                    "ok": bool(rp.get("ok", False)),
+                    "checks": rp.get("checks", {}),
+                    "recommended_action": rp.get("recommended_action"),
+                }
+            out[room] = {
+                "heartbeat": hb_block,
+                "last_deep_check": deep_block,
+            }
+        self._send_json(200, {"now": now, "rooms": out})
+
+    def _handle_post_satellite_health_check(self, room: str) -> None:
+        """POST /api/satellites/{room}/health/check — on-demand probe.
+
+        Publishes a request on ``glowup/voice/health/request`` with
+        a fresh correlation id and the target ``room`` field, then
+        blocks for up to ``HUB_SATELLITE_PROBE_TIMEOUT_S`` waiting
+        for a reply correlated to that id.  Returns the full deep
+        report, or a 504 with the most recent heartbeat age if no
+        reply arrives — future-me reads the 504 body and already
+        knows whether the room is dead or just slow.
+
+        Args:
+            room: Target room name (URL-decoded).  Must match a
+                  room that has ever heartbeated; otherwise 404.
+        """
+        import uuid
+        cls: Any = self.__class__
+        if cls.satellite_probe_client is None:
+            self._send_json(503, {
+                "error": (
+                    "satellite probe client not ready — server "
+                    "MQTT is still initialising"
+                ),
+            })
+            return
+        # Tolerate callers that URL-encode the room name.  Match
+        # against any known heartbeat room; 404 if we've never seen
+        # the target room at all.  (A satellite that just booted
+        # and hasn't heartbeated yet cannot be probed on-demand —
+        # wait for the first heartbeat tick.)
+        with cls.satellite_state_lock:
+            known: set[str] = set(cls.satellite_heartbeats.keys())
+        if room not in known:
+            self._send_json(404, {
+                "error": (
+                    f"room {room!r} has never heartbeated; known "
+                    f"rooms: {sorted(known)}"
+                ),
+            })
+            return
+
+        corr_id: str = f"ondemand-{uuid.uuid4().hex[:12]}"
+        waiter: threading.Event = threading.Event()
+        with cls.satellite_state_lock:
+            cls.satellite_health_events[corr_id] = waiter
+        try:
+            payload: bytes = json.dumps({
+                "id": corr_id, "room": room,
+            }).encode("utf-8")
+            try:
+                cls.satellite_probe_client.publish(
+                    _VOICE_TOPIC_HEALTH_REQUEST, payload, qos=1,
+                )
+            except Exception as exc:
+                self._send_json(502, {
+                    "error": f"publish failed: {exc!r}",
+                })
+                return
+            # Wait for the reply callback to set() this event.
+            arrived: bool = waiter.wait(
+                timeout=_SAT_PROBE_TIMEOUT_S,
+            )
+            if not arrived:
+                # Fall back to last-known heartbeat age.
+                with cls.satellite_state_lock:
+                    hb: Optional[dict[str, Any]] = (
+                        cls.satellite_heartbeats.get(room)
+                    )
+                hb_age: Optional[float] = None
+                if hb is not None:
+                    hb_age = time_mod.time() - float(hb.get("ts", 0.0))
+                self._send_json(504, {
+                    "error": (
+                        f"no deep-check reply from room {room!r} "
+                        f"within {_SAT_PROBE_TIMEOUT_S:.0f}s"
+                    ),
+                    "last_heartbeat_age_s": hb_age,
+                    "recommended_action": (
+                        f"room {room!r} did not answer the deep "
+                        "health check.  Verify the satellite host "
+                        "is reachable and glowup-satellite is "
+                        "active; inspect journalctl for errors."
+                    ),
+                })
+                return
+            # Reply arrived — fetch the stashed report.
+            with cls.satellite_state_lock:
+                report: Optional[dict[str, Any]] = (
+                    cls.satellite_health_replies.get(room)
+                )
+            if report is None or report.get("id") != corr_id:
+                # Another reply (periodic prober) landed between
+                # wake and fetch.  Serve whatever is fresh — it is
+                # still authoritative for the room's current state.
+                self._send_json(200, report or {"error": "race"})
+                return
+            self._send_json(200, report)
+        finally:
+            # Always clear the waiter entry so the dict doesn't
+            # leak correlation ids over time.
+            with cls.satellite_state_lock:
+                cls.satellite_health_events.pop(corr_id, None)
 
     def _handle_get_io_page(self) -> None:
         """GET /io — serve the I/O timing dashboard."""
@@ -942,10 +1242,11 @@ class DashboardHandlerMixin:
                 "alarm": "unknown", "doors": [], "sensors": {},
             }
 
-        # Health.
+        # Health.  Zigbee excluded — see _handle_get_home_health for
+        # the MQTT-traffic liveness probe rationale (broker-2 owns
+        # the zigbee pipeline now).
         adapter_health: dict[str, bool] = {}
         for attr, label in [
-            ("_zigbee_adapter", "zigbee"),
             ("_vivint_adapter", "vivint"),
             ("_nvr_adapter", "nvr"),
             ("_printer_adapter", "printer"),
@@ -964,6 +1265,15 @@ class DashboardHandlerMixin:
                     adapter_health[label] = healthy
                 except Exception:
                     adapter_health[label] = False
+        b2_ts2: Optional[float] = getattr(
+            self.__class__, "broker2_signals_last_ts", None,
+        )
+        if b2_ts2 is None:
+            adapter_health["zigbee"] = False
+        else:
+            adapter_health["zigbee"] = (
+                (time_mod.time() - b2_ts2) < BROKER2_SIGNALS_STALE_SEC
+            )
         ka: Any = getattr(self.__class__, "keepalive", None)
         if ka is not None:
             adapter_health["keepalive"] = ka.is_alive()
@@ -1408,45 +1718,13 @@ class DashboardHandlerMixin:
         readings = tl.query(node_id=node, hours=hours, resolution=resolution)
         self._send_json(200, {"readings": readings})
 
-    def _handle_post_zigbee_set(self) -> None:
-        """POST /api/zigbee/set — send a command to a Zigbee device.
-
-        Publishes a payload to zigbee2mqtt/{device}/set via the
-        Zigbee adapter's MQTT connection.
-
-        Request body::
-
-            {"device": "LRTV", "payload": {"state": "ON"}}
-        """
-        body: dict[str, Any] = self._read_json_body()
-        if not body:
-            self._send_json(400, {"error": "missing JSON body"})
-            return
-
-        device: str = body.get("device", "")
-        payload: dict[str, Any] = body.get("payload", {})
-
-        if not device or not payload:
-            self._send_json(400, {"error": "device and payload required"})
-            return
-
-        proxy: Any = getattr(self.server, "_zigbee_adapter", None)
-        if proxy is None or not hasattr(proxy, "send_command"):
-            self._send_json(503, {"error": "Zigbee adapter not available"})
-            return
-
-        try:
-            result: dict[str, Any] = proxy.send_command(
-                "send", {"device": device, "payload": payload},
-            )
-            if result.get("status") == "ok":
-                self._send_json(200, {"status": "ok", "device": device})
-            else:
-                self._send_json(502, {
-                    "error": result.get("error", f"failed to send to {device}"),
-                })
-        except TimeoutError:
-            self._send_json(504, {"error": "Zigbee adapter timed out"})
+    # _handle_post_zigbee_set was removed in 2026-04-15.  It used
+    # the deleted in-process Zigbee adapter proxy and had been
+    # returning 503 on every call since the broker-2 service
+    # pivot.  Plug control will return as a hub→broker-2 cross-
+    # host publisher (the inverse of glowup-zigbee-service's data
+    # path) — see docs/29-zigbee-service.md "What's broken
+    # (follow-up)" and the entry in MEMORY.md.
 
     # -- Helpers ------------------------------------------------------------
 

@@ -124,8 +124,8 @@ class SensorAdapter(ABC):
 
 | Adapter | Transport | Ingestion | Normalization |
 |---------|-----------|-----------|---------------|
-| `BleAdapter` | BLE | MQTT subscription (`glowup/ble/#`) | motion: int→float, temp/humid: raw Celsius/% |
-| `ZigbeeAdapter` | Zigbee | MQTT subscription (Zigbee2MQTT) | boolean→0.0/1.0, battery÷100, temp/humid: raw |
+| `glowup-ble-sensor` (broker-2) | BLE / HAP | Encrypted HAP-BLE reads on broker-2 → cross-host paho publish to hub on `glowup/signals/{label}:{prop}` (numeric) and `glowup/ble/status/{label}` (JSON) | motion: int→float, temp/humid: raw Celsius/% — standalone systemd service on broker-2, not an `AdapterBase` subclass |
+| `glowup-zigbee-service` (broker-2) | Zigbee | Local Z2M MQTT subscribe → cross-host paho publish to hub on `glowup/signals/{device}:{prop}` | boolean→0.0/1.0, battery÷100, temp/humid: raw — runs as a standalone systemd service on broker-2, not an `AdapterBase` subclass |
 | `VivintAdapter` | Vivint | Async cloud API polling + PubNub | lock: bool→0.0/1.0, battery÷100 |
 
 ### Writing a New Adapter
@@ -148,11 +148,15 @@ All adapters accept configurable MQTT topic prefixes:
 
 ```json
 {
-    "ble": {"topic_prefix": "glowup/ble"},
-    "zigbee": {"z2m_prefix": "zigbee2mqtt", "topic_prefix": "glowup/zigbee"},
     "vivint": {"mqtt_topic_prefix": "glowup/vivint"}
 }
 ```
+
+(BLE no longer takes a `topic_prefix` config key — the
+`glowup-ble-sensor` service publishes on a fixed schema:
+`glowup/signals/{label}:{prop}` for numerics and
+`glowup/ble/status/{label}` for JSON status.  See
+[Chapter 28](28-ble-sensors.md).)
 
 ---
 
@@ -342,11 +346,13 @@ The bus is the single source of truth for parameters when active.
 ### Signal Flow Graph
 
 ```
-          ┌─────────────┐
-Sensors   │ BleAdapter   │──► onvis_motion:motion
-          │ ZigbeeAdapter│──► hallway_contact:contact
-          │ VivintAdapter│──► front_door:lock_state
-          └──────┬───────┘
+          ┌──────────────────────────┐
+Sensors   │ glowup-ble-sensor        │──► onvis_motion:motion
+          │ (broker-2, cross-host)   │
+          │ glowup-zigbee-service    │──► hallway_contact:contact
+          │ (broker-2, cross-host)   │
+          │ VivintAdapter            │──► front_door:lock_state
+          └──────────┬───────────────┘
                  │ SignalBus
           ┌──────▼───────┐
 Operators │ Occupancy    │──► house:occupancy:state

@@ -48,12 +48,10 @@ class TestAdapterSentinels(unittest.TestCase):
         """Each adapter has a corresponding _HAS_* sentinel in server.py."""
         import server
         expected_sentinels: list[str] = [
-            "_HAS_ZIGBEE",
             "_HAS_VIVINT",
             "_HAS_NVR",
             "_HAS_PRINTER",
             "_HAS_MATTER",
-            "_HAS_BLE_ADAPTER",
             "_HAS_LOCK_MANAGER",
         ]
         for sentinel in expected_sentinels:

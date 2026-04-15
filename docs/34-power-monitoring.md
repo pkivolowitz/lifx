@@ -14,25 +14,33 @@ device on/off control.
 ## Architecture
 
 ```
-+-------------------+       +-------------------+       +-------------------+
-|  ThirdReality     |       |  Zigbee2MQTT      |       |  GlowUp Server   |
-|  Smart Plug Gen3  | Zigbee|  (broker-2)       |  MQTT |  ZigbeeAdapter   |
-|  (power, voltage, | ----->|                   | ----->|       |          |
-|   current, energy)|       +-------------------+       |  PowerLogger     |
-+-------------------+                                   |       |          |
-                                                        |   SQLite DB     |
-                                                        |  /etc/glowup/   |
-                                                        |   power.db      |
-                                                        +-------------------+
-                                                                |
-                                                          /power page
-                                                         (Chart.js)
++-------------------+       +-------------------+       +-------------------------+       +-------------------+
+|  ThirdReality     |       |  Zigbee2MQTT +    |       | glowup-zigbee-service   |       |  GlowUp Server    |
+|  Smart Plug Gen3  | Zigbee|  local mosquitto  | MQTT  | (broker-2, standalone   | MQTT  |  _on_remote_signal|
+|  (power, voltage, | ----->|  (broker-2)       | ----->| systemd unit; cross-host| ----->|       |           |
+|   current, energy)|       +-------------------+       | publish to hub on       |       |  PowerLogger      |
++-------------------+                                   | glowup/signals/*)       |       |       |           |
+                                                        +-------------------------+       |   SQLite DB       |
+                                                                                          |  /etc/glowup/     |
+                                                                                          |   power.db        |
+                                                                                          +-------------------+
+                                                                                                    |
+                                                                                              /power page
+                                                                                             (Chart.js)
 ```
 
 - **Smart plugs** report power, voltage, current, energy, power
   factor, and AC frequency every ~30 seconds via Zigbee.
-- **ZigbeeAdapter** normalizes the values and calls
-  `PowerLogger.record()` for each property.
+- **`glowup-zigbee-service`** runs as a standalone systemd unit on
+  broker-2, subscribes to Z2M's local `zigbee2mqtt/#` topic,
+  normalizes the values, and publishes one `glowup/signals/{device}:{prop}`
+  message per property by opening its own paho client cross-host
+  to the hub mosquitto.  This replaced the in-process `ZigbeeAdapter`
+  on 2026-04 — the hub no longer hosts a Zigbee adapter at all.
+  See `zigbee_service/service.py` for the architecture rationale.
+- **`_on_remote_signal`** in `server.py` receives those signals on
+  `glowup/signals/#` and feeds power-related properties to
+  `PowerLogger.record()` (throttled per-device).
 - **PowerLogger** accumulates properties per device, throttles
   writes (5-second minimum interval), and stores readings in SQLite.
 - **/power page** fetches chart data and statistics via REST API.
@@ -51,7 +59,9 @@ logger = PowerLogger(db_path="/etc/glowup/power.db")
 
 Creates the SQLite database and table on first use.  WAL mode is
 enabled for concurrent read/write access from the server thread
-and the Zigbee adapter's MQTT callback thread.
+and the hub's `_on_remote_signal` MQTT callback thread (which is
+where `glowup/signals/*` messages from `glowup-zigbee-service` on
+broker-2 land and get fed to `record()`).
 
 ### Recording
 
@@ -195,11 +205,29 @@ Line chart with four time ranges:
 
 Device selector dropdown filters by individual plug or all devices.
 
-### Device Controls
+### Device State Display (read-only)
 
-On/off toggle switch per device.  Publishes state changes to
-Zigbee2MQTT via the GlowUp API (`/api/zigbee/set`).  Device state
-is inferred from power draw (>1W = ON).
+The controls row shows a **read-only state pill** per device
+labelled `ON` / `OFF` / `—`.  The pill is sourced from
+`/api/power/plug_states`, which proxies broker-2's
+`glowup-zigbee-service /devices` endpoint — that's the plug's
+real `genOnOff` relay attribute, not an inference from power draw.
+
+> **Plug control (on/off from this page) was removed on
+> 2026-04-15** along with the in-process Zigbee adapter on the
+> hub.  The `POST /api/zigbee/set` endpoint and the JavaScript
+> toggle that called it have both been deleted.  Until plug
+> control returns, switch plugs from the broker-2 service's
+> own HTTP API (`POST http://10.0.0.123:8422/devices/{name}/state`)
+> or via `zigbee2mqtt/{device}/set` directly on broker-2's
+> local mosquitto.
+>
+> Restoring plug control is tracked in
+> [Chapter 29: Zigbee Service](29-zigbee-service.md) under
+> "What's broken (follow-up)".  The architectural answer is to
+> add a hub→broker-2 cross-host publisher (the inverse of the
+> data path in chapter 29) and re-introduce the dashboard toggle
+> on top of it.
 
 ### Daily Cost Chart
 
@@ -285,7 +313,12 @@ Current monitored plugs:
 
 ## See Also
 
-- [Chapter 29: Zigbee Adapter](29-zigbee-adapter.md) -- The adapter
-  that feeds power readings to the logger.
+- [Chapter 29: Zigbee Service](29-zigbee-service.md) -- The
+  standalone `glowup-zigbee-service` on broker-2 that feeds plug
+  power readings into `_on_remote_signal` and from there into
+  `PowerLogger.record()`.  Includes the "what changed and why"
+  story for the broker-2 pivot.
 - [Chapter 27: Adapter Base Classes](27-adapter-base.md) -- Base
-  classes used by the Zigbee adapter.
+  classes used by the remaining in-process adapters; note that
+  `glowup-zigbee-service` deliberately does **not** subclass any
+  of them.

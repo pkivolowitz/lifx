@@ -65,6 +65,7 @@ def simulate_on_remote_signal(
     message: SimpleNamespace,
     power_logger: Optional[PowerLogger],
     signal_bus: Optional[Any] = None,
+    liveness_holder: Optional[list[Optional[float]]] = None,
 ) -> None:
     """Reproduce exactly what _on_remote_signal in server.py does.
 
@@ -72,14 +73,29 @@ def simulate_on_remote_signal(
     real function changes, update this and the tests.
 
     Args:
-        message:      Fake paho MQTT message.
-        power_logger: PowerLogger instance (or None).
-        signal_bus:   Optional SignalBus (ignored in these tests).
+        message:         Fake paho MQTT message.
+        power_logger:    PowerLogger instance (or None).
+        signal_bus:      Optional SignalBus (ignored in these tests).
+        liveness_holder: Single-slot list used as a mutable "out
+                         parameter" for the broker-2 liveness
+                         timestamp.  When the real callback would
+                         update ``GlowUpRequestHandler.broker2_signals_last_ts``,
+                         this simulator writes ``time.time()`` into
+                         ``liveness_holder[0]`` instead.  Pass
+                         ``[None]`` to observe the stamp; pass
+                         ``None`` to skip tracking.
     """
     parts: list[str] = message.topic.split("/", 2)
     if len(parts) < 3:
         return
     sig_name: str = parts[2]
+
+    # Broker-2 liveness stamp — every non-time signal counts.
+    # Stamp happens before JSON parse so malformed payloads still
+    # register as "broker-2 is alive and publishing."
+    if liveness_holder is not None and not sig_name.startswith("time:"):
+        liveness_holder[0] = time.time()
+
     try:
         sig_value: Any = json.loads(message.payload)
     except (json.JSONDecodeError, ValueError):
@@ -87,7 +103,7 @@ def simulate_on_remote_signal(
     if signal_bus is not None:
         signal_bus.write_local(sig_name, sig_value)
 
-    # --- This is the contract under test ---
+    # --- Power-recording contract ---
     # Power-related signals must be fed to PowerLogger.
     if power_logger is not None:
         sig_parts: list[str] = sig_name.split(":", 1)
@@ -286,103 +302,120 @@ class TestServerCodeFeedsPowerLogger(unittest.TestCase):
         )
 
 
-class TestZigbeePowerSubscription(unittest.TestCase):
-    """Verify server subscribes to glowup/zigbee/ for direct power recording.
+class TestBroker2LivenessStamp(unittest.TestCase):
+    """Verify the /api/home/health broker-2 liveness probe wiring.
 
-    The Zigbee adapter publishes every Z2M property to
-    ``glowup/zigbee/{device}/{property}`` on broker-2's MQTT, which
-    the bridge forwards to glowup.  These messages bypass
-    MqttSignalBus dedup.  The server must subscribe to these and
-    feed power properties to PowerLogger — otherwise slow-reporting
-    devices (like BYIR at ~6min intervals) lose readings when dedup
-    suppresses the ``glowup/signals/`` path.
+    The hub reports zigbee/BLE health by observing whether any
+    non-time signal has arrived on glowup/signals/# recently.  The
+    real callback in server.py stamps
+    ``GlowUpRequestHandler.broker2_signals_last_ts`` on every
+    qualifying message, and handlers/dashboard.py compares that
+    timestamp against ``BROKER2_SIGNALS_STALE_SEC``.
+
+    These tests verify both the filter logic (via the simulator)
+    and the name-level contract between the producer side
+    (server.py) and the consumer side (handlers/dashboard.py).  If
+    anyone renames the attribute without touching the other file,
+    these tests fire.
     """
 
-    # Topic prefix for adapter's direct publishes.
-    ZIGBEE_TOPIC_PREFIX: str = "glowup/zigbee/"
-
-    def test_server_subscribes_to_glowup_zigbee(self) -> None:
-        """server.py must subscribe to glowup/zigbee/ for power recording."""
-        server_path: str = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "server.py",
+    def test_device_signal_stamps_liveness(self) -> None:
+        """A device:prop signal must bump the liveness timestamp."""
+        holder: list[Optional[float]] = [None]
+        msg = make_mqtt_message(
+            f"{SIGNAL_TOPIC_PREFIX}BYIR:power", 0.7,
         )
-        with open(server_path) as f:
-            source: str = f.read()
+        before: float = time.time()
+        simulate_on_remote_signal(msg, None, liveness_holder=holder)
+        self.assertIsNotNone(
+            holder[0],
+            "device:prop signal did not stamp the liveness holder",
+        )
+        self.assertGreaterEqual(holder[0], before)
+
+    def test_time_signal_does_not_stamp_liveness(self) -> None:
+        """time:* signals originate on the hub and must NOT stamp.
+
+        If time signals stamped the liveness holder, a silent
+        broker-2 outage would still report healthy because the hub
+        keeps publishing time signals to itself.
+        """
+        holder: list[Optional[float]] = [None]
+        msg = make_mqtt_message(
+            f"{SIGNAL_TOPIC_PREFIX}time:epoch", 1776253652.0,
+        )
+        simulate_on_remote_signal(msg, None, liveness_holder=holder)
+        self.assertIsNone(
+            holder[0],
+            "time:* signal incorrectly stamped broker-2 liveness — "
+            "a silent broker-2 outage would be hidden",
+        )
+
+    def test_malformed_payload_still_stamps(self) -> None:
+        """A non-parseable payload must still count as 'broker-2 alive'.
+
+        The stamp happens before JSON parsing so a broken device
+        message still proves broker-2's network path is intact.
+        """
+        holder: list[Optional[float]] = [None]
+        msg = SimpleNamespace(
+            topic=f"{SIGNAL_TOPIC_PREFIX}BYIR:power",
+            payload=b"not-json",
+        )
+        simulate_on_remote_signal(msg, None, liveness_holder=holder)
+        self.assertIsNotNone(
+            holder[0],
+            "malformed broker-2 payload failed to stamp liveness — "
+            "a noisy-but-broken producer would report unhealthy",
+        )
+
+    def test_handler_attribute_and_constant_exist(self) -> None:
+        """server.py and handlers/dashboard.py must agree on names.
+
+        The hub's health handler reads
+        ``GlowUpRequestHandler.broker2_signals_last_ts`` and compares
+        against ``BROKER2_SIGNALS_STALE_SEC``.  If either identifier
+        is renamed in one file without the other, the liveness
+        probe silently reverts to always-False.
+        """
+        import server
+        import handlers.dashboard as dashboard_mod
+        self.assertTrue(
+            hasattr(server.GlowUpRequestHandler, "broker2_signals_last_ts"),
+            "server.GlowUpRequestHandler missing broker2_signals_last_ts — "
+            "health probe will never see a stamp",
+        )
+        self.assertTrue(
+            hasattr(dashboard_mod, "BROKER2_SIGNALS_STALE_SEC"),
+            "handlers/dashboard.py missing BROKER2_SIGNALS_STALE_SEC — "
+            "health probe has no staleness threshold",
+        )
+        self.assertIsInstance(
+            dashboard_mod.BROKER2_SIGNALS_STALE_SEC, (int, float),
+        )
+        self.assertGreater(dashboard_mod.BROKER2_SIGNALS_STALE_SEC, 0)
+
+    def test_server_callback_stamps_in_source(self) -> None:
+        """server.py's real _on_remote_signal must contain the stamp.
+
+        Source-level check: if the stamp line is ever deleted or
+        the field is renamed without also renaming the reader, the
+        simulator above is useless because it only tests its own
+        copy of the logic.  This nails the real file.
+        """
+        source: str = extract_on_remote_signal_source()
         self.assertIn(
-            "glowup/zigbee/",
+            "broker2_signals_last_ts",
             source,
-            "server.py does not subscribe to glowup/zigbee/ — "
-            "slow-reporting Zigbee devices will miss power recordings",
+            "server.py _on_remote_signal does not stamp "
+            "broker2_signals_last_ts — health probe is dead",
         )
-
-    def test_zigbee_power_message_recorded(self) -> None:
-        """A glowup/zigbee/{device}/power message must produce a DB row."""
-        tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        path: str = tmpfile.name
-        tmpfile.close()
-        pl: PowerLogger = PowerLogger(db_path=path)
-        pl._last_write.clear()
-        try:
-            msg = make_mqtt_message(
-                f"{self.ZIGBEE_TOPIC_PREFIX}BYIR/power", 13.1,
-            )
-            simulate_on_zigbee_power(msg, pl)
-            rows = pl.query(device="BYIR", hours=1, resolution=1)
-            self.assertGreater(
-                len(rows), 0,
-                "glowup/zigbee/BYIR/power did not produce a DB row",
-            )
-        finally:
-            pl.close()
-            os.unlink(path)
-
-    def test_zigbee_non_power_property_ignored(self) -> None:
-        """Non-power properties on glowup/zigbee/ must not record."""
-        tmpfile = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        path: str = tmpfile.name
-        tmpfile.close()
-        pl: PowerLogger = PowerLogger(db_path=path)
-        pl._last_write.clear()
-        try:
-            msg = make_mqtt_message(
-                f"{self.ZIGBEE_TOPIC_PREFIX}BYIR/linkquality", 56.0,
-            )
-            simulate_on_zigbee_power(msg, pl)
-            self.assertEqual(
-                pl.devices(), [],
-                "Non-power zigbee property should not create a DB row",
-            )
-        finally:
-            pl.close()
-            os.unlink(path)
-
-
-def simulate_on_zigbee_power(
-    message: SimpleNamespace,
-    power_logger: Optional[PowerLogger],
-) -> None:
-    """Reproduce the glowup/zigbee/ callback contract.
-
-    Parses ``glowup/zigbee/{device}/{property}`` and feeds power
-    properties to PowerLogger.record().
-
-    Args:
-        message:      Fake paho MQTT message.
-        power_logger: PowerLogger instance (or None).
-    """
-    # topic: glowup/zigbee/{device}/{property}
-    parts: list[str] = message.topic.split("/")
-    if len(parts) < 4:
-        return
-    device: str = parts[2]
-    prop: str = parts[3]
-    if power_logger is not None:
-        try:
-            value: float = float(json.loads(message.payload))
-            power_logger.record(device, prop, value)
-        except (ValueError, TypeError, json.JSONDecodeError):
-            pass
+        self.assertIn(
+            'not sig_name.startswith("time:")',
+            source,
+            "server.py _on_remote_signal does not filter time:* "
+            "signals — a silent broker-2 outage will report healthy",
+        )
 
 
 if __name__ == "__main__":
