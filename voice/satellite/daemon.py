@@ -318,30 +318,59 @@ class SatelliteDaemon:
             self._mqtt_client = mqtt.Client(client_id=client_id)
 
         self._mqtt_client.on_message = self._on_mqtt_message
+        # Subscriptions are placed in on_connect (not here) so paho's
+        # auto-reconnect path restores them after any broker blip.
+        # A client that subscribes once at startup goes silently deaf
+        # the first time the TCP session is replaced — outbound
+        # publishes keep working, inbound is gone, nothing logs.
+        # mbclock demonstrated this on 2026-04-16 (subs lost at
+        # ~20:29, went unnoticed for 12h).
+        self._mqtt_client.on_connect = self._on_mqtt_connect
         self._mqtt_client.connect(self._mqtt_broker, self._mqtt_port)
-        self._mqtt_client.subscribe(C.TOPIC_PLAYBACK, qos=0)
-        self._mqtt_client.subscribe(C.TOPIC_TTS_TEXT, qos=0)
-        self._mqtt_client.subscribe(C.TOPIC_FLUSH, qos=1)
-        self._mqtt_client.subscribe(C.TOPIC_THINKING, qos=0)
-        # Deep health probe — hub broadcasts a request and every
-        # satellite replies with its own subsystem snapshot.  QoS 1
-        # so a single dropped packet does not silently hide a hung
-        # satellite from the hub's periodic prober.
-        self._mqtt_client.subscribe(C.TOPIC_HEALTH_REQUEST, qos=1)
-        # Only gated satellites subscribe to a gate topic.  Non-gated
-        # rooms (Dining Room, Main Bedroom, etc.) never see a gate
-        # message and their audio loop never consults gate state.
-        if self._gated:
-            self._mqtt_client.subscribe(self._gate_topic, qos=1)
-            logger.info(
-                "Voice gate enabled — subscribed to %s (default closed)",
-                self._gate_topic,
-            )
         self._mqtt_client.loop_start()
         logger.info(
             "MQTT connected: %s:%d as %s",
             self._mqtt_broker, self._mqtt_port, client_id,
         )
+
+    def _on_mqtt_connect(
+        self, client: Any, userdata: Any, *args: Any,
+    ) -> None:
+        """Subscribe to every satellite inbound topic on (re)connect.
+
+        Paho invokes this on the initial connect and again on every
+        successful auto-reconnect.  Re-subscribing here is what keeps
+        the satellite from going silently deaf after a broker blip —
+        with clean_session=True (paho default for MQTT 3.1.1) the
+        broker drops subscriptions at disconnect, so they must be
+        re-established every time the session comes back.
+
+        Args:
+            client:   MQTT client instance (paho passes this back).
+            userdata: User data (unused).
+            *args:    Absorbs the differing trailing args between
+                      paho v1 (flags, rc) and v2 (flags, reason_code,
+                      properties) so this handler works on both.
+        """
+        client.subscribe(C.TOPIC_PLAYBACK, qos=0)
+        client.subscribe(C.TOPIC_TTS_TEXT, qos=0)
+        client.subscribe(C.TOPIC_FLUSH, qos=1)
+        client.subscribe(C.TOPIC_THINKING, qos=0)
+        # Deep health probe — hub broadcasts a request and every
+        # satellite replies with its own subsystem snapshot.  QoS 1
+        # so a single dropped packet does not silently hide a hung
+        # satellite from the hub's periodic prober.
+        client.subscribe(C.TOPIC_HEALTH_REQUEST, qos=1)
+        # Only gated satellites subscribe to a gate topic.  Non-gated
+        # rooms (Dining Room, Main Bedroom, etc.) never see a gate
+        # message and their audio loop never consults gate state.
+        if self._gated:
+            client.subscribe(self._gate_topic, qos=1)
+            logger.info(
+                "Voice gate enabled — subscribed to %s (default closed)",
+                self._gate_topic,
+            )
+        logger.info("MQTT subscribed (on_connect) — receive path live")
 
     def _on_mqtt_message(
         self, client: Any, userdata: Any, msg: Any,
