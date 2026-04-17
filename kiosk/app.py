@@ -13,7 +13,7 @@ Usage::
 Requires: pygame, requests.
 """
 
-__version__: str = "1.0"
+__version__: str = "1.1"
 
 import argparse
 import logging
@@ -25,7 +25,7 @@ from typing import Any, Callable
 
 import pygame
 
-from kiosk.data import DataPoller
+from kiosk.data import DataPoller, TILE_SOURCE
 from kiosk.theme import DAY, NIGHT, Theme
 from kiosk import tiles
 
@@ -373,13 +373,22 @@ def main() -> None:
         # Draw clock.
         tiles.draw_clock(canvas, active_clock_rect, poller, theme)
 
-        # Draw tiles.
+        # Draw tiles.  After the tile's own renderer, if its backing
+        # data source has gone stale (no successful fetch within
+        # threshold), overlay the international bad / blocked X so
+        # the viewer instantly sees "these numbers are not live."
+        # Without this, a network outage leaves the kiosk cheerfully
+        # showing hours-old values with no cue that it's lying.
         for i, (name, draw_fn) in enumerate(active_registry):
             if i < len(active_rects):
                 try:
                     draw_fn(canvas, active_rects[i], poller, theme)
                 except Exception as exc:
                     logger.debug("Tile '%s' render error: %s", name, exc)
+                if poller.is_stale(TILE_SOURCE.get(name)):
+                    tiles.draw_stale_overlay(
+                        canvas, active_rects[i], theme,
+                    )
 
         # Rotate canvas onto physical screen if needed.
         if args.rotate != 0:

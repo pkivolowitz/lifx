@@ -8,7 +8,7 @@ Thread-safe: the poller writes complete dicts; readers get a
 consistent snapshot via the property accessors.
 """
 
-__version__: str = "1.0"
+__version__: str = "1.1"
 
 import json
 import logging
@@ -56,6 +56,44 @@ NWS_URL: str = (
     "?point={lat},{lon}&status=actual&severity=Extreme,Severe,Moderate"
 )
 
+# Tile-name → data-source mapping.  Tiles whose underlying source has
+# not successfully refreshed within the per-source threshold below
+# render with a diagonal X overlay so the viewer knows the reading is
+# stale.  mbclock went silently deaf during a 3-hour network outage
+# on 2026-04-17 with no visible cue; the X is the fix.
+TILE_SOURCE: dict[str, str] = {
+    # Bundled sources — all keys fetched in a single /api/home/all.
+    "locks": "bundled",
+    "security": "bundled",
+    "health": "bundled",
+    "cameras": "bundled",
+    "printer": "bundled",
+    "soil": "bundled",
+    "hints": "bundled",
+    # Night-stack rows that pull from bundled.
+    "doors": "bundled",
+    "alarm": "bundled",
+    # External APIs, each polled independently.
+    "weather": "weather",
+    "aqi": "aqi",
+    "alerts": "alerts",
+    # Night-stack temperature row reads weather.
+    "temp": "weather",
+    # "moon" is purely computed from wall-clock time — never stale,
+    # so it is deliberately absent from this mapping.
+}
+
+# Per-source staleness threshold in seconds.  Chosen at ~3× the poll
+# interval — enough slack to ride out a single missed poll + one
+# retry without a false alarm, but short enough that a real outage
+# shows up on-screen within a minute for the fast-polled tiles.
+STALE_THRESHOLDS: dict[str, float] = {
+    "bundled": POLL_FAST * 3.0,       # 30 s
+    "weather": POLL_SLOW * 3.0,       # 900 s (15 min)
+    "aqi": POLL_SLOW * 3.0,           # 900 s
+    "alerts": POLL_ALERTS * 3.0,      # 360 s (6 min)
+}
+
 
 class DataPoller:
     """Background data poller for all kiosk data sources.
@@ -76,6 +114,13 @@ class DataPoller:
 
         # Last poll timestamps — track when each source was last polled.
         self._last_poll: dict[str, float] = {}
+
+        # Last *successful* fetch per source — monotonic seconds.  This
+        # is distinct from _last_poll (which advances even when a
+        # request throws) so is_stale() reflects actual data freshness,
+        # not mere scheduling activity.  A source absent from this
+        # dict has never successfully fetched and is considered stale.
+        self._last_success: dict[str, float] = {}
 
     # -- Public API ---------------------------------------------------------
 
@@ -105,6 +150,35 @@ class DataPoller:
         """
         with self._lock:
             return self._state.get(key, default)
+
+    def is_stale(self, source: Optional[str]) -> bool:
+        """Return True if ``source`` has not refreshed within threshold.
+
+        A tile whose source is stale should render the "cannot update"
+        overlay (diagonal X).  Sources never seen (no successful
+        fetch since startup) are also stale — the kiosk came up but
+        the network was already dead.
+
+        Args:
+            source: Logical source name (one of ``STALE_THRESHOLDS``
+                    keys), or ``None`` for tiles with no underlying
+                    source (e.g., the moon tile, which is computed).
+
+        Returns:
+            True if the source is stale or unknown-but-mapped.
+            False for sources that are fresh or for ``source=None``.
+        """
+        if source is None:
+            return False
+        threshold: Optional[float] = STALE_THRESHOLDS.get(source)
+        if threshold is None:
+            # Unknown source — can't judge, assume fresh rather than
+            # paint false-positive X's on tiles we forgot to register.
+            return False
+        last: Optional[float] = self._last_success.get(source)
+        if last is None:
+            return True
+        return (time.monotonic() - last) > threshold
 
     # -- Internal -----------------------------------------------------------
 
@@ -159,6 +233,16 @@ class DataPoller:
 
             self._stop.wait(1.0)
 
+    def _mark_fresh(self, source: str) -> None:
+        """Record a successful fetch of ``source`` at the current time.
+
+        Called by every ``_poll_*`` method immediately after a
+        non-None payload is written into state.  Kept as a one-liner
+        helper so every poller uses the same clock (``time.monotonic``)
+        and can't drift by mistake.
+        """
+        self._last_success[source] = time.monotonic()
+
     def _poll_bundled(self) -> None:
         """Poll /api/home/all — single request for all GlowUp tile data."""
         data = self._api_get("/api/home/all")
@@ -167,6 +251,7 @@ class DataPoller:
                         "printer", "soil", "hints"):
                 if key in data:
                     self._set(key, data[key])
+            self._mark_fresh("bundled")
 
     def _poll_weather(self) -> None:
         """Poll Open-Meteo weather."""
@@ -174,6 +259,7 @@ class DataPoller:
         data = self._fetch_json(url)
         if data is not None:
             self._set("weather", data)
+            self._mark_fresh("weather")
 
     def _poll_aqi(self) -> None:
         """Poll Open-Meteo AQI."""
@@ -181,6 +267,7 @@ class DataPoller:
         data = self._fetch_json(url)
         if data is not None:
             self._set("aqi", data)
+            self._mark_fresh("aqi")
 
     def _poll_alerts(self) -> None:
         """Poll NWS severe weather alerts."""
@@ -189,3 +276,4 @@ class DataPoller:
         if data is not None:
             features = data.get("features", [])
             self._set("alerts", features)
+            self._mark_fresh("alerts")

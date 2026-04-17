@@ -9,7 +9,7 @@ Adding a new tile: write a ``draw_foo(surf, rect, data, theme)``
 function and register it in ``TILE_REGISTRY`` in app.py.
 """
 
-__version__: str = "1.0"
+__version__: str = "1.1"
 
 import logging
 import math
@@ -157,6 +157,36 @@ def _draw_card(surf: pygame.Surface, rect: pygame.Rect,
         pygame.draw.rect(card_surf, theme.card_border,
                          (0, 0, rect.w, rect.h), width=3, border_radius=14)
     surf.blit(card_surf, rect.topleft)
+
+
+def draw_stale_overlay(surf: pygame.Surface, rect: pygame.Rect,
+                       theme: Theme) -> None:
+    """Paint a diagonal X over ``rect`` to flag stale data.
+
+    Called by the render loop AFTER the tile's own draw function when
+    the poller reports the tile's source has not refreshed within
+    threshold.  The X is the international "bad / do-not / blocked"
+    glyph — instantly readable from across the room without needing
+    to parse text.
+
+    Color is ``theme.bad`` so day mode and night mode each render in
+    their own palette (night mode's ``bad`` is the alert red; day
+    mode's is the seafoam off-white).  Stroke width scales with
+    tile size so the X stays visually consistent across the full
+    2×2 grid tiles and the tall-thin night-stack rows.
+
+    The X insets ~8% from each edge so it reads as a mark placed on
+    the tile rather than a frame drawn against it.
+    """
+    inset: int = max(6, int(min(rect.w, rect.h) * 0.08))
+    x0, y0 = rect.left + inset, rect.top + inset
+    x1, y1 = rect.right - inset, rect.bottom - inset
+    # Stroke proportional to the smaller dimension so a skinny row
+    # still gets a proportionally skinny X instead of a line so wide
+    # it fills the row vertically.
+    width: int = max(3, min(rect.w, rect.h) // 24)
+    pygame.draw.line(surf, theme.bad, (x0, y0), (x1, y1), width)
+    pygame.draw.line(surf, theme.bad, (x0, y1), (x1, y0), width)
 
 
 def _draw_title(surf: pygame.Surface, rect: pygame.Rect,
