@@ -1,0 +1,8 @@
+{
+    "_comment": "GlowUp SDR service config. Deployed to /etc/glowup/sdr_config.json on the SDR Pi.",
+    "hub_broker": "10.0.0.214",
+    "hub_port": 1883,
+    "frequency": 433920000,
+    "device_index": 0,
+    "gain": null
+}

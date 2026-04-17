@@ -71,7 +71,17 @@ WorkingDirectory=/opt/glowup-sensors
 Environment=GLB_HUB_BROKER=10.0.0.214
 Environment=GLB_HUB_PORT=1883
 
-ExecStartPre=-/usr/sbin/rfkill unblock bluetooth
+# Pin to the ASUS USB dongle (hci1).  broker-2 has two BT adapters:
+#   hci0 = built-in Cypress (must stay DOWN — ONVIS is not paired to it)
+#   hci1 = ASUS USB (0b05:1bf6, ONVIS motion paired here)
+# Bleak defaults to the first UP adapter, so if hci0 is up it wins
+# and scans on the wrong radio.  ExecStartPre ensures correct state
+# at every service start.  See reference_network.md.
+Environment=GLB_BLE_ADAPTER=hci1
+
+ExecStartPre=-+/usr/sbin/rfkill unblock bluetooth
+ExecStartPre=-+/usr/bin/hciconfig hci1 up
+ExecStartPre=-+/usr/bin/hciconfig hci0 down
 ExecStart=/usr/bin/python3 -m ble.sensor --config /etc/glowup/ble_pairing.json
 Restart=always
 RestartSec=10

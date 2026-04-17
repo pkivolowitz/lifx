@@ -1,0 +1,72 @@
+# GlowUp SDR Service — rtl_433 signal ingestion on a dedicated Pi
+#
+# Runs the SDR service daemon (sdr/service.py) on a Pi with an
+# RTL-SDR dongle.  Spawns rtl_433, decodes packets, and publishes
+# sensor signals CROSS-HOST directly to the hub mosquitto at
+# GLB_HUB_BROKER.  The hub does not subscribe to this Pi — that
+# direction is the failure mode that motivated the service-pattern
+# pivot.  See docs/35-service-vs-adapter.md.
+#
+# Topics published (all qos=0, retain=False):
+#
+#   glowup/signals/{label}:{property}  → numeric scalars
+#   glowup/sdr/status/{label}          → full rtl_433 JSON
+#   glowup/sdr/raw                     → every decoded packet
+#
+# Subscribes to (for frequency changes):
+#
+#   glowup/sdr/command                 → {"frequency": 315000000}
+#
+# Install / update on the SDR Pi:
+#
+#   scp deploy/sdr-pi/glowup-sdr.service a@<ip>:/tmp/glowup-sdr.service
+#   ssh a@<ip> \
+#     'sudo install -o root -g root -m 0644 \
+#        /tmp/glowup-sdr.service \
+#        /etc/systemd/system/glowup-sdr.service && \
+#      sudo systemctl daemon-reload && \
+#      sudo systemctl enable glowup-sdr && \
+#      sudo systemctl restart glowup-sdr && \
+#      sudo systemctl status glowup-sdr --no-pager'
+#
+# Requires on the SDR Pi:
+#   - rtl_433 installed: sudo apt install rtl-433
+#   - RTL-SDR dongle plugged in (lsusb shows RTL2832U)
+#   - paho-mqtt: pip install paho-mqtt
+#   - sdr/ python package at /opt/glowup-sdr/sdr/
+#   - Network reachability to hub mosquitto (10.0.0.214:1883)
+#
+# Rollback:
+#   sudo systemctl stop glowup-sdr
+#   sudo systemctl disable glowup-sdr
+
+[Unit]
+Description=GlowUp SDR Service (rtl_433 → cross-host MQTT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=a
+Group=a
+WorkingDirectory=/opt/glowup-sdr
+
+# Hub mosquitto address — the systemd unit owns this (per the
+# installer-owns-config rule).
+Environment=GLB_HUB_BROKER=10.0.0.214
+Environment=GLB_HUB_PORT=1883
+
+# Default frequency — 433.92 MHz (US ISM band).
+# Change to 315000000 for US TPMS, or use the MQTT command
+# topic to switch at runtime without a restart.
+Environment=GLB_SDR_FREQ=433920000
+
+ExecStart=/usr/bin/python3 -m sdr.service
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glowup-sdr
+
+[Install]
+WantedBy=multi-user.target

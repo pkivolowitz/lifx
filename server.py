@@ -367,6 +367,21 @@ _ROUTES: tuple[_Route, ...] = (
            unquote_params=("id",)),
     _Route("DELETE", ("api", "shopping", "checked"),
            "_handle_delete_shopping_checked", requires_auth=False),
+
+    # -- SDR (software-defined radio) -----------------------------------------
+    _Route("GET", ("sdr",),
+           "_handle_get_sdr_page", requires_auth=False),
+    _Route("GET", ("api", "sdr", "status"),
+           "_handle_get_sdr_status"),
+    _Route("POST", ("api", "sdr", "frequency"),
+           "_handle_post_sdr_frequency"),
+
+    # -- ADS-B (aircraft tracking) ------------------------------------------
+    _Route("GET", ("adsb",),
+           "_handle_get_adsb_page", requires_auth=False),
+    _Route("GET", ("api", "sdr", "adsb", "aircraft"),
+           "_handle_get_adsb_aircraft"),
+
     _Route("GET", ("photos", "{filename}"),
            "_handle_get_photo", requires_auth=False),
     _Route("GET", ("js", "{filename}"),
@@ -595,6 +610,7 @@ from handlers import (
     DistributedHandlerMixin, DiagnosticsHandlerMixin, StaticHandlerMixin,
 )
 from handlers.shopping import ShoppingHandlerMixin, ShoppingStore
+from handlers.sdr import SdrHandlerMixin
 
 
 class GlowUpRequestHandler(
@@ -611,6 +627,7 @@ class GlowUpRequestHandler(
     DiagnosticsHandlerMixin,
     StaticHandlerMixin,
     ShoppingHandlerMixin,
+    SdrHandlerMixin,
     http.server.BaseHTTPRequestHandler,
 ):
     """HTTP request handler for the GlowUp REST API.
@@ -2695,8 +2712,53 @@ def main() -> None:
 
                 # Hand the proc_mqtt client to the handler class so
                 # on-demand POST /api/satellites/{room}/health/check
-                # can publish requests without re-opening a client.
+                # and POST /api/sdr/frequency can publish requests
+                # without re-opening a client.
                 GlowUpRequestHandler.satellite_probe_client = proc_mqtt
+                GlowUpRequestHandler._mqtt_client = proc_mqtt
+                GlowUpRequestHandler._sdr_status = {}
+
+                # -- SDR status subscription --------------------------
+                # The SDR service publishes status blobs to
+                # glowup/sdr/status/{label}.  Store the latest per
+                # label for the GET /api/sdr/status endpoint.
+
+                def _on_sdr_status(
+                    client: Any, userdata: Any, message: Any,
+                ) -> None:
+                    parts: list[str] = message.topic.split("/", 3)
+                    if len(parts) < 4:
+                        return
+                    label: str = parts[3]
+                    try:
+                        payload: dict = json.loads(message.payload)
+                        payload["_received_at"] = time.time()
+                        GlowUpRequestHandler._sdr_status[label] = payload
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+                proc_mqtt.subscribe("glowup/sdr/status/#", qos=0)
+                proc_mqtt.message_callback_add(
+                    "glowup/sdr/status/#", _on_sdr_status,
+                )
+
+                # -- ADS-B aircraft subscription ----------------------
+                GlowUpRequestHandler._adsb_aircraft = {}
+
+                def _on_adsb_aircraft(
+                    client: Any, userdata: Any, message: Any,
+                ) -> None:
+                    try:
+                        GlowUpRequestHandler._adsb_aircraft = json.loads(
+                            message.payload,
+                        )
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+                proc_mqtt.subscribe("glowup/sdr/adsb/aircraft", qos=0)
+                proc_mqtt.message_callback_add(
+                    "glowup/sdr/adsb/aircraft", _on_adsb_aircraft,
+                )
 
                 # -- Periodic satellite prober --------------------------
                 # Every HUB_SATELLITE_PROBE_INTERVAL_S the hub

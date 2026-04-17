@@ -133,6 +133,15 @@ DEFAULT_HUB_BROKER: str = os.environ.get("GLB_HUB_BROKER", "10.0.0.214")
 # Default MQTT port.
 DEFAULT_MQTT_PORT: int = int(os.environ.get("GLB_HUB_PORT", "1883"))
 
+# BLE adapter to use — read from GLB_BLE_ADAPTER so the systemd unit
+# can pin to a specific HCI device (e.g. "hci1" for the ASUS USB
+# dongle on broker-2).  None means bleak's default (first UP adapter).
+# broker-2 has two adapters: hci0 (built-in Cypress, must be DOWN)
+# and hci1 (ASUS USB, ONVIS is paired to this one).  If the wrong
+# adapter is UP, bleak scans on the wrong radio and ONVIS silently
+# fails to connect.  See reference_network.md "Bluetooth on broker-2".
+DEFAULT_BLE_ADAPTER: Optional[str] = os.environ.get("GLB_BLE_ADAPTER")
+
 # Seconds between motion polls.  Keep short for responsiveness.
 # Temperature/humidity are read every 30s regardless of this value.
 POLL_INTERVAL: float = 1.0
@@ -686,10 +695,14 @@ async def monitor_device(
     pairing: dict,
     publisher: MqttPublisher,
     poll_interval: float = POLL_INTERVAL,
+    adapter: Optional[str] = None,
 ) -> None:
     """Connect, verify, and poll a single device.
 
     Runs until the BLE connection drops, then returns (caller retries).
+
+    Args:
+        adapter: HCI adapter name (e.g. "hci1").  None = bleak default.
     """
     try:
         from bleak import BleakClient, BleakScanner
@@ -698,13 +711,16 @@ async def monitor_device(
 
     # Serialize scan+connect — BlueZ rejects concurrent scans.
     async with _scan_lock:
-        logger.info("Scanning for %s (%s)...", label, address)
-        ble_dev = await BleakScanner.find_device_by_address(address, timeout=15)
+        logger.info("Scanning for %s (%s) on %s...", label, address,
+                     adapter or "default adapter")
+        ble_dev = await BleakScanner.find_device_by_address(
+            address, timeout=15, adapter=adapter,
+        )
         if ble_dev is None:
             logger.warning("%s not found", label)
             return
 
-    async with BleakClient(ble_dev, timeout=30) as client:
+    async with BleakClient(ble_dev, timeout=30, adapter=adapter) as client:
         logger.info("Connected to %s", label)
 
         # Pair-verify.
@@ -846,6 +862,7 @@ async def _monitor_with_reconnect(
     pairing: dict,
     publisher: MqttPublisher,
     poll_interval: float,
+    adapter: Optional[str] = None,
 ) -> None:
     """Monitor a single device with auto-reconnect.
 
@@ -856,7 +873,8 @@ async def _monitor_with_reconnect(
     while True:
         try:
             await monitor_device(
-                label, address, pairing, publisher, poll_interval
+                label, address, pairing, publisher, poll_interval,
+                adapter=adapter,
             )
         except asyncio.CancelledError:
             raise
@@ -872,6 +890,7 @@ async def _monitor_gsn(
     gsn_devices: dict[str, str],
     publisher: MqttPublisher,
     watchdog_seconds: float = 120.0,
+    adapter: Optional[str] = None,
 ) -> None:
     """Monitor Thread-capable devices via passive GSN scanning.
 
@@ -951,9 +970,12 @@ async def _monitor_gsn(
                 return
             pos += sub_len
 
-    scanner = BleakScanner(detection_callback=_on_advertisement)
+    scanner = BleakScanner(
+        detection_callback=_on_advertisement,
+        adapter=adapter,
+    )
     await scanner.start()
-    logger.info("GSN scanner running")
+    logger.info("GSN scanner running on %s", adapter or "default adapter")
 
     # Publish initial status for all GSN devices.
     for label, addr in gsn_devices.items():
@@ -988,6 +1010,7 @@ async def run_daemon(
     hub_broker: str = DEFAULT_HUB_BROKER,
     hub_port: int = DEFAULT_MQTT_PORT,
     poll_interval: float = POLL_INTERVAL,
+    adapter: Optional[str] = DEFAULT_BLE_ADAPTER,
 ) -> None:
     """Run the BLE sensor daemon with concurrent multi-device support.
 
@@ -997,6 +1020,9 @@ async def run_daemon(
 
     Each GATT device gets its own monitor task with independent
     reconnect logic.  All GSN devices share a single scanner task.
+
+    Args:
+        adapter: HCI adapter name (e.g. "hci1").  None = bleak default.
     """
     with open(config_path) as f:
         pairing: dict = json.load(f)
@@ -1035,6 +1061,9 @@ async def run_daemon(
 
     tasks: list[asyncio.Task] = []
 
+    if adapter:
+        logger.info("BLE adapter pinned to %s", adapter)
+
     # Launch GATT monitor tasks (existing path).
     LAUNCH_STAGGER: float = 3.0
     for i, label in enumerate(gatt_devices):
@@ -1044,6 +1073,7 @@ async def run_daemon(
                 i * LAUNCH_STAGGER,
                 _monitor_with_reconnect,
                 label, address, pairing, publisher, poll_interval,
+                adapter,
             ),
             name=f"ble-{label}",
         )
@@ -1052,7 +1082,7 @@ async def run_daemon(
     # Launch GSN scanner task if any GSN devices exist.
     if gsn_devices:
         gsn_task: asyncio.Task = asyncio.create_task(
-            _monitor_gsn(gsn_devices, publisher),
+            _monitor_gsn(gsn_devices, publisher, adapter=adapter),
             name="ble-gsn-scanner",
         )
         tasks.append(gsn_task)
@@ -1102,6 +1132,16 @@ def main() -> None:
         help=f"Seconds between polls (default: {POLL_INTERVAL})",
     )
     parser.add_argument(
+        "--adapter",
+        default=DEFAULT_BLE_ADAPTER,
+        help=(
+            "HCI adapter name, e.g. 'hci1' for the ASUS USB dongle "
+            f"(default: {DEFAULT_BLE_ADAPTER or 'auto'}, "
+            "from GLB_BLE_ADAPTER env var).  On broker-2 this must be "
+            "'hci1' — the built-in Cypress (hci0) must stay DOWN."
+        ),
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Debug logging",
@@ -1130,6 +1170,7 @@ def main() -> None:
                 hub_broker=args.hub_broker,
                 hub_port=args.hub_port,
                 poll_interval=args.poll_interval,
+                adapter=args.adapter,
             )
         )
     except asyncio.CancelledError:

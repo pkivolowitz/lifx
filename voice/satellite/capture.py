@@ -143,12 +143,24 @@ class UtteranceCapture:
         _NOISE_MULTIPLIER: float = 1.8
         # Minimum threshold prevents zero-floor edge case (dead quiet room).
         _MIN_THRESHOLD: float = 50.0
-        adaptive_threshold: float = max(
-            noise_floor * _NOISE_MULTIPLIER, _MIN_THRESHOLD,
+        # SPECULATIVE (2026-04-16): hard cap on adaptive threshold.
+        # The Dining Room Jabra near the NAS sees bursty equipment
+        # noise (floor swings 121–4471 RMS within 30s).  When the
+        # floor spikes, 1.8x pushes the threshold to 8000+ and
+        # normal speech never registers — capture runs to the 10s
+        # cap.  3000 lets the detector still hear conversational
+        # speech at arm's length from a Jabra.  Needs confirmation
+        # that this doesn't cause premature cutoff in loud rooms.
+        _MAX_THRESHOLD: float = 3000.0
+        adaptive_threshold: float = min(
+            max(noise_floor * _NOISE_MULTIPLIER, _MIN_THRESHOLD),
+            _MAX_THRESHOLD,
         )
         logger.info(
-            "Adaptive silence: floor=%.0f threshold=%.0f (configured=%d)",
-            noise_floor, adaptive_threshold, self._silence_rms,
+            "Adaptive silence: floor=%.0f threshold=%.0f "
+            "(cap=%.0f, configured=%d)",
+            noise_floor, adaptive_threshold,
+            _MAX_THRESHOLD, self._silence_rms,
         )
 
         frames: list[bytes] = list(self._ring)

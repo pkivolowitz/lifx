@@ -1,0 +1,50 @@
+# GlowUp ADS-B Service — aircraft tracking via dump1090
+#
+# Runs on a dedicated Pi with an RTL-SDR dongle on 1090 MHz.
+# Spawns dump1090, polls its aircraft.json endpoint, and
+# publishes aircraft data cross-host to the hub mosquitto.
+#
+# Topics published (all qos=0, retain=False):
+#
+#   glowup/sdr/adsb/aircraft           → full aircraft list JSON
+#   glowup/signals/adsb_{icao}:*       → per-aircraft signals
+#
+# Install / update:
+#
+#   scp deploy/sdr-pi/glowup-adsb.service a@<ip>:/tmp/
+#   ssh a@<ip> \
+#     'sudo install -o root -g root -m 0644 \
+#        /tmp/glowup-adsb.service \
+#        /etc/systemd/system/glowup-adsb.service && \
+#      sudo systemctl daemon-reload && \
+#      sudo systemctl enable glowup-adsb && \
+#      sudo systemctl restart glowup-adsb'
+#
+# Requires:
+#   - dump1090-mutability: sudo apt install dump1090-mutability
+#   - RTL-SDR dongle (dedicated to 1090 MHz)
+#   - paho-mqtt: pip install paho-mqtt
+
+[Unit]
+Description=GlowUp ADS-B Service (dump1090 → cross-host MQTT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=a
+Group=a
+WorkingDirectory=/opt/glowup-sdr
+
+Environment=GLB_HUB_BROKER=10.0.0.214
+Environment=GLB_HUB_PORT=1883
+
+ExecStart=/usr/bin/python3 -m sdr.adsb
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glowup-adsb
+
+[Install]
+WantedBy=multi-user.target

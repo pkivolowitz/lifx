@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlowUp ADS-B Radar</title>
+<style>
+:root {
+    --bg: #0a1a0a;
+    --card-bg: rgba(0,255,0,0.03);
+    --text: #33cc33;
+    --label: #1a8a1a;
+    --gold: #33cc33;
+    --green: #33ff33;
+    --dim: #0a660a;
+    --border: rgba(0,255,0,0.12);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "SF Mono", "Menlo", "Consolas", monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    padding: 24px;
+}
+h1 {
+    font-size: 1.8rem;
+    font-weight: 300;
+    color: var(--green);
+    margin-bottom: 24px;
+    text-shadow: 0 0 20px rgba(0,255,0,0.3);
+}
+h2 {
+    font-size: 1.1rem;
+    font-weight: 400;
+    color: var(--green);
+    margin-bottom: 12px;
+}
+
+/* Stats */
+.stats-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+.stat-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 24px;
+    flex: 1;
+    min-width: 140px;
+}
+.stat-value {
+    font-family: var(--mono);
+    font-size: 2rem;
+    font-weight: 200;
+    color: var(--green);
+    text-shadow: 0 0 10px rgba(0,255,0,0.4);
+}
+.stat-unit {
+    font-size: 0.9rem;
+    color: var(--label);
+    margin-left: 4px;
+}
+.stat-label {
+    font-size: 0.8rem;
+    color: var(--label);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 4px;
+}
+
+/* Aircraft table */
+.ac-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    margin-bottom: 24px;
+}
+.ac-table th {
+    text-align: left;
+    padding: 8px 12px;
+    color: var(--label);
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border);
+}
+.ac-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(0,255,0,0.04);
+    font-family: var(--mono);
+    font-size: 0.8rem;
+}
+.ac-table tr:hover {
+    background: rgba(0,255,0,0.04);
+}
+.flight-id {
+    color: var(--green);
+    font-weight: 500;
+}
+.squawk-alert {
+    color: #ff3333;
+    font-weight: 700;
+}
+.alt-high { color: #33ccff; }
+.alt-mid { color: var(--green); }
+.alt-low { color: #ffcc33; }
+.alt-ground { color: #cc6633; }
+
+/* Status */
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+    box-shadow: 0 0 6px currentColor;
+}
+.status-online { color: var(--green); background: var(--green); }
+.status-offline { color: #cc3333; background: #cc3333; }
+
+/* Scanline effect */
+@keyframes scanline {
+    0% { background-position: 0 0; }
+    100% { background-position: 0 100%; }
+}
+body::after {
+    content: "";
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.03) 2px,
+        rgba(0,0,0,0.03) 4px
+    );
+    z-index: 9999;
+}
+</style>
+</head>
+<body>
+
+<!-- Site nav -->
+<nav id="siteNav" style="display:flex;gap:18px;padding:6px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:0.8rem;letter-spacing:0.04em;"></nav>
+<script src="/js/site_nav.js" defer></script>
+
+<h1>ADS-B Radar</h1>
+
+<!-- Stats -->
+<div class="stats-row">
+    <div class="stat-card">
+        <div><span class="stat-value" id="acCount">--</span></div>
+        <div class="stat-label">Aircraft Tracked</div>
+    </div>
+    <div class="stat-card">
+        <div><span class="stat-value" id="peakCount">--</span></div>
+        <div class="stat-label">Peak This Session</div>
+    </div>
+    <div class="stat-card">
+        <div><span class="stat-value" id="closestAlt">--</span><span class="stat-unit">ft</span></div>
+        <div class="stat-label">Lowest Altitude</div>
+    </div>
+    <div class="stat-card">
+        <div><span class="status-dot" id="statusDot"></span><span class="stat-value" id="statusText" style="font-size:1rem;">--</span></div>
+        <div class="stat-label">ADS-B Receiver</div>
+    </div>
+</div>
+
+<!-- Aircraft table -->
+<h2>Aircraft</h2>
+<table class="ac-table" id="acTable">
+    <thead>
+        <tr>
+            <th>ICAO</th>
+            <th>Flight</th>
+            <th>Squawk</th>
+            <th>Altitude</th>
+            <th>Speed</th>
+            <th>Heading</th>
+            <th>Lat</th>
+            <th>Lon</th>
+            <th>RSSI</th>
+            <th>Age</th>
+        </tr>
+    </thead>
+    <tbody id="acBody"></tbody>
+</table>
+
+<div id="emptyMsg" style="text-align:center;color:var(--label);padding:40px;font-size:0.9rem;">
+    Waiting for ADS-B data...
+</div>
+
+<script>
+const AUTH = localStorage.getItem("glowup_token") || "";
+const API = "";
+let peak = 0;
+
+function altClass(alt) {
+    if (alt == null) return "";
+    if (alt <= 0) return "alt-ground";
+    if (alt < 5000) return "alt-low";
+    if (alt < 20000) return "alt-mid";
+    return "alt-high";
+}
+
+function fmtAlt(alt) {
+    if (alt == null) return "--";
+    return alt.toLocaleString();
+}
+
+function fmtSpeed(gs) {
+    if (gs == null) return "--";
+    return Math.round(gs) + " kt";
+}
+
+function fmtHeading(track) {
+    if (track == null) return "--";
+    return Math.round(track) + "\u00b0";
+}
+
+function fmtCoord(v) {
+    if (v == null) return "--";
+    return v.toFixed(4);
+}
+
+function isAlertSquawk(sq) {
+    return sq === "7500" || sq === "7600" || sq === "7700";
+}
+
+async function poll() {
+    try {
+        const resp = await fetch(API + "/api/sdr/adsb/aircraft", {
+            headers: { "Authorization": "Bearer " + AUTH },
+        });
+        if (!resp.ok) throw new Error(resp.status);
+        const data = await resp.json();
+        const aircraft = data.aircraft || [];
+        const count = aircraft.length;
+
+        if (count > peak) peak = count;
+
+        document.getElementById("acCount").textContent = count;
+        document.getElementById("peakCount").textContent = peak;
+        document.getElementById("statusDot").className =
+            "status-dot " + (count > 0 ? "status-online" : "status-offline");
+        document.getElementById("statusText").textContent =
+            count > 0 ? "receiving" : "waiting";
+        document.getElementById("emptyMsg").style.display =
+            count > 0 ? "none" : "block";
+
+        /* Lowest altitude. */
+        let lowest = null;
+        aircraft.forEach(ac => {
+            const alt = ac.alt_baro;
+            if (alt != null && (lowest == null || alt < lowest)) lowest = alt;
+        });
+        document.getElementById("closestAlt").textContent =
+            lowest != null ? lowest.toLocaleString() : "--";
+
+        /* Sort by altitude ascending — lowest (most interesting) first. */
+        aircraft.sort((a, b) => (a.alt_baro || 99999) - (b.alt_baro || 99999));
+
+        const body = document.getElementById("acBody");
+        body.innerHTML = aircraft.map(ac => {
+            const icao = ac.hex || "?";
+            const flight = (ac.flight || "").trim();
+            const squawk = ac.squawk || "";
+            const sqClass = isAlertSquawk(squawk) ? " squawk-alert" : "";
+            const alt = ac.alt_baro;
+            const aClass = altClass(alt);
+            const seen = ac.seen != null ? Math.round(ac.seen) + "s" : "?";
+            const rssi = ac.rssi != null ? ac.rssi.toFixed(1) : "--";
+            return `<tr>
+                <td>${icao}</td>
+                <td class="flight-id">${flight || "--"}</td>
+                <td class="${sqClass}">${squawk || "--"}</td>
+                <td class="${aClass}">${fmtAlt(alt)}</td>
+                <td>${fmtSpeed(ac.gs)}</td>
+                <td>${fmtHeading(ac.track)}</td>
+                <td>${fmtCoord(ac.lat)}</td>
+                <td>${fmtCoord(ac.lon)}</td>
+                <td>${rssi}</td>
+                <td>${seen}</td>
+            </tr>`;
+        }).join("");
+
+    } catch (e) {
+        document.getElementById("statusDot").className = "status-dot status-offline";
+        document.getElementById("statusText").textContent = "error";
+    }
+}
+
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

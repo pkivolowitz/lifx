@@ -263,6 +263,11 @@ class GlowUpExecutor:
     def _resolve_target(self, target: str) -> str:
         """Resolve a fuzzy target name to an actual group or device.
 
+        Uses the source room (``self._current_room``) as a tiebreaker
+        when multiple groups substring-match the target.  "bedroom"
+        spoken from "Main Bedroom" resolves to "Main Bedroom", not
+        whichever group happens to iterate first.
+
         Args:
             target: Raw target string from the LLM.
 
@@ -276,8 +281,11 @@ class GlowUpExecutor:
             data = self._request("GET", "/api/groups")
             groups: dict = data.get("groups", {})
             target_lower: str = target.lower().strip()
+            room_lower: str = getattr(
+                self, "_current_room", ""
+            ).lower().strip()
 
-            # Exact match.
+            # Exact match (highest priority).
             for name in groups:
                 if name.lower() == target_lower:
                     logger.info(
@@ -286,14 +294,31 @@ class GlowUpExecutor:
                     )
                     return f"group:{name}"
 
-            # Substring match.
-            for name in groups:
-                if target_lower in name.lower():
+            # Substring match — collect all candidates, prefer the
+            # source room when there are multiple hits.
+            candidates: list[str] = [
+                name for name in groups
+                if target_lower in name.lower()
+            ]
+            if candidates:
+                # If the source room is among the candidates, prefer it.
+                room_match: Optional[str] = next(
+                    (n for n in candidates if n.lower() == room_lower),
+                    None,
+                )
+                chosen: str = room_match if room_match else candidates[0]
+                if room_match:
+                    logger.info(
+                        "Fuzzy target '%s' resolved to source room "
+                        "'group:%s' (preferred over %d other match(es))",
+                        target, chosen, len(candidates) - 1,
+                    )
+                else:
                     logger.info(
                         "Fuzzy target '%s' resolved to group 'group:%s'",
-                        target, name,
+                        target, chosen,
                     )
-                    return f"group:{name}"
+                return f"group:{chosen}"
 
             # Device list.
             dev_data = self._request("GET", "/api/devices")
@@ -311,6 +336,47 @@ class GlowUpExecutor:
             logger.debug("Target resolution failed: %s", exc)
 
         return target
+
+    def _prepare_for_brightness(
+        self, target_url: str, display_target: str,
+    ) -> None:
+        """Stop any running effect and power on before setting brightness.
+
+        Two prerequisites for a brightness command to visibly work:
+
+        1. The effect engine must be stopped — otherwise it repaints
+           bulb state every frame, overwriting the new brightness.
+        2. The bulb must be powered on — LIFX stores HSBK while
+           powered off but emits nothing.  (blank-on-poweroff means
+           set_power(on) alone emits zero light, but set_brightness
+           writes a visible warm-white immediately after.)
+
+        Errors are logged but do not block the brightness call.
+        """
+        # Stop running effect.
+        stop_cfg = self._actions.get("stop")
+        if stop_cfg is not None:
+            try:
+                self._dispatch_command(
+                    stop_cfg, target_url, display_target, {},
+                )
+                logger.info(
+                    "Stopped running effect on %s before brightness",
+                    display_target,
+                )
+            except Exception as exc:
+                logger.debug("Stop before brightness (non-fatal): %s", exc)
+
+        # Power on.
+        power_cfg = self._actions.get("power")
+        if power_cfg is not None:
+            try:
+                self._dispatch_command(
+                    power_cfg, target_url, display_target, {"on": True},
+                )
+                logger.info("Powered on %s before brightness", display_target)
+            except Exception as exc:
+                logger.debug("Power-on before brightness (non-fatal): %s", exc)
 
     # ------------------------------------------------------------------
     # Generic dispatch
@@ -362,9 +428,39 @@ class GlowUpExecutor:
             action_type: str = action_cfg.get("type", "command")
 
             if action_type == "command":
-                return self._dispatch_command(
+                # Brightness and power+brightness both need any running
+                # effect stopped first — otherwise the effect engine
+                # repaints over the new brightness on every frame.
+                if action in ("brightness",):
+                    self._prepare_for_brightness(target_url, display_target)
+
+                result = self._dispatch_command(
                     action_cfg, target_url, display_target, params,
                 )
+                # When Ollama bundles brightness into a power intent
+                # (e.g. "turn on to 10%"), chain a brightness call
+                # after the power-on succeeds.
+                if (
+                    action == "power"
+                    and result.get("status") == "ok"
+                    and params.get("on") is True
+                    and "brightness" in params
+                ):
+                    self._prepare_for_brightness(target_url, display_target)
+                    bri_cfg = self._actions.get("brightness")
+                    if bri_cfg:
+                        self._dispatch_command(
+                            bri_cfg, target_url, display_target, params,
+                        )
+                        result["confirmation"] = (
+                            f"{display_target} on at "
+                            f"{params['brightness']}%."
+                        )
+                        logger.info(
+                            "Chained brightness %d%% after power-on for %s",
+                            params["brightness"], display_target,
+                        )
+                return result
             elif action_type == "query":
                 return self._dispatch_query(
                     action_cfg, target_url, target_raw,

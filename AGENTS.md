@@ -25,20 +25,24 @@ misconfigured), run the script manually:
 
 ### Post-discovery actions (Claude's responsibility)
 
-- Read `~/NAS/.claude/global/identity.md`
-- Read `~/NAS/.claude/global/rules.md`
+- **Trust the bootstrap blob.** The SessionStart hook already inlines
+  `identity.md`, `rules.md`, `MEMORY.md`, and any `_precompact.md` or
+  handoff content between `--- begin ---` / `--- end ---` markers.
+  Do NOT re-Read files whose content is already in the blob — that
+  doubles per-turn token cost for zero benefit.
 - If the bootstrap block says **handoff PRESENT**: its body is embedded
   inline — internalize it, then archive to
   `~/NAS/.claude/handoff/archive/<from>_to_<machine>_<YYYY-MM-DD>.md`
-- If the bootstrap block says **precompact PRESENT**: read the file,
-  internalize it, then DELETE it (Compaction Protocol in rules.md)
+- If the bootstrap block says **precompact PRESENT**: content is inlined —
+  internalize it, then DELETE the file (Compaction Protocol in rules.md)
 - Pull latest branch state from `staging` before code changes
-- Read project memory:
+- Read project memory files **only if they were NOT inlined** in the blob.
+  Files commonly inlined by the bootstrap script:
+  - `~/NAS/.claude/global/identity.md`
+  - `~/NAS/.claude/global/rules.md`
   - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/MEMORY.md`
-  - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_project_state.md`
-  - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/reference_network.md`
-  - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/feedback_debugging_methodology.md`
-  - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/feedback_token_discipline.md`
+  If these appear in the blob, skip them. Only Read files the task
+  actually requires (e.g., a specific project or reference memory).
 - Inspect repo state (the bootstrap script does not touch git):
   - `git branch --show-current`
   - `git status --short --branch`

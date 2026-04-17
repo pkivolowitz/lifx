@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlowUp SDR Scanner</title>
+<style>
+:root {
+    --bg: #1a1410;
+    --card-bg: rgba(255,255,255,0.04);
+    --text: #c4b49a;
+    --label: #8a7a60;
+    --gold: #c4a44a;
+    --green: #6aaa90;
+    --red: #c45a3a;
+    --blue: #4a8ac4;
+    --border: rgba(196,164,74,0.15);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "SF Mono", "Menlo", "Consolas", monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    padding: 24px;
+}
+h1 {
+    font-size: 1.8rem;
+    font-weight: 300;
+    color: var(--gold);
+    margin-bottom: 24px;
+}
+h2 {
+    font-size: 1.1rem;
+    font-weight: 400;
+    color: var(--gold);
+    margin-bottom: 12px;
+}
+
+/* Stats row */
+.stats-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+.stat-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 24px;
+    flex: 1;
+    min-width: 140px;
+}
+.stat-value {
+    font-family: var(--mono);
+    font-size: 2rem;
+    font-weight: 200;
+    color: var(--gold);
+}
+.stat-unit {
+    font-size: 0.9rem;
+    color: var(--label);
+    margin-left: 4px;
+}
+.stat-label {
+    font-size: 0.8rem;
+    color: var(--label);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 4px;
+}
+
+/* Frequency selector */
+.freq-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+}
+.freq-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.freq-card:hover {
+    border-color: var(--gold);
+}
+.freq-card.active {
+    border-color: var(--green);
+    background: rgba(106,170,144,0.08);
+}
+.freq-card input[type="radio"] {
+    accent-color: var(--green);
+    width: 16px;
+    height: 16px;
+}
+.freq-name {
+    font-weight: 500;
+    color: var(--text);
+}
+.freq-mhz {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    color: var(--label);
+}
+.freq-desc {
+    font-size: 0.75rem;
+    color: var(--label);
+    margin-top: 2px;
+}
+
+/* Device table */
+.device-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    margin-bottom: 24px;
+}
+.device-table th {
+    text-align: left;
+    padding: 8px 12px;
+    color: var(--label);
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border);
+}
+.device-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(196,164,74,0.06);
+    font-family: var(--mono);
+    font-size: 0.8rem;
+}
+.device-table tr:hover {
+    background: rgba(196,164,74,0.04);
+}
+.type-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.type-tpms { background: rgba(74,138,196,0.15); color: var(--blue); }
+.type-weather { background: rgba(106,170,144,0.15); color: var(--green); }
+.type-generic { background: rgba(196,164,74,0.15); color: var(--gold); }
+
+/* Raw log */
+.raw-log {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    max-height: 300px;
+    overflow-y: auto;
+    line-height: 1.6;
+    color: var(--label);
+}
+.raw-log .entry {
+    border-bottom: 1px solid rgba(196,164,74,0.04);
+    padding: 2px 0;
+}
+.raw-log .entry-time {
+    color: var(--label);
+    margin-right: 8px;
+}
+.raw-log .entry-model {
+    color: var(--gold);
+    font-weight: 500;
+}
+
+/* Status indicator */
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+.status-online { background: var(--green); }
+.status-offline { background: var(--red); }
+</style>
+</head>
+<body>
+
+<!-- Site nav -->
+<nav id="siteNav" style="display:flex;gap:18px;padding:6px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:0.8rem;letter-spacing:0.04em;"></nav>
+<script src="/js/site_nav.js" defer></script>
+
+<h1>SDR Scanner</h1>
+
+<!-- Stats -->
+<div class="stats-row">
+    <div class="stat-card">
+        <div><span class="stat-value" id="deviceCount">--</span></div>
+        <div class="stat-label">Devices Seen</div>
+    </div>
+    <div class="stat-card">
+        <div><span class="stat-value" id="currentFreq">--</span><span class="stat-unit">MHz</span></div>
+        <div class="stat-label">Current Frequency</div>
+    </div>
+    <div class="stat-card">
+        <div><span class="status-dot" id="statusDot"></span><span class="stat-value" id="statusText" style="font-size:1rem;">--</span></div>
+        <div class="stat-label">SDR Service</div>
+    </div>
+</div>
+
+<!-- Frequency selector -->
+<h2>Frequency Band</h2>
+<div class="freq-grid" id="freqGrid"></div>
+
+<!-- Devices -->
+<h2>Decoded Devices</h2>
+<table class="device-table" id="deviceTable">
+    <thead>
+        <tr>
+            <th>Device</th>
+            <th>Type</th>
+            <th>Model</th>
+            <th>Last Value</th>
+            <th>Age</th>
+        </tr>
+    </thead>
+    <tbody id="deviceBody"></tbody>
+</table>
+
+<!-- Raw log -->
+<h2>Raw Packets</h2>
+<div class="raw-log" id="rawLog">Waiting for packets...</div>
+
+<script>
+const AUTH = localStorage.getItem("glowup_token") || "";
+const API = "";
+
+const FREQUENCIES = [
+    { name: "433 MHz ISM", mhz: 433.920, hz: 433920000,
+      desc: "Weather stations, TPMS, doorbells, soil sensors" },
+    { name: "315 MHz", mhz: 315.000, hz: 315000000,
+      desc: "US TPMS, garage doors, car remotes" },
+    { name: "868 MHz EU", mhz: 868.000, hz: 868000000,
+      desc: "EU ISM band, smart meters" },
+    { name: "915 MHz US", mhz: 915.000, hz: 915000000,
+      desc: "US ISM, LoRa, smart meters" },
+    { name: "345 MHz", mhz: 345.000, hz: 345000000,
+      desc: "Honeywell security sensors" },
+    { name: "390 MHz", mhz: 390.000, hz: 390000000,
+      desc: "Chamberlain/LiftMaster garage doors" },
+];
+
+let currentFreqHz = 433920000;
+let devices = {};
+let rawEntries = [];
+
+/* ---- Frequency grid ---- */
+function buildFreqGrid() {
+    const grid = document.getElementById("freqGrid");
+    grid.innerHTML = "";
+    FREQUENCIES.forEach(f => {
+        const card = document.createElement("div");
+        card.className = "freq-card" + (f.hz === currentFreqHz ? " active" : "");
+        card.innerHTML = `
+            <input type="radio" name="freq" value="${f.hz}"
+                   ${f.hz === currentFreqHz ? "checked" : ""}>
+            <div>
+                <div class="freq-name">${f.name}</div>
+                <div class="freq-mhz">${f.mhz.toFixed(3)} MHz</div>
+                <div class="freq-desc">${f.desc}</div>
+            </div>
+        `;
+        card.addEventListener("click", () => setFrequency(f.hz));
+        grid.appendChild(card);
+    });
+}
+
+async function setFrequency(hz) {
+    try {
+        const resp = await fetch(API + "/api/sdr/frequency", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + AUTH,
+            },
+            body: JSON.stringify({ frequency: hz }),
+        });
+        if (resp.ok) {
+            currentFreqHz = hz;
+            buildFreqGrid();
+            updateStats();
+            /* Clear device list on freq change — new band, new devices. */
+            devices = {};
+            renderDevices();
+            rawEntries = [];
+            document.getElementById("rawLog").innerHTML = "Switched to " +
+                (hz / 1e6).toFixed(3) + " MHz — waiting for packets...";
+        }
+    } catch (e) {
+        console.error("Frequency change failed:", e);
+    }
+}
+
+/* ---- Stats ---- */
+function updateStats() {
+    document.getElementById("deviceCount").textContent = Object.keys(devices).length;
+    document.getElementById("currentFreq").textContent = (currentFreqHz / 1e6).toFixed(3);
+}
+
+/* ---- Device table ---- */
+function renderDevices() {
+    const body = document.getElementById("deviceBody");
+    const now = Date.now() / 1000;
+    const sorted = Object.entries(devices).sort((a, b) =>
+        (b[1]._received_at || 0) - (a[1]._received_at || 0)
+    );
+    body.innerHTML = sorted.map(([label, d]) => {
+        const age = d._received_at ? Math.round(now - d._received_at) : "?";
+        const ageStr = age < 60 ? age + "s" : Math.round(age / 60) + "m";
+        const model = d.model || "?";
+        const dtype = classifyModel(model);
+        const values = extractValues(d);
+        return `<tr>
+            <td>${label}</td>
+            <td><span class="type-badge type-${dtype}">${dtype}</span></td>
+            <td>${model}</td>
+            <td>${values}</td>
+            <td>${ageStr}</td>
+        </tr>`;
+    }).join("");
+    updateStats();
+}
+
+function classifyModel(model) {
+    const m = model.toLowerCase();
+    if (m.includes("tpms") || m.includes("tire") || m.includes("schrader")) return "tpms";
+    if (m.includes("acurite") || m.includes("lacrosse") || m.includes("oregon") ||
+        m.includes("fineoffset") || m.includes("weather") || m.includes("ecowitt") ||
+        m.includes("bresser") || m.includes("davis")) return "weather";
+    return "generic";
+}
+
+function extractValues(d) {
+    const parts = [];
+    if (d.temperature_C != null) parts.push(d.temperature_C.toFixed(1) + "\u00b0C");
+    if (d.temperature_F != null) parts.push(d.temperature_F.toFixed(1) + "\u00b0F");
+    if (d.humidity != null) parts.push(d.humidity + "%rh");
+    if (d.pressure_PSI != null) parts.push(d.pressure_PSI.toFixed(1) + " psi");
+    if (d.pressure_kPa != null) parts.push(d.pressure_kPa.toFixed(1) + " kPa");
+    if (d.wind_avg_km_h != null) parts.push(d.wind_avg_km_h.toFixed(1) + " km/h");
+    if (d.rain_mm != null) parts.push(d.rain_mm.toFixed(1) + " mm");
+    if (d.battery_ok != null) parts.push("bat:" + (d.battery_ok ? "ok" : "low"));
+    if (d.state != null) parts.push(d.state);
+    if (d.power != null) parts.push(d.power.toFixed(1) + "W");
+    if (parts.length === 0) return "<span style='color:var(--label)'>--</span>";
+    return parts.join(" &middot; ");
+}
+
+/* ---- Raw log ---- */
+function appendRaw(packet) {
+    const log = document.getElementById("rawLog");
+    const time = new Date().toLocaleTimeString();
+    const model = packet.model || "?";
+    const entry = document.createElement("div");
+    entry.className = "entry";
+    entry.innerHTML = `<span class="entry-time">${time}</span>` +
+        `<span class="entry-model">${model}</span> ` +
+        JSON.stringify(packet).substring(0, 200);
+    log.prepend(entry);
+    /* Keep last 100 entries. */
+    while (log.children.length > 100) {
+        log.removeChild(log.lastChild);
+    }
+}
+
+/* ---- Polling ---- */
+async function poll() {
+    try {
+        const resp = await fetch(API + "/api/sdr/status", {
+            headers: { "Authorization": "Bearer " + AUTH },
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            const dot = document.getElementById("statusDot");
+            const txt = document.getElementById("statusText");
+
+            if (data.device_count > 0 || Object.keys(data.devices).length > 0) {
+                dot.className = "status-dot status-online";
+                txt.textContent = "receiving";
+            } else {
+                dot.className = "status-dot status-offline";
+                txt.textContent = "waiting";
+            }
+
+            /* Merge devices. */
+            for (const [label, d] of Object.entries(data.devices || {})) {
+                const isNew = !(label in devices);
+                devices[label] = d;
+                if (isNew) appendRaw(d);
+            }
+            renderDevices();
+        }
+    } catch (e) {
+        document.getElementById("statusDot").className = "status-dot status-offline";
+        document.getElementById("statusText").textContent = "error";
+    }
+}
+
+/* ---- Init ---- */
+buildFreqGrid();
+updateStats();
+poll();
+setInterval(poll, 3000);
+</script>
+</body>
+</html>

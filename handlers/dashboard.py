@@ -670,6 +670,8 @@ class DashboardHandlerMixin:
             {"label": "I/O", "href": "/io"},
             {"label": "Shopping", "href": "/shopping"},
             {"label": "Vivint", "href": "/vivint"},
+            {"label": "SDR", "href": "/sdr"},
+            {"label": "ADS-B", "href": "/adsb"},
         ]
         # External links from config.
         extra: list[dict[str, str]] = self.config.get("nav_links", [])

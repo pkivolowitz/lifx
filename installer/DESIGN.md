@@ -1,39 +1,21 @@
-# GlowUp Installer — Design
+# GlowUp Installer — Design (v2)
 
-Status: **design in progress**, not yet implemented.
-Last updated: Conway, 2026-04-08.
+Status: **design locked**, awaiting implementation.
+Session: Conway, 2026-04-12.
+Supersedes: the 2026-04-08 design doc, preserved verbatim in Claude memory
+at `project_installer_design_2026-04-08.md`.
 
-This document is the working design for the GlowUp installer rewrite.
-It supersedes the browser-based installer currently on disk in this
-directory (`install.py` + `static/installer.js`), which will be
-replaced wholesale once this design is locked in.
+This v2 supersedes v1 on: unified single/multi flow, uv-backed venv, Linux-only
+feature gating, Windows standalone-only punt, SoC table instead of voice
+benchmark, schema migration on re-run, shopping list folded into voice,
+bootstrap.py as the entry point, all-WIP framing for optional features, and
+re-run handling via explicit prompt.
 
-This is a living design doc, not a precompact. Update it as
-decisions are made. When sections become stable they graduate into
-user-facing docs (`docs/03-quick-start.md`, `docs/24-persistent-services.md`).
-
----
-
-## Why the rewrite
-
-The previous installer was a stdlib HTTP server that launched a
-browser UI and performed a **sparse checkout** of a hand-maintained
-`CLI_BOM` file list (see the old `install.py` for context). That
-approach is being abandoned because:
-
-- **Version inconsistency.** Sparse checkout + file list means
-  the user doesn't have a real clone — they have a snapshot. There
-  is no `git pull` path to upgrades. Every update is a full re-install.
-- **BOM maintenance tax.** Any file added to the project has to be
-  manually added to `CLI_BOM` or it silently stops shipping. This is
-  a future bug factory.
-- **Two installers in one.** "Browser UI for configuration" and
-  "terminal installer for the server stack" are different problems;
-  trying to solve both in one tool made both halves worse.
-
-The new approach: a plain terminal installer invoked inside a real
-git clone, with user configuration living in a **gitignored overlay
-directory** that survives `git pull`.
+v2 inherits from v1 unchanged: installer-owns-config principle, site-settings
+gitignored overlay pattern, secrets in `site-settings/secrets.json` mode 0600,
+`tools/label_bulbs.py` as separate walk-through, bulb labeling via the dashboard
+ARP panel, passive satellite registration via retained MQTT, no clone-vs-fork
+question, `git clone` as the distribution base (now wrapped by `bootstrap.py`).
 
 ---
 
@@ -41,623 +23,677 @@ directory** that survives `git pull`.
 
 **The installer owns configuration. User hand-edits are unsupported.**
 
-The installer creates, enables, and controls every configuration
-artifact: venv, service files, `site-settings/`, `secrets.json`,
-ports, auth tokens, feature gates, everything. If a user deviates
-— hand-edits a systemd unit, points at their own venv, swaps in
-their own JSON — we do not owe them support. Perry may still feel
-bad when it breaks, but the license disclaims it, and the installer's
-implicit promise is "if you let us do it, it works."
+Installer creates, enables, and controls every artifact: venv, service files,
+`site-settings/`, `secrets.json`, ports, auth tokens, feature gates. A user who
+hand-edits a systemd unit or swaps in their own JSON is out of scope. This is
+the only way to promise a working install across macOS, Linux, multiple Pi
+models, and user skill levels.
 
-This is the only way we can promise a working install across
-macOS, Linux, multiple Pi models, and user skill levels. It is
-documented as a project feedback memory
-(`feedback_installer_owns_config.md`).
-
-Corollaries:
-
-- Escape hatches like "skip venv creation, bring your own" are
-  **not** added.
-- Reconfiguration goes through a tool *we* provide (see Section
-  "Re-run / reconfigure"), not hand-editing.
-- User-facing docs state clearly that `site-settings/` is installer-
-  managed and hand-edits are out of scope.
+See `feedback_installer_owns_config.md`.
 
 ---
 
-## Distribution and bootstrap
+## Distribution
 
-The installer lives **inside the repository** at `installer/install.py`.
-It is distributed by `git clone`, never by `curl | python3`. The full
-first-install command is:
+**`bootstrap.py`** is the entry point. Users download it standalone (browser
+download or `curl -O`) and run `python3 bootstrap.py`. It:
 
-    git clone https://github.com/pkivolowitz/lifx.git glowup
-    cd glowup
-    python3 installer/install.py
+1. Checks `sys.version_info >= (3, 8)` so it can even run
+2. Detects platform triple: `{linux,darwin,win32} × {x86_64,aarch64}`
+3. Downloads pinned **uv** binary from GitHub releases via `urllib.request` —
+   never `curl | sh`, never `irm | iex`. Six triples supported:
+   - `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
+   - `x86_64-apple-darwin`, `aarch64-apple-darwin`
+   - `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`
+4. Extracts uv to `~/.local/share/glowup/uv/uv` (or `%LOCALAPPDATA%\glowup\uv\uv.exe`)
+5. Checks for `git`; on failure, prints install hint for detected OS and exits
+6. `git clone https://github.com/pkivolowitz/lifx.git glowup` (or user's
+   `--repo-url <url>` for power users who pre-forked)
+7. `cd glowup`
+8. `uv python install 3.11` — downloads a standalone python-build-standalone
+   binary; never touches system Python
+9. `uv venv --python 3.11 ./venv`
+10. `exec` into `./venv/.../python installer/install.py` for the rest of the flow
 
-Consequences:
+All runtime code (including `installer/install.py`) targets Python **3.11+**.
+Only `bootstrap.py` is 3.8-compatible.
 
-- The user already has a working `git` by the time they reach the
-  installer. No "git missing? exit" gate is needed — that contradiction
-  is resolved. (Original concern: "they might have enough git to get
-  started but not enough to finish." The clone-first distribution
-  model makes that impossible — if `git clone` worked, the toolchain
-  is complete enough.)
-- Upgrades are `git pull` inside the clone, followed by `pip install
-  -r requirements.txt` inside the venv, followed by a service restart.
-  Site-settings are gitignored and survive the pull.
-- The installer can upgrade itself (just by pulling), because it is
-  part of the repo.
-
-### Step zero — license acknowledgement
-
-Before anything else, the installer reads `LICENSE` from the repo
-root, displays the copyright and license summary, and asks the user
-to confirm they want to continue. Decline → exit cleanly, no side
-effects.
-
-### Developer / contributor framing
-
-This is **out of the install flow**. The installer does not ask
-"are you a developer?" or "clone vs fork?" Fork is a GitHub-account
-action the installer cannot perform anyway. After successful install,
-the summary screen points the user at `docs/CONTRIB.md` (or a new
-section of it) which explains how to fork on GitHub and add their
-fork as a second remote if they plan to contribute upstream. Most
-users want a clone and nothing more; don't make them answer a
-question that doesn't apply to them.
+uv version is pinned as a module-level constant `UV_VERSION = "0.x.y"`. Audited
+and bumped manually, never auto-updated.
 
 ---
 
 ## Directory layout
 
-Tracked in git (part of the repo, shipped to every user):
+Tracked in git:
 
     installer/
-      install.py             — the terminal installer entry point
-      DESIGN.md              — this document
+      install.py                              — the terminal installer entry point
+      DESIGN.md                               — this document
       templates/
-        glowup-server.service.in    — systemd unit template
-        glowup-satellite.service.in — systemd unit template
-        net.glowup.server.plist.in  — launchd plist template
-      (more as needed)
+        glowup-server.service.in              — systemd unit template (hardened)
+        glowup-satellite.service.in           — systemd unit template
+        net.glowup.server.plist.in            — launchd plist template
     sample-site-settings/
-      local.json             — sample shape for a single-computer install
-      hub.json               — sample shape for a multi-computer hub
-      satellite.json         — sample shape for a multi-computer satellite
-      secrets.json           — sample shape for credentials (commented out)
+      settings.json                           — sample shape (see JSON schema below)
+      secrets.json                            — sample shape, all values null
     tools/
-      label_bulbs.py         — walk-through LIFX labeling tool (separate, see below)
+      label_bulbs.py                          — walk-through LIFX labeling tool
+      reconfigure.py                          — post-v1 reconfigure tool (stub)
+    bootstrap.py                              — downloadable standalone installer launcher
 
 Gitignored (created by the installer on first run):
 
-    site-settings/           — active configuration for this machine
-      local.json             — features, role, ports, auth token, machine IPs
-      secrets.json           — mode 0600, credentials only
-      bulbs.json             — managed by the label tool, not the installer
-    venv/                    — installer-created virtualenv
+    site-settings/
+      settings.json                           — features, role, ports, per-feature config
+      secrets.json                            — mode 0600, credentials only
+      bulbs.json                              — managed by tools/label_bulbs.py
+    venv/                                     — uv-created venv, python 3.11
 
-`.gitignore` must list both `site-settings/` and `venv/` at the
-repo-root level. `sample-site-settings/` is **not** gitignored.
-
-On first install, the installer:
-
-1. Confirms `site-settings/` does not exist (see Re-run section).
-2. Copies `sample-site-settings/` to `site-settings/`.
-3. Walks the feature picker and interview.
-4. Rewrites `site-settings/local.json` (or `hub.json` / `satellite.json`)
-   with the user's real answers.
-5. Chmods `site-settings/secrets.json` to `0600`.
+`.gitignore` lists `site-settings/`, `venv/`, and `bootstrap.py` should NOT be
+in the repo — it lives as a GitHub release artifact or is linked from the
+README, not carried inside the repo tree.
 
 ---
 
-## Single-computer flow
+## Flow — unified single/multi-computer
 
-**Step 0: License.** See above.
+No separate single vs multi branch. Role is a preset over the feature picker.
 
-**Step 1: Python version check.**
-Minimum version TBD — open question (see open questions).
-If below minimum, print install instructions for the detected OS
-and exit.
+**Step 0: License.** Read `LICENSE` from repo root, display summary, require
+explicit confirmation. Decline → exit, no side effects.
 
-**Step 2: Single vs multi-computer.**
+**Step 1: Platform gate.**
+- If `sys.platform == "win32"` → jump to Windows standalone flow (below)
+- Else continue
 
-    How are you installing GlowUp?
-      1. Single computer — this machine runs everything
-      2. Multi-computer — I have a hub and one or more satellites
+**Step 2: Role prompt.**
+
+    Is this the only computer running GlowUp, or one of several?
+      1. Only computer (single-computer install)
+      2. One of several (multi-computer install)
     Choice:
 
-Single → continue here. Multi → jump to the multi-computer flow.
+If multi:
+
+    What role does this computer play?
+      1. Central hub
+      2. Voice satellite
+      3. Kiosk
+      4. Custom (pick features manually)
+    Choice:
+
+Role maps to a pre-checked set in the feature picker (see `ROLE_PRESETS` in
+implementation).
 
 **Step 3: Feature picker.**
-Checkbox-style menu of optional features. LIFX core is always on;
-everything else is opt-in. Exact list is an open question (see below)
-but is roughly the old spec's nine features:
 
-    Select features (comma-separated numbers, or 'a' for all):
-      1. [always] LIFX light control (core)
-      2. [ ] Zigbee device control
-      3. [ ] Vivint security integration
-      4. [ ] NVR camera feeds
-      5. [ ] Voice control
-      6. [ ] Kiosk display
-      7. [ ] Power monitoring
-      8. [ ] BLE sensors
-      9. [ ] Shopping list
+    Select features (numbers, comma-separated):
 
-    a. Select all
-    k. Know more about a feature (enter number)
+      1. [always]   LIFX light control (core)
+      2. [ WIP  ]   Zigbee device control
+      3. [ WIP  ]   Voice control (incl. shopping list)
+      4. [ WIP  ]   Kiosk display
+      5. [ WIP  ]   Power monitoring
+      6. [ WIP  ]   BLE sensors
+      7. [ WIP  ]   NVR camera feeds
+      8. [ WIP  ]   Vivint security integration
 
-"Know more" prints a short description and a URL to the relevant
-docs page for that feature.
+      a. Select all
+      k. Know more about a feature (enter number)
 
-**Step 4: Feature preflight.** For every selected feature that needs
-special hardware or a heavy runtime, the installer does a targeted
-sanity check:
+Features are platform-gated per `FEATURES` dict. Features unsupported on the
+current OS are hidden entirely. On macOS, Zigbee/BLE/Kiosk do not appear. On
+Windows, only LIFX and the standalone flow are offered.
 
-- **Voice** → run the voice sizing probe. If hardware cannot pin one
-  Ollama model with headroom, hard-warn and offer to skip. If it
-  cannot pin two simultaneously, warn that full voice is degraded.
-  See "Voice sizing" below.
-- **Zigbee** → look for a local USB coordinator via `lsusb` / macOS
-  equivalent, or ask for an existing Z2M MQTT broker address. If
-  neither present, warn and offer to skip *or* proceed (user may be
-  planning to buy hardware).
-- **BLE** → check for Bluetooth adapter via `hciconfig` / macOS
-  system profiler.
-- **NVR / Vivint** → no detection possible without credentials.
-  Install proceeds; credentials are asked for at configuration time.
-- **Kiosk** → check we're on Linux with a framebuffer or X (this
-  feature is Pi-oriented).
+**WIP ack** — every optional feature prints a warning at select time:
 
-**Step 5: Configuration interview.** For each selected feature,
-prompt for the values the feature needs. Every answer goes into
-`site-settings/local.json` except for passwords / tokens, which go
-into `site-settings/secrets.json`.
+    Zigbee is a WORK IN PROGRESS.
 
-Values asked for (still being finalized):
+    - Active development. Interfaces and behavior change without notice.
+    - No warranty. No support. No guarantees of any kind.
+    - You may hit bugs, regressions, or outright broken state on any given day.
+    - File issues if you want, but no response is promised.
+    - If you cannot debug this yourself and accept that things may break,
+      do not install this feature.
 
-- Dashboard port (default `8420`)
-- Dashboard auth token (generate random, or prompt)
-- MQTT broker address if Zigbee / Power / BLE selected
-- Vivint credentials (secrets.json)
-- NVR host, credentials (secrets.json)
-- Voice: wake word, Ollama model names, coordinator host
-- Kiosk: display device, rotation, brightness
-- Location (lat/lon) for scheduling — optional, can skip
-- Device groups — **not asked here**, see LIFX labeling note below
+    The MIT license in the repo root already disclaims all warranty. This
+    is a reminder, not a change.
 
-**Step 6: Environment setup.** Installer creates `venv/`, activates
-it, installs `requirements.txt`, then installs feature-specific
-requirements per the old spec's matrix (Zigbee → `paho-mqtt`,
-Voice → `faster-whisper` + `openwakeword` + `piper-tts` + ...,
-BLE → `bleak`, etc.). All feature deps remain **guarded imports**
-per the existing architecture rule — base system still runs with
-zero optional deps.
+    Install Zigbee anyway? [y/N]
 
-**Step 7: Service setup.**
-Asks once, then owns the service files.
+`N` is the default. `y` adds the feature; `N` leaves it unchecked and the
+picker redraws.
+
+**Step 4: Per-feature hardware probes (Linux only).**
+
+For each selected feature, call its probe function. Probes return
+`(found: bool, detail: str, hint: str)`.
+
+| Feature       | Probe                                          | Hint on miss                                          |
+|---------------|------------------------------------------------|-------------------------------------------------------|
+| Zigbee        | `lsusb` for known coordinator VIDs             | "No coordinator found. Plan to buy one? [y/N]"        |
+| BLE           | `hciconfig -a` shows UP interface              | "No BLE adapter. Plan to add a BT500 dongle? [y/N]"   |
+| Kiosk         | `$DISPLAY` set, `/dev/fb0` exists              | "No display detected. Kiosk needs HDMI + keyboard."   |
+| Voice (mic)   | `arecord -l` lists capture device              | "No microphone. Plan to add a USB mic? [y/N]"         |
+| Voice (spkr)  | `aplay -l` lists a card                        | "No audio output. Plan to add speakers? [y/N]"        |
+| Power         | no hardware probe (MQTT-tested at cred step)  | n/a                                                   |
+| NVR           | no hardware probe                              | n/a — prompt for IP                                   |
+| Vivint        | no hardware probe (cloud-only)                 | n/a                                                   |
+| LIFX          | LAN broadcast scan (~2s bounded)               | "No bulbs found. Install anyway? [y/N]"               |
+
+Probes are Linux-only. macOS skips probes entirely (features that need them
+are already hidden by platform gating). Probes never block on network longer
+than 2 seconds. "I plan to buy one" is always a valid answer — never blocks
+install. Probe failure is never fatal.
+
+**Step 5: Voice hardware tier check** (if voice selected).
+
+See `VOICE_CAPABILITY` table below. Match `/proc/cpuinfo` / `sysctl` against
+the table, then apply RAM and AVX2 downgrades. Tier drives behavior:
+
+- **overkill** — install normally, print one random compliment from
+  `OVERKILL_COMPLIMENTS` pool
+- **good** — install normally, no warning
+- **marginal** — install, soft warning, default to tiny whisper model
+- **bad** — hard warning, default to skip, escape hatch offers "install
+  anyway" or "I'll upgrade hardware later"
+- **reject** — refuse to install voice runtime. Only option: "I'll install on
+  better hardware later." Print the reason (armv6 / no AVX2 / <1GB RAM)
+
+**Step 6: Configuration interview.**
+
+For each selected feature, prompt for values. Non-secret values go to
+`site-settings/settings.json`, credentials go to `site-settings/secrets.json`.
+
+Every credential prompt is preceded by a friendly explanation:
+
+- *what* the credential is for
+- *why* it's needed
+- *where* it will be stored (path + mode + ownership)
+- "Nothing leaves this machine. Never logged."
+
+Users can press Enter to **skip** any credential. Skipped = `null` in
+`secrets.json`, feature disabled at runtime with a log message until filled.
+
+Where cheap, **verify-before-write**: for MQTT creds, try `mqtt.Client.connect`
+and show `✓ connected` or `✗ auth failed, re-enter?`. For Reolink, test HTTP
+auth. Skip verification for rate-limited / slow services like Vivint.
+`--no-verify` disables all verification checks for offline installs.
+
+All password prompts use `getpass.getpass()`, never `input()`.
+
+If multi-computer and role ≠ hub: ask for hub IP, ping it, probe TCP 1883 and
+TCP 8420. Fail fast with a clear error if unreachable.
+
+**Step 7: Environment setup.**
+
+- uv-created venv already exists (bootstrap.py did it)
+- `uv pip install -r requirements.txt` (base)
+- For each enabled feature, `uv pip install <feature-deps>` per the
+  `FEATURE_DEPS` dict
+- All feature deps remain **guarded imports** in runtime code
+
+**Step 8: Service setup.**
 
     Set up GlowUp to start automatically at boot? [Y/n]
 
 On yes:
 
-- **Linux**: generates `/etc/systemd/system/glowup-server.service`
-  from `installer/templates/glowup-server.service.in`, substituting
-  venv path, working directory, and service user. Runs `systemctl
-  daemon-reload`, `enable`, `start`, verifies `systemctl is-active`.
-- **macOS**: generates `~/Library/LaunchAgents/net.glowup.server.plist`
-  from the template, runs `launchctl load`, verifies.
+- **Linux**: generate `/etc/systemd/system/glowup-server.service` from
+  `installer/templates/glowup-server.service.in`. Substitute invoking user,
+  venv path, working directory. Unit includes hardening directives:
+  ```
+  [Service]
+  User=<invoking_user>
+  NoNewPrivileges=true
+  ProtectSystem=strict
+  ProtectHome=read-only
+  PrivateTmp=true
+  ReadWritePaths=<repo>/site-settings <repo>/venv /var/log/glowup
+  SystemCallFilter=@system-service
+  SystemCallErrorNumber=EPERM
+  RestrictNamespaces=true
+  ```
+  Run `systemctl daemon-reload`, `enable`, `start`, verify `is-active`.
+- **macOS**: generate `~/Library/LaunchAgents/net.glowup.server.plist`,
+  `launchctl load`, verify. No extra sandboxing for v1.
+- **Satellite**: also install `glowup-satellite.service` unit with the same
+  hardening.
 
-User-scope launchd on macOS needs no sudo. Linux systemd needs sudo
-for the unit install — on the Pi this is passwordless, on a fresh
-install we prompt. If the user declines service setup, the installer
-still prints the manual command but does NOT write partial state.
+Declining service setup prints the manual commands and writes NO partial
+systemd state.
 
-**Step 8: First-run verification.** Start the server, hit
-`/api/status`, report what's online. Print the summary:
+**Step 9: First-run verification.** Start the server, hit `/api/status`,
+report what's online.
 
-- What was installed
-- Where site-settings lives (and the warning: installer-managed, do
-  not hand-edit)
+**Step 10: Summary.**
+
+- Print what was installed
+- Print location of `site-settings/` with the warning: installer-managed,
+  do not hand-edit
+- Global WIP reminder: "You installed these WIP features: <list>. Things
+  will break. You accepted this per-feature above. Check `journalctl -u
+  glowup-server`. Open issues with logs. Response is best-effort."
 - Next steps:
-  - **Run `python3 tools/label_bulbs.py` to label your LIFX bulbs.**
-  - Open `http://localhost:<port>/dashboard` to assign groups and
-    configure the rest.
-  - Tools we provide: `tools/restart.sh`, `tools/health.sh`, etc.
-  - Where docs live.
+  - **Run `python3 tools/label_bulbs.py` to label your LIFX bulbs**
+  - Open `http://localhost:8420/dashboard`
+  - Tools provided: `tools/restart.sh`, `tools/health.sh`
 
 Installer exits.
 
 ---
 
-## Multi-computer flow
+## Windows standalone flow
 
-Triggered when the user answers "multi-computer" at Step 2.
+If `sys.platform == "win32"`:
 
-**Step M1: What role does *this* machine play?**
+1. License ack (same as linux/mac)
+2. Print punt message:
 
-    What role does this computer have?
-      1. Hub — central server (MQTT broker, dashboard, adapters)
-      2. Satellite — peripheral (voice room, kiosk, etc.)
+        GlowUp on Windows supports standalone LIFX control only.
+        Server features (Zigbee, voice, kiosk, power, cameras, Vivint)
+        require Linux or macOS. To run the full server, use a Raspberry Pi
+        or a Mac. See docs/pi-shopping.md for hardware suggestions.
+
+3. Offer to install standalone:
+   - uv venv (already done by bootstrap.py on Windows too)
+   - `uv pip install -r requirements-standalone.txt`
+   - Add a `glowup` alias to PowerShell `$PROFILE`: `function glowup {
+     & <venv>\python.exe <repo>\glowup.py @args }`
+4. Note SmartScreen: "If Windows blocks uv.exe, click 'More info' → 'Run
+   anyway'. We fetched it straight from Astral's signed GitHub release."
+5. Print next step: `glowup --discover`
+6. Exit.
+
+No feature picker, no site-settings, no services, no probes. ~30 lines of
+Windows branch inside install.py.
+
+---
+
+## Platform / feature matrix
+
+Single source of truth in `install.py`:
+
+```python
+FEATURES = {
+    "lifx":    {"platforms": {"linux", "darwin", "win32"}, "probe": probe_lifx,    "deps": [...]},
+    "zigbee":  {"platforms": {"linux"},                    "probe": probe_zigbee,  "deps": ["paho-mqtt"]},
+    "ble":     {"platforms": {"linux"},                    "probe": probe_ble,     "deps": ["bleak"]},
+    "kiosk":   {"platforms": {"linux"},                    "probe": probe_kiosk,   "deps": ["pygame"]},
+    "voice":   {"platforms": {"linux", "darwin"},          "probe": probe_voice,   "deps": ["faster-whisper","openwakeword","piper-tts","paho-mqtt","numpy","sounddevice"]},
+    "power":   {"platforms": {"linux", "darwin"},          "probe": None,          "deps": ["paho-mqtt"]},
+    "nvr":     {"platforms": {"linux", "darwin"},          "probe": None,          "deps": ["reolink-aio"]},
+    "vivint":  {"platforms": {"linux", "darwin"},          "probe": None,          "deps": ["vivintpy"]},
+}
+```
+
+Adding a feature = one new row. Platform gate = list the platforms. No
+conditional probe logic anywhere else. Shopping list is not a separate key —
+it lives inside voice.
+
+---
+
+## Voice SoC table
+
+```python
+VOICE_CAPABILITY = [
+    # (regex, tier, note)
+    (r"Raspberry Pi 5",                 "good",     "tiny + base comfortably"),
+    (r"Raspberry Pi 4",                 "marginal", "tiny only; base stutters"),
+    (r"Raspberry Pi 3",                 "bad",      "too slow"),
+    (r"Raspberry Pi Zero 2",            "bad",      "RAM + CPU insufficient"),
+    (r"Raspberry Pi Zero(?! 2)",        "reject",   "armv6, not supported by faster-whisper"),
+    (r"Raspberry Pi 1",                 "reject",   "armv6, not supported by faster-whisper"),
+    (r"Orange Pi Zero 3",               "bad",      "Pi Zero 2 class"),
+    (r"Orange Pi 3B|Orange Pi 5",       "good",     "RK3566 / RK3588"),
+    (r"Intel.*Atom",                    "reject",   "no AVX2, insufficient"),
+    (r"Intel.*Celeron",                 "marginal", "variable, prompt user"),
+    (r"Intel.*Core.*i[3-9]",            "good",     "AVX2 assumed"),
+    (r"AMD.*Ryzen",                     "good",     ""),
+    (r"AMD.*(A[4-9]|FX)",               "marginal", "old, no AVX2 on some"),
+    (r"Threadripper|EPYC|Xeon",         "good",     "(and overkill-trigger)"),
+    (r"Apple M",                        "good",     "Metal + unified memory"),
+]
+
+OVERKILL_COMPLIMENTS = [
+    "This machine could transcribe the whole neighborhood in real time.",
+    "Your rig could run voice for a small call center. Nice.",
+    "We're going to run voice on this? It's going to be bored.",
+    "This hardware deserves a harder problem than wake-word detection.",
+    "Detected: a machine that could beat Whisper at its own game and still have cycles to spare.",
+    "Installing voice on this is like hiring a neurosurgeon to open a jar.",
+    "Voice stack will barely notice it's running. Respect.",
+]
+```
+
+**Tier downgrades (applied after match):**
+- RAM < 1 GB → **reject** (hard floor, independent of CPU match)
+- RAM < 2 GB → downgrade one tier (good → marginal → bad → reject)
+- Linux x86_64 missing `avx2` in `/proc/cpuinfo` flags → downgrade one tier
+
+**Overkill promotion (applied after match):**
+- Total RAM ≥ 32 GB, OR
+- CPU matches `Apple M[2-9].*(Pro|Max|Ultra)`, OR
+- CPU matches `Threadripper|EPYC|Xeon`, OR
+- Discrete NVIDIA GPU detected via `lspci` (Linux) or `system_profiler
+  SPDisplaysDataType` (macOS)
+
+Promotes `good` → `overkill`. Unlocks a random compliment from
+`OVERKILL_COMPLIMENTS` on print.
+
+**Detection per OS:**
+
+| OS      | CPU model                                          | RAM                                                                 |
+|---------|----------------------------------------------------|---------------------------------------------------------------------|
+| Linux   | `/proc/cpuinfo` → "model name" or "Hardware"       | `/proc/meminfo` → "MemTotal"                                        |
+| macOS   | `sysctl -n machdep.cpu.brand_string`               | `sysctl -n hw.memsize`                                              |
+| Windows | not reached (voice is punted on Windows)           | not reached                                                         |
+
+Unknown CPU → print `"Unknown CPU: <name>. Voice may or may not work.
+Proceed?"` and let the user choose.
+
+---
+
+## Schema migration
+
+Every time `install.py` runs (first install OR re-run), AND every time
+`glowup-server` starts, call `merge_settings(sample, live)`:
+
+```python
+def merge_settings(sample: dict, live: dict) -> tuple[dict, list[str]]:
+    """Recursively add missing keys from sample into live with sample
+    defaults. Never overwrite existing values. Returns (merged, added_paths)."""
+    added: list[str] = []
+    def _walk(s: dict, l: dict, path: str) -> None:
+        for key, sv in s.items():
+            full = f"{path}.{key}" if path else key
+            if key not in l:
+                l[key] = sv
+                added.append(full)
+            elif isinstance(sv, dict) and isinstance(l[key], dict):
+                _walk(sv, l[key], full)
+    _walk(sample, live, "")
+    return live, added
+```
+
+If `added` is non-empty, print the friendly summary:
+
+    GlowUp added 3 new settings since your last install:
+
+      ble_stranger_detection.enabled       → false
+      ble_stranger_detection.scan_interval → 30
+      voice.wake_word_model                → "hey_glowup"
+
+    These are defaults only. Your existing settings were not changed.
+    Edit site-settings/settings.json to customize, then restart glowup-server.
+
+Zero added → print nothing. Existing values are never touched. Deleted keys
+in sample are left alone in live. Type changes need a manual migration,
+handled by bumping `schema_version` when it happens.
+
+---
+
+## JSON schemas — strawman
+
+### `sample-site-settings/settings.json`
+
+```json
+{
+  "schema_version": 1,
+  "machine": {
+    "role": "hub",
+    "hostname": "glowup",
+    "dashboard_port": 8420,
+    "location": {
+      "latitude": null,
+      "longitude": null,
+      "timezone": null
+    }
+  },
+  "mqtt": {
+    "host": "127.0.0.1",
+    "port": 1883,
+    "client_id_prefix": "glowup"
+  },
+  "features": {
+    "lifx": {
+      "enabled": true,
+      "subnet": "auto",
+      "discovery_timeout_s": 2.0
+    },
+    "zigbee": {
+      "enabled": false,
+      "coordinator": "local_usb",
+      "device": "/dev/ttyUSB0",
+      "z2m_topic_prefix": "zigbee2mqtt"
+    },
+    "voice": {
+      "enabled": false,
+      "wake_word": "hey_glowup",
+      "whisper_model": "tiny.en",
+      "piper_voice": "en_US-amy-low",
+      "ollama_host": "http://127.0.0.1:11434",
+      "ollama_model": "llama3.2:3b",
+      "shopping_list": {
+        "enabled": false,
+        "path": "site-settings/shopping.json"
+      }
+    },
+    "kiosk": {
+      "enabled": false,
+      "display": ":0",
+      "rotation": 0,
+      "brightness": 100
+    },
+    "power": {
+      "enabled": false,
+      "plugs": []
+    },
+    "ble": {
+      "enabled": false,
+      "adapter": "hci0",
+      "sensors": []
+    },
+    "nvr": {
+      "enabled": false,
+      "cameras": []
+    },
+    "vivint": {
+      "enabled": false
+    }
+  },
+  "satellites": {
+    "expected_hostnames": []
+  }
+}
+```
+
+### `sample-site-settings/secrets.json`
+
+```json
+{
+  "schema_version": 1,
+  "dashboard_auth_token": null,
+  "mqtt": {
+    "username": null,
+    "password": null
+  },
+  "vivint": {
+    "username": null,
+    "password": null
+  },
+  "nvr": {
+    "default_username": null,
+    "default_password": null,
+    "per_camera": {}
+  }
+}
+```
+
+Notes:
+- `schema_version`: integer, independent per file. Used by schema migration.
+- `features` is a dict (key = identity), never an array.
+- `lifx.enabled` is always true but encoded explicitly for uniform iteration.
+- `dashboard_auth_token` lives in secrets, not settings. Everything a bad
+  actor wants is in one 0600 file.
+- `mqtt` at top level, not under any feature. It's shared infrastructure.
+- Secrets default to `null`; server code treats null as "feature cannot
+  authenticate, disable with log message."
+
+---
+
+## Secrets file, friendly prompts
+
+Every credential prompt follows this shape:
+
+    Vivint stores lock/alarm/sensor state we can read. I'll save your
+    username and password to site-settings/secrets.json, owned by the
+    service user, mode 0600. Nothing leaves this machine. Never logged.
+
+    Press Enter to skip and fill in later.
+
+    Vivint username: ___
+    Vivint password: (getpass)
+
+Skip → `null` in secrets.json, feature disabled at runtime with a log line.
+
+Verify-before-write on cheap checks (MQTT, Reolink). Skip verify on
+Vivint. `--no-verify` disables all verification.
+
+All password prompts use `getpass.getpass()`.
+
+---
+
+## Re-run handling
+
+If `site-settings/settings.json` exists when `install.py` runs:
+
+    GlowUp is already installed on this machine.
+      1. Resume — finish the install (re-runs pip, service setup, verify)
+      2. Start over — delete site-settings/ and venv/ and re-run from scratch
+      3. Exit
     Choice:
 
-**Step M2a: Hub role.** Essentially the same as the single-computer
-flow: feature picker, interview, venv, services, verification. The
-hub does not need to know about its satellites up front — they
-announce themselves later (see registration model).
+**Resume** = skip the interview, re-run every post-interview step. All
+post-interview steps are idempotent by construction:
+- `uv pip install -r requirements.txt` → no-op on already-installed
+- `systemctl daemon-reload`, `enable`, `start` → idempotent
+- `systemctl is-active` → read-only
 
-**Step M2b: Satellite role.** Reduced feature picker (only
-satellite-meaningful features: voice, kiosk, BLE, etc.). Asks for:
+No state-machine, no checkpoint file. If resume fails again, user can re-run
+and pick "start over."
 
-- **Hub IP address** (required). Installer pings it, tries TCP 1883
-  and TCP 8420 to sanity-check reachability. Fails fast with a clear
-  error if the hub isn't reachable.
-- MQTT broker auth token if the hub has one set.
-- Feature-specific values per the selected features.
+**Start over** = `rm -rf site-settings/ venv/` after typed confirmation:
 
-Writes `site-settings/satellite.json` with role, hub IP, features,
-and this machine's hostname.
+    This will delete site-settings/ and venv/. Type "yes, wipe" to confirm:
 
-### Registration model
+Typo-proof against destructive accidents.
 
-Satellites register themselves with the hub **passively** — the hub
-does not need to be modified during a satellite install, and no
-cross-machine SSH or hub credentials are required.
+**Exit** = no side effects, exit 0.
 
-Mechanism:
-
-- On first boot after install, the satellite service reads
-  `site-settings/satellite.json`, finds the hub's MQTT broker address
-  (which the installer wrote there when it asked the user), and
-  connects.
-- The satellite publishes a **retained** message on
-  `glowup/registry/<hostname>` containing its role, enabled features,
-  GlowUp version, and identity.
-- The hub is subscribed to `glowup/registry/#` and adds the satellite
-  to its fleet view when the retained message arrives. Dashboard
-  reflects this automatically.
-- Removing a satellite is done by publishing an empty retained
-  message on its topic (tombstone) — can be a `tools/deregister.sh`
-  script.
-
-This is not *discovery* — the satellite must be explicitly told the
-hub's address during install. "Passive" here means "the hub is
-passive — nothing on the hub side needs to be touched during a
-satellite install."
+This also provides a crude reconfigure path (start over → re-pick features)
+until `tools/reconfigure.py` is built post-v1.
 
 ---
 
-## Feature picker and per-feature details
+## LIFX bulb labeling
 
-The exact v1 feature list is an open question. Candidate features
-(from the old spec):
+**`tools/label_bulbs.py`** — walk-through CLI tool, separate from the
+installer. Called out in the install summary as the next step.
 
-- LIFX core (always on)
-- Zigbee — requires a Z2M instance or a local USB coordinator
-- Vivint — requires account credentials
-- NVR — requires camera host + credentials
-- Voice — requires sizing probe, needs wake word + Ollama + Whisper + Piper
-- Kiosk — requires a display
-- Power monitoring — requires ThirdReality plugs via Z2M
-- BLE sensors — requires Bluetooth adapter
-- Shopping list — stdlib only, no extra deps
-
-Each feature has a `docs/features/<name>.md` one-pager the installer
-links to via the "know more" option. These docs are tracked in the
-repo and are part of the installer's UX.
-
----
-
-## Voice sizing
-
-Voice is the most demanding optional feature — it pulls in
-`faster-whisper`, `openwakeword`, `piper-tts`, and expects Ollama to
-be reachable with one or two models resident in RAM.
-
-Tiers (Perry's words, 2026-04-08):
-
-- **Full voice (beefy).** Machine can pin **both** production Ollama
-  models in RAM simultaneously, with a strong CPU. Full voice stack
-  runs.
-- **Minimum.** Machine can pin a single smaller Ollama model with
-  enough headroom for whisper + piper + the rest. Voice runs, but
-  degraded.
-- **Below minimum.** Hard warning. Installer offers to skip voice or
-  proceed anyway (the user's call).
-
-Probe design:
-
-- Check total RAM (informational).
-- Check available RAM after a fresh boot (the real constraint).
-- Optionally run a short RTF (real-time factor) benchmark by
-  transcribing a small bundled WAV with `faster-whisper`. If RTF >
-  some threshold, warn the user.
-
-Exact thresholds are an open question — Perry approved the benchmark
-idea in principle but didn't pick numbers.
-
----
-
-## Secrets
-
-Credentials that the code needs to read on every startup (Vivint,
-NVR, MQTT broker auth, etc.) live in **`site-settings/secrets.json`**:
-
-- Gitignored (the whole `site-settings/` directory is).
-- Mode `0600`, owned by the service user.
-- Loaded by the code at startup alongside `local.json`.
-- **Never logged, never printed in error messages, never included in
-  diagnostic bundles.** Anything that writes diagnostics must
-  explicitly strip secrets.
-
-Rejected alternatives:
-- OS keyring (`python-keyring`) — non-starter for headless systemd
-  on a Pi, since the service user has no login session to unlock
-  the keyring. Adds a guarded-import dep. Opaque to debug.
-- Environment variable file (`/etc/glowup/env` read by systemd
-  `EnvironmentFile=`) — works, but splits configuration across two
-  conceptual homes. Rejected for keeping everything in one place.
-
-Plaintext-on-disk is not a meaningful downgrade on a single-user
-home server: if an attacker has file read on the service user,
-they already have everything. The real security boundary is "don't
-commit to git" and "don't print in logs," both of which this
-approach enforces.
-
----
-
-## LIFX bulb labeling — separate tool
-
-Labeling is explicitly **not** part of the installer. A fresh user
-has bulbs named `LIFX Color A19` / `LIFX White 800` — factory
-defaults from which no useful logical name can be derived. The
-installer cannot guess what physical room any bulb is in. Instead,
-the installer points the user at a walk-through labeling tool:
-
-### `tools/label_bulbs.py`
-
-Purpose: one-time (and occasionally re-run) interactive tool that
-walks the user around the house, identifies each bulb via the
-existing `device_manager.identify()` path
-(`device_manager.py:1079`), and captures a user-chosen logical
-label per bulb.
-
-Flow:
-
-- Broadcast-scan for all LIFX devices on the local subnet.
-- Load `site-settings/bulbs.json`. For each discovered bulb, match
-  by MAC. If an entry with a non-null `logical_label` exists, skip
-  it (already labeled). Otherwise it's a candidate.
-- For each candidate, send identify (existing call), then ask:
+- Broadcast-scan for LIFX devices
+- Load `site-settings/bulbs.json`, skip entries where `logical_label` is
+  non-null
+- For each candidate, call `device_manager.identify()`, prompt:
 
       A bulb is flashing. Is it in front of you? [y/n/skip/quit]
 
-- On `y`, prompt for a logical label ("living room lamp", "hallway
-  sconce", etc.), write it to `bulbs.json` via `SetLabel` or local
-  JSON only (see open question below), and move to the next
-  candidate.
-- On `n`, leave the entry alone and move to the next candidate.
-- On `skip`, cancel identify and move to the next candidate.
-- On `quit`, write current state and exit.
-- Loop until no candidates remain.
-- `--all` flag ignores the skip-already-labeled rule and walks
-  every bulb (for renaming rooms).
+- On `y`, prompt for logical label, write to JSON, move on
+- **JSON only by default.** `--write-bulb-label` flag opts in to also
+  calling `SetLabel` on the bulb (updates the bulb's factory label to the
+  logical name).
+- `--all` flag walks every bulb regardless of labeling state (for renaming)
 
-### `site-settings/bulbs.json` schema
+**`site-settings/bulbs.json`** — keyed by MAC:
 
-JSON object keyed by MAC address (stable canonical identity). Each
-value:
+```json
+{
+  "d0:73:d5:xx:xx:xx": {
+    "mac":           "d0:73:d5:xx:xx:xx",
+    "lifx_label":    "LIFX Color A19",
+    "logical_label": "living room lamp",
+    "ip":             "10.0.0.73"
+  }
+}
+```
 
-    {
-      "mac":           "d0:73:d5:xx:xx:xx",
-      "lifx_label":    "LIFX Color A19",      // as found on the bulb
-      "logical_label": "living room lamp",    // user-assigned, or null if not yet labeled
-      "ip":             "10.0.0.73"            // last-observed, may drift
-    }
+Source of truth is `logical_label`. `ip` is an informational cache.
 
-Definition of "already labeled": the entry exists AND
-`logical_label` is a non-null, non-empty string. No regex, no
-factory-prefix list, no tombstone file — the JSON itself is the
-tombstone and carries the useful metadata.
+**Dashboard inline labeling** — in the existing "Discovered Devices (ARP
+Keepalive)" panel at `static/dashboard.html:523`, add per row:
+- Identify button (POST `/api/bulbs/identify`)
+- Inline-editable label control (POST `/api/bulbs/label`)
+- Read-only factory `lifx_label` alongside
 
-The engine continues to resolve *labels → IPs* at runtime via
-broadcast discovery; `ip` in `bulbs.json` is an informational
-cache, not a source of truth.
+`GET /api/discovered_bulbs` is extended to join against `bulbs.json`, adding
+`logical_label` and `lifx_label` fields to each row. Backwards-compatible.
 
-Groups are still assigned via the dashboard (group CRUD already
-exists per `reference_dashboard_features`), not via this tool.
-
-### Dashboard labeling — inline, in the ARP panel
-
-The CLI walk-through tool is the right UX for "I'm wandering through
-the house with my laptop relabeling every bulb." It is NOT the right
-UX for "I'm already staring at the dashboard and I can see two
-unlabeled devices in the ARP table and I just want to name them
-right now."
-
-For that second case, the dashboard grows inline labeling directly
-in its existing discovered-devices panel.
-
-**Hook point (already exists):**
-
-- `static/dashboard.html:523` — the collapsible section titled
-  "Discovered Devices (ARP Keepalive)" with container
-  `#discovered-bulbs`.
-- Backed by `GET /api/discovered_bulbs` in `handlers/discovery.py:39`,
-  which returns the keepalive daemon's live ARP view.
-
-**What gets added per row** in the discovered-devices panel:
-
-- An **Identify** button. Clicking it calls the existing identify
-  path via REST; the bulb flashes on the user's desk. No argument
-  needed beyond the bulb's IP (already known to the row).
-- A **Label** control, inline-editable. Shows the current
-  `logical_label` if one exists in `bulbs.json`, or a placeholder
-  like `(unlabeled — click to name)` otherwise. Editing and
-  confirming (Enter or blur) writes the new label to `bulbs.json`
-  via a new REST endpoint.
-- The row also displays the bulb's **factory LIFX label** (the
-  `lifx_label` field — e.g. `LIFX Color A19`) as read-only metadata
-  next to the editable logical label, so the user can tell whether
-  this is a fresh-out-of-box bulb or one that's been renamed.
-
-**New REST endpoints:**
-
-- `POST /api/bulbs/label` — body `{"mac": "...", "logical_label": "..."}`.
-  Writes to `site-settings/bulbs.json`. Creates the entry if it
-  doesn't exist. Returns the updated entry.
-- `POST /api/bulbs/identify` — body `{"ip": "..."}` or
-  `{"mac": "..."}`. Triggers the existing identify path
-  (`device_manager.identify`). Returns 200 on dispatch. (May already
-  exist as a side effect of `handlers/device.py:563` — verify and
-  reuse rather than duplicate.)
-
-**Single source of truth.** Both `tools/label_bulbs.py` and the
-dashboard inline labeling write to the same `site-settings/bulbs.json`
-using the same schema. There is exactly one JSON file, one schema,
-one set of semantics for "already labeled." The two interfaces are
-just different front-ends to the same state.
-
-**Interaction with `GET /api/discovered_bulbs`.** The existing
-endpoint returns ARP-derived rows (IP, MAC, last-seen, etc.). It
-should be extended to **join** against `bulbs.json` so each row
-includes `logical_label` (nullable) and `lifx_label` fields. That
-way the dashboard renders the current labeling state without a
-second round-trip. This is a small, backwards-compatible addition:
-existing consumers that ignore the new fields keep working.
-
-**Why this is in the design doc and not a follow-up ticket:**
-Perry asked for it directly on 2026-04-08 while designing the
-installer, specifically because he could already see two unlabeled
-devices in the ARP table on the live dashboard and wanted to name
-them without leaving the page. It's part of the same labeling
-story as the CLI tool.
+Groups remain dashboard-only (existing group CRUD), not part of labeling.
 
 ---
 
-## Re-run / reconfigure (v1 concession)
+## Multi-computer registration
 
-**v1 behavior — refuse and defer.** If `site-settings/` already
-exists when the installer is run, it prints:
+**Passive from the hub.** Nothing on the hub is touched during a satellite
+install.
 
-    GlowUp is already installed on this machine.
-    To change features, use (coming soon) tools/reconfigure.py.
-    To start over completely, delete site-settings/ and re-run.
+- Satellite installer asks user for hub IP, writes to its own
+  `site-settings/settings.json` under `mqtt.host`
+- Satellite service connects to the hub's MQTT broker on first boot
+- Satellite publishes a **retained** message on
+  `glowup/registry/<hostname>` containing role, enabled features, version,
+  and identity
+- Hub subscribes to `glowup/registry/#` and adds to fleet view on first
+  retained message
+- De-registration = publish empty retained message (tombstone). A
+  `tools/deregister.sh` will be provided.
 
-...and exits. No destructive action.
-
-**This is temporary.** A real reconfigure tool is a
-**must-build follow-up**, not a nice-to-have. Tracked explicitly in
-this document so it doesn't get forgotten:
-
-- `tools/reconfigure.py` — same prompts as the installer's interview
-  step, but pre-fills current values from `site-settings/local.json`
-  and lets the user change any of them. Does not re-run venv setup
-  or service installation. Writes updated JSON, restarts the service.
-
-Until that exists, re-runs are manual (delete site-settings, redo
-interview). Document this prominently in the summary screen and
-user docs so it's not a surprise.
+Not discovery — the satellite must be explicitly told the hub address at
+install time.
 
 ---
 
-## What gets deleted from the current installer directory
+## What gets deleted from the repo
 
-When this design is implemented, the following go away:
+Already done in this session:
+- `installer/DESIGN.md` v1 — moved to Claude memory
+  (`project_installer_design_2026-04-08.md`), then `git rm` (staged)
 
-- `installer/install.py` — rewritten wholesale. Same path, totally
-  different contents.
-- `installer/static/installer.js` — dead. Delete.
-- `installer/static/` as a concept — dead. Delete unless we find
-  another use for static assets under the installer directory (we
-  won't; the dashboard has its own static tree).
-- `CLI_BOM` and all sparse-checkout machinery inside `install.py`
-  — gone. The new model is a full clone, there is no BOM.
+To be deleted in the implementation commit:
+- `installer/install.py` v1 (323-line web-installer stub) — replaced wholesale
+- `installer/static/` entire tree — dead
+- Any `CLI_BOM` file and sparse-checkout machinery — dead
 
-New additions:
-
-- `installer/DESIGN.md` (this file)
-- `installer/templates/*.in` (systemd/launchd templates)
-- `sample-site-settings/*.json` (tracked sample configs)
-- `tools/label_bulbs.py` (walk-through labeling)
+To be added in the implementation commit:
+- `bootstrap.py` at repo root (new)
+- `installer/install.py` rewritten
+- `installer/DESIGN.md` v2 (this file)
+- `installer/templates/*.in`
+- `sample-site-settings/settings.json`
+- `sample-site-settings/secrets.json`
+- `tools/label_bulbs.py`
 - `.gitignore` entries for `site-settings/` and `venv/`
 
 ---
 
-## Open questions (resume here next session)
+## Open (deferred to post-v1)
 
-These need Perry's call before implementation can start. Ordered
-by approximate blocking priority:
-
-- **Python version floor.** Current `install.py` says 3.8, old spec
-  said 3.10. Pi OS Bookworm ships 3.11, Bullseye 3.9. Targeting
-  3.10 rules out Bullseye. Pick one.
-- **Service user.** Does the service run as root, a dedicated
-  `glowup` user, or the invoking user? Has security implications
-  but was deferred during the service-setup discussion.
-- **sample-site-settings/ concrete file shapes.** The exact JSON
-  schemas for `local.json`, `hub.json`, `satellite.json`,
-  `secrets.json`. Worth a strawman proposal to push back on.
-- **Voice sizing thresholds.** Exact RAM numbers for "beefy" vs
-  "minimum" tiers, what the bundled benchmark WAV is, what RTF
-  threshold trips the warning.
-- **Feature list for v1.** Is it all nine from the old spec, or
-  trimmed? Which features are v1 blockers vs post-v1 follow-ups?
-- **Auth token.** Generate random UUID on first install? Let user
-  set? Stored in `local.json` (since it gates the dashboard, not a
-  third-party credential) or in `secrets.json` (since it's a
-  secret)?
-- **Port default.** 8420 from the old spec — confirm. Still offered
-  as a prompt?
-- **Labeling — does `tools/label_bulbs.py` also call `SetLabel` on
-  the bulb**, or only write to local JSON and leave the bulb's own
-  label at its factory default? Arguments both ways: writing to the
-  bulb persists the logical name across config loss; not writing
-  keeps the bulb's native label diagnostic ("this bulb factory-ships
-  as LIFX Color A19, and our JSON says the user calls it 'living
-  room lamp'").
-- **Partial-install failure handling.** If Step 5 succeeds but
-  Step 6 (pip install) fails, do we roll back site-settings? Leave
-  it and resume? Block and prompt? "Refuse and defer" on re-run
-  makes resume hard — this is an interaction between those two
-  design choices.
-- **Where / how the copyright + license text is sourced.** Assume
-  `LICENSE` in the repo root, full text printed to stdout. Confirm.
-
----
-
-## Decided — do not re-litigate
-
-These are locked in. Listed here so next session can skip them.
-
-- Distribution model: `git clone` + `python3 installer/install.py`.
-  Not `curl | python3`.
-- Site-settings is a gitignored overlay copied from a tracked
-  `sample-site-settings/`.
-- Secrets live in `site-settings/secrets.json`, mode 0600.
-- Bulb IPs are not stored in site-settings — bulbs are discovered
-  at runtime by label. The labeling tool owns `bulbs.json`.
-- LIFX discovery is not in the installer; `tools/label_bulbs.py`
-  handles it post-install.
-- Bulb "already labeled" definition: `bulbs.json` entry with
-  non-null `logical_label`.
-- Developer / fork framing is out of the install flow entirely.
-- Multi-computer registration is passive-from-the-hub: satellites
-  announce themselves via retained `glowup/registry/<hostname>`.
-- Satellite installer asks for hub IP, writes it to local
-  site-settings, and the satellite runtime uses that to reach the
-  broker. No mDNS, no magic discovery.
-- v1 re-run behavior is refuse-and-defer. A reconfigure tool is a
-  must-build follow-up, not a v1 blocker — but it IS on the hook
-  for post-v1.
-- Installer creates, enables, and starts services. Asks once, then
-  owns the files.
-- Installer controls all configuration; user hand-edits unsupported.
-- The old browser installer (`install.py` web UI, `static/installer.js`,
-  `CLI_BOM`) is fully retired.
-- Labeling has two front-ends, both writing to the same
-  `site-settings/bulbs.json`: the CLI walk-through tool
-  (`tools/label_bulbs.py`) for room-to-room renaming, and inline
-  dashboard controls added to the existing Discovered Devices (ARP
-  Keepalive) panel for quick in-place labeling from the web UI.
+- `tools/reconfigure.py` — full reconfigure without "start over." Must-build
+  post-v1, not a v1 blocker (start-over provides a crude path).
+- Windows voice support — tracked as a separate subproject in
+  `project_voice_on_windows.md`. Not in v1.
+- Air-gapped / offline install — v1 assumes network for uv + Python +
+  packages. Offline-install story is post-v1.
+- The sentinel `feedback_installer_owns_config.md` and related feedback
+  memories remain authoritative for implementation decisions not covered here.
