@@ -324,6 +324,9 @@ class TestRouteFlags(unittest.TestCase):
             # no secrets in the payload; matches /api/home/health.
             ("api", "satellites", "health"),
             ("api", "satellites", "{room}", "health", "check"),
+            # SDR / ADS-B dashboard pages — same pattern as /power, /thermal.
+            ("sdr",),
+            ("adsb",),
         }
         for route in _ROUTES:
             if route.pattern in AUTH_FREE_PATTERNS:
@@ -346,16 +349,16 @@ class TestRouteCount(unittest.TestCase):
         """GET routes should match the expected count."""
         get_routes: list[_Route] = [r for r in _ROUTES if r.method == "GET"]
         self.assertEqual(
-            len(get_routes), 61,
-            f"Expected 61 GET routes, got {len(get_routes)}",
+            len(get_routes), 65,
+            f"Expected 65 GET routes, got {len(get_routes)}",
         )
 
     def test_post_route_count(self) -> None:
         """POST routes should match the expected count."""
         post_routes: list[_Route] = [r for r in _ROUTES if r.method == "POST"]
         self.assertEqual(
-            len(post_routes), 34,
-            f"Expected 34 POST routes, got {len(post_routes)}",
+            len(post_routes), 35,
+            f"Expected 35 POST routes, got {len(post_routes)}",
         )
 
     def test_put_route_count(self) -> None:

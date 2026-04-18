@@ -1248,8 +1248,10 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         now: float = time.monotonic()
         idle: float = now - self._last_request_time
 
-        # Log stall after 10 seconds of no accepted requests.
-        if idle > 10.0 and not self._stall_logged:
+        # Log stall after 60 seconds of no accepted requests.
+        # The kiosk polls every POLL_FAST (10s), so 60s means six
+        # consecutive missed polls — a genuine problem, not jitter.
+        if idle > 60.0 and not self._stall_logged:
             self._stall_logged = True
             last_step: str = getattr(self, "_last_step", "none")
             accept_seq: int = getattr(self, "_accept_seq", 0)

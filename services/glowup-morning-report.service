@@ -1,0 +1,32 @@
+# GlowUp Morning Report — one-shot service triggered by the companion timer.
+#
+# Gathers fleet health data from all hosts, checks API/adapter status,
+# optionally runs the test suite on a dev Mac, and sends a formatted
+# HTML email to perry@kivolowitz.com.
+#
+# Install:
+#   sudo cp /home/a/lifx/services/glowup-morning-report.service /etc/systemd/system/
+#   sudo cp /home/a/lifx/services/glowup-morning-report.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now glowup-morning-report.timer
+#
+# Manual run:
+#   sudo systemctl start glowup-morning-report.service
+#
+# Credentials: /etc/glowup/email.json (mode 0600, owned by root)
+
+[Unit]
+Description=GlowUp Morning Report — fleet health email
+After=network-online.target glowup-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=a
+ExecStart=/home/a/venv/bin/python3 /home/a/lifx/services/morning_report.py
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

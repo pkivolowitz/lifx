@@ -1,0 +1,22 @@
+# GlowUp Morning Report timer — fires daily at 06:00 local time.
+#
+# The hub (.214) is configured for America/Chicago (CDT/CST),
+# so 06:00 here is 06:00 Central.
+#
+# Install:
+#   sudo cp /home/a/lifx/services/glowup-morning-report.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now glowup-morning-report.timer
+#
+# Verify:
+#   systemctl list-timers glowup-morning-report.timer
+
+[Unit]
+Description=GlowUp Morning Report — daily at 06:00
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

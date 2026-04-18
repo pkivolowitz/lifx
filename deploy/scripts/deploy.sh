@@ -69,6 +69,27 @@ RSYNC_EXCLUDES=(
     --exclude='ble_pairing.json'  # machine-local BLE pairing data; gitignored, never in working tree
 )
 
+# Daedalus gets tests/ so the morning report can run the test suite
+# remotely.  tests/boneyard is still excluded (dead tests).
+RSYNC_EXCLUDES_DAEDALUS=(
+    --exclude='.git'
+    --exclude='.claude'
+    --exclude='.pytest_cache'
+    --exclude='__pycache__'
+    --exclude='*.pyc'
+    --exclude='*.pyo'
+    --exclude='.DS_Store'
+    --exclude='tests/boneyard'
+    --exclude='docs/'
+    --exclude='deploy/'
+    --exclude='tools/'
+    --exclude='ios/'
+    --exclude='shortcuts/'
+    --exclude='*.example'
+    --exclude='DEPLOYED'
+    --exclude='ble_pairing.json'
+)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -103,7 +124,10 @@ write_deployed() {
 
 deploy_daedalus() {
     echo "==> daedalus: syncing to $DAEDALUS_HOST:$DAEDALUS_DEST"
-    do_rsync "$DAEDALUS_HOST" "$DAEDALUS_DEST"
+    # Daedalus-specific rsync — includes tests/ for morning report.
+    local opts=(-avz --delete "${RSYNC_EXCLUDES_DAEDALUS[@]}")
+    $dry_run && opts+=(--dry-run)
+    rsync "${opts[@]}" ./ "$DAEDALUS_HOST:$DAEDALUS_DEST/"
     write_deployed "$DAEDALUS_HOST" "$DAEDALUS_DEST"
 
     if $dry_run; then
