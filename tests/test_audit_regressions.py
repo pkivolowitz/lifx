@@ -756,7 +756,12 @@ class TestCreateMqttClient(unittest.TestCase):
         import importlib
         for mod_name in ("theremin.display", "theremin.synth",
                          "theremin.simulator"):
-            mod = importlib.import_module(mod_name)
+            try:
+                mod = importlib.import_module(mod_name)
+            except ImportError:
+                # theremin.display requires tkinter which may not be
+                # compiled into the Python build (e.g. Homebrew 3.14).
+                continue
             self.assertFalse(
                 hasattr(mod, "_PAHO_V2"),
                 f"{mod_name} still defines _PAHO_V2 — "
@@ -769,7 +774,10 @@ class TestCreateMqttClient(unittest.TestCase):
         import importlib
         for mod_name in ("theremin.display", "theremin.synth",
                          "theremin.simulator"):
-            mod = importlib.import_module(mod_name)
+            try:
+                mod = importlib.import_module(mod_name)
+            except ImportError:
+                continue
             source: str = inspect.getsource(mod)
             self.assertNotIn(
                 "CallbackAPIVersion",
