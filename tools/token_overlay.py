@@ -21,11 +21,14 @@ __version__: str = "1.0"
 
 import argparse
 import json
+import logging
 import socket
 import threading
 import time
 import tkinter as tk
 from typing import Optional
+
+logger: logging.Logger = logging.getLogger("glowup.token_overlay")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -162,8 +165,8 @@ class TokenOverlay:
                 msg: dict = json.loads(data.decode("utf-8"))
                 # Schedule UI update on the main thread.
                 self._root.after(0, self._apply_update, msg)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("UDP receive/parse failed: %s", exc)
 
     def _apply_update(self, msg: dict) -> None:
         """Update the display from a received message."""

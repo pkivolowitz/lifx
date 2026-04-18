@@ -10,3 +10,5 @@ Included:
 - Printer — Brother SNMP printer monitoring
 - HDHomeRun — SiliconDust network tuner diagnostics
 """
+
+__version__: str = "1.0.0"

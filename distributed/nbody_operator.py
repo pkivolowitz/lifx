@@ -38,7 +38,14 @@ import threading
 import time
 from typing import Any, Optional
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    import sys
+    sys.exit(
+        "distributed.nbody_operator: missing package: numpy  "
+        "— pip install numpy"
+    )
 
 from network_config import net
 

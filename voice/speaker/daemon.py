@@ -246,8 +246,8 @@ class SpeakerDaemon:
             try:
                 self._piper_proc.terminate()
                 self._piper_proc.wait(timeout=5)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Error terminating piper process: %s", exc)
             self._piper_proc = None
 
     def _speak(self, text: str) -> None:

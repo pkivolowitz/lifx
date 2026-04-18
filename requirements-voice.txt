@@ -1,0 +1,9 @@
+# Voice subsystem dependencies — coordinator and satellite daemons.
+# Install: pip install -r requirements-voice.txt
+-r requirements.txt
+numpy>=1.24,<3.0
+PyYAML>=6.0,<7.0
+pyaudio>=0.2.13,<1.0
+openwakeword>=0.6,<1.0
+openai-whisper>=20230918
+piper-tts>=1.2,<2.0

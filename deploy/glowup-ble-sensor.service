@@ -23,7 +23,8 @@ Wants=bluetooth.target
 
 [Service]
 Type=simple
-User=root
+User=a
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 WorkingDirectory=/home/pi/lifx
 ExecStartPre=-/usr/sbin/rfkill unblock bluetooth
 ExecStart=/usr/bin/python3 -m ble.sensor --config /home/pi/lifx/ble_pairing.json --broker localhost
@@ -31,6 +32,18 @@ Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+
+# Hardening — BLE scanner needs CAP_NET_RAW/CAP_NET_ADMIN instead of root.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/etc/glowup
 
 [Install]
 WantedBy=multi-user.target

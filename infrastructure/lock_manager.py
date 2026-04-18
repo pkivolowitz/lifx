@@ -184,8 +184,8 @@ class LockManager:
         if self._db:
             try:
                 self._db.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("SQLite close failed: %s", exc)
             self._db = None
         logger.info("LockManager stopped")
 

@@ -34,11 +34,14 @@ __version__: str = "1.0"
 import argparse
 import curses
 import json
+import logging
 import subprocess
 import sys
 import threading
 import time
 from typing import Any, Optional
+
+logger: logging.Logger = logging.getLogger("glowup.glowup_top")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -234,8 +237,8 @@ class GlowUpTop:
         try:
             self._client.connect(self._broker, self._port)
             self._client.loop_forever()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("MQTT connection failed: %s", exc)
 
     def _on_connect(self, client: Any, userdata: Any, *args: Any) -> None:
         """Subscribe to heartbeat and status topics."""
@@ -285,6 +288,7 @@ class GlowUpTop:
         if self._sort_mode == SORT_NAME:
             # Use ADAPTER_ORDER for known, alphabetical for unknown.
             def name_key(p: ProcessInfo) -> tuple[int, str]:
+                """Sort by ADAPTER_ORDER position, then alphabetically."""
                 try:
                     idx: int = ADAPTER_ORDER.index(p.adapter_id)
                 except ValueError:

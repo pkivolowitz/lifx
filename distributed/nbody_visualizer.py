@@ -27,7 +27,14 @@ import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Optional
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    import sys
+    sys.exit(
+        "distributed.nbody_visualizer: missing package: numpy  "
+        "— pip install numpy"
+    )
 
 from network_config import net
 
@@ -98,10 +105,12 @@ class ParticleSystem:
 
     @property
     def active_count(self) -> int:
+        """Return the number of currently alive particles."""
         return int(np.sum(self.alive))
 
     def spawn(self, count: int, x: float, y: float,
               vx: float, vy: float, color: int) -> None:
+        """Spawn *count* particles at (x, y) with initial velocity and color index."""
         for _ in range(count):
             s: int = self._next % self._max
             self._next += 1
@@ -118,6 +127,7 @@ class ParticleSystem:
             self.alive[s] = True
 
     def step(self, dt: float = DEFAULT_DT) -> None:
+        """Advance the simulation by one timestep, applying forces and aging particles."""
         t0: float = time.monotonic()
         idx = np.where(self.alive)[0]
         if len(idx) == 0:
@@ -366,6 +376,7 @@ class NBodyVisualizer:
             """Serve the page at / and frames at /frame."""
 
             def do_GET(self) -> None:
+                """Serve the WebGL page at / and JSON particle frames at /frame."""
                 if self.path == "/frame":
                     with viz._frame_lock:
                         data: bytes = viz._latest_frame.encode("utf-8")
@@ -384,12 +395,14 @@ class NBodyVisualizer:
                     self.wfile.write(viz._html)
 
             def log_message(self, fmt: str, *args: Any) -> None:
-                pass  # Suppress request logging.
+                """Suppress default HTTP request logging."""
+                pass
 
         # Threaded HTTP server so multiple poll requests don't block.
         from socketserver import ThreadingMixIn
 
         class ThreadedHTTP(ThreadingMixIn, HTTPServer):
+            """Threading HTTP server so concurrent poll requests don't block."""
             daemon_threads = True
 
         http_thread = threading.Thread(
@@ -429,6 +442,7 @@ class NBodyVisualizer:
         logger.info("Visualizer stopped")
 
     def stop(self) -> None:
+        """Signal the visualizer to shut down."""
         self._stop_event.set()
 
     # -------------------------------------------------------------------
@@ -503,8 +517,8 @@ class NBodyVisualizer:
             try:
                 self._mqtt_client.loop_stop()
                 self._mqtt_client.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("MQTT disconnect failed: %s", exc)
 
     def _on_connect(self, client: Any, userdata: Any, flags: Any,
                     rc: Any, properties: Any = None) -> None:
@@ -516,8 +530,8 @@ class NBodyVisualizer:
     def _on_message(self, client: Any, userdata: Any, msg: Any) -> None:
         try:
             self._on_midi_event(json.loads(msg.payload.decode()))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to process MQTT message: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +539,7 @@ class NBodyVisualizer:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    """CLI entry point for the N-body visualizer."""
     parser = argparse.ArgumentParser(
         description="GlowUp N-body Visualizer — MIDI → particles → WebGL",
     )

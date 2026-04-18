@@ -26,16 +26,22 @@ granted Bluetooth permission in System Settings → Privacy & Security.
 
 from __future__ import annotations
 
+__version__: str = "1.0.0"
+
 import argparse
 import asyncio
+import logging
 import sys
 import time
 from dataclasses import dataclass
 from typing import Optional
 
+logger: logging.Logger = logging.getLogger("glowup.govee_h7060_pwn")
+
 try:
     from bleak import BleakClient, BleakScanner
     from bleak.backends.device import BLEDevice
+    from bleak.backends.scanner import AdvertisementData
 except ImportError:
     print("error: bleak is not installed.  pip install bleak", file=sys.stderr)
     sys.exit(1)
@@ -86,6 +92,7 @@ class GoveeSnapshot:
     rgb: Optional[tuple[int, int, int]] = None
 
     def is_complete(self) -> bool:
+        """True when power, brightness, and mode have all been queried."""
         return (
             self.power is not None
             and self.brightness is not None
@@ -108,6 +115,7 @@ class GoveeSnapshot:
         return False
 
     def format(self) -> str:
+        """Return a human-readable description of the captured state."""
         if not self.is_complete():
             return (
                 f"INCOMPLETE: power={self.power} brightness={self.brightness} "
@@ -146,13 +154,15 @@ class GoveeController:
         self._responses: asyncio.Queue[bytes] = asyncio.Queue()
 
     async def start(self) -> None:
+        """Subscribe to GATT notifications for query responses."""
         await self._client.start_notify(NOTIFY_UUID, self._on_notify)
 
     async def stop(self) -> None:
+        """Unsubscribe from GATT notifications."""
         try:
             await self._client.stop_notify(NOTIFY_UUID)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Error stopping GATT notifications: %s", exc)
 
     def _on_notify(self, _sender, data: bytearray) -> None:
         self._responses.put_nowait(bytes(data))
@@ -192,6 +202,7 @@ class GoveeController:
         return None
 
     async def snapshot(self) -> GoveeSnapshot:
+        """Query power, brightness, and color to capture the current state."""
         snap = GoveeSnapshot()
         power_frame = await self._query(CMD_POWER)
         if power_frame and len(power_frame) >= 3:
@@ -207,13 +218,16 @@ class GoveeController:
         return snap
 
     async def set_power(self, on: bool) -> None:
+        """Turn the light on or off."""
         await self._send(build_frame(HDR_SET, CMD_POWER, [0x01 if on else 0x00]))
 
     async def set_brightness(self, level: int) -> None:
+        """Set brightness (0-255, clamped)."""
         clamped = max(0, min(255, int(level)))
         await self._send(build_frame(HDR_SET, CMD_BRIGHTNESS, [clamped]))
 
     async def set_color(self, r: int, g: int, b: int) -> None:
+        """Set the light to a static RGB color."""
         await self._send(
             build_frame(HDR_SET, CMD_COLOR, [MODE_MANUAL_COLOR, r, g, b])
         )
@@ -243,6 +257,7 @@ async def run_engagement(
     rssi: int,
     args: argparse.Namespace,
 ) -> int:
+    """Connect to a target, run the rainbow demo, and restore original state."""
     print(f"\n[+] connecting to {target.address}  {target.name}  RSSI={rssi} dBm")
     async with BleakClient(target, timeout=args.connect_timeout) as client:
         if not client.is_connected:
@@ -324,10 +339,12 @@ async def run_engagement(
 async def scan_and_select(
     args: argparse.Namespace,
 ) -> Optional[tuple[BLEDevice, int]]:
+    """Scan for Govee H7060 devices and select the strongest signal."""
     print(f"[+] scanning {args.scan_secs:.0f}s for Govee_H7060_* ...")
     best: dict[str, tuple[BLEDevice, int]] = {}
 
-    def on_detect(dev: BLEDevice, ad) -> None:
+    def on_detect(dev: BLEDevice, ad: "AdvertisementData") -> None:
+        """Filter and track Govee H7060 advertisements by RSSI."""
         name = dev.name or getattr(ad, "local_name", None) or ""
         if not name.startswith("Govee_H7060_"):
             return
@@ -390,6 +407,7 @@ async def scan_and_select(
 
 
 async def main_async(args: argparse.Namespace) -> int:
+    """Async entry point: scan, select, and run the engagement."""
     selection = await scan_and_select(args)
     if selection is None:
         return 1
@@ -398,6 +416,7 @@ async def main_async(args: argparse.Namespace) -> int:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
     p = argparse.ArgumentParser(
         description=(
             "Authorized BLE control demo for Govee H7060 Aurora.  "
@@ -470,6 +489,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """CLI entry point."""
     args = parse_args()
     try:
         return asyncio.run(main_async(args))

@@ -30,11 +30,14 @@ Requirements:
 __version__ = "1.0"
 
 import argparse
+import logging
 import subprocess
 import sys
 import threading
 import time
 from typing import Any, Optional
+
+logger: logging.Logger = logging.getLogger("glowup.screen_test_harness")
 
 try:
     import numpy as np
@@ -377,8 +380,8 @@ class MovieDecoder:
             try:
                 self._process.kill()
                 self._process.wait(timeout=3.0)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Error killing ffmpeg process: %s", exc)
         if self._thread:
             self._thread.join(timeout=3.0)
 

@@ -76,7 +76,10 @@ import os
 import signal
 import struct
 import time
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bleak import BleakClient
 
 logger: logging.Logger = logging.getLogger("glowup.ble.sensor")
 
@@ -286,7 +289,7 @@ class HapEncryptedSession:
         connected: Whether the BLE connection is active.
     """
 
-    def __init__(self, client, c2a_key: bytes, a2c_key: bytes) -> None:
+    def __init__(self, client: "BleakClient", c2a_key: bytes, a2c_key: bytes) -> None:
         """Initialize with a connected BleakClient and session keys.
 
         Args:
@@ -385,7 +388,7 @@ class HapEncryptedSession:
 # ---------------------------------------------------------------------------
 
 async def pair_verify(
-    client, ltsk: bytes, acc_ltpk: bytes
+    client: "BleakClient", ltsk: bytes, acc_ltpk: bytes
 ) -> Optional[HapEncryptedSession]:
     """Run pair-verify and return an encrypted session.
 
@@ -410,6 +413,7 @@ async def pair_verify(
     tid_ctr: list[int] = [1]
 
     def nt() -> int:
+        """Allocate the next transaction ID (0-255, wrapping)."""
         t: int = tid_ctr[0]
         tid_ctr[0] = (t + 1) % 256
         return t
@@ -507,7 +511,7 @@ async def pair_verify(
 # ---------------------------------------------------------------------------
 
 async def discover_sensor_iids(
-    client,
+    client: "BleakClient",
     use_known: bool = True,
 ) -> dict[str, int]:
     """Discover IIDs for sensor characteristics.
@@ -552,8 +556,8 @@ async def discover_sensor_iids(
                                 await client.read_gatt_descriptor(desc.handle)
                             )
                             iid = int.from_bytes(val, "little")
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("Failed to read IID descriptor: %s", exc)
                 result[ch.uuid] = iid
                 logger.info(
                     "  %s: IID=%d", SENSOR_NAMES[ch.uuid], iid

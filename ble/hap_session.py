@@ -84,14 +84,25 @@ IID_DESCRIPTOR_UUID: str = "dc46f0fe-81d2-4616-b5d9-6abdd796939a"
 class GattClient(Protocol):
     """Protocol for BLE GATT read/write operations."""
 
-    async def read_characteristic(self, uuid: str) -> bytes: ...
+    async def read_characteristic(self, uuid: str) -> bytes:
+        """Read a GATT characteristic value by UUID."""
+        ...
+
     async def write_characteristic(
         self, uuid: str, data: bytes, response: bool = True
-    ) -> None: ...
+    ) -> None:
+        """Write data to a GATT characteristic by UUID."""
+        ...
+
     async def start_notify(
         self, uuid: str, callback: Callable[[int, bytearray], None]
-    ) -> None: ...
-    async def stop_notify(self, uuid: str) -> None: ...
+    ) -> None:
+        """Subscribe to GATT notifications on a characteristic."""
+        ...
+
+    async def stop_notify(self, uuid: str) -> None:
+        """Unsubscribe from GATT notifications on a characteristic."""
+        ...
 
 
 # ---------------------------------------------------------------------------

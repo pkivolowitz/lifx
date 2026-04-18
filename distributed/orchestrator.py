@@ -601,6 +601,7 @@ class Orchestrator:
 
         # Sort by: has GPU (desc), assignment count (asc).
         def sort_key(item: tuple[str, _FleetNode]) -> tuple[int, int]:
+            """Rank candidates: GPU nodes first, then fewest assignments."""
             nid, node = item
             has_gpu: int = 1 if node.capability.resources.get("gpus") else 0
             return (-has_gpu, len(node.assignments))

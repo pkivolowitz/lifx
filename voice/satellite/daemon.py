@@ -35,7 +35,12 @@ import threading
 import time
 from typing import Any, Optional, Union
 
-import numpy as np
+try:
+    import numpy as np
+    _HAS_NUMPY: bool = True
+except ImportError:
+    np = None  # type: ignore[assignment]
+    _HAS_NUMPY = False
 
 from voice import constants as C
 from voice.protocol import encode
@@ -2090,6 +2095,7 @@ def main() -> None:
     daemon = SatelliteDaemon(config)
 
     def shutdown(sig: int, frame: Any) -> None:
+        """Stop the satellite daemon on signal."""
         logger.info("Received signal %d — shutting down", sig)
         daemon.stop()
 

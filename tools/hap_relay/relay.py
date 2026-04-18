@@ -28,10 +28,23 @@ import threading
 import time
 from typing import Any, Optional
 
-from pyhap.accessory import Accessory, Bridge
-from pyhap.accessory_driver import AccessoryDriver
-from pyhap import loader as service_loader
-import paho.mqtt.client as mqtt
+_missing: list[str] = []
+try:
+    from pyhap.accessory import Accessory, Bridge
+    from pyhap.accessory_driver import AccessoryDriver
+    from pyhap import loader as service_loader
+except ImportError:
+    _missing.append("HAP-python")
+try:
+    import paho.mqtt.client as mqtt
+except ImportError:
+    _missing.append("paho-mqtt")
+if _missing:
+    import sys
+    sys.exit(
+        f"tools.hap_relay.relay: missing packages: {', '.join(_missing)}  "
+        f"— pip install {' '.join(_missing)}"
+    )
 
 logger: logging.Logger = logging.getLogger("glowup.hap_relay")
 
@@ -239,6 +252,7 @@ def main() -> None:
 
     # Signal handling.
     def shutdown(sig: int, frame: Any) -> None:
+        """Stop the HAP driver and MQTT client on signal."""
         logger.info("Shutting down (signal %d)", sig)
         driver.stop()
         mqtt_client.loop_stop()

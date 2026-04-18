@@ -14,6 +14,7 @@ __version__: str = "1.0"
 
 import argparse
 import json
+import logging
 import math
 import os
 import threading
@@ -24,9 +25,24 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime
 
-import pygame
-import pygame.gfxdraw
-from PIL import Image, ImageDraw, ImageFont
+logger: logging.Logger = logging.getLogger("glowup.bespoke_clock_mock")
+
+_missing: list[str] = []
+try:
+    import pygame
+    import pygame.gfxdraw
+except ImportError:
+    _missing.append("pygame")
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    _missing.append("Pillow")
+if _missing:
+    import sys
+    sys.exit(
+        f"kiosk.bespoke_clock_mock: missing packages: {', '.join(_missing)}  "
+        f"— pip install {' '.join(_missing)}"
+    )
 
 
 FPS: int = 20
@@ -172,7 +188,8 @@ class FontProxy:
                 continue
             try:
                 return ImageFont.truetype(path, self._size)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Font not available at %s: %s", path, exc)
                 continue
         return ImageFont.load_default()
 

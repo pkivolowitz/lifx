@@ -232,6 +232,7 @@ class CombineOperator(Operator):
         self._last_output: Optional[float] = None
 
     def on_start(self) -> None:
+        """Log configuration and perform an initial evaluation."""
         logger.info(
             "CombineOperator '%s' started — %d inputs, expr: %s, out: %s",
             self.name, len(self._inputs), " ".join(self._tokens),
@@ -242,6 +243,7 @@ class CombineOperator(Operator):
         self._evaluate_and_write()
 
     def on_signal(self, name: str, value: SignalValue) -> None:
+        """Re-evaluate the RPN expression when any input signal changes."""
         self._evaluate_and_write()
 
     def _evaluate_and_write(self) -> None:

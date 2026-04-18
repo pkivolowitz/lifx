@@ -148,6 +148,7 @@ class _Subscriber:
         self._topics: list[str] = topics
         self._queue: "queue.Queue[tuple[str, bytes]]" = queue.Queue()
         self._client: mqtt.Client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"integration-sub-{os.getpid()}-{id(self)}",
         )
         self._client.on_message = self._on_message
@@ -158,8 +159,7 @@ class _Subscriber:
         self,
         client: "mqtt.Client",
         userdata: Any,
-        flags: dict[str, Any],
-        rc: int,
+        *args: Any,
     ) -> None:
         """Subscribe to all topics once connected."""
         for topic in self._topics:
@@ -239,7 +239,10 @@ def _clear_retained(
         port:   Broker port.
         topics: Topics to clear.
     """
-    cleaner: mqtt.Client = mqtt.Client(client_id=f"integration-cleaner-{os.getpid()}")
+    cleaner: mqtt.Client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2,
+        client_id=f"integration-cleaner-{os.getpid()}",
+    )
     cleaner.connect(host, port, _TEST_KEEPALIVE_S)
     cleaner.loop_start()
     for topic in topics:

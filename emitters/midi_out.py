@@ -236,8 +236,8 @@ class FluidSynthBackend(SynthBackend):
             self.all_notes_off()
             try:
                 self._fs.delete()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Error deleting FluidSynth instance: %s", exc)
             self._fs = None
 
     def note_on(self, channel: int, note: int, velocity: int) -> None:
@@ -635,8 +635,8 @@ class MidiOutEmitter:
             try:
                 self._client.loop_stop()
                 self._client.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("MQTT disconnect failed: %s", exc)
             self._client = None
             self._connected = False
 

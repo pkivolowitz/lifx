@@ -102,6 +102,7 @@ class TimeSourceOperator(Operator):
         self._sunset_hour: float = FALLBACK_SUNSET_HOUR
 
     def on_start(self) -> None:
+        """Log configuration and emit initial time signals."""
         logger.info(
             "TimeSourceOperator started — lat=%.4f lon=%.4f, %.2f Hz",
             self.latitude, self.longitude, self.tick_hz,
@@ -111,6 +112,7 @@ class TimeSourceOperator(Operator):
         self.on_tick(0.0)
 
     def on_tick(self, dt: float) -> None:
+        """Compute current time values and publish all time signals to the bus."""
         now_epoch: float = _time.time()
         now: datetime = datetime.now()
         hour_f: float = (

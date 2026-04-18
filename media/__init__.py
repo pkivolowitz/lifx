@@ -601,8 +601,8 @@ class SignalBus:
             try:
                 self._mqtt_client.loop_stop()
                 self._mqtt_client.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("MQTT client disconnect failed: %s", exc)
             self._mqtt_client = None
             self._mqtt_connected = False
 
@@ -880,8 +880,8 @@ class MediaManager:
             if source and source.is_alive():
                 try:
                     source.stop()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Media source '%s' stop failed: %s", name, exc)
         self._bus.disable_mqtt()
         logger.info("MediaManager shut down")
 

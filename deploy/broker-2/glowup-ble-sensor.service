@@ -89,5 +89,19 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=glowup-ble-sensor
 
+# Hardening — BLE sensor reads pairing config and publishes to MQTT.
+# AmbientCapabilities grants BLE raw socket access without running as root.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/etc/glowup /opt/glowup-sensors
+
 [Install]
 WantedBy=multi-user.target

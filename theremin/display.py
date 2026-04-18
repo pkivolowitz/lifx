@@ -28,7 +28,13 @@ from typing import Any, Optional
 
 import tkinter as tk
 
-import paho.mqtt.client as mqtt
+try:
+    import paho.mqtt.client as mqtt
+except ImportError:
+    sys.exit(
+        "theremin.display: missing package: paho-mqtt  "
+        "— pip install paho-mqtt"
+    )
 
 from . import (
     DISPLAY_HZ,

@@ -159,11 +159,12 @@ class AudioSensor:
             try:
                 self._process.terminate()
                 self._process.wait(timeout=3)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Error terminating audio capture process: %s", exc)
                 try:
                     self._process.kill()
-                except Exception:
-                    pass
+                except Exception as exc2:
+                    logger.debug("Error killing audio capture process: %s", exc2)
             self._process = None
 
         if self._reader_thread is not None:

@@ -236,6 +236,7 @@ class HistoryDB:
         return out
 
     def close(self) -> None:
+        """Close the sqlite database connection."""
         with self._lock:
             self._conn.close()
 
@@ -264,6 +265,7 @@ class DeviceState:
             self.raw = {}
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize current state to a JSON-safe dict."""
         return {
             "name": self.name,
             "online": self.online,
@@ -333,6 +335,7 @@ class StateRegistry:
             return dev
 
     def set_availability(self, name: str, online: bool) -> None:
+        """Update the online/offline status of a device."""
         with self._lock:
             dev: DeviceState = self._devices.setdefault(
                 name, DeviceState(name=name),
@@ -341,10 +344,12 @@ class StateRegistry:
             dev.last_seen = time.time()
 
     def get(self, name: str) -> Optional[DeviceState]:
+        """Return the current state of a device by name, or None."""
         with self._lock:
             return self._devices.get(name)
 
     def snapshot(self) -> list[DeviceState]:
+        """Return a list of all tracked device states."""
         with self._lock:
             return list(self._devices.values())
 
@@ -396,6 +401,7 @@ class Z2MClient:
         self._client.on_message = self._on_message
 
     def start(self) -> None:
+        """Connect to the local Z2M MQTT broker and start the event loop."""
         logger.info(
             "Z2M client connecting to %s:%d (%s/#)",
             Z2M_BROKER, Z2M_PORT, Z2M_PREFIX,
@@ -404,6 +410,7 @@ class Z2MClient:
         self._client.loop_start()
 
     def stop(self) -> None:
+        """Stop the MQTT event loop and disconnect."""
         self._client.loop_stop()
         self._client.disconnect()
 
@@ -502,6 +509,7 @@ class HubPublisher:
             self._client.on_disconnect = self._on_disconnect
 
     def start(self) -> None:
+        """Connect to the hub MQTT broker with async reconnect."""
         if not self._enabled or self._client is None:
             logger.info("Hub publisher disabled (no GLZ_HUB_BROKER)")
             return
@@ -516,6 +524,7 @@ class HubPublisher:
         self._client.loop_start()
 
     def stop(self) -> None:
+        """Stop the hub publisher event loop and disconnect."""
         if self._client is None:
             return
         self._client.loop_stop()
@@ -568,6 +577,7 @@ class HubPublisher:
             logger.info("pub %s → %s", device, ", ".join(published))
 
     def publish_availability(self, device: str, online: bool) -> None:
+        """Publish a device's availability as a numeric signal to the hub."""
         if not self._enabled or self._client is None:
             return
         topic: str = f"{HUB_SIGNAL_PREFIX}/{device}:_availability"
@@ -589,6 +599,7 @@ class ZigbeeHTTPHandler(BaseHTTPRequestHandler):
     z2m: Z2MClient  # type: ignore
 
     def log_message(self, fmt: str, *args: Any) -> None:
+        """Route HTTP request logging through the application logger."""
         logger.debug("http %s", fmt % args)
 
     def _send_json(self, status: int, body: Any) -> None:
@@ -602,6 +613,7 @@ class ZigbeeHTTPHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self) -> None:
+        """Handle GET requests for health, devices, history, and summary."""
         parsed = urlparse(self.path)
         path: str = parsed.path.rstrip("/") or "/"
         qs: dict[str, list[str]] = parse_qs(parsed.query)
@@ -674,6 +686,7 @@ class ZigbeeHTTPHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": f"unknown path: {path}"})
 
     def do_POST(self) -> None:
+        """Handle POST requests for device state commands (ON/OFF)."""
         parsed = urlparse(self.path)
         path: str = parsed.path.rstrip("/")
 

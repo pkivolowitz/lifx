@@ -34,12 +34,15 @@ from __future__ import annotations
 
 __version__: str = "1.1"
 
+import logging
 import os
 import platform
 import queue
 import subprocess
 import time
 from typing import Optional
+
+logger: logging.Logger = logging.getLogger("glowup.simulator")
 
 # ---------------------------------------------------------------------------
 # Graceful tkinter import — the entire module is a no-op if unavailable.
@@ -483,9 +486,9 @@ if _TK_AVAILABLE:
             self._stopped = True
             try:
                 self._root.after(0, self._root.quit)
-            except Exception:
+            except Exception as exc:
                 # Window may already be destroyed.
-                pass
+                logger.debug("Error scheduling tkinter quit: %s", exc)
 
 
 # ---------------------------------------------------------------------------

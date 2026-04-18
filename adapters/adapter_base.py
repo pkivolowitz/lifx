@@ -732,8 +732,8 @@ class AsyncPollingAdapterBase(AdapterBase):
                 asyncio.run_coroutine_threadsafe(
                     self._disconnect(), self._loop,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Adapter disconnect failed: %s", exc)
         if self._thread:
             self._thread.join(timeout=THREAD_JOIN_TIMEOUT)
         self._on_stopped()
@@ -801,8 +801,8 @@ class AsyncPollingAdapterBase(AdapterBase):
                 self._hb("disconnecting")
                 try:
                     await self._disconnect()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Adapter disconnect during reconnect failed: %s", exc)
             if self._running:
                 self._hb(f"backoff {delay:.0f}s")
                 await asyncio.sleep(delay)

@@ -3,6 +3,8 @@
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
+__version__: str = "1.0.0"
+
 print("GlowUp Theremin — available subcommands:")
 print()
 print("  python3 -m theremin.simulator   — Sensor simulator (Mac sliders)")

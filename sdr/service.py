@@ -443,8 +443,8 @@ class Rtl433Runner:
                 except subprocess.TimeoutExpired:
                     self._proc.kill()
                     self._proc.wait()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Error stopping rtl_433 process: %s", exc)
                 logger.info("rtl_433 stopped (pid=%d)", self._proc.pid)
                 self._proc = None
 

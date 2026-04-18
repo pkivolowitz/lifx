@@ -28,5 +28,17 @@ TimeoutStartSec=900
 StandardOutput=journal
 StandardError=journal
 
+# Hardening — reads email.json and server.json from /etc/glowup/.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/etc/glowup /home/a/lifx
+
 [Install]
 WantedBy=multi-user.target

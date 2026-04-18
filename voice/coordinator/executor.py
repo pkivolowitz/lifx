@@ -26,7 +26,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-import yaml
+try:
+    import yaml
+    _HAS_YAML: bool = True
+except ImportError:
+    yaml = None  # type: ignore[assignment]
+    _HAS_YAML = False
 
 from voice import constants as C
 
@@ -248,8 +253,8 @@ class GlowUpExecutor:
             error_body: str = ""
             try:
                 error_body = exc.read().decode()[:200]
-            except Exception:
-                pass
+            except Exception as exc2:
+                logger.debug("Failed to read HTTP error body: %s", exc2)
             logger.error(
                 "API %s %s → %d: %s (body: %s)",
                 method, path, exc.code, exc.reason, error_body,
@@ -2229,8 +2234,8 @@ class GlowUpExecutor:
                 parts.append(
                     f"Power monitors: {', '.join(str(d) for d in raw_devices)}"
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to query power devices: %s", exc)
 
         if not parts:
             confirmation: str = "No sensors are available right now."

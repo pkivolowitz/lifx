@@ -422,8 +422,8 @@ class CoordinatorDaemon:
                 logger.debug(
                     "Heartbeat from %s", status.get("room", "?"),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to parse heartbeat: %s", exc)
 
     def _process_message(self, payload: bytes) -> None:
         """Decode and process a single utterance message.
@@ -460,6 +460,7 @@ class CoordinatorDaemon:
         # The pipeline calls tts_text_publisher(room, text) without
         # knowing about sequence numbers.
         def scoped_publisher(r: str, t: str) -> None:
+            """Publish TTS text with the utterance sequence number bound."""
             self._speak_for_room_seq(r, t, utterance_seq)
 
         # Suppress wake detection for the entire pipeline duration,
@@ -707,6 +708,7 @@ def main() -> None:
     daemon = CoordinatorDaemon(config)
 
     def shutdown(sig: int, frame: Any) -> None:
+        """Stop the coordinator daemon on signal."""
         logger.info("Received signal %d", sig)
         daemon.stop()
 

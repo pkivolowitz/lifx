@@ -701,8 +701,8 @@ class EmitterManager:
         for name, slot in snapshot:
             try:
                 slot.emitter.on_flush()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Emitter '%s' flush failed: %s", name, exc)
             try:
                 slot.emitter.on_close()
                 slot.emitter._is_open = False

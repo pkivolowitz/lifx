@@ -11,3 +11,5 @@ Subtrees:
 - operators/  — custom signal transformers
 - emitters/   — custom output devices
 """
+
+__version__: str = "1.0.0"

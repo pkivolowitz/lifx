@@ -312,7 +312,10 @@ def run_sensor(
     client.will_set(status_topic, "offline", qos=1, retain=True)
     client.reconnect_delay_set(min_delay=1, max_delay=30)
 
-    def on_connect(c, ud, flags, rc, props=None):
+    def on_connect(
+        c: mqtt.Client, ud: Any, flags: Any, rc: Any, props: Any = None,
+    ) -> None:
+        """Handle MQTT connection events and publish online status."""
         if rc == 0:
             logger.info("MQTT connected to %s:%d", broker_host, broker_port)
             c.publish(status_topic, "online", qos=1, retain=True)

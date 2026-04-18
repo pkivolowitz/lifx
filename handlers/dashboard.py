@@ -10,6 +10,8 @@ __version__: str = "1.0"
 
 import json
 import logging
+
+logger: logging.Logger = logging.getLogger("glowup.dashboard")
 import math
 import os
 import socket
@@ -820,8 +822,8 @@ class DashboardHandlerMixin:
             device_count = sum(
                 1 for d in devices if not d.get("is_group", False)
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Device count query failed: %s", exc)
 
         # Schedule count — read from scheduler's config.
         schedule_count: int = 0
@@ -832,8 +834,8 @@ class DashboardHandlerMixin:
                 schedule_count = sum(
                     1 for s in specs if s.get("enabled", True)
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Schedule count query failed: %s", exc)
 
         # Satellite summary — compact per-room rollup derived from
         # the same data exposed in full by /api/satellites/health.
@@ -1289,8 +1291,8 @@ class DashboardHandlerMixin:
             device_count = sum(
                 1 for d in devs if not d.get("is_group", False)
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Device count query failed: %s", exc)
         schedule_count: int = 0
         if sched is not None:
             try:
@@ -1298,8 +1300,8 @@ class DashboardHandlerMixin:
                 schedule_count = sum(
                     1 for s in specs if s.get("enabled", True)
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Schedule count query failed: %s", exc)
         result["health"] = {
             "ready": getattr(self.device_manager, "ready", False),
             "adapters": adapter_health,

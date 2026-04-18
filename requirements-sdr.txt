@@ -1,0 +1,3 @@
+# SDR dependencies — RTL-SDR signal ingestion.
+# Install: pip install -r requirements-sdr.txt
+-r requirements.txt

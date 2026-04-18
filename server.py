@@ -1013,8 +1013,8 @@ class GlowUpRequestHandler(
                     self._send_json(500, {
                         "error": f"Internal error: {type(exc).__name__}: {exc}",
                     })
-                except Exception:
-                    pass  # Response already started or connection dead.
+                except Exception as exc:
+                    logging.debug("Error response send failed: %s", exc)
             finally:
                 elapsed_s: float = time.monotonic() - t_handler
                 if elapsed_s > HANDLER_DEADLINE_S:

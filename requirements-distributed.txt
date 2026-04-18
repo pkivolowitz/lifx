@@ -1,0 +1,5 @@
+# Distributed subsystem dependencies — demos and tools.
+# Install: pip install -r requirements-distributed.txt
+-r requirements.txt
+numpy>=1.24,<3.0
+sounddevice>=0.4,<1.0

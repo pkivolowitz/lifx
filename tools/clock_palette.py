@@ -32,6 +32,7 @@ __version__ = "1.0"
 
 import argparse
 import colorsys
+import logging
 import math
 import os
 import sys
@@ -39,8 +40,22 @@ import tkinter as tk
 from datetime import datetime
 from typing import Any
 
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageTk
+logger: logging.Logger = logging.getLogger("glowup.clock_palette")
+
+_missing: list[str] = []
+try:
+    import numpy as np
+except ImportError:
+    _missing.append("numpy")
+try:
+    from PIL import Image, ImageDraw, ImageFont, ImageTk
+except ImportError:
+    _missing.append("Pillow")
+if _missing:
+    sys.exit(
+        f"tools.clock_palette: missing packages: {', '.join(_missing)}  "
+        f"— pip install {' '.join(_missing)}"
+    )
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -458,8 +473,8 @@ def render_clock_mockup(
                 date_font = ImageFont.truetype(font_path, 14)
                 label_font = ImageFont.truetype(font_path, 10)
                 break
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to load font: %s", exc)
 
     if time_font is None:
         time_font = ImageFont.load_default()

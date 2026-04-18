@@ -229,8 +229,8 @@ class Dump1090Runner:
             except subprocess.TimeoutExpired:
                 self._proc.kill()
                 self._proc.wait()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Error stopping dump1090 process: %s", exc)
 
     def _spawn(self) -> None:
         """Spawn the dump1090 process."""

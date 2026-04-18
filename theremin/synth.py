@@ -27,9 +27,24 @@ import sys
 import threading
 from typing import Any, Optional
 
-import numpy as np
-import sounddevice as sd
-import paho.mqtt.client as mqtt
+_missing: list[str] = []
+try:
+    import numpy as np
+except ImportError:
+    _missing.append("numpy")
+try:
+    import sounddevice as sd
+except ImportError:
+    _missing.append("sounddevice")
+try:
+    import paho.mqtt.client as mqtt
+except ImportError:
+    _missing.append("paho-mqtt")
+if _missing:
+    sys.exit(
+        f"theremin.synth: missing packages: {', '.join(_missing)}  "
+        f"— pip install {' '.join(_missing)}"
+    )
 
 from . import (
     AUDIO_BLOCK_SIZE,

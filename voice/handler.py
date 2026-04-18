@@ -115,8 +115,8 @@ class VoiceHandlerMixin:
             try:
                 from effects import EFFECT_REGISTRY
                 result["effects"] = sorted(EFFECT_REGISTRY.keys())
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to load effect registry: %s", exc)
 
         # Groups from config.
         cfg = self.config  # type: ignore[attr-defined]
@@ -132,8 +132,8 @@ class VoiceHandlerMixin:
                     d.get("label", d.get("ip", ""))
                     for d in devs
                 ]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to get device list: %s", exc)
 
         # Sensors from signal_bus.
         bus = self.signal_bus  # type: ignore[attr-defined]
@@ -147,16 +147,16 @@ class VoiceHandlerMixin:
                     if len(parts) >= 2:
                         sensors.add(parts[0])
                 result["sensors"] = sorted(sensors)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to enumerate sensors: %s", exc)
 
         # Power devices.
         pl = self.power_logger  # type: ignore[attr-defined]
         if pl is not None:
             try:
                 result["power_devices"] = pl.devices()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to get power devices: %s", exc)
 
         self._send_json(200, result)  # type: ignore[attr-defined]
 

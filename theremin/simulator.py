@@ -29,7 +29,13 @@ import time
 import tkinter as tk
 from typing import Any, Optional
 
-import paho.mqtt.client as mqtt
+try:
+    import paho.mqtt.client as mqtt
+except ImportError:
+    sys.exit(
+        "theremin.simulator: missing package: paho-mqtt  "
+        "— pip install paho-mqtt"
+    )
 
 from . import (
     DISTANCE_MAX_CM,

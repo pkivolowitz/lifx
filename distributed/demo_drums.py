@@ -38,8 +38,21 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
-import numpy as np
-import sounddevice as sd
+_missing: list[str] = []
+try:
+    import numpy as np
+except ImportError:
+    _missing.append("numpy")
+try:
+    import sounddevice as sd
+except ImportError:
+    _missing.append("sounddevice")
+if _missing:
+    import sys
+    sys.exit(
+        f"distributed.demo_drums: missing packages: {', '.join(_missing)}  "
+        f"— pip install {' '.join(_missing)}"
+    )
 
 from transport import LifxDevice
 

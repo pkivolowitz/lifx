@@ -29,29 +29,50 @@ logger: logging.Logger = logging.getLogger("glowup.voice.pipeline")
 
 class STTLike(Protocol):
     """Anything with a transcribe(pcm, sample_rate) -> str method."""
-    def transcribe(self, pcm: bytes, sample_rate: int) -> str: ...
+
+    def transcribe(self, pcm: bytes, sample_rate: int) -> str:
+        """Transcribe raw PCM audio to text."""
+        ...
 
 
 class IntentLike(Protocol):
     """Anything with a parse(text) -> dict method."""
-    def parse(self, text: str) -> dict[str, Any]: ...
+
+    def parse(self, text: str) -> dict[str, Any]:
+        """Parse transcribed text into a structured intent dict."""
+        ...
 
 
 class ExecutorLike(Protocol):
     """Anything with an execute(intent, room) -> dict method."""
-    def execute(self, intent: dict[str, Any], room: str) -> dict[str, Any]: ...
-    def get_action_label(self, action: str) -> str: ...
-    def get_action_type(self, action: str) -> str: ...
+
+    def execute(self, intent: dict[str, Any], room: str) -> dict[str, Any]:
+        """Dispatch an intent to the GlowUp API and return the result."""
+        ...
+
+    def get_action_label(self, action: str) -> str:
+        """Return a human-readable label for an action name."""
+        ...
+
+    def get_action_type(self, action: str) -> str:
+        """Return the action category (command, query, etc.)."""
+        ...
 
 
 class TTSLike(Protocol):
     """Anything with a synthesize(text) -> (bytes, sample_rate) method."""
-    def synthesize(self, text: str) -> tuple[bytes, int]: ...
+
+    def synthesize(self, text: str) -> tuple[bytes, int]:
+        """Synthesize text to WAV audio bytes and sample rate."""
+        ...
 
 
 class PlayerLike(Protocol):
     """Anything with a play(room, audio_bytes) -> bool method."""
-    def play(self, room: str, audio_bytes: bytes) -> bool: ...
+
+    def play(self, room: str, audio_bytes: bytes) -> bool:
+        """Stream audio to a room's speaker and return success."""
+        ...
 
 
 class PlaybackNotifier(Protocol):

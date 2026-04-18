@@ -229,8 +229,8 @@ def _print_summary(label: str, stats: SignalStats, lost_threshold: float) -> Non
             print(f"Gap:          min={stats.gap_min:.1f}s  max={stats.gap_max:.1f}s  avg={stats.gap_avg:.1f}s")
         print(f"Lost events:  {stats.lost_count} (>{lost_threshold}s without advertisement)")
         sys.stdout.flush()
-    except Exception:
-        pass  # stdout may already be closed on SIGHUP
+    except Exception as exc:
+        logger.debug("Signal summary output failed (stdout may be closed): %s", exc)
 
 
 async def run_signal_meter(

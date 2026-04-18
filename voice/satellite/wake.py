@@ -18,7 +18,12 @@ import logging
 import time
 from typing import Optional
 
-import numpy as np
+try:
+    import numpy as np
+    _HAS_NUMPY: bool = True
+except ImportError:
+    np = None  # type: ignore[assignment]
+    _HAS_NUMPY = False
 
 logger: logging.Logger = logging.getLogger("glowup.voice.wake")
 

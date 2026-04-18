@@ -16,7 +16,12 @@ import threading
 import time
 from typing import Any, Optional
 
-import requests
+try:
+    import requests
+    _HAS_REQUESTS: bool = True
+except ImportError:
+    requests = None  # type: ignore[assignment]
+    _HAS_REQUESTS = False
 
 logger: logging.Logger = logging.getLogger("glowup.kiosk.data")
 

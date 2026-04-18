@@ -194,8 +194,8 @@ class MqttTransport(TransportAdapter):
         if self._client and self._connected:
             try:
                 self._client.unsubscribe(MQTT_SIGNAL_PREFIX + name)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("MQTT unsubscribe failed for '%s': %s", name, exc)
 
     def start(self) -> None:
         """Connect to the MQTT broker and start the network loop."""
@@ -236,8 +236,8 @@ class MqttTransport(TransportAdapter):
             try:
                 self._client.loop_stop()
                 self._client.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("MQTT disconnect failed: %s", exc)
             self._client = None
             self._connected = False
 

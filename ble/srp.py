@@ -30,7 +30,7 @@ import hashlib
 import logging
 import math
 import os
-from typing import Optional
+from typing import Optional, Union
 
 from .hap_constants import (
     SRP_GENERATOR,
@@ -142,7 +142,7 @@ class SrpClient:
         self._salt: Optional[int] = None
         self._B: Optional[int] = None
 
-    def set_salt(self, salt) -> None:
+    def set_salt(self, salt: Union[bytes, bytearray, int]) -> None:
         """Set the server-provided salt.
 
         Args:
@@ -153,7 +153,7 @@ class SrpClient:
         else:
             self._salt = salt
 
-    def set_server_public_key(self, B) -> None:
+    def set_server_public_key(self, B: Union[bytes, bytearray, int]) -> None:
         """Set the server's public ephemeral value *B*.
 
         Args:
@@ -257,7 +257,7 @@ class SrpClient:
         )
         return int.from_bytes(proof, byteorder="big")
 
-    def verify_server_proof(self, server_M2) -> bool:
+    def verify_server_proof(self, server_M2: Union[bytes, bytearray, int]) -> bool:
         """Verify the server's proof *M2*.
 
         Args:

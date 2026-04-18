@@ -23,7 +23,13 @@ import time
 from datetime import datetime
 from typing import Any, Callable
 
-import pygame
+try:
+    import pygame
+except ImportError:
+    sys.exit(
+        "kiosk.app: missing package: pygame  "
+        "— pip install pygame"
+    )
 
 from kiosk.data import DataPoller, TILE_SOURCE
 from kiosk.theme import DAY, NIGHT, Theme
@@ -242,8 +248,8 @@ def main() -> None:
             pygame.Surface((1, 1), pygame.SRCALPHA),
         )
         pygame.mouse.set_cursor(invisible)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to set invisible cursor: %s", exc)
 
     if args.windowed:
         w: int = args.width or 480

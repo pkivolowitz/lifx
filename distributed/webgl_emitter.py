@@ -476,8 +476,8 @@ class WebGLEmitter:
                 self._ws_clients.discard(writer)
             try:
                 writer.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Error closing WebSocket writer: %s", exc)
             logger.info("WebSocket client disconnected (%d remaining)",
                          len(self._ws_clients))
 
@@ -546,8 +546,8 @@ class WebGLEmitter:
             try:
                 self._mqtt_client.loop_stop()
                 self._mqtt_client.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("MQTT disconnect failed: %s", exc)
             self._mqtt_client = None
             self._mqtt_connected = False
 

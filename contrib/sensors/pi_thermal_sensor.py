@@ -468,6 +468,7 @@ class PiThermalSensor:
         # client_id scoped to the node so the broker cleanly replaces
         # a prior instance's session on reconnect.
         client: mqtt.Client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2,
             client_id=f"pi-thermal-{self._node_id}",
         )
         client.will_set(
@@ -497,10 +498,16 @@ class PiThermalSensor:
         self,
         client: "mqtt.Client",
         userdata: Any,
-        flags: dict[str, Any],
-        rc: int,
+        *args: Any,
     ) -> None:
-        """paho callback — logs connection outcome."""
+        """paho callback — logs connection outcome.
+
+        paho v2 passes (flags, reason_code, properties); v1 passed
+        (flags, rc).  Using ``*args`` accepts both; the reason code
+        is always the second positional.
+        """
+        raw_rc = args[1] if len(args) >= 2 else args[0]
+        rc: int = raw_rc.value if hasattr(raw_rc, "value") else int(raw_rc)
         if rc == 0:
             logger.info(
                 "connected to %s:%d as pi-thermal-%s",
@@ -513,9 +520,15 @@ class PiThermalSensor:
         self,
         client: "mqtt.Client",
         userdata: Any,
-        rc: int,
+        *args: Any,
     ) -> None:
-        """paho callback — logs unexpected disconnects."""
+        """paho callback — logs unexpected disconnects.
+
+        paho v2 passes (flags, reason_code, properties); v1 passed
+        (rc,).  Using ``*args`` accepts both.
+        """
+        raw_rc = args[1] if len(args) >= 2 else args[0]
+        rc: int = raw_rc.value if hasattr(raw_rc, "value") else int(raw_rc)
         if rc != 0:
             logger.warning(
                 "mqtt unexpected disconnect rc=%d (paho will retry)", rc,

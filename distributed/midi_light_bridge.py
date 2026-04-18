@@ -238,8 +238,8 @@ class MidiLightBridge:
                     (0, 0, 0, KELVIN_DEFAULT)
                 ] * count
                 dev.set_zones(black, duration_ms=500)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to black out device on stop: %s", exc)
 
         self._disconnect_mqtt()
 
@@ -437,8 +437,8 @@ class MidiLightBridge:
             try:
                 self._client.loop_stop()
                 self._client.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("MQTT disconnect failed: %s", exc)
             self._client = None
             self._connected = False
 

@@ -17,7 +17,14 @@ import time
 from datetime import datetime
 from typing import Any, Optional
 
-import pygame
+try:
+    import pygame
+except ImportError:
+    import sys
+    sys.exit(
+        "kiosk.tiles: missing package: pygame  "
+        "— pip install pygame"
+    )
 
 from kiosk.theme import Theme
 from kiosk.data import DataPoller

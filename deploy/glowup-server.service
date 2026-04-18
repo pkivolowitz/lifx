@@ -8,6 +8,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=a
 ExecStart=/usr/bin/python3 /home/pi/lifx/server.py /etc/glowup/server.json
 WorkingDirectory=/home/pi/lifx
 Restart=always
@@ -15,6 +16,18 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=glowup-server
+
+# Hardening — server needs write access to state.db and the repo tree.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/etc/glowup /home/a/lifx
 
 [Install]
 WantedBy=multi-user.target

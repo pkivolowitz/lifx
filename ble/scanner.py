@@ -29,7 +29,10 @@ import asyncio
 import logging
 import struct
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bleak import BleakClient
 
 logger: logging.Logger = logging.getLogger("glowup.ble.scanner")
 
@@ -259,7 +262,7 @@ class BleakGattClient:
     :class:`HapSession` expects.
     """
 
-    def __init__(self, client) -> None:
+    def __init__(self, client: "BleakClient") -> None:
         """Initialize with a connected BleakClient.
 
         Args:

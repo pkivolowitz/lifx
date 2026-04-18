@@ -36,5 +36,17 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=glowup-keepalive
 
+# Hardening — keepalive sends UDP to bulbs and reads ARP tables.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/home/a/lifx
+
 [Install]
 WantedBy=multi-user.target

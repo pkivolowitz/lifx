@@ -1,0 +1,4 @@
+# BLE dependencies — HAP-BLE sensor daemon on broker-2.
+# Install: pip install -r requirements-ble.txt
+-r requirements.txt
+bleak>=0.21,<4.0

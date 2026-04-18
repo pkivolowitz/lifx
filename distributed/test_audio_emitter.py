@@ -30,7 +30,13 @@ import termios
 import tty
 from typing import Any
 
-import paho.mqtt.client as mqtt
+try:
+    import paho.mqtt.client as mqtt
+except ImportError:
+    sys.exit(
+        "distributed.test_audio_emitter: missing package: paho-mqtt  "
+        "— pip install paho-mqtt"
+    )
 
 from emitters import create_emitter
 from emitters.audio_out import AudioOutEmitter

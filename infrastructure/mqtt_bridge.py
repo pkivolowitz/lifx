@@ -309,8 +309,8 @@ class MqttBridge:
                     qos=QOS_AT_LEAST_ONCE,
                     retain=True,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Offline status publish failed: %s", exc)
             self._client.loop_stop()
             self._client.disconnect()
 

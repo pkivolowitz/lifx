@@ -27,6 +27,7 @@ __version__: str = "1.0"
 
 import argparse
 import json
+import logging
 import os
 import platform
 import shutil
@@ -37,6 +38,8 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 from typing import Any, Optional
+
+logger: logging.Logger = logging.getLogger("glowup.health_check")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -519,8 +522,8 @@ def check_satellite(r: CheckResult) -> None:
                 with open(config_path, "r") as f:
                     cfg = json.load(f)
                 piper_model = cfg.get("piper_model", "")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to read config for piper model: %s", exc)
         if piper_model and os.path.exists(piper_model):
             r.passed("Piper model", os.path.basename(piper_model))
         elif piper_model:

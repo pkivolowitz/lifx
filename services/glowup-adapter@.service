@@ -38,5 +38,17 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=glowup-%i
 
+# Hardening — adapters need network, config reads, and repo access.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/etc/glowup /home/a/lifx
+
 [Install]
 WantedBy=multi-user.target

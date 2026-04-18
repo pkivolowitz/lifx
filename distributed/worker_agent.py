@@ -450,8 +450,8 @@ class WorkerAgent:
             for t in running.transports:
                 try:
                     t.stop()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Error stopping operator transport during cleanup: %s", exc)
             return
 
         with self._lock:
@@ -722,13 +722,13 @@ class WorkerAgent:
             for t in running.transports:
                 try:
                     t.stop()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Error stopping emitter transport during cleanup: %s", exc)
             if running.emitter is not None and running.emitter._is_open:
                 try:
                     running.emitter.on_close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Error closing emitter during cleanup: %s", exc)
             return
 
         with self._lock:
@@ -857,8 +857,8 @@ class WorkerAgent:
         if emitter is not None and emitter._is_open:
             try:
                 emitter.on_flush()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Error flushing emitter: %s", exc)
             try:
                 emitter.on_close()
                 emitter._is_open = False
@@ -910,8 +910,8 @@ class WorkerAgent:
                 health.to_json(),
                 qos=HEALTH_QOS,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to publish health: %s", exc)
 
     def _get_cpu_percent(self) -> float:
         """Read CPU usage percentage.
@@ -1073,8 +1073,8 @@ class WorkerAgent:
                     qos=STATUS_QOS,
                     retain=True,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to publish offline status: %s", exc)
             self._client.loop_stop()
             self._client.disconnect()
 

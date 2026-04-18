@@ -396,8 +396,8 @@ class ProcessAdapterBase:
                 status_topic, payload="offline",
                 qos=QOS_STATUS, retain=True,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Offline status publish failed: %s", exc)
 
         self._client.loop_stop()
         self._client.disconnect()
