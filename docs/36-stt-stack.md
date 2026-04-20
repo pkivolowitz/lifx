@@ -132,7 +132,17 @@ in the facade, not in individual engines.
 
 ## State file contract
 
-`~/.glowup/stt_state.json`, atomic write (tmp + rename):
+`~/.glowup/stt_state.json`, atomic write (per-writer unique tmp + rename).
+Each `write_state()` call creates its own `stt_state.json.<random>.tmp`
+via `tempfile.mkstemp` in the same directory as the target, writes the
+JSON there, then `os.replace`s it onto the final path. This is the
+refit after the 2026-04-20 duplicate-launchd-instance race, where two
+coordinators sharing a single `.json.tmp` name could see the second
+writer's rename fail with `FileNotFoundError` — the target file would
+end up with stale content and the morning report would flag Daedalus
+red for what was actually a phantom bug. With per-writer tmp names the
+race is impossible: every writer has its own exclusive inode, and the
+final rename is atomic on POSIX even under concurrent contention.
 
 ```json
 {

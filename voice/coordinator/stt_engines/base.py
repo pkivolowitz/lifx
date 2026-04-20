@@ -142,6 +142,28 @@ def write_state(
         "fallback_reason": fallback_reason,
         "since": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
-    tmp_path: Path = STT_STATE_FILE.with_suffix(".json.tmp")
-    tmp_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    tmp_path.replace(STT_STATE_FILE)
+    # Per-writer unique tmp name — multiple coordinators (or, pathologically,
+    # a rogue duplicate launchd instance) must not race on a shared `.tmp`
+    # path where the second renamer can hit FileNotFoundError after the first
+    # has already moved the file into place.  mkstemp gives us an exclusive
+    # inode in the same directory as the target, so os.replace is atomic
+    # within the filesystem and per-writer-isolated across processes.
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        prefix=STT_STATE_FILE.name + ".",
+        suffix=".tmp",
+        dir=str(STT_STATE_DIR),
+    )
+    tmp_path: Path = Path(tmp_name)
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, indent=2) + "\n")
+        os.replace(tmp_path, STT_STATE_FILE)
+    except BaseException:
+        # Leave the target untouched and clean up our tmp on any failure
+        # (including KeyboardInterrupt) so /.glowup does not accumulate
+        # orphan tmp files across crashes.
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise

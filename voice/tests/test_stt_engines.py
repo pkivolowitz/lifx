@@ -83,6 +83,45 @@ class TestWriteState(unittest.TestCase):
         tmps = list(base_module.STT_STATE_DIR.glob("*.tmp"))
         self.assertEqual(tmps, [])
 
+    def test_concurrent_writers_do_not_race(self) -> None:
+        """Two writers racing on the shared `.tmp` name was the 2026-04-20
+        Daedalus bug that took the state file degraded.  Per-writer
+        unique tmp names must let both calls complete without either
+        one hitting FileNotFoundError on the os.replace step.
+        """
+        import threading
+
+        writer_count: int = 8  # enough to provoke a race on the old path
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(writer_count)
+
+        def worker(i: int) -> None:
+            try:
+                barrier.wait()  # release all workers simultaneously
+                base_module.write_state(
+                    engine=f"mock-{i}",
+                    primary_engine="mock",
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=worker, args=(i,))
+            for i in range(writer_count)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [], f"writer raised: {errors!r}")
+        # Final file must be a valid JSON doc (one of the writers won).
+        data = json.loads(base_module.STT_STATE_FILE.read_text())
+        self.assertTrue(data["engine"].startswith("mock-"))
+        # No orphan tmp files left behind.
+        tmps = list(base_module.STT_STATE_DIR.glob("*.tmp"))
+        self.assertEqual(tmps, [])
+
 
 class TestMockEngine(unittest.TestCase):
     def test_deterministic_transcript(self) -> None:
