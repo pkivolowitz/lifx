@@ -5,6 +5,14 @@ alongside it (pre-warmed so transitions are latency-free), and writes
 ``~/.glowup/stt_state.json`` so the morning report can detect and
 render degraded state.
 
+Each engine load runs under a deadline: if the configured
+``model_root`` path (typically a USB/TB-attached disk like Mini-Dock)
+stalls — common if a macOS accessory-permission prompt fires before a
+GUI session exists — the facade abandons the stalled load and retries
+against the engine's HF cache on internal disk.  This keeps the
+coordinator startable at boot before the user has logged in, even
+when the preferred external storage is momentarily unreachable.
+
 Engine implementations live in ``voice.coordinator.stt_engines``.
 See ``docs/36-stt-stack.md`` for stack design and configuration.
 """
@@ -14,11 +22,12 @@ See ``docs/36-stt-stack.md`` for stack design and configuration.
 
 from __future__ import annotations
 
-__version__ = "3.0"
+__version__ = "3.1"
 
 import logging
 import os
-from typing import Any, Optional
+import threading
+from typing import Any, Optional, Tuple
 
 from voice.coordinator.stt_engines import (
     FasterWhisperEngine,
@@ -30,6 +39,15 @@ from voice.coordinator.stt_engines import (
 )
 
 logger: logging.Logger = logging.getLogger("glowup.voice.stt")
+
+
+# Default per-engine load deadlines (seconds).  Overridable via the
+# ``stt`` config block with ``primary_load_timeout_s`` /
+# ``fallback_load_timeout_s``.  The primary default is generous
+# because MLX-Whisper JIT-compiles Metal kernels on first run after a
+# reboot — shorter deadlines risk false timeouts on cold boot.
+DEFAULT_PRIMARY_LOAD_TIMEOUT_S: float = 60.0
+DEFAULT_FALLBACK_LOAD_TIMEOUT_S: float = 30.0
 
 
 # Name → factory.  A factory returns an un-loaded engine instance
@@ -62,38 +80,154 @@ def _resolve_model_path(
     return candidate if os.path.isdir(candidate) else None
 
 
-def _build_engine(
+def _build_engine_at_path(
     engine_name: str,
     model: str,
-    model_root: str,
+    model_path: Optional[str],
     language: str,
     device: str,
     compute_type: str,
 ) -> STTEngine:
-    """Instantiate an un-loaded engine by name."""
+    """Instantiate an un-loaded engine with an explicit model_path.
+
+    ``model_path=None`` tells the engine to use its own default model
+    discovery (HF cache).
+    """
     factory = _ENGINE_FACTORIES.get(engine_name)
     if factory is None:
         raise STTEngineLoadError(
             f"Unknown STT engine '{engine_name}' — "
             f"valid: {sorted(_ENGINE_FACTORIES)}"
         )
-    path: Optional[str] = _resolve_model_path(model_root, engine_name, model)
-    return factory(model, path, language, device, compute_type)
+    return factory(model, model_path, language, device, compute_type)
+
+
+class LoadTimeout(RuntimeError):
+    """Raised by ``_load_with_deadline`` when an engine load exceeds
+    its allotted time.  Named distinctly from ``TimeoutError`` so
+    callers can tell a facade-enforced deadline apart from an OS
+    timeout bubbling up from elsewhere."""
+
+
+def _load_with_deadline(engine: STTEngine, timeout_s: float) -> None:
+    """Run ``engine.load()`` with a hard deadline.
+
+    On timeout, raises ``LoadTimeout``.  The in-flight load thread is
+    daemonised and abandoned — this is deliberate.  An abandoned
+    thread stuck in a macOS accessory prompt is harmless: it holds no
+    locks we care about, the engine instance is discarded, and daemon
+    threads die when the coordinator exits.  ``ThreadPoolExecutor``
+    is not used because its worker threads are non-daemon in
+    Python 3.9+, which would prevent the process from exiting cleanly
+    while an abandoned load thread is still blocked.
+    """
+    holder: dict = {"exc": None, "done": False}
+
+    def worker() -> None:
+        try:
+            engine.load()
+        except BaseException as exc:  # noqa: BLE001 — we re-raise below
+            holder["exc"] = exc
+        finally:
+            holder["done"] = True
+
+    t = threading.Thread(
+        target=worker,
+        name=f"stt-load-{engine.name}",
+        daemon=True,
+    )
+    t.start()
+    t.join(timeout=timeout_s)
+
+    if not holder["done"]:
+        raise LoadTimeout(
+            f"{engine.name}.load() exceeded {timeout_s:.1f}s deadline"
+        )
+    if holder["exc"] is not None:
+        raise holder["exc"]
+
+
+def _attempt_load_with_hf_fallback(
+    engine_name: str,
+    model: str,
+    model_root: str,
+    language: str,
+    device: str,
+    compute_type: str,
+    timeout_s: float,
+) -> Tuple[STTEngine, str]:
+    """Load an engine, preferring ``model_root`` then falling back to HF cache.
+
+    Returns ``(loaded_engine, degradation_reason)``.  Empty reason
+    means the preferred (model_root) path loaded cleanly; non-empty
+    means we fell off to the HF cache on internal disk and the
+    morning report should flag the dock as acting up.
+
+    Raises ``STTEngineLoadError`` if both the model_root attempt and
+    the HF cache attempt fail.
+    """
+    degradation: str = ""
+    local_path: Optional[str] = _resolve_model_path(
+        model_root, engine_name, model,
+    )
+
+    # Attempt 1: the configured model_root path (usually Mini-Dock).
+    if local_path is not None:
+        engine: STTEngine = _build_engine_at_path(
+            engine_name, model, local_path, language, device, compute_type,
+        )
+        try:
+            _load_with_deadline(engine, timeout_s)
+            return engine, ""
+        except LoadTimeout:
+            degradation = (
+                f"{engine_name} load from {local_path} exceeded "
+                f"{timeout_s:.0f}s deadline — retrying with HF cache "
+                "(is /Volumes/Mini-Dock stuck on an accessory prompt?)"
+            )
+            logger.error("%s", degradation)
+        except STTEngineLoadError as exc:
+            degradation = (
+                f"{engine_name} load from {local_path} failed "
+                f"({exc}) — retrying with HF cache"
+            )
+            logger.error("%s", degradation)
+
+    # Attempt 2: HF cache on internal disk.
+    engine = _build_engine_at_path(
+        engine_name, model, None, language, device, compute_type,
+    )
+    try:
+        _load_with_deadline(engine, timeout_s)
+        return engine, degradation
+    except LoadTimeout as exc:
+        raise STTEngineLoadError(
+            f"{engine_name} load from HF cache also exceeded "
+            f"{timeout_s:.0f}s deadline; preceding error: {degradation}"
+        ) from exc
+    except STTEngineLoadError as exc:
+        if degradation:
+            raise STTEngineLoadError(
+                f"{degradation}; HF cache load also failed: {exc}"
+            ) from exc
+        raise
 
 
 class SpeechToText:
-    """Primary/fallback STT facade.
+    """Primary/fallback STT facade with load-deadline + HF-cache retry.
 
     Config schema (coordinator_config.json, ``stt`` block)::
 
         {
-          "engine":          "mlx-whisper",
-          "fallback_engine": "faster-whisper",
-          "model":           "large-v3-turbo",
-          "model_root":      "/Volumes/Mini-Dock/glowup/models",
-          "language":        "en",
-          "device":          "cpu",          # faster-whisper only
-          "compute_type":    "int8"          # faster-whisper only
+          "engine":                  "mlx-whisper",
+          "fallback_engine":         "faster-whisper",
+          "model":                   "large-v3-turbo",
+          "model_root":              "/Volumes/Mini-Dock/glowup/models",
+          "language":                "en",
+          "device":                  "cpu",      # faster-whisper only
+          "compute_type":            "int8",     # faster-whisper only
+          "primary_load_timeout_s":  60,         # default 60
+          "fallback_load_timeout_s": 30          # default 30
         }
 
     Legacy keys ``model_size`` (alias for ``model``) are accepted for
@@ -101,9 +235,15 @@ class SpeechToText:
     not hard-fail.
 
     Both engines are loaded at construction time so a runtime fallback
-    transition is latency-free.  If the primary engine fails to load,
-    the fallback becomes the active engine and ``write_state`` records
-    the degradation.  If both fail, ``STTEngineLoadError`` is raised
+    transition is latency-free.  Each load runs under its own deadline
+    so a stalled ``model_root`` does not hang the coordinator — the
+    facade abandons the stalled attempt and retries against the
+    engine's HF cache on internal disk.  Any such retry is recorded
+    in ``fallback_reason`` so the morning report renders the Daedalus
+    row in red.
+
+    If the primary engine ultimately cannot load, the fallback becomes
+    the active engine.  If both fail, ``STTEngineLoadError`` is raised
     and the coordinator refuses to start.
     """
 
@@ -133,100 +273,115 @@ class SpeechToText:
         language: str = cfg.get("language", "en")
         fw_device: str = cfg.get("device", "cpu")
         fw_compute_type: str = cfg.get("compute_type", "int8")
+        primary_timeout: float = float(cfg.get(
+            "primary_load_timeout_s", DEFAULT_PRIMARY_LOAD_TIMEOUT_S,
+        ))
+        fallback_timeout: float = float(cfg.get(
+            "fallback_load_timeout_s", DEFAULT_FALLBACK_LOAD_TIMEOUT_S,
+        ))
 
         # Fallback collapses to no-op if it matches the primary.
         if fallback_name == primary_name:
             fallback_name = ""
 
-        primary: STTEngine = _build_engine(
-            primary_name, model, model_root, language, fw_device, fw_compute_type,
-        )
-        fallback: Optional[STTEngine] = None
-        if fallback_name:
-            fallback = _build_engine(
-                fallback_name, model, model_root, language,
-                fw_device, fw_compute_type,
-            )
-
-        # Load primary.  Fallback reason is kept so we can render it in
-        # the state file and in the morning report email.
-        fallback_reason: str = ""
-        primary_loaded: bool = False
+        # Load primary (with deadline + HF-cache retry).
+        primary: Optional[STTEngine] = None
+        primary_degradation: str = ""
+        primary_error: Optional[Exception] = None
         try:
-            primary.load()
-            primary_loaded = True
+            primary, primary_degradation = _attempt_load_with_hf_fallback(
+                primary_name, model, model_root, language,
+                fw_device, fw_compute_type, primary_timeout,
+            )
             logger.info(
-                "STT primary engine loaded: %s (model=%s)",
+                "STT primary engine loaded: %s (model=%s%s)",
                 primary.name, model,
+                " — degraded" if primary_degradation else "",
             )
         except STTEngineLoadError as exc:
-            fallback_reason = f"primary {primary.name} failed: {exc}"
+            primary_error = exc
             logger.error(
-                "STT primary engine %s failed to load — will fall back: %s",
-                primary.name, exc,
+                "STT primary engine %s failed to load — "
+                "will fall back: %s", primary_name, exc,
             )
 
-        # Load fallback.  Pre-warm path: load it even when the primary
-        # loaded successfully so a runtime swap has no model-load cost.
-        fallback_loaded: bool = False
-        if fallback is not None:
+        # Load fallback (pre-warm).
+        fallback: Optional[STTEngine] = None
+        fallback_degradation: str = ""
+        fallback_error: Optional[Exception] = None
+        if fallback_name:
             try:
-                fallback.load()
-                fallback_loaded = True
+                fallback, fallback_degradation = _attempt_load_with_hf_fallback(
+                    fallback_name, model, model_root, language,
+                    fw_device, fw_compute_type, fallback_timeout,
+                )
                 logger.info(
-                    "STT fallback engine loaded: %s (pre-warmed)",
+                    "STT fallback engine loaded: %s (pre-warmed%s)",
                     fallback.name,
+                    " — degraded" if fallback_degradation else "",
                 )
             except STTEngineLoadError as exc:
+                fallback_error = exc
                 logger.error(
                     "STT fallback engine %s failed to load: %s",
-                    fallback.name, exc,
+                    fallback_name, exc,
                 )
-                if not primary_loaded:
-                    # Both engines down.  Refuse to start so the
-                    # coordinator's launchd throttle holds it down
-                    # for operator intervention.
-                    write_state(
-                        engine="none",
-                        fallback_reason=(
-                            f"{fallback_reason} | fallback {fallback.name} "
-                            f"also failed: {exc}"
-                        ),
-                        primary_engine=primary.name,
-                    )
-                    raise STTEngineLoadError(
-                        f"No STT engine could be loaded. Primary "
-                        f"{primary.name}: {fallback_reason}. "
-                        f"Fallback {fallback.name}: {exc}"
-                    ) from exc
 
-        if primary_loaded:
+        # Decide active engine + compose the state-file reason.
+        reasons: list[str] = []
+        if primary is not None:
             active: STTEngine = primary
-        elif fallback_loaded and fallback is not None:
+            if primary_degradation:
+                reasons.append(primary_degradation)
+            if fallback_error is not None:
+                reasons.append(
+                    f"fallback {fallback_name} also failed: {fallback_error}"
+                )
+            elif fallback_degradation:
+                reasons.append(
+                    f"fallback pre-warm degraded: {fallback_degradation}"
+                )
+        elif fallback is not None:
             active = fallback
+            reasons.append(
+                f"primary {primary_name} failed: {primary_error}"
+            )
+            if fallback_degradation:
+                reasons.append(
+                    f"fallback also degraded: {fallback_degradation}"
+                )
         else:
-            # Primary failed, no fallback configured.
+            # No engine available.
+            reasons.append(
+                f"primary {primary_name} failed: {primary_error}"
+            )
+            if fallback_error is not None:
+                reasons.append(
+                    f"fallback {fallback_name} failed: {fallback_error}"
+                )
+            elif not fallback_name:
+                reasons.append("no fallback engine configured")
             write_state(
                 engine="none",
-                fallback_reason=fallback_reason
-                or f"primary {primary.name} failed and no fallback configured",
-                primary_engine=primary.name,
+                fallback_reason=" | ".join(reasons),
+                primary_engine=primary_name,
             )
             raise STTEngineLoadError(
-                f"No STT engine available — primary {primary.name} "
-                "failed and no fallback is configured."
+                f"No STT engine could be loaded. {' | '.join(reasons)}"
             )
 
-        self._primary: STTEngine = primary
-        self._fallback: Optional[STTEngine] = fallback if fallback_loaded else None
+        fallback_reason: str = " | ".join(reasons)
+
+        self._primary: Optional[STTEngine] = primary
+        self._fallback: Optional[STTEngine] = fallback
         self._active: STTEngine = active
-        self._primary_name: str = primary.name
+        self._primary_name: str = primary_name
         self._fallback_reason: str = fallback_reason
 
         write_state(
             engine=active.name,
             fallback_reason=fallback_reason,
-            primary_engine=primary.name,
+            primary_engine=primary_name,
         )
 
     @property

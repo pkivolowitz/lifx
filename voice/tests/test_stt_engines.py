@@ -121,7 +121,13 @@ class TestEngineAvailability(unittest.TestCase):
 
 
 class TestFacadeSelection(unittest.TestCase):
-    """SpeechToText selection, fallback, and failure behaviour."""
+    """SpeechToText selection, fallback, and failure behaviour.
+
+    Tests patch ``_build_engine_at_path`` rather than constructing
+    real engines; each mocked engine's ``load()`` controls whether
+    that attempt succeeds, fails (STTEngineLoadError), or hangs (the
+    facade's deadline triggers a TimeoutError).
+    """
 
     def setUp(self) -> None:
         self.fx = _StateFileFixture()
@@ -135,7 +141,6 @@ class TestFacadeSelection(unittest.TestCase):
         load_raises: bool = False,
         transcribe_returns: str = "ok",
     ):
-        """Build a stand-in engine object compliant with the protocol."""
         engine = mock.MagicMock()
         engine.name = name
         if load_raises:
@@ -152,12 +157,15 @@ class TestFacadeSelection(unittest.TestCase):
         self.assertIn("Unknown STT engine", str(ctx.exception))
 
     def test_primary_ok_both_engines_preloaded(self) -> None:
+        """Happy path: no model_root resolves, both engines load from HF cache."""
         from voice.coordinator import stt as stt_mod
         primary = self._make_engine("mlx-whisper")
         fallback = self._make_engine("faster-whisper")
         with mock.patch.object(
-            stt_mod, "_build_engine",
+            stt_mod, "_build_engine_at_path",
             side_effect=[primary, fallback],
+        ), mock.patch.object(
+            stt_mod, "_resolve_model_path", return_value=None,
         ):
             s = stt_mod.SpeechToText({
                 "engine": "mlx-whisper",
@@ -178,8 +186,10 @@ class TestFacadeSelection(unittest.TestCase):
         fallback = self._make_engine("faster-whisper",
                                      transcribe_returns="fell back")
         with mock.patch.object(
-            stt_mod, "_build_engine",
+            stt_mod, "_build_engine_at_path",
             side_effect=[primary, fallback],
+        ), mock.patch.object(
+            stt_mod, "_resolve_model_path", return_value=None,
         ):
             s = stt_mod.SpeechToText({
                 "engine": "mlx-whisper",
@@ -199,8 +209,10 @@ class TestFacadeSelection(unittest.TestCase):
         primary = self._make_engine("mlx-whisper", load_raises=True)
         fallback = self._make_engine("faster-whisper", load_raises=True)
         with mock.patch.object(
-            stt_mod, "_build_engine",
+            stt_mod, "_build_engine_at_path",
             side_effect=[primary, fallback],
+        ), mock.patch.object(
+            stt_mod, "_resolve_model_path", return_value=None,
         ):
             with self.assertRaises(STTEngineLoadError):
                 stt_mod.SpeechToText({
@@ -216,9 +228,11 @@ class TestFacadeSelection(unittest.TestCase):
         from voice.coordinator import stt as stt_mod
         primary = self._make_engine("mlx-whisper")
         with mock.patch.object(
-            stt_mod, "_build_engine",
+            stt_mod, "_build_engine_at_path",
             side_effect=[primary],
-        ) as build:
+        ) as build, mock.patch.object(
+            stt_mod, "_resolve_model_path", return_value=None,
+        ):
             stt_mod.SpeechToText({
                 "engine": "mlx-whisper",
                 "fallback_engine": "mlx-whisper",
@@ -230,9 +244,11 @@ class TestFacadeSelection(unittest.TestCase):
         from voice.coordinator import stt as stt_mod
         primary = self._make_engine("faster-whisper")
         with mock.patch.object(
-            stt_mod, "_build_engine",
+            stt_mod, "_build_engine_at_path",
             side_effect=[primary],
-        ) as build:
+        ) as build, mock.patch.object(
+            stt_mod, "_resolve_model_path", return_value=None,
+        ):
             stt_mod.SpeechToText(
                 {"engine": "faster-whisper", "fallback_engine": "faster-whisper"},
                 model_size="base.en",
@@ -240,10 +256,149 @@ class TestFacadeSelection(unittest.TestCase):
                 compute_type="int8",
             )
         # Verify the legacy model_size flowed into the new 'model' arg.
-        call_kwargs = build.call_args
-        # Positional signature is (engine_name, model, model_root, ...)
-        self.assertEqual(call_kwargs.args[0], "faster-whisper")
-        self.assertEqual(call_kwargs.args[1], "base.en")
+        call = build.call_args
+        # Positional signature is (engine_name, model, model_path, ...)
+        self.assertEqual(call.args[0], "faster-whisper")
+        self.assertEqual(call.args[1], "base.en")
+
+
+class TestLoadDeadlineAndHFFallback(unittest.TestCase):
+    """The deadline must cap a stalled Mini-Dock load and force an
+    internal-disk (HF cache) retry; the degradation must land in the
+    state file so the morning report picks it up."""
+
+    def setUp(self) -> None:
+        self.fx = _StateFileFixture()
+
+    def tearDown(self) -> None:
+        self.fx.close()
+
+    def _hanging_load(self) -> None:
+        """A load that never returns — used to simulate a stuck
+        accessory prompt on Mini-Dock."""
+        import time
+        time.sleep(3600)
+
+    def test_timeout_falls_back_to_hf_cache(self) -> None:
+        """Simulate a Mini-Dock hang: the first load (at the local
+        path) times out; the second attempt (HF cache) succeeds."""
+        from voice.coordinator import stt as stt_mod
+
+        stuck = mock.MagicMock()
+        stuck.name = "mlx-whisper"
+        stuck.load.side_effect = self._hanging_load
+
+        healthy = mock.MagicMock()
+        healthy.name = "mlx-whisper"
+        healthy.load.return_value = None
+
+        # Same-name fallback collapses, so only primary is loaded.
+        # _resolve_model_path returns a non-None path → attempt 1 uses
+        # the stuck engine; attempt 2 (HF cache, model_path=None)
+        # uses the healthy engine.
+        with mock.patch.object(
+            stt_mod, "_build_engine_at_path",
+            side_effect=[stuck, healthy],
+        ), mock.patch.object(
+            stt_mod, "_resolve_model_path",
+            return_value="/Volumes/Mini-Dock/glowup/models/mlx-whisper/large-v3-turbo",
+        ):
+            s = stt_mod.SpeechToText({
+                "engine": "mlx-whisper",
+                "fallback_engine": "mlx-whisper",
+                "primary_load_timeout_s": 0.2,
+            })
+
+        self.assertEqual(s.engine_name, "mlx-whisper")
+        # State file should flag the degraded (dock-stuck) state.
+        state = json.loads(base_module.STT_STATE_FILE.read_text())
+        self.assertEqual(state["engine"], "mlx-whisper")
+        self.assertTrue(state["fallback_reason"])
+        self.assertIn("deadline", state["fallback_reason"])
+        self.assertIn("HF cache", state["fallback_reason"])
+
+    def test_local_path_load_error_retries_hf_cache(self) -> None:
+        """A hard load error (not a hang) also triggers the HF retry."""
+        from voice.coordinator import stt as stt_mod
+
+        broken = mock.MagicMock()
+        broken.name = "faster-whisper"
+        broken.load.side_effect = STTEngineLoadError("bad checksum")
+
+        healthy = mock.MagicMock()
+        healthy.name = "faster-whisper"
+        healthy.load.return_value = None
+
+        with mock.patch.object(
+            stt_mod, "_build_engine_at_path",
+            side_effect=[broken, healthy],
+        ), mock.patch.object(
+            stt_mod, "_resolve_model_path",
+            return_value="/Volumes/Mini-Dock/glowup/models/faster-whisper/large-v3-turbo",
+        ):
+            s = stt_mod.SpeechToText({
+                "engine": "faster-whisper",
+                "fallback_engine": "faster-whisper",
+            })
+
+        self.assertEqual(s.engine_name, "faster-whisper")
+        state = json.loads(base_module.STT_STATE_FILE.read_text())
+        self.assertIn("bad checksum", state["fallback_reason"])
+        self.assertIn("HF cache", state["fallback_reason"])
+
+    def test_both_paths_fail_raises_with_both_reasons(self) -> None:
+        from voice.coordinator import stt as stt_mod
+
+        broken1 = mock.MagicMock()
+        broken1.name = "mlx-whisper"
+        broken1.load.side_effect = STTEngineLoadError("local fail")
+
+        broken2 = mock.MagicMock()
+        broken2.name = "mlx-whisper"
+        broken2.load.side_effect = STTEngineLoadError("hf fail")
+
+        with mock.patch.object(
+            stt_mod, "_build_engine_at_path",
+            side_effect=[broken1, broken2],
+        ), mock.patch.object(
+            stt_mod, "_resolve_model_path",
+            return_value="/Volumes/Mini-Dock/glowup/models/mlx-whisper/large-v3-turbo",
+        ):
+            with self.assertRaises(STTEngineLoadError) as ctx:
+                stt_mod.SpeechToText({
+                    "engine": "mlx-whisper",
+                    "fallback_engine": "mlx-whisper",
+                })
+        msg: str = str(ctx.exception)
+        self.assertIn("local fail", msg)
+        self.assertIn("hf fail", msg)
+
+    def test_deadline_does_not_fire_when_load_is_fast(self) -> None:
+        """A quick load must not trigger the deadline path at all."""
+        from voice.coordinator import stt as stt_mod
+
+        healthy = mock.MagicMock()
+        healthy.name = "mlx-whisper"
+        healthy.load.return_value = None
+
+        with mock.patch.object(
+            stt_mod, "_build_engine_at_path",
+            side_effect=[healthy],
+        ), mock.patch.object(
+            stt_mod, "_resolve_model_path",
+            return_value="/Volumes/Mini-Dock/glowup/models/mlx-whisper/large-v3-turbo",
+        ):
+            s = stt_mod.SpeechToText({
+                "engine": "mlx-whisper",
+                "fallback_engine": "mlx-whisper",
+                "primary_load_timeout_s": 5,
+            })
+
+        # Only one engine constructed — no retry required, no
+        # degradation recorded.
+        self.assertEqual(s.fallback_reason, "")
+        state = json.loads(base_module.STT_STATE_FILE.read_text())
+        self.assertEqual(state["fallback_reason"], "")
 
 
 class TestFacadeModelRootResolution(unittest.TestCase):
