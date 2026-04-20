@@ -23,6 +23,7 @@ from voice.coordinator.stt_engines.base import (
     write_state,
 )
 from voice.coordinator.stt_engines.faster_whisper import FasterWhisperEngine
+from voice.coordinator.stt_engines.mlx_whisper import MLXWhisperEngine
 from voice.coordinator.stt_engines.mock import MockEngine
 
 __all__ = [
@@ -31,5 +32,6 @@ __all__ = [
     "pcm_to_wav",
     "write_state",
     "FasterWhisperEngine",
+    "MLXWhisperEngine",
     "MockEngine",
 ]
