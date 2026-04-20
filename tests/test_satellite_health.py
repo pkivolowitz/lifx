@@ -75,8 +75,14 @@ def _make_fake_daemon(
     fake._gate_open = False
     fake._gate_expires = 0.0
     # MQTT client with configurable is_connected.
+    # ``MqttResilientClient`` exposes ``is_connected`` as a property,
+    # not a method — the deep health check reads it as an attribute.
+    # The previous shape (``is_connected.return_value = ...``) set
+    # the return value of a mock *method*, which the new code never
+    # calls, so the mock always reported connected regardless of the
+    # ``mqtt_connected`` argument.
     fake._mqtt_client = MagicMock()
-    fake._mqtt_client.is_connected.return_value = mqtt_connected
+    fake._mqtt_client.is_connected = mqtt_connected
     return fake
 
 
@@ -223,11 +229,20 @@ class TestWiringContracts(unittest.TestCase):
         )
 
     def test_satellite_daemon_subscribes_to_request(self) -> None:
-        """daemon.py must subscribe to TOPIC_HEALTH_REQUEST in _init_mqtt."""
+        """daemon.py must subscribe to TOPIC_HEALTH_REQUEST in _init_mqtt.
+
+        Accepts either the old direct-subscribe form
+        ``client.subscribe(C.TOPIC_HEALTH_REQUEST, ...)`` or the new
+        ``MqttResilientClient``-list form
+        ``(C.TOPIC_HEALTH_REQUEST, 1),``.  Both encode the same
+        contract: on every (re)connect the satellite subscribes to
+        the health-request topic.
+        """
         src: str = _read("voice/satellite/daemon.py")
         self.assertIn("TOPIC_HEALTH_REQUEST", src)
-        self.assertIn(
-            ".subscribe(C.TOPIC_HEALTH_REQUEST", src,
+        self.assertTrue(
+            ".subscribe(C.TOPIC_HEALTH_REQUEST" in src
+            or "(C.TOPIC_HEALTH_REQUEST," in src,
             "satellite does not subscribe to the deep-check "
             "request topic — hub probes will be ignored",
         )

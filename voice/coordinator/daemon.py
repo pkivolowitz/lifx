@@ -32,19 +32,9 @@ from typing import Any, Optional
 from voice import constants as C
 from voice.protocol import ProtocolError, decode
 from voice.coordinator.pipeline import process_utterance
+from infrastructure.mqtt_resilient_client import MqttResilientClient
 
 logger: logging.Logger = logging.getLogger("glowup.voice.coordinator")
-
-# ---------------------------------------------------------------------------
-# Optional imports
-# ---------------------------------------------------------------------------
-
-try:
-    import paho.mqtt.client as mqtt
-    _PAHO_V2: bool = hasattr(mqtt, "CallbackAPIVersion")
-except ImportError:
-    mqtt = None  # type: ignore[assignment]
-    _PAHO_V2 = False
 
 
 class CoordinatorDaemon:
@@ -63,7 +53,14 @@ class CoordinatorDaemon:
         mqtt_cfg: dict[str, Any] = config.get("mqtt", {})
         self._mqtt_broker: str = mqtt_cfg.get("broker", "localhost")
         self._mqtt_port: int = mqtt_cfg.get("port", 1883)
-        self._mqtt_client: Optional[Any] = None
+        # ``MqttResilientClient`` wrapper — owns the paho client, the
+        # silence watchdog, and automatic resubscription on reconnect.
+        # Same attribute name as before to minimize churn in the
+        # executor handoff and the test suite, but the type is now
+        # the helper, not a raw paho client.  Its ``.publish()`` has
+        # the same call signature as paho's, so existing call sites
+        # keep working.
+        self._mqtt_client: Optional[MqttResilientClient] = None
 
         # Worker pool.
         workers_cfg: dict[str, Any] = config.get("workers", {})
@@ -371,54 +368,55 @@ class CoordinatorDaemon:
             self._mqtt_client.publish(C.TOPIC_FLUSH, payload, qos=1)
 
     def _init_mqtt(self) -> None:
-        """Connect to MQTT broker and subscribe to utterance topic."""
-        if mqtt is None:
-            raise ImportError("paho-mqtt not installed")
+        """Construct and start the resilient MQTT client.
 
-        client_id: str = f"coordinator_{int(time.time())}"
-        if _PAHO_V2:
-            self._mqtt_client = mqtt.Client(
-                mqtt.CallbackAPIVersion.VERSION2,
-                client_id=client_id,
-            )
-        else:
-            self._mqtt_client = mqtt.Client(client_id=client_id)
+        Non-blocking: ``MqttResilientClient.start()`` uses
+        ``connect_async`` internally, so a briefly-unreachable broker
+        at startup does not abort coordinator initialization — the
+        helper's watchdog and paho's internal reconnect will establish
+        the session as soon as the broker is reachable, and the
+        on-connect callback logs when it happens.
 
-        self._mqtt_client.on_message = self._on_message
-        self._mqtt_client.on_connect = self._on_connect
-        self._mqtt_client.connect(self._mqtt_broker, self._mqtt_port)
-        self._mqtt_client.loop_start()
-        logger.info(
-            "MQTT connected: %s:%d",
-            self._mqtt_broker, self._mqtt_port,
+        Raises:
+            ImportError: ``paho-mqtt`` is not installed.
+        """
+        client = MqttResilientClient(
+            broker=self._mqtt_broker,
+            port=self._mqtt_port,
+            client_id_prefix="coordinator",
+            subscriptions=[
+                (C.TOPIC_UTTERANCE, 1),
+                (f"{C.TOPIC_STATUS_PREFIX}/#", 0),
+            ],
+            on_message=self._dispatch_mqtt_message,
+            on_connected=self._on_mqtt_connected,
         )
+        if not client.is_available:
+            raise ImportError("paho-mqtt not installed")
+        client.start()
+        self._mqtt_client = client
 
-    def _on_connect(self, client: Any, userdata: Any, *args: Any) -> None:
-        """Subscribe to utterance topic on connect/reconnect."""
-        client.subscribe(C.TOPIC_UTTERANCE, qos=1)
-        client.subscribe(f"{C.TOPIC_STATUS_PREFIX}/#", qos=0)
+    def _on_mqtt_connected(self) -> None:
+        """Log a coordinator-specific line after subscriptions are applied."""
         logger.info("Subscribed to %s", C.TOPIC_UTTERANCE)
 
-    def _on_message(
-        self, client: Any, userdata: Any, message: Any,
-    ) -> None:
+    def _dispatch_mqtt_message(self, topic: str, payload: bytes) -> None:
         """Handle incoming MQTT messages.
 
         Utterance messages are dispatched to the worker pool.
-        Status messages are logged.
+        Status messages are logged at debug.  Called from the
+        helper's paho network thread; must not block.
         """
-        topic: str = message.topic
-
         if topic == C.TOPIC_UTTERANCE:
             # Dispatch to worker — don't block the MQTT thread.
             if self._pool is not None:
-                self._pool.submit(self._process_message, message.payload)
+                self._pool.submit(self._process_message, payload)
             else:
                 logger.warning("Worker pool not ready — dropping utterance")
 
         elif topic.startswith(C.TOPIC_STATUS_PREFIX):
             try:
-                status = json.loads(message.payload)
+                status = json.loads(payload)
                 logger.debug(
                     "Heartbeat from %s", status.get("room", "?"),
                 )
@@ -574,18 +572,16 @@ class CoordinatorDaemon:
             thread_name_prefix="voice-worker",
         )
 
-        # MQTT.
+        # MQTT.  Non-blocking — ``_init_mqtt`` returns immediately and
+        # the helper establishes the session asynchronously.  A broker
+        # that is briefly unreachable at startup no longer prevents
+        # the coordinator from coming up; the watchdog + reconnect
+        # logic handles it once the broker is reachable.
         try:
             self._init_mqtt()
         except ImportError:
             logger.error(
                 "paho-mqtt not installed. Install with: pip install paho-mqtt"
-            )
-            return
-        except Exception as exc:
-            logger.error(
-                "MQTT connection failed (%s:%d): %s",
-                self._mqtt_broker, self._mqtt_port, exc,
             )
             return
 
@@ -615,8 +611,7 @@ class CoordinatorDaemon:
         self._running = False
 
         if self._mqtt_client is not None:
-            self._mqtt_client.loop_stop()
-            self._mqtt_client.disconnect()
+            self._mqtt_client.stop()
             self._mqtt_client = None
 
         if self._pool is not None:

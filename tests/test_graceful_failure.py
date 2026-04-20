@@ -245,13 +245,32 @@ class TestSatelliteGracefulStartup(unittest.TestCase):
         config.update(overrides)
         return SatelliteDaemon(config)
 
-    def test_mqtt_broker_unreachable_exits_cleanly(self) -> None:
-        """Satellite with unreachable broker logs error and returns."""
+    def test_mqtt_broker_unreachable_does_not_crash(self) -> None:
+        """Satellite MQTT init does not crash when the broker is unreachable.
+
+        Historical: this test used to call ``daemon.start()`` and rely
+        on the synchronous ``client.connect`` raising ``OSError``,
+        which the daemon caught and returned from ``start``.  After
+        the 2026-04-19 move to ``MqttResilientClient`` (and
+        ``connect_async``), ``_init_mqtt`` is non-blocking — an
+        unreachable broker at boot no longer aborts startup, the
+        helper's watchdog + paho's internal reconnect drive
+        establishment later.  The test now verifies the narrower
+        (and actually-load-bearing) invariant: ``_init_mqtt`` itself
+        does not raise when the broker is unreachable.
+        """
         daemon = self._make_daemon(
             mqtt={"broker": "192.0.2.1", "port": 1},
         )
-        daemon.start()
-        # If we got here, it didn't crash.
+        try:
+            daemon._init_mqtt()
+        finally:
+            # Tear down the helper so its background threads exit
+            # before the test returns — otherwise a daemon watchdog
+            # thread keeps poking at an unreachable broker for the
+            # rest of the pytest process lifetime.
+            if daemon._mqtt_client is not None:
+                daemon._mqtt_client.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +281,15 @@ class TestSatelliteGracefulStartup(unittest.TestCase):
 class TestCoordinatorGracefulStartup(unittest.TestCase):
     """Coordinator daemon handles missing dependencies without crashing."""
 
-    def test_mqtt_broker_unreachable_exits_cleanly(self) -> None:
-        """Coordinator with unreachable broker logs error and returns."""
+    def test_mqtt_broker_unreachable_does_not_crash(self) -> None:
+        """Coordinator MQTT init does not crash when broker is unreachable.
+
+        See the companion satellite test for the rationale on the
+        semantic shift from "start returns on broker failure" to
+        "init does not raise on broker failure" — the 2026-04-19
+        ``MqttResilientClient`` refactor moved broker establishment
+        to an async background path.
+        """
         from voice.coordinator.daemon import CoordinatorDaemon
         config: dict[str, Any] = {
             "mqtt": {"broker": "192.0.2.1", "port": 1},
@@ -275,8 +301,11 @@ class TestCoordinatorGracefulStartup(unittest.TestCase):
             "mock_intent": True,
         }
         daemon = CoordinatorDaemon(config)
-        daemon.start()
-        # If we got here, it didn't crash.
+        try:
+            daemon._init_mqtt()
+        finally:
+            if daemon._mqtt_client is not None:
+                daemon._mqtt_client.stop()
 
 
 # ---------------------------------------------------------------------------

@@ -73,13 +73,9 @@ except ImportError:
     pyaudio = None  # type: ignore[assignment]
     _HAS_PYAUDIO = False
 
-try:
-    import paho.mqtt.client as mqtt
-    # Detect paho v2 vs v1.
-    _PAHO_V2: bool = hasattr(mqtt, "CallbackAPIVersion")
-except ImportError:
-    mqtt = None  # type: ignore[assignment]
-    _PAHO_V2 = False
+from types import SimpleNamespace
+
+from infrastructure.mqtt_resilient_client import MqttResilientClient
 
 # ---------------------------------------------------------------------------
 # Audio device helpers
@@ -156,7 +152,12 @@ class SatelliteDaemon:
         mqtt_cfg: dict[str, Any] = config.get("mqtt", {})
         self._mqtt_broker: str = mqtt_cfg.get("broker", "localhost")
         self._mqtt_port: int = mqtt_cfg.get("port", 1883)
-        self._mqtt_client: Optional[Any] = None
+        # MqttResilientClient wraps the paho client with on_disconnect
+        # logging, a silence watchdog, and fresh-client_id-per-rebuild
+        # recovery.  Same attribute name as before so test_gate.py and
+        # the handful of callers that read ``_mqtt_client.publish(...)``
+        # keep working — the helper's ``publish`` has paho's signature.
+        self._mqtt_client: Optional[MqttResilientClient] = None
 
         # Audio config.
         # _sample_rate is the TARGET rate for the pipeline (16 kHz).
@@ -304,100 +305,92 @@ class SatelliteDaemon:
         )
 
     def _init_mqtt(self) -> None:
-        """Connect to the MQTT broker.
+        """Construct and start the resilient MQTT client.
+
+        Non-blocking — ``MqttResilientClient.start()`` uses
+        ``connect_async`` internally so a briefly-unreachable broker
+        at startup does not abort satellite initialization.  The
+        helper's watchdog and paho's internal reconnect logic will
+        establish the session as soon as the broker is reachable,
+        and the ``on_connected`` hook logs when it happens.
+
+        Subscriptions are registered as a fixed list at construction
+        and re-applied on every (re)connect by the helper.  With
+        ``clean_session=True`` (paho MQTT 3.1.1 default) the broker
+        drops subscriptions on disconnect, so restoring them on every
+        new session is what keeps the satellite from going silently
+        deaf after a broker blip — mbclock demonstrated that failure
+        mode on 2026-04-16 (subs lost at ~20:29, unnoticed for 12h).
 
         Raises:
-            ImportError: paho-mqtt not installed.
-            Exception: Broker unreachable.
+            ImportError: ``paho-mqtt`` is not installed.
         """
-        if mqtt is None:
-            raise ImportError("paho-mqtt not installed")
-
-        client_id: str = f"satellite_{self._room}_{int(time.time())}"
-        if _PAHO_V2:
-            self._mqtt_client = mqtt.Client(
-                mqtt.CallbackAPIVersion.VERSION2,
-                client_id=client_id,
-            )
-        else:
-            self._mqtt_client = mqtt.Client(client_id=client_id)
-
-        self._mqtt_client.on_message = self._on_mqtt_message
-        # Subscriptions are placed in on_connect (not here) so paho's
-        # auto-reconnect path restores them after any broker blip.
-        # A client that subscribes once at startup goes silently deaf
-        # the first time the TCP session is replaced — outbound
-        # publishes keep working, inbound is gone, nothing logs.
-        # mbclock demonstrated this on 2026-04-16 (subs lost at
-        # ~20:29, went unnoticed for 12h).
-        self._mqtt_client.on_connect = self._on_mqtt_connect
-        self._mqtt_client.connect(self._mqtt_broker, self._mqtt_port)
-        self._mqtt_client.loop_start()
-        logger.info(
-            "MQTT connected: %s:%d as %s",
-            self._mqtt_broker, self._mqtt_port, client_id,
-        )
-
-    def _on_mqtt_connect(
-        self, client: Any, userdata: Any, *args: Any,
-    ) -> None:
-        """Subscribe to every satellite inbound topic on (re)connect.
-
-        Paho invokes this on the initial connect and again on every
-        successful auto-reconnect.  Re-subscribing here is what keeps
-        the satellite from going silently deaf after a broker blip —
-        with clean_session=True (paho default for MQTT 3.1.1) the
-        broker drops subscriptions at disconnect, so they must be
-        re-established every time the session comes back.
-
-        Args:
-            client:   MQTT client instance (paho passes this back).
-            userdata: User data (unused).
-            *args:    Absorbs the differing trailing args between
-                      paho v1 (flags, rc) and v2 (flags, reason_code,
-                      properties) so this handler works on both.
-        """
-        client.subscribe(C.TOPIC_PLAYBACK, qos=0)
-        client.subscribe(C.TOPIC_TTS_TEXT, qos=0)
-        client.subscribe(C.TOPIC_FLUSH, qos=1)
-        client.subscribe(C.TOPIC_THINKING, qos=0)
-        # Deep health probe — hub broadcasts a request and every
-        # satellite replies with its own subsystem snapshot.  QoS 1
-        # so a single dropped packet does not silently hide a hung
-        # satellite from the hub's periodic prober.
-        client.subscribe(C.TOPIC_HEALTH_REQUEST, qos=1)
+        subscriptions: list[tuple[str, int]] = [
+            (C.TOPIC_PLAYBACK, 0),
+            (C.TOPIC_TTS_TEXT, 0),
+            (C.TOPIC_FLUSH, 1),
+            (C.TOPIC_THINKING, 0),
+            # Deep health probe — hub broadcasts a request and every
+            # satellite replies with its own subsystem snapshot.
+            # QoS 1 so a single dropped packet does not silently hide
+            # a hung satellite from the hub's periodic prober.
+            (C.TOPIC_HEALTH_REQUEST, 1),
+        ]
         # Only gated satellites subscribe to a gate topic.  Non-gated
         # rooms (Dining Room, Main Bedroom, etc.) never see a gate
         # message and their audio loop never consults gate state.
         if self._gated:
-            client.subscribe(self._gate_topic, qos=1)
+            subscriptions.append((self._gate_topic, 1))
+
+        client = MqttResilientClient(
+            broker=self._mqtt_broker,
+            port=self._mqtt_port,
+            client_id_prefix=f"satellite_{self._room}",
+            subscriptions=subscriptions,
+            on_message=self._dispatch_mqtt_message,
+            on_connected=self._on_mqtt_connected,
+        )
+        if not client.is_available:
+            raise ImportError("paho-mqtt not installed")
+        client.start()
+        self._mqtt_client = client
+
+    def _on_mqtt_connected(self) -> None:
+        """Log the satellite-specific ready message after subscribe.
+
+        Called by the helper on every successful (re)connect, after
+        all configured subscriptions have been applied.
+        """
+        if self._gated:
             logger.info(
                 "Voice gate enabled — subscribed to %s (default closed)",
                 self._gate_topic,
             )
         logger.info("MQTT subscribed (on_connect) — receive path live")
 
-    def _on_mqtt_message(
-        self, client: Any, userdata: Any, msg: Any,
-    ) -> None:
+    def _dispatch_mqtt_message(self, topic: str, payload: bytes) -> None:
         """Dispatch incoming MQTT messages by topic.
 
-        Args:
-            client:   MQTT client instance.
-            userdata: User data (unused).
-            msg:      MQTT message.
+        Called by ``MqttResilientClient`` on paho's network thread.
+        Wraps the ``(topic, payload)`` pair in a ``SimpleNamespace``
+        shim so the per-topic ``_on_*_message`` handlers continue to
+        accept a paho-style ``msg`` object — this preserves the
+        handler signatures the existing test suite depends on
+        (``voice/tests/test_gate.py`` exercises ``_on_gate_message``
+        with a fabricated ``SimpleNamespace`` message).
         """
-        if msg.topic == C.TOPIC_PLAYBACK:
+        msg = SimpleNamespace(topic=topic, payload=payload)
+        if topic == C.TOPIC_PLAYBACK:
             self._on_playback_message(msg)
-        elif msg.topic == C.TOPIC_TTS_TEXT:
+        elif topic == C.TOPIC_TTS_TEXT:
             self._on_tts_text_message(msg)
-        elif msg.topic == C.TOPIC_FLUSH:
+        elif topic == C.TOPIC_FLUSH:
             self._on_flush_message(msg)
-        elif msg.topic == C.TOPIC_THINKING:
+        elif topic == C.TOPIC_THINKING:
             self._on_thinking_message(msg)
-        elif msg.topic == C.TOPIC_HEALTH_REQUEST:
+        elif topic == C.TOPIC_HEALTH_REQUEST:
             self._on_health_request_message(msg)
-        elif self._gated and msg.topic == self._gate_topic:
+        elif self._gated and topic == self._gate_topic:
             self._on_gate_message(msg)
 
     def _on_gate_message(self, msg: Any) -> None:
@@ -1600,16 +1593,18 @@ class SatelliteDaemon:
         mqtt_ok: bool = False
         mqtt_detail: str = "client not initialised"
         if self._mqtt_client is not None:
-            try:
-                mqtt_ok = bool(self._mqtt_client.is_connected())
-                mqtt_detail = (
-                    "connected"
-                    if mqtt_ok
-                    else "paho client reports disconnected"
-                )
-            except Exception as exc:
-                mqtt_ok = False
-                mqtt_detail = f"is_connected() raised: {exc!r}"
+            # MqttResilientClient exposes ``is_connected`` as a
+            # property, not a method — paho's own client has
+            # ``is_connected()`` as a method.  The helper's property
+            # reflects the state tracked via ``on_connect`` /
+            # ``on_disconnect`` callbacks, which is the authoritative
+            # signal for whether we believe the session is live.
+            mqtt_ok = bool(self._mqtt_client.is_connected)
+            mqtt_detail = (
+                "connected"
+                if mqtt_ok
+                else "MqttResilientClient reports disconnected"
+            )
         checks["mqtt"] = mk(mqtt_ok, mqtt_detail, 0.0)
 
         # -- Audio capture: are PCM frames still arriving? --
@@ -1775,19 +1770,16 @@ class SatelliteDaemon:
         # Initialize subsystems with graceful failure handling.
         # Each subsystem is required — if any fails, the satellite
         # cannot operate and exits with a clear error message.
+        # ``_init_mqtt`` is non-blocking: ``MqttResilientClient.start``
+        # uses ``connect_async`` so an unreachable broker at startup
+        # no longer aborts satellite init.  The helper retries and
+        # logs on its own schedule; the satellite continues to boot.
         try:
             self._init_mqtt()
         except ImportError:
             logger.error(
                 "paho-mqtt not installed. Install with: "
                 "pip install paho-mqtt"
-            )
-            return
-        except (OSError, ConnectionError, ValueError) as exc:
-            logger.error(
-                "MQTT connection failed (%s:%d): %s. "
-                "Check that the broker is running.",
-                self._mqtt_broker, self._mqtt_port, exc,
             )
             return
 
@@ -1992,8 +1984,7 @@ class SatelliteDaemon:
             self._pa = None
 
         if self._mqtt_client is not None:
-            self._mqtt_client.loop_stop()
-            self._mqtt_client.disconnect()
+            self._mqtt_client.stop()
             self._mqtt_client = None
 
         if self._piper_pool is not None:

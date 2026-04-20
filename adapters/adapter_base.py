@@ -147,6 +147,19 @@ class AdapterBase(ABC):
 class MqttAdapterBase(AdapterBase):
     """Base class for adapters that subscribe to MQTT topics.
 
+    TODO(consolidation): ``infrastructure.mqtt_resilient_client.MqttResilientClient``
+    is a standalone extraction of this same lifecycle, created 2026-04-19
+    when the voice coordinator needed the same resilience and could not
+    inherit from this class (it is not an adapter).  Migrating this
+    class to delegate to the helper is intentionally deferred — the
+    exhaustive fault-injection tests in ``tests/test_mqtt_fault_injection.py``
+    and the 1700-line ``tests/test_adapter_base.py`` exercise the paho
+    internals directly via mocks, and the rewrite would require
+    re-targeting those mocks at the helper.  Do the migration in its
+    own commit, behind a dedicated test pass.  For now the logic is
+    identical on both sides; do not change one without changing the
+    other.
+
     Handles paho client creation (v1 and v2), ``connect_async``, network
     loop management, ``on_connect`` subscription, disconnect detection,
     silence watchdog, and ``stop``/``disconnect``.
