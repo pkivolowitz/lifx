@@ -5,5 +5,14 @@ numpy>=1.24,<3.0
 PyYAML>=6.0,<7.0
 pyaudio>=0.2.13,<1.0
 openwakeword>=0.6,<1.0
-openai-whisper>=20230918
+faster-whisper>=1.0,<2.0
 piper-tts>=1.2,<2.0
+sounddevice>=0.4,<1.0
+
+# MLX-Whisper — Apple Silicon GPU-accelerated Whisper.  Coordinator
+# uses it as the primary STT engine on Daedalus; falls back to
+# faster-whisper (CPU) if MLX is unavailable or fails to load.  The
+# environment marker keeps linux/raspberry-pi satellites from trying
+# (and failing) to install it.
+mlx-whisper>=0.2,<1.0 ; sys_platform == 'darwin' and platform_machine == 'arm64'
+scipy>=1.11,<2.0 ; sys_platform == 'darwin' and platform_machine == 'arm64'
