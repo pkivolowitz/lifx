@@ -108,11 +108,16 @@ class CoordinatorDaemon:
         else:
             stt_cfg: dict[str, Any] = self._config.get("stt", {})
             from voice.coordinator.stt import SpeechToText
-            self._stt = SpeechToText(
-                model_size=stt_cfg.get("model_size", "base.en"),
-                device=stt_cfg.get("device", "cpu"),
-                compute_type=stt_cfg.get("compute_type", "int8"),
+            self._stt = SpeechToText(stt_cfg)
+            logger.info(
+                "STT engine active: %s (primary=%s)",
+                self._stt.engine_name, self._stt.primary_name,
             )
+            if self._stt.fallback_reason:
+                logger.error(
+                    "STT running on FALLBACK — %s",
+                    self._stt.fallback_reason,
+                )
 
     def _init_intent(self) -> None:
         """Initialize intent parser."""
