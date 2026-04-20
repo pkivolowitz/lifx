@@ -516,6 +516,61 @@ def collect_test_results() -> dict[str, Any]:
     return result
 
 
+def collect_stt_state(host: str, user: str) -> dict[str, Any]:
+    """Read the voice coordinator's STT engine state file from Daedalus.
+
+    The file is written atomically by the coordinator at
+    ``~/.glowup/stt_state.json`` whenever the active engine changes
+    (boot, primary load success, primary load failure with fallback,
+    both-engines-down).  Schema::
+
+        {
+          "engine":          "mlx-whisper",      # currently active
+          "primary_engine":  "mlx-whisper",      # configured primary
+          "fallback_reason": "",                 # non-empty if degraded
+          "since":           "2026-04-20T15:42:03+00:00"
+        }
+
+    Returns a dict with:
+        - reachable: bool     (False if SSH or JSON parse failed)
+        - degraded:  bool     (True if engine != primary or reason set)
+        - engine, primary_engine, fallback_reason, since
+        - error: str          (only present if reachable is False)
+    """
+    ok, out = _ssh(
+        host, user,
+        "cat ~/.glowup/stt_state.json 2>/dev/null",
+    )
+    if not ok or not out.strip():
+        return {
+            "reachable": False,
+            "error": (
+                "state file missing at ~/.glowup/stt_state.json "
+                "— coordinator may be down, never started, or running "
+                "an older build without the state writer"
+            ),
+        }
+    try:
+        data: dict = json.loads(out)
+    except json.JSONDecodeError as exc:
+        return {
+            "reachable": False,
+            "error": f"state file not valid JSON: {exc}",
+        }
+    engine: str = data.get("engine", "unknown")
+    primary: str = data.get("primary_engine", engine)
+    reason: str = data.get("fallback_reason", "")
+    degraded: bool = (engine != primary) or bool(reason)
+    return {
+        "reachable": True,
+        "degraded": degraded,
+        "engine": engine,
+        "primary_engine": primary,
+        "fallback_reason": reason,
+        "since": data.get("since", ""),
+    }
+
+
 # ---------------------------------------------------------------------------
 # HTML rendering
 # ---------------------------------------------------------------------------
@@ -586,6 +641,7 @@ def render_html(
     mqtt_rates: dict[str, tuple[bool, float]],
     git: dict[str, Any],
     tests: dict[str, Any],
+    stt_state: dict[str, Any],
     now: datetime,
 ) -> str:
     """Build the full HTML email body."""
@@ -662,6 +718,48 @@ def render_html(
                 f"<td>{_svc_badge(state)}</td></tr>"
             )
         parts.append("</table>")
+    parts.append("</div>")
+
+    # --- Voice / STT ---
+    parts.append('<div class="section"><h2>Voice &middot; STT</h2>')
+    if not stt_state.get("reachable"):
+        parts.append(
+            f'<p class="warn">STT state unavailable &mdash; '
+            f'{_esc(stt_state.get("error", "unknown"))}</p>'
+        )
+    else:
+        engine: str = stt_state["engine"]
+        primary: str = stt_state["primary_engine"]
+        reason: str = stt_state["fallback_reason"]
+        since: str = stt_state.get("since", "")
+        if stt_state["degraded"]:
+            badge = (
+                f'<span class="badge badge-red">DEGRADED</span>'
+            )
+            parts.append(
+                f'<p class="fail">Daedalus STT is on the fallback engine. '
+                f'Active: <strong>{_esc(engine)}</strong> &middot; '
+                f'configured primary: <strong>{_esc(primary)}</strong> '
+                f'{badge}</p>'
+            )
+            if reason:
+                parts.append(
+                    f'<p class="fail"><strong>Reason:</strong> '
+                    f'{_esc(reason)}</p>'
+                )
+            if since:
+                parts.append(
+                    f'<p class="muted">Since {_esc(since)}</p>'
+                )
+        else:
+            parts.append(
+                f'<p>Daedalus STT: <strong>{_esc(engine)}</strong> '
+                f'<span class="badge badge-green">primary</span></p>'
+            )
+            if since:
+                parts.append(
+                    f'<p class="muted">Active since {_esc(since)}</p>'
+                )
     parts.append("</div>")
 
     # --- API / Adapters ---
@@ -910,10 +1008,18 @@ def main() -> None:
     logger.info("Running test suite (this may take several minutes)...")
     tests: dict[str, Any] = collect_test_results()
 
+    # --- STT engine state on Daedalus ---
+    logger.info("Checking Daedalus STT engine state...")
+    stt_state: dict[str, Any] = collect_stt_state(
+        FLEET["Daedalus (.191)"]["ip"],
+        FLEET["Daedalus (.191)"]["user"],
+    )
+
     # --- Render and send ---
     logger.info("Rendering report...")
     html: str = render_html(
-        hosts, api_status, locks, batteries, mqtt_rates, git, tests, now,
+        hosts, api_status, locks, batteries, mqtt_rates, git, tests,
+        stt_state, now,
     )
 
     subject: str = (
