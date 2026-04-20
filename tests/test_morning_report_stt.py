@@ -26,15 +26,27 @@ from unittest import mock
 
 # The morning_report module lives in services/ and is not a package.
 # Load it by path so this test does not depend on the PYTHONPATH
-# tweaks required on the hub's deployment.
+# tweaks required on the hub's deployment.  The module is not deployed
+# to Daedalus (the coordinator host) — it only lives on the hub.  Skip
+# the whole file when the source is not present so the test suite
+# stays clean on every deployed host.
 import importlib.util
 import os
 
-_MR_PATH: str = os.path.join(
+_MR_PATH: str = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "services", "morning_report.py",
-)
+))
+
+if not os.path.isfile(_MR_PATH):
+    import pytest
+    pytest.skip(
+        f"services/morning_report.py not present at {_MR_PATH} "
+        "(expected when running tests off the hub)",
+        allow_module_level=True,
+    )
+
 _spec = importlib.util.spec_from_file_location(
-    "morning_report_under_test", os.path.abspath(_MR_PATH),
+    "morning_report_under_test", _MR_PATH,
 )
 assert _spec is not None and _spec.loader is not None
 morning_report = importlib.util.module_from_spec(_spec)
