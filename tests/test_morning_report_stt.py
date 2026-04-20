@@ -138,13 +138,14 @@ class TestRenderDegradedInRed(unittest.TestCase):
         # that would pollute the assertions.
         hosts = []
         api_status = {"reachable": True, "data": {"status": "ready"}}
+        locks: list = []
         batteries = []
         mqtt_rates = {}
         git = {"reachable": True, "log": "", "branches": ""}
         tests = {"reachable": True, "summary": ""}
         now = datetime(2026, 4, 20, 6, 0, 0)
         return morning_report.render_html(
-            hosts, api_status, batteries, mqtt_rates,
+            hosts, api_status, locks, batteries, mqtt_rates,
             git, tests, stt_state, now,
         )
 
