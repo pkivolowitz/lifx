@@ -136,17 +136,14 @@ FLEET: dict[str, dict] = {
             },
         ],
     },
-    "NAS (.24)": {
-        "ip": "10.0.0.24",
-        "user": "perryk",
-        "os": "freebsd",
-        "role": "TrueNAS CORE — storage, git repos, PostgreSQL, Plex",
-        "zpool": "storage",
-    },
 }
 
 # Vivint battery warning threshold (percent).
 BATTERY_WARNING_PCT: int = 30
+
+# Door lock battery warning threshold (percent) — higher than sensors
+# because a dead lock strands you outside; replace earlier.
+LOCK_WARNING_PCT: int = 40
 
 # Logging setup.
 logging.basicConfig(
@@ -420,6 +417,33 @@ def collect_vivint_batteries(api_data: dict) -> list[dict[str, Any]]:
     return warnings
 
 
+def collect_vivint_locks(api_data: dict) -> list[dict[str, Any]]:
+    """Extract Vivint door-lock batteries. Adapter reports 0.0–1.0."""
+    locks_out: list[dict[str, Any]] = []
+    vivint: dict = api_data.get("adapters", {}).get("vivint", {})
+    locks: dict = vivint.get("locks", {})
+    for key, lock in locks.items():
+        raw: Any = lock.get("battery")
+        if raw is None:
+            pct: int = 0
+            missing: bool = True
+        else:
+            # Adapter normalizes lock batteries to 0.0–1.0; sensors are 0–100.
+            pct = int(round(float(raw) * 100)) if float(raw) <= 1.0 else int(raw)
+            missing = False
+        label: str = key.replace("_", " ").title()
+        locks_out.append({
+            "name": label,
+            "key": key,
+            "battery": pct,
+            "locked": bool(lock.get("lock_state")),
+            "low": (not missing) and pct < LOCK_WARNING_PCT,
+            "missing": missing,
+        })
+    locks_out.sort(key=lambda x: x["battery"])
+    return locks_out
+
+
 def collect_mqtt_rate(host: str, user: str,
                       seconds: int = 5,
                       is_local: bool = False) -> tuple[bool, float]:
@@ -557,6 +581,7 @@ def _host_badge(reachable: bool) -> str:
 def render_html(
     hosts: list[dict[str, Any]],
     api_status: dict[str, Any],
+    locks: list[dict[str, Any]],
     batteries: list[dict[str, Any]],
     mqtt_rates: dict[str, tuple[bool, float]],
     git: dict[str, Any],
@@ -572,6 +597,41 @@ def render_html(
         <h1>GlowUp Morning Report</h1>
         <div class="date">{now.strftime('%A, %B %d, %Y  %H:%M %Z')}</div>
     </div>""")
+
+    # --- Door Locks (first — safety critical) ---
+    if locks:
+        low_locks: list[dict] = [l for l in locks if l["low"] or l["missing"]]
+        parts.append('<div class="section"><h2>Door Locks</h2>')
+        if low_locks:
+            parts.append(
+                f'<p class="fail">{len(low_locks)} lock(s) at or below '
+                f'{LOCK_WARNING_PCT}% — replace before they fail.</p>'
+            )
+        parts.append(
+            "<table><tr><th>Lock</th><th>State</th>"
+            "<th>Battery</th></tr>"
+        )
+        for l in locks:
+            if l["missing"]:
+                cls: str = "fail"
+                batt_text: str = "?"
+            elif l["battery"] < 25:
+                cls = "fail"
+                batt_text = f'{l["battery"]}%'
+            elif l["low"]:
+                cls = "warn"
+                batt_text = f'{l["battery"]}%'
+            else:
+                cls = "ok"
+                batt_text = f'{l["battery"]}%'
+            state_text: str = "LOCKED" if l["locked"] else "UNLOCKED"
+            state_cls: str = "ok" if l["locked"] else "warn"
+            parts.append(
+                f"<tr><td><strong>{_esc(l['name'])}</strong></td>"
+                f'<td class="{state_cls}">{state_text}</td>'
+                f'<td class="{cls}">{batt_text}</td></tr>'
+            )
+        parts.append("</table></div>")
 
     # --- Fleet Summary ---
     parts.append('<div class="section"><h2>Fleet Status</h2>')
@@ -640,10 +700,10 @@ def render_html(
         )
     parts.append("</div>")
 
-    # --- Vivint Batteries ---
+    # --- Vivint Sensor Batteries ---
     low_batt: list[dict] = [b for b in batteries if b["low"]]
     if batteries:
-        parts.append('<div class="section"><h2>Vivint Batteries</h2>')
+        parts.append('<div class="section"><h2>Vivint Sensor Batteries</h2>')
         if low_batt:
             parts.append(
                 f'<p class="warn">{len(low_batt)} sensor(s) below '
@@ -822,9 +882,11 @@ def main() -> None:
     logger.info("Checking API status...")
     api_status: dict[str, Any] = collect_api_status(api_token)
 
-    # --- Vivint batteries ---
+    # --- Vivint locks + sensor batteries ---
+    locks: list[dict[str, Any]] = []
     batteries: list[dict[str, Any]] = []
     if api_status.get("reachable") and api_status.get("data"):
+        locks = collect_vivint_locks(api_status["data"])
         batteries = collect_vivint_batteries(api_status["data"])
 
     # --- MQTT rates ---
@@ -851,7 +913,7 @@ def main() -> None:
     # --- Render and send ---
     logger.info("Rendering report...")
     html: str = render_html(
-        hosts, api_status, batteries, mqtt_rates, git, tests, now,
+        hosts, api_status, locks, batteries, mqtt_rates, git, tests, now,
     )
 
     subject: str = (
