@@ -43,11 +43,16 @@ logger: logging.Logger = logging.getLogger("glowup.voice.stt")
 
 # Default per-engine load deadlines (seconds).  Overridable via the
 # ``stt`` config block with ``primary_load_timeout_s`` /
-# ``fallback_load_timeout_s``.  The primary default is generous
-# because MLX-Whisper JIT-compiles Metal kernels on first run after a
-# reboot — shorter deadlines risk false timeouts on cold boot.
+# ``fallback_load_timeout_s``.  Both default to 60s — MLX-Whisper
+# JIT-compiles Metal kernels on first run after a reboot and
+# faster-whisper's 1.5 GB CT2 blob takes real wallclock time to load
+# from disk when the rest of the boot is fighting for I/O.  The
+# 2026-04-20 reboot validation observed a 23s faster-whisper load at
+# load avg 139; a 30s deadline tripped there even though the dock was
+# not actually stuck.  60s is the safer default — set lower in config
+# if a specific host wants faster failover.
 DEFAULT_PRIMARY_LOAD_TIMEOUT_S: float = 60.0
-DEFAULT_FALLBACK_LOAD_TIMEOUT_S: float = 30.0
+DEFAULT_FALLBACK_LOAD_TIMEOUT_S: float = 60.0
 
 
 # Name → factory.  A factory returns an un-loaded engine instance
@@ -227,7 +232,7 @@ class SpeechToText:
           "device":                  "cpu",      # faster-whisper only
           "compute_type":            "int8",     # faster-whisper only
           "primary_load_timeout_s":  60,         # default 60
-          "fallback_load_timeout_s": 30          # default 30
+          "fallback_load_timeout_s": 60          # default 60
         }
 
     Legacy keys ``model_size`` (alias for ``model``) are accepted for
