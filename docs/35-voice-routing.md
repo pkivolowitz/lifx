@@ -17,6 +17,9 @@ subscribes to all utterances, runs STT, intent parsing, action
 execution, and decides what to say back. **How** that response gets
 spoken depends on per-room speaker routing.
 
+The STT stack itself (MLX-Whisper primary, faster-whisper fallback,
+state reporting) is documented in [36-stt-stack.md](36-stt-stack.md).
+
 ## TTS Routing Modes
 
 The coordinator's config has a `room_speakers` map. Each room has a
