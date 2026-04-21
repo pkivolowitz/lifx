@@ -81,6 +81,7 @@ FLEET: dict[str, dict] = {
         "os": "linux",
         "role": "Hub: primary server, Dining Room satellite, MQTT broker",
         "local": True,
+        "repo_path": "/home/a/lifx",
         "services": [
             "glowup-server",
             "glowup-satellite",
@@ -98,6 +99,9 @@ FLEET: dict[str, dict] = {
         "user": "a",
         "os": "linux",
         "role": "Zigbee coordinator, BLE gateway, secondary MQTT broker",
+        # No repo_path: broker-2 uses per-role /opt/glowup-* layout,
+        # not a single ~/lifx tree. Drift check skips it until that
+        # deployment shape is normalized by the installer.
         "services": [
             "glowup-zigbee-service",
             "glowup-ble-sensor",
@@ -110,6 +114,7 @@ FLEET: dict[str, dict] = {
         "user": "a",
         "os": "linux",
         "role": "Bedroom kiosk, Main Bedroom satellite, thermal sensor",
+        "repo_path": "/home/a/lifx",
         "services": [
             "glowup-satellite",
             "pi-thermal",
@@ -126,6 +131,7 @@ FLEET: dict[str, dict] = {
         "user": "perrykivolowitz",
         "os": "macos",
         "role": "Mac Studio — voice coordinator, development",
+        "repo_path": "/Users/perrykivolowitz/lifx",
         "services": [
             "com.glowup.ollama-preload",
         ],
@@ -159,24 +165,42 @@ logger: logging.Logger = logging.getLogger("glowup.morning_report")
 # ---------------------------------------------------------------------------
 
 def _ssh(host: str, user: str, cmd: str,
-         timeout: int = SSH_TIMEOUT) -> tuple[bool, str]:
+         timeout: int = SSH_TIMEOUT,
+         stdin: str | None = None) -> tuple[bool, str]:
     """Run a command on a remote host via SSH.
 
     Returns (success, output).  On failure, output contains the
-    error message rather than raising.
+    error message rather than raising. Host-key mismatch (common after
+    a rebuild) is surfaced explicitly — it used to fall through as
+    generic "unreachable".
     """
     try:
+        ssh_argv: list[str] = ["ssh"]
+        if stdin is None:
+            ssh_argv.append("-n")
+        ssh_argv += [
+            "-o", "ConnectTimeout=5",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "BatchMode=yes",
+            f"{user}@{host}", cmd,
+        ]
         result: subprocess.CompletedProcess = subprocess.run(
-            [
-                "ssh", "-n",
-                "-o", "ConnectTimeout=5",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "BatchMode=yes",
-                f"{user}@{host}", cmd,
-            ],
+            ssh_argv,
+            input=stdin,
             capture_output=True, text=True, timeout=timeout,
         )
-        return (result.returncode == 0, result.stdout.strip())
+        if result.returncode == 0:
+            return (True, result.stdout.strip())
+        stderr: str = result.stderr or ""
+        if "REMOTE HOST IDENTIFICATION HAS CHANGED" in stderr:
+            return (
+                False,
+                f"host key mismatch (run: ssh-keygen -R {host})",
+            )
+        if "Permission denied" in stderr:
+            return (False, "ssh permission denied (authorized_keys?)")
+        last: str = (stderr or result.stdout or "ssh failed").strip()
+        return (False, last.splitlines()[-1] if last else "ssh failed")
     except subprocess.TimeoutExpired:
         return (False, "SSH timeout")
     except Exception as exc:
@@ -616,6 +640,199 @@ pre { background: #f8f8f8; padding: 10px; border-radius: 4px;
 """
 
 
+# ---------------------------------------------------------------------------
+# Fleet code drift — compare each host's on-disk files to the NAS bare repo.
+# Uses git blob hashes (sha1("blob <size>\0<content>")) so the host side
+# can run plain Python and the reference side runs `git ls-tree -r HEAD`.
+# Files missing on a host are NOT flagged — every host runs a subset. A file
+# present on the host that mismatches (or is absent from the reference) is.
+# ---------------------------------------------------------------------------
+
+# Directory names to skip when walking a host's repo copy.
+_DRIFT_EXCLUDE_DIRS: set[str] = {
+    ".git", "__pycache__", "venv", ".venv", "env", ".env",
+    "node_modules", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    "dist", "build", ".tox", ".idea", ".vscode",
+}
+
+# Extensions / filename suffixes never worth diffing (generated, editor junk).
+_DRIFT_SKIP_SUFFIXES: tuple[str, ...] = (
+    ".pyc", ".pyo", ".log", ".tmp", ".swp", ".swo", ".DS_Store",
+)
+
+# Python script the host runs to emit "<blob-sha> <relpath>" lines.
+# Reads root from stdin's argv (first line). Embedded via ssh -i stdin.
+_DRIFT_HOST_SCRIPT: str = r"""
+import os, sys, hashlib
+root = sys.argv[1] if len(sys.argv) > 1 else "."
+EX_DIRS = set(sys.argv[2].split(",")) if len(sys.argv) > 2 else set()
+EX_SUF = tuple(sys.argv[3].split(",")) if len(sys.argv) > 3 else ()
+try:
+    os.chdir(os.path.expanduser(root))
+except OSError as e:
+    print("__ERROR__", e, file=sys.stderr)
+    sys.exit(2)
+for dp, dn, fn in os.walk("."):
+    dn[:] = [d for d in dn if d not in EX_DIRS]
+    for f in fn:
+        if f.endswith(EX_SUF):
+            continue
+        p = os.path.join(dp, f)
+        try:
+            size = os.path.getsize(p)
+            h = hashlib.sha1()
+            h.update(b"blob " + str(size).encode() + b"\0")
+            with open(p, "rb") as fh:
+                while True:
+                    chunk = fh.read(65536)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+            rel = p[2:] if p.startswith("./") else p
+            print(h.hexdigest(), rel)
+        except OSError:
+            pass
+"""
+
+
+def _fetch_reference_manifest() -> tuple[dict[str, str], str]:
+    """Fetch {path: blob_sha} from the NAS bare repo at HEAD.
+
+    Returns (manifest, ref_sha). Empty manifest on failure.
+    """
+    cmd: str = (
+        f"git --git-dir={NAS_GIT_PATH} rev-parse HEAD && "
+        f"git --git-dir={NAS_GIT_PATH} ls-tree -r HEAD"
+    )
+    ok, out = _ssh(NAS_GIT_HOST, NAS_GIT_USER, cmd, timeout=20)
+    if not ok or not out:
+        logger.warning("Drift: reference manifest fetch failed: %s", out)
+        return ({}, "")
+    lines: list[str] = out.splitlines()
+    if not lines:
+        return ({}, "")
+    ref_sha: str = lines[0].strip()
+    manifest: dict[str, str] = {}
+    for line in lines[1:]:
+        # Format: "<mode> <type> <sha>\t<path>"
+        try:
+            meta, path = line.split("\t", 1)
+        except ValueError:
+            continue
+        parts: list[str] = meta.split()
+        if len(parts) >= 3 and parts[1] == "blob":
+            manifest[path] = parts[2]
+    return (manifest, ref_sha)
+
+
+def _parse_host_manifest(text: str) -> dict[str, str]:
+    """Parse "<sha> <path>" lines into a dict."""
+    result: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or " " not in line:
+            continue
+        sha, _, path = line.partition(" ")
+        if len(sha) == 40:
+            result[path] = sha
+    return result
+
+
+def _host_manifest(info: dict[str, Any]) -> tuple[bool, dict[str, str], str]:
+    """Walk one host's repo copy and hash every file.
+
+    Returns (ok, {path: sha}, error_text).
+    """
+    repo_path: str | None = info.get("repo_path")
+    if not repo_path:
+        return (False, {}, "no repo_path configured")
+
+    ex_dirs: str = ",".join(sorted(_DRIFT_EXCLUDE_DIRS))
+    ex_suf: str = ",".join(_DRIFT_SKIP_SUFFIXES)
+    # Run: python3 - <repo_path> <ex_dirs> <ex_suf>  with script on stdin.
+    argv_str: str = f"python3 - {repo_path} {ex_dirs} '{ex_suf}'"
+
+    if info.get("local"):
+        try:
+            result = subprocess.run(
+                ["python3", "-", repo_path, ex_dirs, ex_suf],
+                input=_DRIFT_HOST_SCRIPT,
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode != 0:
+                return (False, {}, (result.stderr or "local hash failed").strip())
+            return (True, _parse_host_manifest(result.stdout), "")
+        except Exception as exc:
+            return (False, {}, str(exc))
+
+    ok, out = _ssh(
+        info["ip"], info["user"], argv_str,
+        timeout=120, stdin=_DRIFT_HOST_SCRIPT,
+    )
+    if not ok:
+        return (False, {}, out)
+    return (True, _parse_host_manifest(out), "")
+
+
+def collect_drift() -> dict[str, Any]:
+    """Compare each fleet host's repo tree to the NAS reference.
+
+    Returns a dict with per-host drift/extra lists and the reference SHA.
+    """
+    reference, ref_sha = _fetch_reference_manifest()
+    per_host: dict[str, dict[str, Any]] = {}
+    if not reference:
+        return {
+            "reachable": False,
+            "ref_sha": "",
+            "hosts": per_host,
+            "error": "could not fetch reference manifest from NAS",
+        }
+
+    for name, info in FLEET.items():
+        if not info.get("repo_path"):
+            per_host[name] = {
+                "ok": True,
+                "skipped": True,
+                "error": "",
+                "drifted": [],
+                "extra": [],
+                "count": 0,
+            }
+            continue
+        ok, host_files, err = _host_manifest(info)
+        if not ok:
+            per_host[name] = {
+                "ok": False,
+                "error": err,
+                "drifted": [],
+                "extra": [],
+                "count": 0,
+            }
+            continue
+        drifted: list[str] = []
+        extra: list[str] = []
+        for path, sha in host_files.items():
+            ref_sha_for_path: str | None = reference.get(path)
+            if ref_sha_for_path is None:
+                extra.append(path)
+            elif ref_sha_for_path != sha:
+                drifted.append(path)
+        per_host[name] = {
+            "ok": True,
+            "error": "",
+            "drifted": sorted(drifted),
+            "extra": sorted(extra),
+            "count": len(host_files),
+        }
+    return {
+        "reachable": True,
+        "ref_sha": ref_sha,
+        "hosts": per_host,
+        "error": "",
+    }
+
+
 def _svc_badge(state: str) -> str:
     """Render a service state as a colored badge."""
     if state == "active":
@@ -643,6 +860,7 @@ def render_html(
     tests: dict[str, Any],
     stt_state: dict[str, Any],
     now: datetime,
+    drift: dict[str, Any] | None = None,
 ) -> str:
     """Build the full HTML email body."""
     parts: list[str] = []
@@ -719,6 +937,94 @@ def render_html(
             )
         parts.append("</table>")
     parts.append("</div>")
+
+    # --- Code drift across fleet ---
+    if drift is not None:
+        parts.append('<div class="section"><h2>Fleet Code Drift</h2>')
+        if not drift.get("reachable"):
+            parts.append(
+                f'<p class="fail">Drift check unavailable — '
+                f'{_esc(drift.get("error", "unknown"))}</p>'
+            )
+        else:
+            ref_sha: str = drift.get("ref_sha", "")
+            parts.append(
+                f'<p class="muted">Reference: NAS <code>{_esc(ref_sha[:10])}</code></p>'
+            )
+            any_drift: bool = False
+            parts.append(
+                "<table><tr><th>Host</th><th>Files</th>"
+                "<th>Drifted</th><th>Extra</th><th>Status</th></tr>"
+            )
+            for hname, hres in drift.get("hosts", {}).items():
+                if not hres.get("ok"):
+                    parts.append(
+                        f"<tr><td><strong>{_esc(hname)}</strong></td>"
+                        f"<td colspan='3' class='muted'>—</td>"
+                        f"<td class='fail'>{_esc(hres.get('error', 'error'))}"
+                        f"</td></tr>"
+                    )
+                    continue
+                if hres.get("skipped"):
+                    parts.append(
+                        f"<tr><td><strong>{_esc(hname)}</strong></td>"
+                        f"<td colspan='3' class='muted'>—</td>"
+                        f"<td class='muted'>skipped (custom layout)</td></tr>"
+                    )
+                    continue
+                d_ct: int = len(hres["drifted"])
+                e_ct: int = len(hres["extra"])
+                if d_ct or e_ct:
+                    any_drift = True
+                    status_html: str = (
+                        '<span class="badge badge-red">DRIFT</span>'
+                        if d_ct else
+                        '<span class="badge badge-yellow">EXTRA</span>'
+                    )
+                else:
+                    status_html = '<span class="badge badge-green">OK</span>'
+                parts.append(
+                    f"<tr><td><strong>{_esc(hname)}</strong></td>"
+                    f"<td>{hres['count']}</td>"
+                    f"<td class='{'fail' if d_ct else 'muted'}'>{d_ct}</td>"
+                    f"<td class='{'warn' if e_ct else 'muted'}'>{e_ct}</td>"
+                    f"<td>{status_html}</td></tr>"
+                )
+            parts.append("</table>")
+            if any_drift:
+                for hname, hres in drift.get("hosts", {}).items():
+                    if not hres.get("ok"):
+                        continue
+                    if not hres["drifted"] and not hres["extra"]:
+                        continue
+                    parts.append(f"<p><strong>{_esc(hname)}</strong></p>")
+                    if hres["drifted"]:
+                        items_d: str = "".join(
+                            f"<li class='fail'>{_esc(p)}</li>"
+                            for p in hres["drifted"][:50]
+                        )
+                        more_d: str = (
+                            f"<li class='muted'>… +{len(hres['drifted']) - 50} more</li>"
+                            if len(hres["drifted"]) > 50 else ""
+                        )
+                        parts.append(
+                            f"<p class='muted'>drifted from reference:</p>"
+                            f"<ul>{items_d}{more_d}</ul>"
+                        )
+                    if hres["extra"]:
+                        items_e: str = "".join(
+                            f"<li class='warn'>{_esc(p)}</li>"
+                            for p in hres["extra"][:50]
+                        )
+                        more_e: str = (
+                            f"<li class='muted'>… +{len(hres['extra']) - 50} more</li>"
+                            if len(hres["extra"]) > 50 else ""
+                        )
+                        parts.append(
+                            f"<p class='muted'>not in reference:</p>"
+                            f"<ul>{items_e}{more_e}</ul>"
+                        )
+        parts.append("</div>")
 
     # --- Voice / STT ---
     parts.append('<div class="section"><h2>Voice &middot; STT</h2>')
@@ -1015,11 +1321,15 @@ def main() -> None:
         FLEET["Daedalus (.191)"]["user"],
     )
 
+    # --- Fleet code drift ---
+    logger.info("Checking fleet code drift...")
+    drift: dict[str, Any] = collect_drift()
+
     # --- Render and send ---
     logger.info("Rendering report...")
     html: str = render_html(
         hosts, api_status, locks, batteries, mqtt_rates, git, tests,
-        stt_state, now,
+        stt_state, now, drift=drift,
     )
 
     subject: str = (
