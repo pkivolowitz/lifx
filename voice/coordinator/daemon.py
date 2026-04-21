@@ -149,12 +149,16 @@ class CoordinatorDaemon:
         from voice.coordinator.executor import GlowUpExecutor
         chat_cfg: dict[str, Any] = self._config.get("chat", {})
         intent_cfg: dict[str, Any] = self._config.get("intent", {})
+        zigbee_cfg: dict[str, Any] = self._config.get("zigbee", {})
         self._executor = GlowUpExecutor(
             api_base=self._api_base,
             auth_token=self._auth_token,
             chat_model=chat_cfg.get("model", "llama3.1:8b"),
             ollama_host=intent_cfg.get(
                 "ollama_host", "http://localhost:11434",
+            ),
+            zigbee_service_url=zigbee_cfg.get(
+                "service_url", "http://10.0.0.123:8422",
             ),
         )
 

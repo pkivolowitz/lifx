@@ -44,6 +44,16 @@ logger: logging.Logger = logging.getLogger("glowup.voice.executor")
 # Mobile, AL residential electricity rate ($/kWh).
 _ELECTRICITY_RATE_PER_KWH: float = 0.171
 
+# Base URL for broker-2's glowup-zigbee-service HTTP API. Used by the
+# voice plug commands (power on/off, is-on queries) — direct hop from
+# the coordinator on Daedalus, not via the hub, so latency stays low.
+# Overridable via coordinator_config.json -> zigbee.service_url.
+_BROKER2_ZIGBEE_DEFAULT: str = "http://10.0.0.123:8422"
+
+# Timeout for plug HTTP calls — plugs actuate in <500 ms over Zigbee;
+# anything longer means the radio is wedged, bail.
+_PLUG_HTTP_TIMEOUT: float = 5.0
+
 # Repair hints for adapters that need special onboarding beyond a restart.
 _REPAIR_HINTS: dict[str, str] = {
     "vivint": "Run vivint setup in the adapters directory to re-authenticate.",
@@ -96,12 +106,14 @@ class GlowUpExecutor:
         auth_token: str = "",
         chat_model: str = "gemma3:27b",
         ollama_host: str = "http://localhost:11434",
+        zigbee_service_url: str = _BROKER2_ZIGBEE_DEFAULT,
     ) -> None:
         """Initialize the executor."""
         self._api_base: str = api_base.rstrip("/")
         self._auth_token: str = auth_token
         self._chat_model: str = chat_model
         self._ollama_host: str = ollama_host
+        self._zigbee_url: str = zigbee_service_url.rstrip("/")
 
         # Per-room conversation history.
         self._chat_history: dict[str, list[dict[str, str]]] = {}
@@ -109,6 +121,19 @@ class GlowUpExecutor:
 
         # Load action definitions.
         self._actions: dict[str, dict[str, Any]] = self._load_actions()
+
+        # Plug synonyms — "friendly name" (what the user says) mapped
+        # to the Z2M device name (what broker-2 addresses). Loaded from
+        # the `plugs:` section of actions.yml. Two views are kept:
+        # one for resolution (lower-case match), one for display.
+        plugs_cfg: dict[str, str] = self._actions.get("plugs", {}) or {}
+        self._plug_synonyms: dict[str, str] = {
+            friendly.lower(): zigbee
+            for friendly, zigbee in plugs_cfg.items()
+        }
+        self._plug_display: dict[str, str] = {
+            zigbee: friendly for friendly, zigbee in plugs_cfg.items()
+        }
 
         # Named query handlers — the config's "function pointers."
         # Each takes (api_data, action_config, target_raw, params)
@@ -282,6 +307,18 @@ class GlowUpExecutor:
         if target.lower() == "all":
             return "all"
 
+        # Plug synonyms win over groups — friendly plug names like
+        # "Main Bedroom TV Switch" could overlap with group names
+        # (e.g. "Main Bedroom"), and the user said "switch" explicitly.
+        tl: str = target.lower().strip()
+        if tl in self._plug_synonyms:
+            zigbee_name: str = self._plug_synonyms[tl]
+            logger.info(
+                "Target '%s' resolved to plug 'plug:%s'",
+                target, zigbee_name,
+            )
+            return f"plug:{zigbee_name}"
+
         try:
             data = self._request("GET", "/api/groups")
             groups: dict = data.get("groups", {})
@@ -408,10 +445,27 @@ class GlowUpExecutor:
         target_url: str = urllib.parse.quote(target_raw, safe="")
         params: dict[str, Any] = intent.get("params", {})
 
-        # Human-readable target (strip group: prefix).
-        display_target: str = (
-            target_raw[6:] if target_raw.startswith("group:") else target_raw
-        )
+        # Human-readable target (strip group: / plug: prefix).
+        if target_raw.startswith("group:"):
+            display_target: str = target_raw[6:]
+        elif target_raw.startswith("plug:"):
+            zigbee_name: str = target_raw[5:]
+            display_target = self._plug_display.get(zigbee_name, zigbee_name)
+        else:
+            display_target = target_raw
+
+        # Plug intercept — friendly name resolved to plug:<zigbee_name>.
+        # Route power on/off and status queries directly to broker-2's
+        # glowup-zigbee-service; skip the LIFX-shaped API dispatch.
+        if target_raw.startswith("plug:"):
+            if action == "power":
+                return self._plug_power(
+                    target_raw[5:], display_target, params,
+                )
+            if action == "query_status":
+                return self._plug_query(
+                    target_raw[5:], display_target,
+                )
 
         # Look up action config.
         action_cfg: dict[str, Any] | None = self._actions.get(action)
@@ -640,6 +694,109 @@ class GlowUpExecutor:
     # ------------------------------------------------------------------
     # Query handlers — the "function pointers" referenced by config
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Plug handlers — direct HTTP to glowup-zigbee-service on broker-2.
+    # No hub hop, no effect-engine machinery, no brightness chaining.
+    # ------------------------------------------------------------------
+
+    def _plug_http(
+        self, method: str, path: str, body: Any | None = None,
+    ) -> tuple[bool, Any]:
+        """Call broker-2's zigbee service. Returns (ok, parsed_or_error)."""
+        url: str = f"{self._zigbee_url}{path}"
+        data: bytes | None = None
+        headers: dict[str, str] = {}
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(
+            url, data=data, headers=headers, method=method,
+        )
+        try:
+            with urllib.request.urlopen(
+                req, timeout=_PLUG_HTTP_TIMEOUT,
+            ) as resp:
+                raw: bytes = resp.read()
+                if not raw:
+                    return (True, {})
+                try:
+                    return (True, json.loads(raw))
+                except ValueError:
+                    return (True, raw.decode("utf-8", "replace"))
+        except urllib.error.HTTPError as exc:
+            return (False, f"HTTP {exc.code}")
+        except urllib.error.URLError as exc:
+            return (False, f"unreachable: {exc.reason}")
+        except Exception as exc:
+            return (False, str(exc))
+
+    def _plug_power(
+        self, zigbee_name: str, display_target: str, params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Turn a Zigbee plug on or off via broker-2.
+
+        POST /devices/{name}/state body {"state": "ON" | "OFF"}.
+        """
+        on: bool = bool(params.get("on", False))
+        state: str = "ON" if on else "OFF"
+        ok, result = self._plug_http(
+            "POST", f"/devices/{urllib.parse.quote(zigbee_name)}/state",
+            {"state": state},
+        )
+        if not ok:
+            logger.warning(
+                "Plug %s set %s failed: %s", zigbee_name, state, result,
+            )
+            return {
+                "status": "error",
+                "confirmation": (
+                    f"I couldn't reach {display_target}. {result}."
+                ),
+                "speak": True,
+            }
+        logger.info("Plug %s set to %s", zigbee_name, state)
+        return {
+            "status": "ok",
+            "confirmation": f"{display_target} is {state.lower()}.",
+            "speak": True,
+        }
+
+    def _plug_query(
+        self, zigbee_name: str, display_target: str,
+    ) -> dict[str, Any]:
+        """Report a plug's current ON/OFF state."""
+        ok, result = self._plug_http("GET", "/devices")
+        if not ok or not isinstance(result, dict):
+            return {
+                "status": "error",
+                "confirmation": (
+                    f"I can't check {display_target} right now."
+                ),
+                "speak": True,
+            }
+        devices: list[dict[str, Any]] = result.get("devices", [])
+        for dev in devices:
+            if dev.get("name") == zigbee_name:
+                if not dev.get("online", False):
+                    return {
+                        "status": "ok",
+                        "confirmation": (
+                            f"{display_target} is offline."
+                        ),
+                        "speak": True,
+                    }
+                dev_state: str = (dev.get("state") or "unknown").lower()
+                return {
+                    "status": "ok",
+                    "confirmation": f"{display_target} is {dev_state}.",
+                    "speak": True,
+                }
+        return {
+            "status": "ok",
+            "confirmation": f"I don't know about {display_target}.",
+            "speak": True,
+        }
 
     def _handle_power_state(
         self,

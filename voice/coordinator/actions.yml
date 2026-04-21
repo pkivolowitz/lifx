@@ -20,6 +20,19 @@
 # Perry Kivolowitz, 2026. MIT License.
 
 # ---------------------------------------------------------------------------
+# Zigbee smart plug synonyms — map spoken friendly name to Z2M device name.
+# Voice targets matching a key here are resolved to "plug:<zigbee_name>" and
+# handled by the executor's plug path (direct HTTP to glowup-zigbee-service
+# on broker-2, not via hub /api/devices). Adding a plug is a YAML edit.
+# ---------------------------------------------------------------------------
+
+plugs:
+  "ML Switch": ML_Power
+  "Main Bedroom TV Switch": MBTV
+  "Living Room TV Switch": LRTV
+  "Backyard IR Switch": BYIR
+
+# ---------------------------------------------------------------------------
 # Commands — POST to API, says "Got it" after execution
 # ---------------------------------------------------------------------------
 

@@ -104,6 +104,10 @@ Examples:
 - "set brightness to 50 percent" -> {{"action": "brightness", "target": "all", "params": {{"brightness": 50}}}}
 - "are the bedroom lights on?" -> {{"action": "query_status", "target": "bedroom", "params": {{}}}}
 - "is the living room on?" -> {{"action": "query_status", "target": "living", "params": {{}}}}
+- "turn on the ML switch" -> {{"action": "power", "target": "ML Switch", "params": {{"on": true}}}}
+- "turn off the main bedroom TV switch" -> {{"action": "power", "target": "Main Bedroom TV Switch", "params": {{"on": false}}}}
+- "is the backyard IR switch on?" -> {{"action": "query_status", "target": "Backyard IR Switch", "params": {{}}}}
+- "is the living room TV switch on?" -> {{"action": "query_status", "target": "Living Room TV Switch", "params": {{}}}}
 - "what was my last question?" -> {{"action": "chat", "target": "all", "params": {{"message": "what was my last question?"}}}}
 - "do I need to water the backyard?" -> {{"action": "query_soil", "target": "backyard", "params": {{}}}}
 - "how wet is the listening room?" -> {{"action": "query_soil", "target": "listening room", "params": {{}}}}
@@ -211,6 +215,28 @@ class IntentParser:
             auth_token: Bearer token for GlowUp API.
         """
         parts: list[str] = []
+        # Plug friendly names — load from actions.yml so the intent
+        # parser knows "Main Bedroom TV Switch" et al. are valid targets.
+        # Reading the YAML here keeps the coordinator from having to
+        # thread data in from the executor.
+        try:
+            import yaml as _yaml  # type: ignore[import-not-found]
+            from pathlib import Path as _Path
+            actions_file = (
+                _Path(__file__).parent / "actions.yml"
+            )
+            if actions_file.exists():
+                with open(actions_file) as f:
+                    _actions = _yaml.safe_load(f) or {}
+                plug_names = list((_actions.get("plugs") or {}).keys())
+                if plug_names:
+                    parts.append(
+                        "Available switches (Zigbee plugs): "
+                        + ", ".join(plug_names)
+                    )
+        except Exception as exc:
+            logger.debug("Plug capability load failed: %s", exc)
+
         headers: dict[str, str] = {
             "Authorization": f"Bearer {auth_token}",
         }
