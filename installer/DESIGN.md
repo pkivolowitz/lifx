@@ -357,6 +357,33 @@ Carried forward from v2 with v3 adjustments:
 
 ---
 
+## Implementation status
+
+Updated 2026-04-21 (Conway pause).
+
+| Phase | Scope                                      | Status       | Commit     |
+|-------|--------------------------------------------|--------------|------------|
+| 1     | skeleton: detect, preflight, welcome, picker | done       | `d3749ab`  |
+| Nuke  | `--nuke` (+ `--keep-state`)                | done         | `9498793`, `a657677` |
+| 2a    | venv, pip install, features.json           | done         | `a657677`  |
+| 2b    | secrets.json, systemd templating, self-check | not started |            |
+| 2c    | per-feature requirements split             | not started  |            |
+| 3     | re-run handling (update/reconfigure/reinstall) | not started |          |
+
+**Verified on VM** `ubuntu-conway` (10.0.0.244, Parallels): end-to-end
+install (Tier B feature picker with dashboard selected), `--nuke`,
+`--nuke --keep-state` all work.
+
+**Notable gotchas caught during testing** (expect to see again in Phase 2b):
+
+- `systemctl list-unit-files <glob>` exits non-zero on no-match on
+  Ubuntu 24. Under `set -euo pipefail`, that silently kills the script.
+  Every such pipeline needs `|| true`.
+- Partial venv creation leaves `bin/python3` but no `bin/pip`. The
+  "reuse existing venv" path must verify both exist.
+- Ubuntu 24 minimal images don't ship `python3-venv` or `git`. Error
+  messages must hint the apt package.
+
 ## Not restated in v3 (carried from v2)
 
 The following subsystem details from v2 remain the authoritative spec for
