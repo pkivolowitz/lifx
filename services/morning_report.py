@@ -16,6 +16,7 @@ Can also be run manually:
 
 __version__: str = "1.0.0"
 
+import fnmatch
 import json
 import logging
 import smtplib
@@ -660,6 +661,42 @@ _DRIFT_SKIP_SUFFIXES: tuple[str, ...] = (
     ".pyc", ".pyo", ".log", ".tmp", ".swp", ".swo", ".DS_Store",
 )
 
+# fnmatch patterns (paths relative to the repo root on the host). Files
+# matching any of these are silently dropped from the "extra" list —
+# they exist on the host legitimately but are not repo contents. Add
+# here, not via per-host config, because these are the same everywhere.
+_DRIFT_EXTRA_IGNORE: tuple[str, ...] = (
+    "DEPLOYED",            # deploy marker
+    "state.db",            # runtime db
+    "state.db-journal",    # sqlite journal
+    "state.db-wal",        # sqlite WAL
+    "state.db-shm",        # sqlite shared mem
+    "ble_pairing.json",    # BLE keys
+    ".claude/",            # IDE settings (trailing / = dir prefix)
+    "*.local.json",        # per-host overrides
+    "*.pem",               # certs
+    "*.key",               # keys
+    ".DS_Store",
+)
+
+
+def _drift_ignored(path: str) -> bool:
+    """True if *path* matches any ignorelist entry.
+
+    Entries ending in '/' are treated as directory prefixes (fnmatch
+    globs don't cross '/'). Others are fnmatched against both the full
+    path and the basename.
+    """
+    base: str = path.rsplit("/", 1)[-1]
+    for pat in _DRIFT_EXTRA_IGNORE:
+        if pat.endswith("/"):
+            if path.startswith(pat) or ("/" + pat) in ("/" + path + "/"):
+                return True
+        else:
+            if fnmatch.fnmatch(path, pat) or fnmatch.fnmatch(base, pat):
+                return True
+    return False
+
 # Python script the host runs to emit "<blob-sha> <relpath>" lines.
 # Reads root from stdin's argv (first line). Embedded via ssh -i stdin.
 _DRIFT_HOST_SCRIPT: str = r"""
@@ -812,10 +849,14 @@ def collect_drift() -> dict[str, Any]:
             continue
         drifted: list[str] = []
         extra: list[str] = []
+        ignored: list[str] = []
         for path, sha in host_files.items():
             ref_sha_for_path: str | None = reference.get(path)
             if ref_sha_for_path is None:
-                extra.append(path)
+                if _drift_ignored(path):
+                    ignored.append(path)
+                else:
+                    extra.append(path)
             elif ref_sha_for_path != sha:
                 drifted.append(path)
         per_host[name] = {
@@ -823,6 +864,7 @@ def collect_drift() -> dict[str, Any]:
             "error": "",
             "drifted": sorted(drifted),
             "extra": sorted(extra),
+            "ignored": sorted(ignored),
             "count": len(host_files),
         }
     return {
