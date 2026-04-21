@@ -1259,14 +1259,36 @@ class SatelliteDaemon:
                             "Auto-detected ALSA capture: %s (%s)",
                             alsa_device, line.strip(),
                         )
-                        # Default playback to the same USB card —
-                        # duplex devices (Jabra SPEAK etc.) expect it.
+                        # Default playback to the same card only if it
+                        # also exists as a playback device (duplex, e.g.
+                        # Jabra SPEAK). Capture-only cards like the
+                        # Blue Snowball aren't in `aplay -l` — leaving
+                        # _alsa_playback_device unset falls back to the
+                        # ALSA default sink.
                         if self._alsa_playback_device is None:
-                            self._alsa_playback_device = f"plughw:{card},0"
-                            logger.info(
-                                "Defaulting ALSA playback to %s",
-                                self._alsa_playback_device,
-                            )
+                            try:
+                                ap = sp.run(
+                                    ["aplay", "-l"],
+                                    capture_output=True, text=True,
+                                    timeout=5,
+                                )
+                                if f"card {card}:" in ap.stdout:
+                                    self._alsa_playback_device = (
+                                        f"plughw:{card},0"
+                                    )
+                                    logger.info(
+                                        "Defaulting ALSA playback to %s "
+                                        "(duplex card)",
+                                        self._alsa_playback_device,
+                                    )
+                                else:
+                                    logger.info(
+                                        "Capture card %s is mic-only; "
+                                        "leaving playback on ALSA default",
+                                        card,
+                                    )
+                            except (OSError, subprocess.SubprocessError):
+                                pass
                         break
             except (OSError, subprocess.SubprocessError) as exc:
                 logger.error("arecord -l failed: %s", exc)
