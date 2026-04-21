@@ -293,11 +293,174 @@ summary() {
 }
 
 # ---------------------------------------------------------------------------
+# Nuke It — return the install tree to a virgin state for testing.
+#
+# Removes: venv/, site-settings/, systemd glowup-* units (Linux), runtime
+# state files (state.db*, DEPLOYED, ble_pairing.json). Leaves the repo
+# clone itself (install.sh, installer/, source code) untouched so a
+# follow-up `./install.sh` can reinstall.
+# ---------------------------------------------------------------------------
+
+# Runtime state files written by the server/adapters, not the installer
+# itself, but which must be removed to reach a truly virgin state.
+RUNTIME_STATE_FILES=(
+    "state.db"
+    "state.db-wal"
+    "state.db-shm"
+    "state.db-journal"
+    "DEPLOYED"
+    "ble_pairing.json"
+    "shopping.json"
+)
+
+# Remove a file if it exists; report concisely either way. Silent when
+# the file is absent (nothing to nuke).
+nuke_file() {
+    local target="$1"
+    if [ -e "$target" ]; then
+        rm -rf -- "$target"
+        ok "removed $target"
+    fi
+}
+
+# Stop + disable + remove every glowup-* systemd unit. Handles instance
+# units (glowup-adapter@*) via pattern, timers as well as services.
+nuke_systemd_units() {
+    [ "$PLATFORM" = "linux" ] || return 0
+    # systemctl returns non-zero when no unit files match the glob; with
+    # pipefail that would kill the script. `|| true` swallows it so the
+    # empty-result branch can handle the no-op case cleanly.
+    local units
+    units="$(systemctl list-unit-files --no-legend --no-pager \
+                'glowup-*' 2>/dev/null | awk '{print $1}' || true)"
+    if [ -z "$units" ]; then
+        return 0
+    fi
+
+    info "Found $(echo "$units" | wc -l | tr -d ' ') glowup unit(s) to remove."
+
+    # Stop running instances first. Same no-match-returns-nonzero dodge.
+    local running
+    running="$(systemctl list-units --no-legend --no-pager --state=active \
+                'glowup-*' 2>/dev/null | awk '{print $1}' || true)"
+    local u
+    for u in $running; do
+        if sudo systemctl stop "$u" 2>/tmp/nuke-err.$$; then
+            ok "stopped $u"
+        else
+            warn "stop $u failed: $(cat /tmp/nuke-err.$$). Continuing."
+        fi
+    done
+
+    # Disable + delete unit files.
+    for u in $units; do
+        sudo systemctl disable "$u" >/dev/null 2>/tmp/nuke-err.$$ || \
+            warn "disable $u failed: $(cat /tmp/nuke-err.$$)"
+        local path="/etc/systemd/system/$u"
+        if [ -e "$path" ]; then
+            sudo rm -f -- "$path"
+            ok "removed $path"
+        fi
+    done
+
+    sudo systemctl daemon-reload
+    sudo systemctl reset-failed 2>/dev/null || true
+    rm -f /tmp/nuke-err.$$
+}
+
+nuke() {
+    hdr "Nuke It"
+    info "This will delete:"
+    info "  - $REPO_ROOT/venv/"
+    info "  - $REPO_ROOT/site-settings/   (includes secrets.json)"
+    info "  - $REPO_ROOT/{${RUNTIME_STATE_FILES[*]}}"
+    if [ "$PLATFORM" = "linux" ]; then
+        info "  - /etc/systemd/system/glowup-*   (stopped + disabled first)"
+    fi
+    info ""
+    info "The git repo itself ($REPO_ROOT) stays — you can reinstall"
+    info "immediately after by re-running ./install.sh."
+    info ""
+    ask "Continue?" "N" || die "Nuke aborted."
+
+    local any_found=0
+
+    # Systemd units (Linux only). Report count before/after so 'nothing
+    # to do' is visible to the user, not a silent no-op.
+    if [ "$PLATFORM" = "linux" ]; then
+        nuke_systemd_units
+    fi
+
+    # venv + site-settings.
+    if [ -e "$REPO_ROOT/venv" ]; then
+        rm -rf -- "$REPO_ROOT/venv"
+        ok "removed $REPO_ROOT/venv"
+        any_found=1
+    fi
+    if [ -e "$REPO_ROOT/site-settings" ]; then
+        rm -rf -- "$REPO_ROOT/site-settings"
+        ok "removed $REPO_ROOT/site-settings"
+        any_found=1
+    fi
+
+    # Runtime state files at the repo root.
+    local f
+    for f in "${RUNTIME_STATE_FILES[@]}"; do
+        if [ -e "$REPO_ROOT/$f" ]; then
+            nuke_file "$REPO_ROOT/$f"
+            any_found=1
+        fi
+    done
+
+    info ""
+    if [ "$any_found" -eq 0 ]; then
+        info "Nothing to nuke — install tree is already virgin."
+    else
+        ok "Nuke complete. Re-run ./install.sh to reinstall."
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+print_usage() {
+    cat <<EOF
+Usage: ./install.sh [OPTION]
+
+Without arguments, runs the interactive installer.
+
+Options:
+  --nuke           Remove venv/, site-settings/, runtime state, and
+                   glowup-* systemd units. Returns the tree to a virgin
+                   state for testing. The repo clone itself is kept.
+  -h, --help       Show this help.
+EOF
+}
+
 main() {
+    # Platform detection always first — every code path needs it.
     detect_platform
+
+    case "${1:-}" in
+        --nuke)
+            nuke
+            return
+            ;;
+        -h|--help)
+            print_usage
+            return
+            ;;
+        "")
+            : # fall through to install flow
+            ;;
+        *)
+            err "Unknown option: $1"
+            print_usage
+            exit 64  # EX_USAGE
+            ;;
+    esac
+
     preflight
     welcome
     feature_picker
