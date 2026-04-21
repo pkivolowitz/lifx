@@ -1,0 +1,18 @@
+# udev rule: /dev/uinput group-writable by `input`.
+#
+# Why: evdev.UInput() opens /dev/uinput O_RDWR.  The default Pi OS
+# permissions are root-only (mode 0600, root:root), forcing either
+# root or setcap-kernel tricks.  Group-assigning to `input` with mode
+# 0660 lets our daemon run as user `a` with SupplementaryGroups=input
+# in the systemd unit and avoids root ownership of the HID pipeline.
+#
+# Install:
+#   sudo install -o root -g root -m 0644 99-uinput.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+#
+# Verify:
+#   ls -l /dev/uinput
+#   # expect: crw-rw---- 1 root input ... /dev/uinput
+
+KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input"

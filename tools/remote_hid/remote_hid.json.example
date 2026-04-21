@@ -1,0 +1,7 @@
+{
+    "_comment": "glowup-remote-hid server config. Install at /etc/glowup/remote_hid.json mode 0600 because auth_token is sensitive.",
+    "bind": "0.0.0.0",
+    "port": 8429,
+    "auth_token": "CHANGE-ME-OR-SET-NULL",
+    "device_name": "GlowUp Remote HID"
+}
