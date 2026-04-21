@@ -71,17 +71,22 @@ WorkingDirectory=/opt/glowup-sensors
 Environment=GLB_HUB_BROKER=10.0.0.214
 Environment=GLB_HUB_PORT=1883
 
-# Pin to the ASUS USB dongle (hci1).  broker-2 has two BT adapters:
-#   hci0 = built-in Cypress (must stay DOWN — ONVIS is not paired to it)
-#   hci1 = ASUS USB (0b05:1bf6, ONVIS motion paired here)
-# Bleak defaults to the first UP adapter, so if hci0 is up it wins
-# and scans on the wrong radio.  ExecStartPre ensures correct state
-# at every service start.  See reference_network.md.
-Environment=GLB_BLE_ADAPTER=hci1
-
-ExecStartPre=-+/usr/sbin/rfkill unblock bluetooth
-ExecStartPre=-+/usr/bin/hciconfig hci1 up
-ExecStartPre=-+/usr/bin/hciconfig hci0 down
+# BLE adapter selection: broker-2 boots with `dtoverlay=disable-bt` in
+# /boot/firmware/config.txt (FLEET_REBUILD § 4.2.3 step 4), which kills
+# the onboard Broadcom/Cypress radio.  The ASUS BT500 USB dongle is then
+# the only HCI device and enumerates as hci0.  We therefore let bleak
+# pick the default adapter rather than pinning a name — the reference
+# memory (reference_broker2.md) and FLEET_REBUILD agree this is the
+# correct setup.  Do NOT reintroduce a hci1 pin without first removing
+# disable-bt from config.txt, or the daemon will fail with
+# `adapter 'hci1' not found` (observed on 2026-04-20 rebuild).
+#
+# bluetooth.service does not power adapters automatically on Debian
+# Trixie — bleak's get_default_adapter() requires at least one POWERED
+# adapter, so we hciconfig hci0 up ourselves.  The `-+` prefix means
+# "ignore failure, run as root" (needed because the daemon runs as
+# user `a` with caps, but bringing an HCI device up requires root).
+ExecStartPre=-+/usr/bin/hciconfig hci0 up
 ExecStart=/usr/bin/python3 -m ble.sensor --config /etc/glowup/ble_pairing.json
 Restart=always
 RestartSec=10
