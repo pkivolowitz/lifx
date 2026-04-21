@@ -228,17 +228,24 @@ class IntentParser:
                     data = json.loads(resp.read())
 
                 if endpoint == "/api/effects":
-                    names = [e.get("name", "") for e in data if isinstance(e, dict)]
+                    # API shape: {"effects": {name: {...}, ...}}
+                    effects = data.get("effects", {}) if isinstance(data, dict) else {}
+                    names = list(effects.keys()) if isinstance(effects, dict) else []
                     if names:
                         parts.append(f"{label}: {', '.join(names)}")
                 elif endpoint == "/api/groups":
-                    if isinstance(data, dict):
-                        parts.append(f"{label}: {', '.join(data.keys())}")
+                    # API shape: {"groups": {name: [...], ...}}
+                    groups = data.get("groups", {}) if isinstance(data, dict) else {}
+                    if isinstance(groups, dict) and groups:
+                        parts.append(f"{label}: {', '.join(groups.keys())}")
                 elif endpoint == "/api/devices":
+                    # API shape: {"devices": [{"label": ..., "ip": ...}, ...]}
+                    devs = data.get("devices", []) if isinstance(data, dict) else []
                     labels = [
                         d.get("label", d.get("ip", ""))
-                        for d in data if isinstance(d, dict)
+                        for d in devs if isinstance(d, dict)
                     ]
+                    labels = [s for s in labels if s]
                     if labels:
                         parts.append(f"{label}: {', '.join(labels)}")
 
