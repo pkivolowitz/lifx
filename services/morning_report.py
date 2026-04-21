@@ -677,6 +677,7 @@ _DRIFT_EXTRA_IGNORE: tuple[str, ...] = (
     "*.pem",               # certs
     "*.key",               # keys
     ".DS_Store",
+    "*xcuserdata*",        # Xcode per-user IDE state (regenerates)
 )
 
 
