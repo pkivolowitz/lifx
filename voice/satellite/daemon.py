@@ -216,6 +216,15 @@ class SatelliteDaemon:
         self._active_piper: Optional[subprocess.Popen] = None
         self._active_aplay: Optional[subprocess.Popen] = None
         self._active_lock: threading.Lock = threading.Lock()
+
+        # ALSA playback device for aplay. If unset, _init_audio_alsa
+        # defaults it to the same USB card as capture (duplex devices
+        # like Jabra speakerphones). Config key: audio.alsa_playback_device
+        # (e.g. "plughw:2,0"). Without this, aplay uses ALSA default,
+        # which on a Pi with HDMI present is card 0 HDMI — silent.
+        self._alsa_playback_device: Optional[str] = config.get(
+            "audio", {},
+        ).get("alsa_playback_device")
         # Utterance sequence — incremented each time this satellite
         # publishes a new utterance.  The coordinator echoes the seq
         # back in TTS responses.  The satellite discards any TTS whose
@@ -603,8 +612,12 @@ class SatelliteDaemon:
                     self._suppress_count += 1
                 logger.info("Playing 'working' audio cue")
                 try:
+                    cmd: list[str] = ["aplay", "-q"]
+                    if self._alsa_playback_device:
+                        cmd += ["-D", self._alsa_playback_device]
+                    cmd.append(working_wav)
                     aplay: subprocess.Popen = subprocess.Popen(
-                        ["aplay", "-q", working_wav],
+                        cmd,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
@@ -813,8 +826,12 @@ class SatelliteDaemon:
                 piper.stdin.close()
 
                 # Start aplay and register it for cancellation.
+                aplay_cmd: list[str] = ["aplay"]
+                if self._alsa_playback_device:
+                    aplay_cmd += ["-D", self._alsa_playback_device]
+                aplay_cmd += ["-r", rate, "-f", "S16_LE", "-t", "raw", "-"]
                 aplay: subprocess.Popen = subprocess.Popen(
-                    ["aplay", "-r", rate, "-f", "S16_LE", "-t", "raw", "-"],
+                    aplay_cmd,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -1242,6 +1259,14 @@ class SatelliteDaemon:
                             "Auto-detected ALSA capture: %s (%s)",
                             alsa_device, line.strip(),
                         )
+                        # Default playback to the same USB card —
+                        # duplex devices (Jabra SPEAK etc.) expect it.
+                        if self._alsa_playback_device is None:
+                            self._alsa_playback_device = f"plughw:{card},0"
+                            logger.info(
+                                "Defaulting ALSA playback to %s",
+                                self._alsa_playback_device,
+                            )
                         break
             except (OSError, subprocess.SubprocessError) as exc:
                 logger.error("arecord -l failed: %s", exc)
