@@ -270,7 +270,109 @@ feature_picker() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 5 — selection summary (Phase 1 stopping point)
+# Step 5 — create venv, upgrade pip + wheel
+# ---------------------------------------------------------------------------
+
+VENV="$REPO_ROOT/venv"
+SITE_SETTINGS="$REPO_ROOT/site-settings"
+
+create_venv() {
+    hdr "Virtual environment"
+    if [ -d "$VENV" ]; then
+        # Both python and pip must be present. A failed prior venv
+        # creation can leave the directory with python but no pip.
+        if { [ -x "$VENV/bin/python" ] || [ -x "$VENV/bin/python3" ]; } \
+           && [ -x "$VENV/bin/pip" ]; then
+            ok "reusing existing venv at $VENV"
+            return 0
+        fi
+        warn "$VENV exists but is incomplete (missing pip); rebuilding."
+        rm -rf -- "$VENV"
+    fi
+    info "creating $VENV …"
+    if ! python3 -m venv "$VENV" 2>/tmp/venv-err.$$; then
+        err "venv creation failed:"
+        cat /tmp/venv-err.$$ >&2
+        rm -f /tmp/venv-err.$$
+        info "fix: on Debian/Ubuntu: sudo apt install python3-venv"
+        exit 1
+    fi
+    rm -f /tmp/venv-err.$$
+    # Upgrade pip + wheel in one shot; --quiet keeps the log tidy but
+    # errors still print.
+    if ! "$VENV/bin/pip" install --quiet --upgrade pip wheel; then
+        err "pip/wheel upgrade failed inside $VENV."
+        info "fix: activate the venv manually ('source $VENV/bin/activate') and run 'pip install --upgrade pip wheel' to see the underlying error."
+        exit 1
+    fi
+    ok "venv ready: $($VENV/bin/python --version)"
+}
+
+# ---------------------------------------------------------------------------
+# Step 6 — install Python dependencies
+#
+# Phase 2a: installs whatever's in the repo's requirements.txt for every
+# tier. Per-feature dependency splitting (tier A shouldn't need psycopg,
+# voice needs faster-whisper + piper, etc.) is deferred to a later pass
+# once we audit what each subsystem actually imports.
+# ---------------------------------------------------------------------------
+
+install_deps() {
+    hdr "Python dependencies"
+    local req="$REPO_ROOT/requirements.txt"
+    if [ ! -f "$req" ]; then
+        warn "requirements.txt missing; skipping pip install."
+        return 0
+    fi
+    info "pip install -r requirements.txt …"
+    if ! "$VENV/bin/pip" install --quiet -r "$req" 2>/tmp/pip-err.$$; then
+        err "pip install failed. Last 20 lines:"
+        tail -20 /tmp/pip-err.$$ >&2
+        rm -f /tmp/pip-err.$$
+        info "fix: activate the venv and re-run the failing install by hand to see the full error."
+        exit 1
+    fi
+    rm -f /tmp/pip-err.$$
+    ok "base deps installed"
+}
+
+# ---------------------------------------------------------------------------
+# Step 7 — write site-settings/features.json
+#
+# Records the user's feature selection so re-runs can diff. This is the
+# first site-settings file; per-feature JSONs (server.json, satellite.json,
+# etc.) come in Phase 2b when schemas are drawn up.
+# ---------------------------------------------------------------------------
+
+write_features_file() {
+    hdr "Recording selection"
+    mkdir -p "$SITE_SETTINGS"
+    local out="$SITE_SETTINGS/features.json"
+    local tmp="$out.tmp.$$"
+
+    # Build the JSON array manually — no jq dependency required. We
+    # escape nothing special here because feature keys are fixed (no
+    # user input lands in this file from Phase 1).
+    {
+        printf '{\n'
+        printf '  "version": 1,\n'
+        printf '  "platform": "%s",\n' "$PLATFORM"
+        printf '  "features": [\n'
+        local first=1
+        local k
+        for k in $SELECTED_FEATURES; do
+            if [ "$first" -eq 1 ]; then first=0; else printf ',\n'; fi
+            printf '    "%s"' "$k"
+        done
+        printf '\n  ]\n'
+        printf '}\n'
+    } > "$tmp"
+    mv -- "$tmp" "$out"
+    ok "wrote $out"
+}
+
+# ---------------------------------------------------------------------------
+# Step 8 — selection summary
 # ---------------------------------------------------------------------------
 
 summary() {
@@ -288,8 +390,13 @@ summary() {
         done
     done
     info ""
-    info "${C_DIM}Phase 1 skeleton: nothing written, nothing installed.${C_RESET}"
-    info "${C_DIM}Phase 2 will add venv + pip install + site-settings + systemd.${C_RESET}"
+    info ""
+    info "venv: $VENV"
+    info "config: $SITE_SETTINGS/features.json"
+    if [ "$PLATFORM" = "linux" ]; then
+        info ""
+        info "${C_DIM}Phase 2b will add secrets.json, systemd units, self-check.${C_RESET}"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -309,6 +416,20 @@ RUNTIME_STATE_FILES=(
     "state.db-shm"
     "state.db-journal"
     "DEPLOYED"
+    "ble_pairing.json"
+    "shopping.json"
+)
+
+# Subset of RUNTIME_STATE_FILES preserved when --keep-state is passed to
+# --nuke. These are expensive to regenerate (state.db = months of history;
+# ble_pairing.json = every BLE sensor would need re-pairing; shopping.json
+# = user's list) so keeping them across a reinstall is the common case.
+# DEPLOYED is a deploy marker, not user data — always removed.
+KEEP_STATE_PRESERVE=(
+    "state.db"
+    "state.db-wal"
+    "state.db-shm"
+    "state.db-journal"
     "ble_pairing.json"
     "shopping.json"
 )
@@ -369,11 +490,25 @@ nuke_systemd_units() {
 }
 
 nuke() {
+    local keep_state=0
+    if [ "${1:-}" = "--keep-state" ]; then
+        keep_state=1
+    fi
+
     hdr "Nuke It"
     info "This will delete:"
     info "  - $REPO_ROOT/venv/"
     info "  - $REPO_ROOT/site-settings/   (includes secrets.json)"
-    info "  - $REPO_ROOT/{${RUNTIME_STATE_FILES[*]}}"
+    if [ "$keep_state" -eq 1 ]; then
+        info "  - $REPO_ROOT/DEPLOYED   (deploy marker)"
+        info ""
+        info "${C_BOLD}Preserved${C_RESET} (because --keep-state):"
+        info "  - state.db*             (server history)"
+        info "  - ble_pairing.json      (BLE sensor keys)"
+        info "  - shopping.json         (user's shopping list)"
+    else
+        info "  - $REPO_ROOT/{${RUNTIME_STATE_FILES[*]}}"
+    fi
     if [ "$PLATFORM" = "linux" ]; then
         info "  - /etc/systemd/system/glowup-*   (stopped + disabled first)"
     fi
@@ -403,9 +538,23 @@ nuke() {
         any_found=1
     fi
 
-    # Runtime state files at the repo root.
+    # Runtime state files at the repo root. Honor --keep-state by
+    # skipping anything in KEEP_STATE_PRESERVE.
     local f
     for f in "${RUNTIME_STATE_FILES[@]}"; do
+        if [ "$keep_state" -eq 1 ]; then
+            local preserve=0
+            local k
+            for k in "${KEEP_STATE_PRESERVE[@]}"; do
+                if [ "$f" = "$k" ]; then preserve=1; break; fi
+            done
+            if [ "$preserve" -eq 1 ]; then
+                if [ -e "$REPO_ROOT/$f" ]; then
+                    info "- preserved $REPO_ROOT/$f"
+                fi
+                continue
+            fi
+        fi
         if [ -e "$REPO_ROOT/$f" ]; then
             nuke_file "$REPO_ROOT/$f"
             any_found=1
@@ -434,6 +583,14 @@ Options:
   --nuke           Remove venv/, site-settings/, runtime state, and
                    glowup-* systemd units. Returns the tree to a virgin
                    state for testing. The repo clone itself is kept.
+
+  --nuke --keep-state
+                   Same as --nuke, but preserves state.db*,
+                   ble_pairing.json, and shopping.json so a fresh
+                   install keeps server history, BLE sensor keys, and
+                   the shopping list. Use this on a real deployment;
+                   skip it for virgin testing.
+
   -h, --help       Show this help.
 EOF
 }
@@ -444,7 +601,7 @@ main() {
 
     case "${1:-}" in
         --nuke)
-            nuke
+            nuke "${2:-}"
             return
             ;;
         -h|--help)
@@ -464,6 +621,9 @@ main() {
     preflight
     welcome
     feature_picker
+    create_venv
+    install_deps
+    write_features_file
     summary
 }
 
