@@ -127,6 +127,24 @@ FLEET: dict[str, dict] = {
             },
         ],
     },
+    "ernie (.153)": {
+        "ip": "10.0.0.153",
+        "user": "perryk",
+        "os": "linux",
+        "role": (
+            "Odroid N2+: far-side BLE + SDR sniffer "
+            "(ASUS BT dongle, RTL-SDR), local MQTT broker bridging "
+            "glowup/ble/# glowup/tpms/# glowup/hardware/# glowup/node/# "
+            "to hub. No repo tree — services run from /opt/ernie "
+            "and /opt/glowup-sensors."
+        ),
+        "services": [
+            "mosquitto",
+            "ble-sniffer",
+            "rtl433",
+            "pi-thermal",
+        ],
+    },
     "Daedalus (.191)": {
         "ip": "10.0.0.191",
         "user": "perrykivolowitz",
