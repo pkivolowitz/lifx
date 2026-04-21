@@ -382,6 +382,18 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("GET", ("api", "sdr", "adsb", "aircraft"),
            "_handle_get_adsb_aircraft"),
 
+    # -- Ernie (.153) sniffer dashboard -------------------------------------
+    # Public (LAN-only deployment — no reason to gate read-only sniffer
+    # data behind auth, matches the intent of /ernie being public).
+    _Route("GET", ("ernie",),
+           "_handle_get_ernie_page", requires_auth=False),
+    _Route("GET", ("api", "ernie", "ble"),
+           "_handle_get_ernie_ble", requires_auth=False),
+    _Route("GET", ("api", "ernie", "tpms"),
+           "_handle_get_ernie_tpms", requires_auth=False),
+    _Route("GET", ("api", "ernie", "thermal"),
+           "_handle_get_ernie_thermal", requires_auth=False),
+
     _Route("GET", ("photos", "{filename}"),
            "_handle_get_photo", requires_auth=False),
     _Route("GET", ("js", "{filename}"),
@@ -611,6 +623,7 @@ from handlers import (
 )
 from handlers.shopping import ShoppingHandlerMixin, ShoppingStore
 from handlers.sdr import SdrHandlerMixin
+from handlers.ernie import ErnieHandlerMixin
 
 
 class GlowUpRequestHandler(
@@ -628,6 +641,7 @@ class GlowUpRequestHandler(
     StaticHandlerMixin,
     ShoppingHandlerMixin,
     SdrHandlerMixin,
+    ErnieHandlerMixin,
     http.server.BaseHTTPRequestHandler,
 ):
     """HTTP request handler for the GlowUp REST API.
@@ -2340,25 +2354,51 @@ def main() -> None:
                 )
 
             # Track unresolved group members so we can re-resolve them
-            # when keepalive discovers new devices on the network.
+            # when keepalive discovers new devices on the network. The
+            # same reconciliation path is driven by two triggers:
+            #
+            #  1. per-device new-bulb events (a bulb appears mid-run)
+            #  2. whole-map updates from keepalive (startup retained
+            #     snapshot + every subsequent scan cycle)
+            #
+            # Trigger (2) exists because bulbs that were already known
+            # to keepalive before the server started never generate
+            # new-bulb events — the retained map simply arrives with
+            # them present. Without a map-update hook, the server's
+            # unresolved backlog could never drain on a cold start
+            # where the initial ARP wait expired before the retained
+            # map landed.
             _pending_unresolved: list[tuple[str, str]] = list(unresolved)
+            # Also track registered-but-unloaded devices. A device that
+            # was offline during step 4b's auto-load gets captured here
+            # and auto-loaded the moment keepalive sees it.
+            _pending_registered: set[str] = {
+                mac for mac in device_reg.all_devices()
+                if mac not in mac_to_ip
+            }
+            _reconcile_lock: threading.Lock = threading.Lock()
             _existing_on_new: Optional[Callable] = keepalive._on_new_bulb
 
-            def _on_new_with_power(ip: str, mac: str) -> None:
-                if _existing_on_new is not None:
-                    _existing_on_new(ip, mac)
-                dm.query_power_state(ip)
+            def _reconcile_devices() -> None:
+                """Drain the unresolved/unregistered backlogs.
 
-                # Re-resolve any previously unresolved group members.
-                # A device that was offline at startup may now be reachable.
-                if not _pending_unresolved:
-                    return
-                still_unresolved: list[tuple[str, str]] = []
-                for group_name, ident in _pending_unresolved:
-                    resolved_ip: Optional[str] = device_reg.resolve_to_ip(
-                        ident, keepalive,
-                    )
-                    if resolved_ip is not None:
+                Called on every keepalive map update and every new-bulb
+                event. Idempotent: re-running when nothing has changed
+                is a no-op because resolved items are removed from the
+                backlogs as they're loaded.
+                """
+                with _reconcile_lock:
+                    needs_reload: bool = False
+
+                    # Group-member backlog.
+                    still_unresolved: list[tuple[str, str]] = []
+                    for group_name, ident in _pending_unresolved:
+                        resolved_ip: Optional[str] = (
+                            device_reg.resolve_to_ip(ident, keepalive)
+                        )
+                        if resolved_ip is None:
+                            still_unresolved.append((group_name, ident))
+                            continue
                         with dm._lock:
                             members: list[str] = dm._group_config.get(
                                 group_name, [],
@@ -2366,26 +2406,72 @@ def main() -> None:
                             if resolved_ip not in members:
                                 members.append(resolved_ip)
                                 dm._group_config[group_name] = members
-                        # Add the IP to the device list and reload all
-                        # devices so it gets an emitter and controller.
                         if resolved_ip not in dm._device_ips:
                             dm._device_ips.append(resolved_ip)
+                        needs_reload = True
+                        logging.info(
+                            "Late resolve: '%s' → %s (group '%s')",
+                            ident, resolved_ip, group_name,
+                        )
+                    _pending_unresolved.clear()
+                    _pending_unresolved.extend(still_unresolved)
+
+                    # Registered-device backlog — devices that were
+                    # offline at step 4b but are now in ARP.
+                    mac_to_ip_now: dict[str, str] = (
+                        keepalive.known_bulbs_by_mac
+                    )
+                    still_registered: set[str] = set()
+                    for mac in _pending_registered:
+                        ip_now: Optional[str] = mac_to_ip_now.get(mac)
+                        if ip_now is None:
+                            still_registered.add(mac)
+                            continue
+                        if ip_now not in dm._device_ips:
+                            dm._device_ips.append(ip_now)
+                        needs_reload = True
+                        label: Optional[str] = device_reg.mac_to_label(
+                            mac,
+                        )
+                        logging.info(
+                            "Late auto-load: registered %s (%s) at %s",
+                            label or "?", mac, ip_now,
+                        )
+                    _pending_registered.clear()
+                    _pending_registered.update(still_registered)
+
+                    if needs_reload:
                         try:
                             dm.load_devices()
                         except Exception as exc:
                             logging.warning(
                                 "Late resolve reload failed: %s", exc,
                             )
-                        logging.info(
-                            "Late resolve: '%s' → %s (group '%s')",
-                            ident, resolved_ip, group_name,
-                        )
-                    else:
-                        still_unresolved.append((group_name, ident))
-                _pending_unresolved.clear()
-                _pending_unresolved.extend(still_unresolved)
+
+            def _on_new_with_power(ip: str, mac: str) -> None:
+                if _existing_on_new is not None:
+                    _existing_on_new(ip, mac)
+                dm.query_power_state(ip)
+                _reconcile_devices()
 
             keepalive._on_new_bulb = _on_new_with_power
+
+            # Whole-map reconciliation fires on every retained-map
+            # delivery and every subsequent scan-cycle publish. This
+            # is the hook that closes the startup cold-cache race:
+            # even if the initial ARP wait timed out before the map
+            # arrived, the map-update callback will drain the backlog
+            # the moment it lands.
+            def _on_device_map_reconcile(_data: dict[str, str]) -> None:
+                _reconcile_devices()
+
+            keepalive._on_device_map = _on_device_map_reconcile
+
+            # Run one reconciliation right now in case the retained
+            # map arrived between step 3 and here — a quick sweep
+            # catches anything already waiting without waiting for the
+            # next scan cycle.
+            _reconcile_devices()
 
             # Start the scheduler now that devices are available.
             sched: Optional[SchedulerThread] = None
@@ -2760,6 +2846,87 @@ def main() -> None:
                 proc_mqtt.subscribe("glowup/sdr/adsb/aircraft", qos=0)
                 proc_mqtt.message_callback_add(
                     "glowup/sdr/adsb/aircraft", _on_adsb_aircraft,
+                )
+
+                # -- Ernie (.153) sniffer subscriptions -----------------
+                # Three streams bridged from ernie's local broker:
+                # BLE adverts (per-MAC), TPMS decodes (per sensor id),
+                # and thermal heartbeats. See handlers/ernie.py for the
+                # corresponding REST endpoints and the /ernie dashboard.
+                GlowUpRequestHandler._ernie_ble = {}
+                GlowUpRequestHandler._ernie_tpms = {}
+                GlowUpRequestHandler._ernie_thermal = {}
+
+                def _on_ernie_ble(
+                    client: Any, userdata: Any, message: Any,
+                ) -> None:
+                    try:
+                        payload: dict = json.loads(message.payload)
+                    except (json.JSONDecodeError, ValueError):
+                        return
+                    mac_val: Any = payload.get("mac")
+                    if not isinstance(mac_val, str):
+                        return
+                    # Maintain a running count of republishes from the
+                    # sniffer — gives a rough activity signal per-MAC.
+                    prev: dict = GlowUpRequestHandler._ernie_ble.get(
+                        mac_val, {},
+                    )
+                    payload["count"] = prev.get("count", 0) + 1
+                    GlowUpRequestHandler._ernie_ble[mac_val] = payload
+
+                proc_mqtt.subscribe("glowup/ble/adv/#", qos=0)
+                proc_mqtt.message_callback_add(
+                    "glowup/ble/adv/#", _on_ernie_ble,
+                )
+
+                def _on_ernie_tpms(
+                    client: Any, userdata: Any, message: Any,
+                ) -> None:
+                    try:
+                        payload: dict = json.loads(message.payload)
+                    except (json.JSONDecodeError, ValueError):
+                        return
+                    # rtl_433's events topic nests fields inside the
+                    # outer dict. The (model, id) pair is the durable
+                    # fingerprint of a physical TPMS transmitter.
+                    model: str = str(payload.get("model", "unknown"))
+                    sensor_id: str = str(payload.get("id", "unknown"))
+                    key: str = f"{model}:{sensor_id}"
+                    now: float = time.time()
+                    prev: dict = GlowUpRequestHandler._ernie_tpms.get(
+                        key, {},
+                    )
+                    entry: dict = {
+                        "model": model,
+                        "id": sensor_id,
+                        "last_payload": payload,
+                        "last_seen": now,
+                        "first_seen": prev.get("first_seen", now),
+                        "count": prev.get("count", 0) + 1,
+                    }
+                    GlowUpRequestHandler._ernie_tpms[key] = entry
+
+                proc_mqtt.subscribe("glowup/tpms/events", qos=0)
+                proc_mqtt.message_callback_add(
+                    "glowup/tpms/events", _on_ernie_tpms,
+                )
+
+                def _on_ernie_thermal(
+                    client: Any, userdata: Any, message: Any,
+                ) -> None:
+                    try:
+                        payload: dict = json.loads(message.payload)
+                    except (json.JSONDecodeError, ValueError):
+                        return
+                    payload["_received_at"] = time.time()
+                    GlowUpRequestHandler._ernie_thermal = payload
+
+                proc_mqtt.subscribe(
+                    "glowup/hardware/thermal/ernie", qos=0,
+                )
+                proc_mqtt.message_callback_add(
+                    "glowup/hardware/thermal/ernie", _on_ernie_thermal,
                 )
 
                 # -- Periodic satellite prober --------------------------

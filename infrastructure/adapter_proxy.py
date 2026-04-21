@@ -401,6 +401,17 @@ class KeepaliveProxy:
         # the same way it wired keepalive._on_new_bulb.
         self._on_new_bulb: Optional[Any] = None
 
+        # Callback for whole-map updates from the keepalive process.
+        # Fires every time the retained IP→MAC map is received, which
+        # happens once at startup (from the retained payload) and then
+        # whenever the keepalive republishes after a scan cycle. The
+        # server uses this to reconcile the DeviceManager against
+        # devices that were already known to keepalive before the
+        # server started — the new-bulb hook above does not cover
+        # that case because no individual new-bulb events are fired
+        # for already-known bulbs at server startup.
+        self._on_device_map: Optional[Any] = None
+
         # Callback for power query results — server wires this
         # the same way it wired keepalive._on_power_query.
         self._on_power_query: Optional[Any] = None
@@ -498,7 +509,12 @@ class KeepaliveProxy:
     def _on_discovered(
         self, client: Any, userdata: Any, message: Any,
     ) -> None:
-        """Handle retained IP→MAC map from the keepalive process."""
+        """Handle retained IP→MAC map from the keepalive process.
+
+        Fires ``self._on_device_map`` after the snapshot is stored so
+        subscribers can reconcile state that depends on the full map
+        (e.g. the DeviceManager's unresolved-entry backlog).
+        """
         try:
             data: dict[str, str] = json.loads(message.payload)
         except (json.JSONDecodeError, ValueError):
@@ -509,6 +525,15 @@ class KeepaliveProxy:
             "[keepalive-proxy] Received device map: %d bulb(s)",
             len(data),
         )
+        cb = self._on_device_map
+        if cb is not None:
+            try:
+                cb(dict(data))
+            except Exception as exc:
+                logger.warning(
+                    "[keepalive-proxy] on_device_map callback failed: %s",
+                    exc,
+                )
 
     def _on_new_bulb_msg(
         self, client: Any, userdata: Any, message: Any,

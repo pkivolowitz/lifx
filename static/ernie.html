@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ernie — BLE + SDR + thermal sniffer</title>
+<style>
+/* CSS custom properties for light + dark. prefers-color-scheme flips
+   these at OS level; no JS toggle needed. Retrofit-able to the other
+   dashboards in this repo by copying the :root and @media block. */
+:root {
+    --bg: #f7f8fa;
+    --panel: #ffffff;
+    --panel-border: #dde1e7;
+    --fg: #1a1d24;
+    --fg-dim: #6a7280;
+    --accent: #2563eb;
+    --ok: #16a34a;
+    --warn: #d97706;
+    --err: #dc2626;
+    --unknown: #9ca3af;
+    --rssi-bar: #2563eb;
+    --rssi-bg: #e5e7eb;
+    --row-hover: #f3f4f6;
+    --new-row: #fef3c7;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #0f1115;
+        --panel: #1a1d24;
+        --panel-border: #2b2f38;
+        --fg: #e5e7eb;
+        --fg-dim: #9ca3af;
+        --accent: #60a5fa;
+        --ok: #34d399;
+        --warn: #fbbf24;
+        --err: #f87171;
+        --unknown: #6b7280;
+        --rssi-bar: #60a5fa;
+        --rssi-bg: #2b2f38;
+        --row-hover: #242833;
+        --new-row: #3b2f0f;
+    }
+}
+* { box-sizing: border-box; }
+html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 Helvetica, Arial, sans-serif;
+    font-size: 14px;
+}
+header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--panel-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+h1 { font-size: 18px; margin: 0; font-weight: 600; }
+h1 small { color: var(--fg-dim); font-weight: 400; font-size: 13px; margin-left: 10px; }
+.meta { color: var(--fg-dim); font-size: 12px; font-family: var(--mono); }
+main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto 1fr;
+    gap: 14px;
+    padding: 14px;
+    height: calc(100vh - 60px);
+}
+@media (max-width: 900px) {
+    main { grid-template-columns: 1fr; height: auto; }
+}
+.panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.panel h2 {
+    font-size: 14px;
+    margin: 0 0 8px 0;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.panel h2 .badge {
+    background: var(--panel-border);
+    color: var(--fg-dim);
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    font-family: var(--mono);
+}
+.panel.top-row { grid-column: span 2; }
+@media (max-width: 900px) {
+    .panel.top-row { grid-column: span 1; }
+}
+.thermal-grid {
+    display: grid;
+    grid-template-columns: minmax(160px, 1fr) minmax(200px, 2fr);
+    gap: 16px;
+    align-items: center;
+}
+.temp-big {
+    font-family: var(--mono);
+    font-size: 48px;
+    font-weight: 600;
+    color: var(--accent);
+    line-height: 1;
+}
+.temp-big.warn { color: var(--warn); }
+.temp-big.err { color: var(--err); }
+.temp-sub {
+    color: var(--fg-dim);
+    font-size: 12px;
+    font-family: var(--mono);
+    margin-top: 4px;
+}
+.services {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+.service {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-family: var(--mono);
+}
+.dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--unknown);
+}
+.dot.ok { background: var(--ok); }
+.dot.err { background: var(--err); }
+.dot.unknown { background: var(--unknown); }
+.table-wrap {
+    overflow: auto;
+    flex: 1;
+    min-height: 0;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+th, td {
+    padding: 4px 8px;
+    text-align: left;
+    border-bottom: 1px solid var(--panel-border);
+    white-space: nowrap;
+}
+th {
+    position: sticky;
+    top: 0;
+    background: var(--panel);
+    font-weight: 600;
+    color: var(--fg-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    user-select: none;
+}
+th:hover { color: var(--fg); }
+tr:hover td { background: var(--row-hover); }
+tr.new-row td { animation: newrow 2s ease-out; }
+@keyframes newrow {
+    0% { background: var(--new-row); }
+    100% { background: transparent; }
+}
+.mono { font-family: var(--mono); }
+.dim { color: var(--fg-dim); }
+.rssi-cell {
+    display: inline-block;
+    width: 80px;
+    height: 12px;
+    background: var(--rssi-bg);
+    border-radius: 2px;
+    position: relative;
+    vertical-align: middle;
+}
+.rssi-cell > div {
+    height: 100%;
+    background: var(--rssi-bar);
+    border-radius: 2px;
+    transition: width 0.2s;
+}
+.empty {
+    color: var(--fg-dim);
+    text-align: center;
+    padding: 30px 10px;
+    font-style: italic;
+}
+</style>
+</head>
+<body>
+<header>
+    <div>
+        <h1>Ernie <small>.153 — Odroid N2+ sniffer</small></h1>
+    </div>
+    <div class="meta" id="meta">connecting…</div>
+</header>
+<main>
+    <section class="panel top-row">
+        <h2>Thermal + services</h2>
+        <div class="thermal-grid">
+            <div>
+                <div class="temp-big" id="temp">--</div>
+                <div class="temp-sub" id="temp-sub">no data</div>
+            </div>
+            <div class="services" id="services"></div>
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>BLE advertisements <span class="badge" id="ble-count">0</span></h2>
+        <div class="table-wrap">
+            <table id="ble-table">
+                <thead>
+                    <tr>
+                        <th data-sort="ts">When</th>
+                        <th data-sort="mac">MAC</th>
+                        <th data-sort="name">Name</th>
+                        <th data-sort="rssi">RSSI</th>
+                        <th data-sort="count">N</th>
+                    </tr>
+                </thead>
+                <tbody id="ble-body">
+                    <tr><td colspan="5" class="empty">listening…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>TPMS decodes <span class="badge" id="tpms-count">0</span></h2>
+        <div class="table-wrap">
+            <table id="tpms-table">
+                <thead>
+                    <tr>
+                        <th data-sort="last_seen">Last</th>
+                        <th data-sort="model">Model</th>
+                        <th data-sort="id">Sensor ID</th>
+                        <th data-sort="pressure">Pressure</th>
+                        <th data-sort="temperature">Temp</th>
+                        <th data-sort="count">N</th>
+                    </tr>
+                </thead>
+                <tbody id="tpms-body">
+                    <tr><td colspan="6" class="empty">waiting for cars…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</main>
+
+<script>
+"use strict";
+
+// Poll interval. 2s is a reasonable balance between responsiveness and
+// server / battery impact; the page is a dashboard, not a console.
+const POLL_MS = 2000;
+
+// Tracks MACs/TPMS-IDs we've already seen, so new arrivals can be
+// briefly highlighted via the .new-row animation.
+const seenMacs = new Set();
+const seenTpms = new Set();
+
+// Current sort state per table.
+const sortState = {
+    ble:  { key: "ts",        asc: false },
+    tpms: { key: "last_seen", asc: false },
+};
+
+function fmtAge(ts) {
+    if (!ts) return "—";
+    const age = Math.max(0, (Date.now() / 1000) - ts);
+    if (age < 60)   return Math.round(age) + "s";
+    if (age < 3600) return Math.round(age / 60) + "m";
+    return Math.round(age / 3600) + "h";
+}
+
+function rssiBar(rssi) {
+    // RSSI typically ranges -30 (very close) to -100 (barely audible).
+    // Map to 0-100% width.
+    if (rssi === null || rssi === undefined) return "";
+    const pct = Math.max(0, Math.min(100, (rssi + 100) * (100 / 70)));
+    return `<span class="rssi-cell"><div style="width:${pct}%"></div></span> `
+         + `<span class="mono dim">${rssi} dBm</span>`;
+}
+
+function sortRows(rows, key, asc) {
+    const dir = asc ? 1 : -1;
+    return rows.slice().sort((a, b) => {
+        const av = a[key], bv = b[key];
+        if (av === undefined || av === null) return 1;
+        if (bv === undefined || bv === null) return -1;
+        if (av < bv) return -1 * dir;
+        if (av > bv) return  1 * dir;
+        return 0;
+    });
+}
+
+function bindSorters(tableId, which) {
+    document.querySelectorAll(`#${tableId} thead th`).forEach(th => {
+        th.addEventListener("click", () => {
+            const k = th.dataset.sort;
+            if (sortState[which].key === k) {
+                sortState[which].asc = !sortState[which].asc;
+            } else {
+                sortState[which].key = k;
+                sortState[which].asc = false;
+            }
+        });
+    });
+}
+
+function renderBle(data) {
+    document.getElementById("ble-count").textContent = data.count;
+    const body = document.getElementById("ble-body");
+    if (!data.advertisements.length) {
+        body.innerHTML = '<tr><td colspan="5" class="empty">'
+            + 'no BLE activity in the last '
+            + Math.round(data.stale_seconds) + 's</td></tr>';
+        return;
+    }
+    const rows = sortRows(
+        data.advertisements, sortState.ble.key, sortState.ble.asc,
+    );
+    const html = rows.map(r => {
+        const isNew = !seenMacs.has(r.mac);
+        seenMacs.add(r.mac);
+        const name = r.name || '';
+        return `<tr class="${isNew ? 'new-row' : ''}">`
+            + `<td class="mono dim">${fmtAge(r.ts)}</td>`
+            + `<td class="mono">${r.mac}</td>`
+            + `<td>${escapeHtml(name)}</td>`
+            + `<td>${rssiBar(r.rssi)}</td>`
+            + `<td class="mono dim">${r.count || 1}</td>`
+            + `</tr>`;
+    }).join("");
+    body.innerHTML = html;
+}
+
+function renderTpms(data) {
+    document.getElementById("tpms-count").textContent = data.count;
+    const body = document.getElementById("tpms-body");
+    if (!data.sensors.length) {
+        body.innerHTML = '<tr><td colspan="6" class="empty">'
+            + 'waiting for cars…</td></tr>';
+        return;
+    }
+    const decorated = data.sensors.map(s => {
+        // Normalize temperature to Fahrenheit for display. Different
+        // TPMS families report native F or C; mark converted-from-C
+        // values with an asterisk so you can tell native-F sensors
+        // from converted-C sensors at a glance.
+        let temp_f = null;
+        let temp_converted = false;
+        const p = s.last_payload || {};
+        if (typeof p.temperature_F === "number") {
+            temp_f = p.temperature_F;
+        } else if (typeof p.temperature_C === "number") {
+            temp_f = p.temperature_C * 9 / 5 + 32;
+            temp_converted = true;
+        }
+        // Normalize pressure to PSI. 1 kPa = 0.145038 PSI. Same
+        // italicize-if-converted convention as temperature.
+        let psi = null;
+        let psi_converted = false;
+        if (typeof p.pressure_PSI === "number") {
+            psi = p.pressure_PSI;
+        } else if (typeof p.pressure_kPa === "number") {
+            psi = p.pressure_kPa * 0.145038;
+            psi_converted = true;
+        }
+        return {
+            ...s,
+            pressure: psi,
+            psi_converted: psi_converted,
+            temperature: temp_f,
+            temp_converted: temp_converted,
+        };
+    });
+    const rows = sortRows(
+        decorated, sortState.tpms.key, sortState.tpms.asc,
+    );
+    const html = rows.map(s => {
+        const key = s.model + ":" + s.id;
+        const isNew = !seenTpms.has(key);
+        seenTpms.add(key);
+        let p = '';
+        if (s.pressure !== null && s.pressure !== undefined) {
+            const txt = `${s.pressure.toFixed(1)} PSI`;
+            p = s.psi_converted ? `<em>${txt}</em>` : txt;
+        }
+        // Italicize temps that were converted from native Celsius;
+        // native-Fahrenheit reports render upright so you can tell at
+        // a glance which sensors report in which unit.
+        let t = '';
+        if (s.temperature !== null && s.temperature !== undefined) {
+            const txt = `${s.temperature.toFixed(1)} °F`;
+            t = s.temp_converted ? `<em>${txt}</em>` : txt;
+        }
+        return `<tr class="${isNew ? 'new-row' : ''}">`
+            + `<td class="mono dim">${fmtAge(s.last_seen)}</td>`
+            + `<td>${escapeHtml(s.model)}</td>`
+            + `<td class="mono">${escapeHtml(s.id)}</td>`
+            + `<td class="mono">${p}</td>`
+            + `<td class="mono">${t}</td>`
+            + `<td class="mono dim">${s.count}</td>`
+            + `</tr>`;
+    }).join("");
+    body.innerHTML = html;
+}
+
+function renderThermal(data) {
+    const r = data.reading || {};
+    const temp = r.cpu_temp_c;
+    const tempEl = document.getElementById("temp");
+    const tempSub = document.getElementById("temp-sub");
+    if (typeof temp === "number") {
+        tempEl.textContent = temp.toFixed(1) + " °C";
+        tempEl.classList.toggle("warn", temp >= 70 && temp < 85);
+        tempEl.classList.toggle("err",  temp >= 85);
+    } else {
+        tempEl.textContent = "—";
+    }
+    const parts = [];
+    if (typeof r.load_1m === "number") parts.push(`load ${r.load_1m}`);
+    if (typeof r.uptime_s === "number") {
+        const hrs = r.uptime_s / 3600;
+        parts.push(`up ${hrs < 24 ? hrs.toFixed(1) + 'h'
+                              : (hrs / 24).toFixed(1) + 'd'}`);
+    }
+    if (r.extra?.model) parts.push(r.extra.model);
+    tempSub.textContent = parts.join(' · ') || "no data";
+
+    // Service dots. null => unknown (rtl433 has no cheap liveness proxy).
+    const svcBox = document.getElementById("services");
+    const svcs = data.health || {};
+    const order = [
+        ["mosquitto",   "mosquitto"],
+        ["ble_sniffer", "ble-sniffer"],
+        ["rtl433",      "rtl433"],
+        ["pi_thermal",  "pi-thermal"],
+    ];
+    svcBox.innerHTML = order.map(([key, label]) => {
+        const v = svcs[key];
+        const cls = v === true ? "ok" : v === false ? "err" : "unknown";
+        return `<span class="service"><span class="dot ${cls}"></span>`
+             + `${label}</span>`;
+    }).join('');
+}
+
+function escapeHtml(s) {
+    if (s === null || s === undefined) return '';
+    return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+async function fetchJson(url) {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+    return await r.json();
+}
+
+async function tick() {
+    try {
+        const [ble, tpms, thermal] = await Promise.all([
+            fetchJson("/api/ernie/ble"),
+            fetchJson("/api/ernie/tpms"),
+            fetchJson("/api/ernie/thermal"),
+        ]);
+        renderBle(ble);
+        renderTpms(tpms);
+        renderThermal(thermal);
+        const now = new Date();
+        document.getElementById("meta").textContent =
+            `updated ${now.toLocaleTimeString()}`;
+    } catch (e) {
+        document.getElementById("meta").textContent =
+            `error: ${e.message}`;
+    }
+}
+
+bindSorters("ble-table",  "ble");
+bindSorters("tpms-table", "tpms");
+tick();
+setInterval(tick, POLL_MS);
+</script>
+</body>
+</html>
