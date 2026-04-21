@@ -12,3 +12,5 @@ state.db-wal
 state.db-shm
 deploy/scripts/
 shopping.json
+site-settings/
+venv/
