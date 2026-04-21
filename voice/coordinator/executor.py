@@ -124,11 +124,13 @@ class GlowUpExecutor:
 
         # Plug synonyms — "friendly name" (what the user says) mapped
         # to the Z2M device name (what broker-2 addresses). Loaded from
-        # the `plugs:` section of actions.yml. Two views are kept:
-        # one for resolution (lower-case match), one for display.
+        # the `plugs:` section of actions.yml. Keys are stored in
+        # *normalized* form so "ML Switch", "ml", "the ML smart plug"
+        # all resolve to the same plug. _plug_display preserves the
+        # original friendly name for spoken confirmation.
         plugs_cfg: dict[str, str] = self._actions.get("plugs", {}) or {}
         self._plug_synonyms: dict[str, str] = {
-            friendly.lower(): zigbee
+            self._normalize_plug_phrase(friendly): zigbee
             for friendly, zigbee in plugs_cfg.items()
         }
         self._plug_display: dict[str, str] = {
@@ -290,6 +292,26 @@ class GlowUpExecutor:
     # Target resolution
     # ------------------------------------------------------------------
 
+    # Filler + category words stripped when matching plug names. Keeps
+    # "Switch" optional and forgives "the", "my", "smart plug" etc.
+    _PLUG_DROP_WORDS: set[str] = {
+        "the", "my", "a", "an", "switch", "plug", "smart",
+    }
+
+    @classmethod
+    def _normalize_plug_phrase(cls, s: str) -> str:
+        """Lowercase, trim, drop filler/category words.
+
+        'Main Bedroom TV Switch' -> 'main bedroom tv'
+        'the ML smart plug'      -> 'ml'
+        'Backyard IR'            -> 'backyard ir'
+        """
+        tokens: list[str] = [
+            t for t in s.lower().split()
+            if t not in cls._PLUG_DROP_WORDS
+        ]
+        return " ".join(tokens).strip()
+
     def _resolve_target(self, target: str) -> str:
         """Resolve a fuzzy target name to an actual group or device.
 
@@ -309,13 +331,15 @@ class GlowUpExecutor:
 
         # Plug synonyms win over groups — friendly plug names like
         # "Main Bedroom TV Switch" could overlap with group names
-        # (e.g. "Main Bedroom"), and the user said "switch" explicitly.
-        tl: str = target.lower().strip()
-        if tl in self._plug_synonyms:
-            zigbee_name: str = self._plug_synonyms[tl]
+        # (e.g. "Main Bedroom"). Normalization drops "switch", "plug",
+        # and common filler words so the match is forgiving: "ML",
+        # "ML switch", and "the ML smart plug" all resolve the same.
+        normalized: str = self._normalize_plug_phrase(target)
+        if normalized and normalized in self._plug_synonyms:
+            zigbee_name: str = self._plug_synonyms[normalized]
             logger.info(
-                "Target '%s' resolved to plug 'plug:%s'",
-                target, zigbee_name,
+                "Target '%s' (normalized '%s') resolved to plug 'plug:%s'",
+                target, normalized, zigbee_name,
             )
             return f"plug:{zigbee_name}"
 
