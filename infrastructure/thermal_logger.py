@@ -1,4 +1,4 @@
-"""Thermal logger — records Pi hardware thermal telemetry to SQLite.
+"""Thermal logger — records Pi hardware thermal telemetry to PostgreSQL.
 
 Subscribes to ``glowup/hardware/thermal/+`` on the GlowUp canonical
 MQTT broker (hub, localhost in production).  Each message published by
@@ -6,7 +6,7 @@ a ``contrib/sensors/pi_thermal_sensor.py`` instance on a fleet Pi
 becomes one row in ``thermal_readings``.
 
 Mirrors the :class:`infrastructure.power_logger.PowerLogger` pattern:
-WAL SQLite, thread-safe writes, throttled inserts, background flush
+psycopg2, thread-safe writes, throttled inserts, background flush
 timer, periodic prune with 7-day retention.
 
 Unlike PowerLogger, the thermal sensor publishes a full snapshot with
@@ -17,14 +17,14 @@ publishing at 1s intervals.
 
 Schema::
 
-    CREATE TABLE thermal_readings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+    CREATE TABLE IF NOT EXISTS thermal_readings (
+        id BIGSERIAL PRIMARY KEY,
         node_id TEXT NOT NULL,
-        timestamp REAL NOT NULL,
+        timestamp DOUBLE PRECISION NOT NULL,
         cpu_temp_c REAL,
         fan_rpm INTEGER,
         fan_pwm_step INTEGER,
-        fan_declared_present INTEGER,
+        fan_declared_present SMALLINT,
         load_1m REAL,
         load_5m REAL,
         load_15m REAL,
@@ -33,7 +33,7 @@ Schema::
         platform TEXT,
         model TEXT
     );
-    CREATE INDEX idx_thermal_node_ts
+    CREATE INDEX IF NOT EXISTS idx_thermal_node_ts
         ON thermal_readings(node_id, timestamp);
 
 Subscriber lifecycle:
@@ -52,10 +52,15 @@ __version__: str = "1.0"
 
 import json
 import logging
-import sqlite3
 import threading
 import time
 from typing import Any, Optional
+
+try:
+    import psycopg2
+    _HAS_PSYCOPG2: bool = True
+except ImportError:
+    _HAS_PSYCOPG2 = False
 
 try:
     import paho.mqtt.client as mqtt
@@ -69,8 +74,8 @@ logger: logging.Logger = logging.getLogger("glowup.thermal_logger")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Default database path (alongside server.json).
-DEFAULT_DB_PATH: str = "/etc/glowup/thermal.db"
+# Default PostgreSQL DSN.  Override via GLOWUP_DIAG_DSN env var in server.py.
+DEFAULT_DSN: str = "postgresql://glowup:changeme@10.0.0.111:5432/glowup"
 
 # 7-day retention to match PowerLogger.
 RETENTION_SECONDS: float = 7 * 24 * 3600
@@ -86,9 +91,6 @@ PRUNE_EVERY: int = 100
 # MQTT topic wildcard the logger subscribes to.
 THERMAL_TOPIC_PATTERN: str = "glowup/hardware/thermal/+"
 
-# Schema version (stored in user_version PRAGMA).
-SCHEMA_VERSION: int = 1
-
 # paho keepalive (seconds).
 _MQTT_KEEPALIVE_S: int = 60
 
@@ -100,10 +102,32 @@ _SUBSCRIBER_JOIN_TIMEOUT_S: float = 5.0
 # ThermalLogger
 # ---------------------------------------------------------------------------
 
-class ThermalLogger:
-    """Records Pi hardware thermal telemetry to SQLite via MQTT subscribe.
+_PG_DDL: str = """
+CREATE TABLE IF NOT EXISTS thermal_readings (
+    id BIGSERIAL PRIMARY KEY,
+    node_id TEXT NOT NULL,
+    timestamp DOUBLE PRECISION NOT NULL,
+    cpu_temp_c REAL,
+    fan_rpm INTEGER,
+    fan_pwm_step INTEGER,
+    fan_declared_present SMALLINT,
+    load_1m REAL,
+    load_5m REAL,
+    load_15m REAL,
+    uptime_s REAL,
+    throttled_flags TEXT,
+    platform TEXT,
+    model TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_thermal_node_ts
+    ON thermal_readings(node_id, timestamp);
+"""
 
-    Instantiate once per process with a database path.  Call
+
+class ThermalLogger:
+    """Records Pi hardware thermal telemetry to PostgreSQL via MQTT subscribe.
+
+    Instantiate once per process with a DSN.  Call
     ``start_subscriber(host, port)`` to begin ingesting live telemetry
     from the MQTT broker; call ``close()`` on shutdown.
 
@@ -114,14 +138,14 @@ class ThermalLogger:
     - :meth:`hosts`     — list of known node ids with any data
 
     Args:
-        db_path: Filesystem path to the SQLite database file.
+        dsn: PostgreSQL connection string.
     """
 
-    def __init__(self, db_path: str = DEFAULT_DB_PATH) -> None:
+    def __init__(self, dsn: str = DEFAULT_DSN) -> None:
         """See class docstring."""
-        self._db_path: str = db_path
+        self._dsn: str = dsn
         self._lock: threading.Lock = threading.Lock()
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: Any = None
         self._write_count: int = 0
         self._last_write: dict[str, float] = {}
         self._client: Optional["mqtt.Client"] = None
@@ -131,40 +155,16 @@ class ThermalLogger:
     # ---- DB lifecycle -------------------------------------------------------
 
     def _open(self) -> None:
-        """Open the database and create schema if needed."""
+        """Open the PG connection and create schema if needed."""
+        if not _HAS_PSYCOPG2:
+            logger.error("psycopg2 not installed — thermal logger disabled")
+            return
         try:
-            self._conn = sqlite3.connect(
-                self._db_path,
-                check_same_thread=False,
-                timeout=5,
-            )
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-            self._conn.execute("""
-                CREATE TABLE IF NOT EXISTS thermal_readings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    node_id TEXT NOT NULL,
-                    timestamp REAL NOT NULL,
-                    cpu_temp_c REAL,
-                    fan_rpm INTEGER,
-                    fan_pwm_step INTEGER,
-                    fan_declared_present INTEGER,
-                    load_1m REAL,
-                    load_5m REAL,
-                    load_15m REAL,
-                    uptime_s REAL,
-                    throttled_flags TEXT,
-                    platform TEXT,
-                    model TEXT
-                )
-            """)
-            self._conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_thermal_node_ts
-                ON thermal_readings(node_id, timestamp)
-            """)
-            self._conn.commit()
-            logger.info("Thermal logger opened: %s", self._db_path)
+            self._conn = psycopg2.connect(self._dsn, connect_timeout=10)
+            self._conn.autocommit = True
+            with self._conn.cursor() as cur:
+                cur.execute(_PG_DDL)
+            logger.info("Thermal logger connected: %s", self._dsn.split("@")[-1])
         except Exception as exc:
             logger.error("Thermal logger DB open failed: %s", exc)
             self._conn = None
@@ -219,31 +219,31 @@ class ThermalLogger:
 
             self._last_write[node_id] = now
             try:
-                self._conn.execute(
-                    """INSERT INTO thermal_readings
-                       (node_id, timestamp,
-                        cpu_temp_c, fan_rpm, fan_pwm_step,
-                        fan_declared_present,
-                        load_1m, load_5m, load_15m,
-                        uptime_s, throttled_flags, platform, model)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        node_id,
-                        now,
-                        payload.get("cpu_temp_c"),
-                        payload.get("fan_rpm"),
-                        payload.get("fan_pwm_step"),
-                        fan_declared,
-                        payload.get("load_1m"),
-                        payload.get("load_5m"),
-                        payload.get("load_15m"),
-                        payload.get("uptime_s"),
-                        throttled_flags,
-                        payload.get("platform"),
-                        model,
-                    ),
-                )
-                self._conn.commit()
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO thermal_readings
+                           (node_id, timestamp,
+                            cpu_temp_c, fan_rpm, fan_pwm_step,
+                            fan_declared_present,
+                            load_1m, load_5m, load_15m,
+                            uptime_s, throttled_flags, platform, model)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (
+                            node_id,
+                            now,
+                            payload.get("cpu_temp_c"),
+                            payload.get("fan_rpm"),
+                            payload.get("fan_pwm_step"),
+                            fan_declared,
+                            payload.get("load_1m"),
+                            payload.get("load_5m"),
+                            payload.get("load_15m"),
+                            payload.get("uptime_s"),
+                            throttled_flags,
+                            payload.get("platform"),
+                            model,
+                        ),
+                    )
                 self._write_count += 1
                 if self._write_count % PRUNE_EVERY == 0:
                     self._prune()
@@ -258,16 +258,16 @@ class ThermalLogger:
             return
         cutoff: float = time.time() - RETENTION_SECONDS
         try:
-            cursor = self._conn.execute(
-                "DELETE FROM thermal_readings WHERE timestamp < ?",
-                (cutoff,),
-            )
-            self._conn.commit()
-            if cursor.rowcount > 0:
-                logger.info(
-                    "Thermal logger pruned %d old record(s)",
-                    cursor.rowcount,
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM thermal_readings WHERE timestamp < %s",
+                    (cutoff,),
                 )
+                if cur.rowcount > 0:
+                    logger.info(
+                        "Thermal logger pruned %d old record(s)",
+                        cur.rowcount,
+                    )
         except Exception as exc:
             logger.warning("Thermal logger prune failed: %s", exc)
 
@@ -302,28 +302,29 @@ class ThermalLogger:
         result: dict[str, dict[str, Any]] = {}
         with self._lock:
             try:
-                cursor = self._conn.execute(sql)
-                for row in cursor.fetchall():
-                    (node_id, ts, temp, rpm, step, declared,
-                     l1, l5, l15, uptime, throttle,
-                     platform, model) = row
-                    result[node_id] = {
-                        "node_id": node_id,
-                        "timestamp": ts,
-                        "cpu_temp_c": temp,
-                        "fan_rpm": rpm,
-                        "fan_pwm_step": step,
-                        "fan_declared_present": (
-                            None if declared is None else bool(declared)
-                        ),
-                        "load_1m": l1,
-                        "load_5m": l5,
-                        "load_15m": l15,
-                        "uptime_s": uptime,
-                        "throttled_flags": throttle,
-                        "platform": platform,
-                        "model": model,
-                    }
+                with self._conn.cursor() as cur:
+                    cur.execute(sql)
+                    for row in cur.fetchall():
+                        (node_id, ts, temp, rpm, step, declared,
+                         l1, l5, l15, uptime, throttle,
+                         platform, model) = row
+                        result[node_id] = {
+                            "node_id": node_id,
+                            "timestamp": float(ts),
+                            "cpu_temp_c": temp,
+                            "fan_rpm": rpm,
+                            "fan_pwm_step": step,
+                            "fan_declared_present": (
+                                None if declared is None else bool(declared)
+                            ),
+                            "load_1m": l1,
+                            "load_5m": l5,
+                            "load_15m": l15,
+                            "uptime_s": uptime,
+                            "throttled_flags": throttle,
+                            "platform": platform,
+                            "model": model,
+                        }
             except Exception as exc:
                 logger.warning("Thermal logger latest query failed: %s", exc)
         return result
@@ -350,30 +351,28 @@ class ThermalLogger:
         if self._conn is None:
             return []
         since: float = time.time() - (hours * 3600)
-        bucket_expr: str = (
-            f"CAST(timestamp / {resolution} AS INTEGER) * {resolution}"
-        )
-        sql: str = f"""
-            SELECT {bucket_expr} AS bucket,
-                   AVG(cpu_temp_c)     AS cpu_temp_c,
-                   AVG(fan_rpm)        AS fan_rpm,
-                   AVG(fan_pwm_step)   AS fan_pwm_step,
-                   MAX(fan_declared_present) AS fan_declared_present,
-                   AVG(load_1m)        AS load_1m,
-                   AVG(load_5m)        AS load_5m,
-                   AVG(load_15m)       AS load_15m,
-                   MAX(uptime_s)       AS uptime_s,
-                   MAX(throttled_flags) AS throttled_flags
+        sql: str = """
+            SELECT floor(timestamp / %s)::bigint * %s AS bucket,
+                   AVG(cpu_temp_c)              AS cpu_temp_c,
+                   AVG(fan_rpm)                 AS fan_rpm,
+                   AVG(fan_pwm_step)            AS fan_pwm_step,
+                   MAX(fan_declared_present)    AS fan_declared_present,
+                   AVG(load_1m)                 AS load_1m,
+                   AVG(load_5m)                 AS load_5m,
+                   AVG(load_15m)                AS load_15m,
+                   MAX(uptime_s)                AS uptime_s,
+                   MAX(throttled_flags)         AS throttled_flags
             FROM thermal_readings
-            WHERE node_id = ? AND timestamp >= ?
+            WHERE node_id = %s AND timestamp >= %s
             GROUP BY bucket
             ORDER BY bucket
         """
         with self._lock:
             try:
-                cursor = self._conn.execute(sql, (node_id, since))
-                cols: list[str] = [d[0] for d in cursor.description]
-                return [dict(zip(cols, row)) for row in cursor.fetchall()]
+                with self._conn.cursor() as cur:
+                    cur.execute(sql, (resolution, resolution, node_id, since))
+                    cols: list[str] = [d[0] for d in cur.description]
+                    return [dict(zip(cols, row)) for row in cur.fetchall()]
             except Exception as exc:
                 logger.warning(
                     "Thermal logger query failed for %s: %s", node_id, exc,
@@ -386,11 +385,12 @@ class ThermalLogger:
             return []
         with self._lock:
             try:
-                rows = self._conn.execute(
-                    "SELECT DISTINCT node_id FROM thermal_readings "
-                    "ORDER BY node_id"
-                ).fetchall()
-                return [r[0] for r in rows]
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT DISTINCT node_id FROM thermal_readings "
+                        "ORDER BY node_id"
+                    )
+                    return [r[0] for r in cur.fetchall()]
             except Exception as exc:
                 logger.warning(
                     "Thermal logger hosts query failed: %s", exc,
@@ -512,5 +512,5 @@ class ThermalLogger:
             try:
                 self._conn.close()
             except Exception as exc:
-                logger.warning("thermal DB close error: %s", exc)
+                logger.warning("thermal PG close error: %s", exc)
             self._conn = None

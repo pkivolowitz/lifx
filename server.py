@@ -3042,12 +3042,10 @@ def main() -> None:
             # Power logger receives readings from signals via MQTT
             # now — the zigbee adapter publishes from its own process.
             try:
-                from infrastructure.power_logger import PowerLogger
-                config_dir_local: str = os.path.dirname(
-                    GlowUpRequestHandler.config_path or "/etc/glowup/server.json"
+                from infrastructure.power_logger import PowerLogger, DEFAULT_DSN as _POWER_DEFAULT_DSN
+                power_log = PowerLogger(
+                    dsn=os.environ.get("GLOWUP_DIAG_DSN", _POWER_DEFAULT_DSN),
                 )
-                power_db_path: str = os.path.join(config_dir_local, "power.db")
-                power_log = PowerLogger(db_path=power_db_path)
                 GlowUpRequestHandler.power_logger = power_log
             except Exception as exc:
                 logging.warning("Power logger unavailable: %s", exc)
@@ -3062,11 +3060,10 @@ def main() -> None:
             # no-op and the /thermal dashboard degrades to whatever
             # historical data was already on disk.
             try:
-                from infrastructure.thermal_logger import ThermalLogger
-                thermal_db_path: str = os.path.join(
-                    config_dir_local, "thermal.db",
+                from infrastructure.thermal_logger import ThermalLogger, DEFAULT_DSN as _THERMAL_DEFAULT_DSN
+                thermal_log = ThermalLogger(
+                    dsn=os.environ.get("GLOWUP_DIAG_DSN", _THERMAL_DEFAULT_DSN),
                 )
-                thermal_log = ThermalLogger(db_path=thermal_db_path)
                 thermal_log.start_subscriber(
                     broker_host=broker_addr,
                     broker_port=broker_port,

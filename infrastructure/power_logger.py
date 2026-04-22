@@ -1,24 +1,25 @@
-"""Power logger — records Zigbee smart plug readings to SQLite.
+"""Power logger — records Zigbee smart plug readings to PostgreSQL.
 
 Subscribes to the SignalBus for power-related signals from Zigbee
-smart plugs and stores readings in a SQLite database.  Provides
+smart plugs and stores readings in a PostgreSQL database.  Provides
 query methods for the /power dashboard.
 
 Data retention: 7 days.  Older records are pruned automatically.
 
 Schema::
 
-    CREATE TABLE power_readings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+    CREATE TABLE IF NOT EXISTS power_readings (
+        id BIGSERIAL PRIMARY KEY,
         device TEXT NOT NULL,
-        timestamp REAL NOT NULL,
+        timestamp DOUBLE PRECISION NOT NULL,
         power REAL,
         voltage REAL,
         current_a REAL,
         energy REAL,
         power_factor REAL
     );
-    CREATE INDEX idx_power_device_ts ON power_readings(device, timestamp);
+    CREATE INDEX IF NOT EXISTS idx_power_device_ts
+        ON power_readings(device, timestamp);
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
@@ -28,10 +29,15 @@ __version__ = "1.0"
 
 import logging
 import os
-import sqlite3
 import threading
 import time
 from typing import Any, Optional
+
+try:
+    import psycopg2
+    _HAS_PSYCOPG2: bool = True
+except ImportError:
+    _HAS_PSYCOPG2 = False
 
 logger: logging.Logger = logging.getLogger("glowup.power_logger")
 
@@ -39,8 +45,8 @@ logger: logging.Logger = logging.getLogger("glowup.power_logger")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Default database path (alongside server.json).
-DEFAULT_DB_PATH: str = "/etc/glowup/power.db"
+# Default PostgreSQL DSN.  Override via GLOWUP_DIAG_DSN env var in server.py.
+DEFAULT_DSN: str = "postgresql://glowup:changeme@10.0.0.111:5432/glowup"
 
 # Data retention in seconds (7 days).
 RETENTION_SECONDS: float = 7 * 24 * 3600
@@ -58,8 +64,20 @@ POWER_PROPERTIES: set[str] = {
     "ac_frequency",
 }
 
-# Schema version — stored in SQLite user_version pragma.
-SCHEMA_VERSION: int = 1
+_PG_DDL: str = """
+CREATE TABLE IF NOT EXISTS power_readings (
+    id BIGSERIAL PRIMARY KEY,
+    device TEXT NOT NULL,
+    timestamp DOUBLE PRECISION NOT NULL,
+    power REAL,
+    voltage REAL,
+    current_a REAL,
+    energy REAL,
+    power_factor REAL
+);
+CREATE INDEX IF NOT EXISTS idx_power_device_ts
+    ON power_readings(device, timestamp);
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -67,24 +85,24 @@ SCHEMA_VERSION: int = 1
 # ---------------------------------------------------------------------------
 
 class PowerLogger:
-    """Records smart plug power readings to SQLite.
+    """Records smart plug power readings to PostgreSQL.
 
     Thread-safe.  Designed to be called from the Zigbee adapter's
     signal bus write path.
 
     Args:
-        db_path: Path to the SQLite database file.
+        dsn: PostgreSQL connection string.
     """
 
-    def __init__(self, db_path: str = DEFAULT_DB_PATH) -> None:
+    def __init__(self, dsn: str = DEFAULT_DSN) -> None:
         """Initialize the power logger.
 
         Args:
-            db_path: Path to the SQLite database file.
+            dsn: PostgreSQL connection string.
         """
-        self._db_path: str = db_path
+        self._dsn: str = dsn
         self._lock: threading.Lock = threading.Lock()
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: Any = None
         self._write_count: int = 0
         # Per-device last-write timestamp to throttle writes.
         self._last_write: dict[str, float] = {}
@@ -136,35 +154,18 @@ class PowerLogger:
         self._flush_thread.start()
 
     def _open(self) -> None:
-        """Open the database and create tables if needed."""
+        """Open the PG connection and create tables if needed."""
+        if not _HAS_PSYCOPG2:
+            logger.error("psycopg2 not installed — power logger disabled")
+            return
         try:
             from infrastructure.timed_io import timed_io, IOClass
             with timed_io("power_logger.connect", IOClass.INSTANT):
-                self._conn = sqlite3.connect(
-                    self._db_path,
-                    check_same_thread=False,
-                    timeout=5,
-                )
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.execute("""
-                CREATE TABLE IF NOT EXISTS power_readings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    device TEXT NOT NULL,
-                    timestamp REAL NOT NULL,
-                    power REAL,
-                    voltage REAL,
-                    current_a REAL,
-                    energy REAL,
-                    power_factor REAL
-                )
-            """)
-            self._conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_power_device_ts
-                ON power_readings(device, timestamp)
-            """)
-            self._conn.commit()
-            logger.info("Power logger opened: %s", self._db_path)
+                self._conn = psycopg2.connect(self._dsn, connect_timeout=10)
+            self._conn.autocommit = True
+            with self._conn.cursor() as cur:
+                cur.execute(_PG_DDL)
+            logger.info("Power logger connected: %s", self._dsn.split("@")[-1])
         except Exception as exc:
             logger.error("Power logger DB open failed: %s", exc)
             self._conn = None
@@ -229,22 +230,22 @@ class PowerLogger:
             self._last_write[device] = now
             self._dirty[device] = False
             try:
-                self._conn.execute(
-                    """INSERT INTO power_readings
-                       (device, timestamp, power, voltage, current_a,
-                        energy, power_factor)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        device,
-                        now,
-                        readings.get("power"),
-                        readings.get("voltage"),
-                        readings.get("current"),
-                        readings.get("energy"),
-                        readings.get("power_factor"),
-                    ),
-                )
-                self._conn.commit()
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO power_readings
+                           (device, timestamp, power, voltage, current_a,
+                            energy, power_factor)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                        (
+                            device,
+                            now,
+                            readings.get("power"),
+                            readings.get("voltage"),
+                            readings.get("current"),
+                            readings.get("energy"),
+                            readings.get("power_factor"),
+                        ),
+                    )
                 self._write_count += 1
 
                 # Periodic prune.
@@ -307,28 +308,29 @@ class PowerLogger:
                 # reconnect, and without this check every server
                 # restart would append a fresh NULL row and pollute
                 # the DB with duplicates.
-                row = self._conn.execute(
-                    "SELECT power, voltage, current_a, energy, "
-                    "power_factor FROM power_readings "
-                    "WHERE device = ? ORDER BY timestamp DESC LIMIT 1",
-                    (device,),
-                ).fetchone()
-                if row is not None and all(v is None for v in row):
-                    logger.debug(
-                        "Power logger: %s already marked offline "
-                        "(most recent row is a NULL sentinel)",
-                        device,
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT power, voltage, current_a, energy, "
+                        "power_factor FROM power_readings "
+                        "WHERE device = %s ORDER BY timestamp DESC LIMIT 1",
+                        (device,),
                     )
-                    return
+                    row = cur.fetchone()
+                    if row is not None and all(v is None for v in row):
+                        logger.debug(
+                            "Power logger: %s already marked offline "
+                            "(most recent row is a NULL sentinel)",
+                            device,
+                        )
+                        return
 
-                self._conn.execute(
-                    """INSERT INTO power_readings
-                       (device, timestamp, power, voltage, current_a,
-                        energy, power_factor)
-                       VALUES (?, ?, NULL, NULL, NULL, NULL, NULL)""",
-                    (device, now),
-                )
-                self._conn.commit()
+                    cur.execute(
+                        """INSERT INTO power_readings
+                           (device, timestamp, power, voltage, current_a,
+                            energy, power_factor)
+                           VALUES (%s, %s, NULL, NULL, NULL, NULL, NULL)""",
+                        (device, now),
+                    )
                 self._write_count += 1
                 logger.info(
                     "Power logger: marked %s offline (sentinel NULL row)",
@@ -387,22 +389,22 @@ class PowerLogger:
                 self._last_write[device] = now
                 self._dirty[device] = False
                 try:
-                    self._conn.execute(
-                        """INSERT INTO power_readings
-                           (device, timestamp, power, voltage, current_a,
-                            energy, power_factor)
-                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                        (
-                            device,
-                            now,
-                            readings.get("power"),
-                            readings.get("voltage"),
-                            readings.get("current"),
-                            readings.get("energy"),
-                            readings.get("power_factor"),
-                        ),
-                    )
-                    self._conn.commit()
+                    with self._conn.cursor() as cur:
+                        cur.execute(
+                            """INSERT INTO power_readings
+                               (device, timestamp, power, voltage, current_a,
+                                energy, power_factor)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                            (
+                                device,
+                                now,
+                                readings.get("power"),
+                                readings.get("voltage"),
+                                readings.get("current"),
+                                readings.get("energy"),
+                                readings.get("power_factor"),
+                            ),
+                        )
                     self._write_count += 1
 
                     if self._write_count % PRUNE_EVERY == 0:
@@ -416,15 +418,15 @@ class PowerLogger:
             return
         cutoff: float = time.time() - RETENTION_SECONDS
         try:
-            cursor = self._conn.execute(
-                "DELETE FROM power_readings WHERE timestamp < ?",
-                (cutoff,),
-            )
-            self._conn.commit()
-            if cursor.rowcount > 0:
-                logger.info(
-                    "Power logger pruned %d old record(s)", cursor.rowcount,
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM power_readings WHERE timestamp < %s",
+                    (cutoff,),
                 )
+                if cur.rowcount > 0:
+                    logger.info(
+                        "Power logger pruned %d old record(s)", cur.rowcount,
+                    )
         except Exception as exc:
             logger.warning("Power logger prune failed: %s", exc)
 
@@ -452,42 +454,42 @@ class PowerLogger:
             return []
 
         since: float = time.time() - (hours * 3600)
-        bucket_expr: str = f"CAST(timestamp / {resolution} AS INTEGER) * {resolution}"
 
         if device:
-            sql = f"""
-                SELECT {bucket_expr} AS bucket, device,
+            sql = """
+                SELECT floor(timestamp / %s)::bigint * %s AS bucket, device,
                        AVG(power) AS power,
                        AVG(voltage) AS voltage,
                        AVG(current_a) AS current_a,
                        MAX(energy) AS energy,
                        AVG(power_factor) AS power_factor
                 FROM power_readings
-                WHERE device = ? AND timestamp >= ?
+                WHERE device = %s AND timestamp >= %s
                 GROUP BY bucket, device
                 ORDER BY bucket
             """
-            params = (device, since)
+            params = (resolution, resolution, device, since)
         else:
-            sql = f"""
-                SELECT {bucket_expr} AS bucket, device,
+            sql = """
+                SELECT floor(timestamp / %s)::bigint * %s AS bucket, device,
                        AVG(power) AS power,
                        AVG(voltage) AS voltage,
                        AVG(current_a) AS current_a,
                        MAX(energy) AS energy,
                        AVG(power_factor) AS power_factor
                 FROM power_readings
-                WHERE timestamp >= ?
+                WHERE timestamp >= %s
                 GROUP BY bucket, device
                 ORDER BY bucket
             """
-            params = (since,)
+            params = (resolution, resolution, since)
 
         with self._lock:
             try:
-                cursor = self._conn.execute(sql, params)
-                cols = [d[0] for d in cursor.description]
-                return [dict(zip(cols, row)) for row in cursor.fetchall()]
+                with self._conn.cursor() as cur:
+                    cur.execute(sql, params)
+                    cols = [d[0] for d in cur.description]
+                    return [dict(zip(cols, row)) for row in cur.fetchall()]
             except Exception as exc:
                 logger.warning("Power logger query failed: %s", exc)
                 return []
@@ -513,21 +515,23 @@ class PowerLogger:
         with self._lock:
             try:
                 if device:
-                    where = "WHERE device = ? AND timestamp >= ?"
+                    where = "WHERE device = %s AND timestamp >= %s"
                     params = (device, since)
                 else:
-                    where = "WHERE timestamp >= ?"
+                    where = "WHERE timestamp >= %s"
                     params = (since,)
 
-                row = self._conn.execute(f"""
-                    SELECT AVG(power) AS avg_watts,
-                           MAX(power) AS peak_watts,
-                           MAX(energy) - MIN(energy) AS total_kwh,
-                           (MAX(timestamp) - MIN(timestamp)) / 86400.0 AS days_covered,
-                           COUNT(DISTINCT device) AS device_count
-                    FROM power_readings
-                    {where}
-                """, params).fetchone()
+                with self._conn.cursor() as cur:
+                    cur.execute(f"""
+                        SELECT AVG(power) AS avg_watts,
+                               MAX(power) AS peak_watts,
+                               MAX(energy) - MIN(energy) AS total_kwh,
+                               (MAX(timestamp) - MIN(timestamp)) / 86400.0 AS days_covered,
+                               COUNT(DISTINCT device) AS device_count
+                        FROM power_readings
+                        {where}
+                    """, params)
+                    row = cur.fetchone()
 
                 if row is None:
                     return {}
@@ -549,10 +553,11 @@ class PowerLogger:
             return []
         with self._lock:
             try:
-                rows = self._conn.execute(
-                    "SELECT DISTINCT device FROM power_readings ORDER BY device"
-                ).fetchall()
-                return [r[0] for r in rows]
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT DISTINCT device FROM power_readings ORDER BY device"
+                    )
+                    return [r[0] for r in cur.fetchall()]
             except Exception as exc:
                 logger.warning("Power logger devices query failed: %s", exc)
                 return []

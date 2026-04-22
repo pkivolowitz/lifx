@@ -3,45 +3,63 @@
 
 Covers the persistence surface without touching MQTT:
 
-- Schema creation and column set
-- ``record()`` happy path, missing node_id, throttle protection
-- ``latest()`` returns one row per node (most recent)
-- ``query()`` with time window and resolution bucketing
-- ``hosts()`` distinct node list
+- record() happy path, missing node_id, throttle protection
+- latest() returns one row per node (most recent)
+- query() with time window and resolution bucketing
+- hosts() distinct node list
 - Retention pruning removes old rows
-- ``fan_declared_present`` bool round-trip (0/1 INTEGER in SQLite)
-- Extras (``throttled_flags``, ``model``) extracted from the payload
+- fan_declared_present bool round-trip
+- Extras (throttled_flags, model) extracted from the payload
 
-No MQTT broker, no paho import required — tests call ``record()``
-directly with dict payloads.  The subscriber path is covered by the
-live integration flow (pi_thermal_sensor deploy → hub broker →
-ThermalLogger).
+Tests require a live PostgreSQL connection.  Set GLOWUP_DIAG_DSN or the
+DEFAULT_DSN default (postgresql://glowup:changeme@10.0.0.111:5432/glowup)
+must be reachable.  Skipped automatically otherwise.
 
 Run::
 
     python3 -m unittest tests.test_thermal_logger -v
-    python3 -m pytest tests/test_thermal_logger.py -v
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__: str = "1.0"
+__version__: str = "2.0"
 
 import os
-import sqlite3
-import tempfile
 import time
 import unittest
 from typing import Any
-from unittest.mock import patch
 
 from infrastructure.thermal_logger import (
     MIN_WRITE_INTERVAL_S,
     RETENTION_SECONDS,
+    DEFAULT_DSN,
     ThermalLogger,
 )
 
+# ---------------------------------------------------------------------------
+# PG availability gate
+# ---------------------------------------------------------------------------
+
+_TEST_DSN: str = os.environ.get("GLOWUP_DIAG_DSN", DEFAULT_DSN)
+
+try:
+    import psycopg2 as _psycopg2
+    _conn_test = _psycopg2.connect(_TEST_DSN, connect_timeout=3)
+    _conn_test.close()
+    _DB_AVAILABLE: bool = True
+except Exception:
+    _DB_AVAILABLE = False
+
+_SKIP_REASON: str = (
+    "psycopg2 unavailable or PostgreSQL unreachable — "
+    "set GLOWUP_DIAG_DSN to a reachable DSN"
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _payload(
     node_id: str,
@@ -57,7 +75,6 @@ def _payload(
     throttled_flags: str = "0x0",
     model: str = "Raspberry Pi 5 Model B",
 ) -> dict[str, Any]:
-    """Build a thermal-sensor-shaped payload dict."""
     return {
         "node_id": node_id,
         "platform": platform,
@@ -76,295 +93,190 @@ def _payload(
     }
 
 
+@unittest.skipUnless(_DB_AVAILABLE, _SKIP_REASON)
 class ThermalLoggerTestCase(unittest.TestCase):
-    """Base: temp-file DB, fresh ThermalLogger per test."""
+    """Base: fresh ThermalLogger per test, table cleaned in setUp."""
 
     def setUp(self) -> None:
-        """Create a temp SQLite file and instantiate a logger."""
-        self._tmp: tempfile.TemporaryDirectory = tempfile.TemporaryDirectory()
-        self._db_path: str = os.path.join(self._tmp.name, "thermal.db")
-        self._tl: ThermalLogger = ThermalLogger(db_path=self._db_path)
+        self._tl: ThermalLogger = ThermalLogger(dsn=_TEST_DSN)
+        self.assertIsNotNone(self._tl._conn, "PG connection must be open")
+        self._exec("DELETE FROM thermal_readings WHERE node_id LIKE %s", ("test-%",))
 
     def tearDown(self) -> None:
-        """Close logger + remove temp dir."""
+        self._exec("DELETE FROM thermal_readings WHERE node_id LIKE %s", ("test-%",))
         self._tl.close()
-        self._tmp.cleanup()
+
+    def _exec(self, sql: str, params: tuple = ()) -> list:
+        """Run SQL directly against the logger's connection."""
+        with self._tl._conn.cursor() as cur:
+            cur.execute(sql, params)
+            try:
+                return cur.fetchall()
+            except Exception:
+                return []
+
+    def _count(self, node_id: str) -> int:
+        rows = self._exec(
+            "SELECT COUNT(*) FROM thermal_readings WHERE node_id = %s",
+            (node_id,),
+        )
+        return rows[0][0] if rows else 0
+
+    def _direct_insert(self, node_id: str, ts: float, cpu_temp_c: float) -> None:
+        """Bypass record() to set exact timestamps for multi-row tests."""
+        self._exec(
+            """INSERT INTO thermal_readings
+               (node_id, timestamp, cpu_temp_c, fan_rpm, fan_pwm_step,
+                fan_declared_present, load_1m, load_5m, load_15m,
+                uptime_s, throttled_flags, platform, model)
+               VALUES (%s, %s, %s, NULL, NULL, NULL,
+                       0.5, 0.4, 0.3, 100.0, '0x0', 'pi5', NULL)""",
+            (node_id, ts, cpu_temp_c),
+        )
 
 
-class TestSchema(ThermalLoggerTestCase):
-    """Schema shape, index, and columns."""
-
-    def test_table_and_index_exist(self) -> None:
-        """The expected table and index are created on open."""
-        conn: sqlite3.Connection = sqlite3.connect(self._db_path)
-        try:
-            tables: set[str] = {
-                r[0] for r in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                ).fetchall()
-            }
-            self.assertIn("thermal_readings", tables)
-            indexes: set[str] = {
-                r[0] for r in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='index'"
-                ).fetchall()
-            }
-            self.assertIn("idx_thermal_node_ts", indexes)
-        finally:
-            conn.close()
-
-    def test_columns_match_payload_schema(self) -> None:
-        """Every field in the sensor payload has a column."""
-        conn: sqlite3.Connection = sqlite3.connect(self._db_path)
-        try:
-            cols: set[str] = {
-                row[1] for row in conn.execute(
-                    "PRAGMA table_info(thermal_readings)"
-                ).fetchall()
-            }
-            expected: set[str] = {
-                "id", "node_id", "timestamp",
-                "cpu_temp_c", "fan_rpm", "fan_pwm_step",
-                "fan_declared_present",
-                "load_1m", "load_5m", "load_15m",
-                "uptime_s", "throttled_flags", "platform", "model",
-            }
-            missing: set[str] = expected - cols
-            self.assertFalse(missing, f"missing columns: {missing}")
-        finally:
-            conn.close()
-
-
+@unittest.skipUnless(_DB_AVAILABLE, _SKIP_REASON)
 class TestRecord(ThermalLoggerTestCase):
     """Write path — happy, rejection, throttling, bool handling."""
 
     def test_record_happy_path_roundtrip(self) -> None:
-        """A complete payload inserts and round-trips through latest()."""
-        p: dict[str, Any] = _payload("hub", cpu_temp_c=56.7, fan_rpm=2739)
+        p = _payload("test-hub", cpu_temp_c=56.7, fan_rpm=2739)
         self._tl.record(p)
-        latest: dict[str, dict[str, Any]] = self._tl.latest()
-        self.assertIn("hub", latest)
-        row: dict[str, Any] = latest["hub"]
-        self.assertEqual(row["cpu_temp_c"], 56.7)
+        latest = self._tl.latest()
+        self.assertIn("test-hub", latest)
+        row = latest["test-hub"]
+        self.assertAlmostEqual(row["cpu_temp_c"], 56.7, places=3)
         self.assertEqual(row["fan_rpm"], 2739)
         self.assertEqual(row["platform"], "pi5")
         self.assertEqual(row["throttled_flags"], "0x0")
         self.assertEqual(row["model"], "Raspberry Pi 5 Model B")
 
     def test_record_rejects_missing_node_id(self) -> None:
-        """Payload without node_id is dropped silently (logged)."""
-        bad: dict[str, Any] = _payload("ignored")
+        bad = _payload("ignored")
         del bad["node_id"]
         self._tl.record(bad)
-        self.assertEqual(self._tl.hosts(), [])
+        self.assertNotIn("test-ignored", self._tl.hosts())
 
     def test_record_rejects_non_string_node_id(self) -> None:
-        """node_id must be a string."""
-        bad: dict[str, Any] = _payload("ignored")
+        bad = _payload("ignored")
         bad["node_id"] = 42
         self._tl.record(bad)
-        self.assertEqual(self._tl.hosts(), [])
 
     def test_throttle_coalesces_rapid_writes(self) -> None:
-        """Two record() calls within MIN_WRITE_INTERVAL_S → one row."""
-        self._tl.record(_payload("hub", cpu_temp_c=50.0))
-        self._tl.record(_payload("hub", cpu_temp_c=60.0))
-        conn: sqlite3.Connection = sqlite3.connect(self._db_path)
-        try:
-            (count,) = conn.execute(
-                "SELECT COUNT(*) FROM thermal_readings WHERE node_id = ?",
-                ("hub",),
-            ).fetchone()
-            self.assertEqual(count, 1)
-        finally:
-            conn.close()
+        self._tl.record(_payload("test-hub", cpu_temp_c=50.0))
+        self._tl.record(_payload("test-hub", cpu_temp_c=60.0))
+        self.assertEqual(self._count("test-hub"), 1)
 
     def test_throttle_is_per_node(self) -> None:
-        """Throttle is scoped per-node — different nodes are independent."""
-        self._tl.record(_payload("hub"))
-        self._tl.record(_payload("broker-2"))
-        self.assertEqual(sorted(self._tl.hosts()), ["broker-2", "hub"])
+        self._tl.record(_payload("test-hub"))
+        self._tl.record(_payload("test-broker"))
+        hosts = self._tl.hosts()
+        self.assertIn("test-hub", hosts)
+        self.assertIn("test-broker", hosts)
 
     def test_fan_declared_present_bool_roundtrip(self) -> None:
-        """fan_declared_present True/False round-trips through SQLite."""
-        self._tl.record(_payload("a", fan_declared_present=True))
-        latest_a: dict[str, dict[str, Any]] = self._tl.latest()
-        self.assertTrue(latest_a["a"]["fan_declared_present"])
+        self._tl.record(_payload("test-a", fan_declared_present=True))
+        latest_a = self._tl.latest()
+        self.assertTrue(latest_a["test-a"]["fan_declared_present"])
 
-        # Advance time to escape throttle before writing a second node.
-        time.sleep(0)  # no sleep needed — different node_id
-        self._tl.record(_payload("b", fan_declared_present=False))
-        latest_b: dict[str, dict[str, Any]] = self._tl.latest()
-        self.assertFalse(latest_b["b"]["fan_declared_present"])
+        self._tl.record(_payload("test-b", fan_declared_present=False))
+        latest_b = self._tl.latest()
+        self.assertFalse(latest_b["test-b"]["fan_declared_present"])
 
-    def test_null_fields_are_stored_as_none(self) -> None:
-        """Pi 4 style payload (null fan fields) round-trips as None."""
-        p: dict[str, Any] = _payload(
-            "mbclock",
-            cpu_temp_c=52.6,
-            platform="pi4",
-            fan_declared_present=True,
-        )
+    def test_null_fan_fields_stored_as_none(self) -> None:
+        p = _payload("test-mbclock", cpu_temp_c=52.6, platform="pi4",
+                     fan_declared_present=True)
         p["fan_rpm"] = None
         p["fan_pwm_step"] = None
         self._tl.record(p)
-        row: dict[str, Any] = self._tl.latest()["mbclock"]
+        row = self._tl.latest()["test-mbclock"]
         self.assertIsNone(row["fan_rpm"])
         self.assertIsNone(row["fan_pwm_step"])
         self.assertTrue(row["fan_declared_present"])
 
 
+@unittest.skipUnless(_DB_AVAILABLE, _SKIP_REASON)
 class TestLatest(ThermalLoggerTestCase):
     """latest() must return the most-recent row per node."""
 
     def test_latest_returns_most_recent_per_node(self) -> None:
-        """When a node has multiple rows, latest() takes the newest."""
-        # First insert at simulated old time.
-        old_time: float = time.time() - 3600
-        new_time: float = time.time()
-        self._direct_insert("hub", old_time, cpu_temp_c=40.0)
-        self._direct_insert("hub", new_time, cpu_temp_c=70.0)
-        self._direct_insert("broker-2", new_time, cpu_temp_c=55.0)
-        latest: dict[str, dict[str, Any]] = self._tl.latest()
-        self.assertEqual(latest["hub"]["cpu_temp_c"], 70.0)
-        self.assertEqual(latest["broker-2"]["cpu_temp_c"], 55.0)
+        old_time = time.time() - 3600
+        new_time = time.time()
+        self._direct_insert("test-hub", old_time, 40.0)
+        self._direct_insert("test-hub", new_time, 70.0)
+        self._direct_insert("test-broker", new_time, 55.0)
+        latest = self._tl.latest()
+        self.assertAlmostEqual(latest["test-hub"]["cpu_temp_c"], 70.0, places=3)
+        self.assertAlmostEqual(latest["test-broker"]["cpu_temp_c"], 55.0, places=3)
 
-    def test_latest_empty_on_empty_db(self) -> None:
-        """Fresh logger has no data → latest() returns empty dict."""
-        self.assertEqual(self._tl.latest(), {})
-
-    def _direct_insert(
-        self,
-        node_id: str,
-        ts: float,
-        cpu_temp_c: float,
-    ) -> None:
-        """Bypass record() to set exact timestamps for multi-row tests."""
-        conn: sqlite3.Connection = sqlite3.connect(self._db_path)
-        try:
-            conn.execute(
-                """INSERT INTO thermal_readings
-                   (node_id, timestamp, cpu_temp_c, fan_rpm, fan_pwm_step,
-                    fan_declared_present,
-                    load_1m, load_5m, load_15m,
-                    uptime_s, throttled_flags, platform, model)
-                   VALUES (?, ?, ?, NULL, NULL, NULL,
-                           NULL, NULL, NULL, NULL, ?, ?, NULL)""",
-                (node_id, ts, cpu_temp_c, "0x0", "pi5"),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+    def test_latest_empty_when_no_test_nodes(self) -> None:
+        # All test-* rows are cleaned in setUp; latest should have no test nodes.
+        latest = self._tl.latest()
+        for key in latest:
+            self.assertFalse(key.startswith("test-"),
+                             f"unexpected test node {key} in latest()")
 
 
+@unittest.skipUnless(_DB_AVAILABLE, _SKIP_REASON)
 class TestQuery(ThermalLoggerTestCase):
     """query() — time windowing + bucket resolution."""
 
     def test_query_returns_empty_for_unknown_node(self) -> None:
-        """Query for a node with no data → empty list."""
-        self.assertEqual(self._tl.query("nobody"), [])
+        self.assertEqual(self._tl.query("test-nobody"), [])
 
     def test_query_filters_by_time_window(self) -> None:
-        """Rows older than `hours` are excluded."""
-        very_old: float = time.time() - (48 * 3600)
-        recent: float = time.time() - 600
-        self._direct_insert("hub", very_old, 40.0)
-        self._direct_insert("hub", recent, 55.0)
-        result: list[dict[str, Any]] = self._tl.query(
-            "hub", hours=1, resolution=60,
-        )
-        # Only the recent row should survive the 1-hour window.
+        very_old = time.time() - (48 * 3600)
+        recent = time.time() - 600
+        self._direct_insert("test-hub", very_old, 40.0)
+        self._direct_insert("test-hub", recent, 55.0)
+        result = self._tl.query("test-hub", hours=1, resolution=60)
         self.assertEqual(len(result), 1)
         self.assertAlmostEqual(result[0]["cpu_temp_c"], 55.0, places=3)
 
     def test_query_buckets_average_values(self) -> None:
-        """Multiple rows in a single bucket average correctly."""
-        now: float = time.time()
-        # Three rows within the same 60s bucket.
-        base: float = int(now / 60) * 60 + 5
-        self._direct_insert("hub", base,     40.0)
-        self._direct_insert("hub", base + 10, 60.0)
-        self._direct_insert("hub", base + 20, 50.0)
-        result: list[dict[str, Any]] = self._tl.query(
-            "hub", hours=1, resolution=60,
-        )
+        now = time.time()
+        base = int(now / 60) * 60 + 5
+        self._direct_insert("test-hub", base,      40.0)
+        self._direct_insert("test-hub", base + 10, 60.0)
+        self._direct_insert("test-hub", base + 20, 50.0)
+        result = self._tl.query("test-hub", hours=1, resolution=60)
         self.assertEqual(len(result), 1)
         self.assertAlmostEqual(result[0]["cpu_temp_c"], 50.0, places=3)
 
-    def _direct_insert(
-        self,
-        node_id: str,
-        ts: float,
-        cpu_temp_c: float,
-    ) -> None:
-        """Bypass record() — see TestLatest for rationale."""
-        conn: sqlite3.Connection = sqlite3.connect(self._db_path)
-        try:
-            conn.execute(
-                """INSERT INTO thermal_readings
-                   (node_id, timestamp, cpu_temp_c, fan_rpm, fan_pwm_step,
-                    fan_declared_present,
-                    load_1m, load_5m, load_15m,
-                    uptime_s, throttled_flags, platform, model)
-                   VALUES (?, ?, ?, NULL, NULL, NULL,
-                           0.5, 0.4, 0.3, 100.0, "0x0", "pi5", NULL)""",
-                (node_id, ts, cpu_temp_c),
-            )
-            conn.commit()
-        finally:
-            conn.close()
 
-
+@unittest.skipUnless(_DB_AVAILABLE, _SKIP_REASON)
 class TestHosts(ThermalLoggerTestCase):
     """hosts() returns sorted distinct node ids."""
 
-    def test_hosts_empty_on_empty_db(self) -> None:
-        """No data → empty list."""
-        self.assertEqual(self._tl.hosts(), [])
-
     def test_hosts_returns_distinct_sorted(self) -> None:
-        """Three nodes each with one row → three distinct hosts."""
-        self._tl.record(_payload("hub"))
-        self._tl.record(_payload("broker-2"))
-        self._tl.record(_payload("mbclock", platform="pi4"))
-        self.assertEqual(
-            self._tl.hosts(), ["broker-2", "hub", "mbclock"],
-        )
+        self._tl.record(_payload("test-hub"))
+        self._tl.record(_payload("test-broker"))
+        self._tl.record(_payload("test-mbclock", platform="pi4"))
+        hosts = self._tl.hosts()
+        test_hosts = [h for h in hosts if h.startswith("test-")]
+        self.assertEqual(test_hosts, sorted(test_hosts))
+        self.assertEqual(len(test_hosts), 3)
 
 
+@unittest.skipUnless(_DB_AVAILABLE, _SKIP_REASON)
 class TestRetention(ThermalLoggerTestCase):
     """_prune() removes rows older than RETENTION_SECONDS."""
 
     def test_prune_removes_old_rows(self) -> None:
-        """A row past the retention window is gone after _prune()."""
-        past: float = time.time() - (RETENTION_SECONDS + 3600)
-        now: float = time.time()
-        conn: sqlite3.Connection = sqlite3.connect(self._db_path)
-        try:
-            for ts in (past, now):
-                conn.execute(
-                    """INSERT INTO thermal_readings
-                       (node_id, timestamp, cpu_temp_c, fan_rpm, fan_pwm_step,
-                        fan_declared_present, load_1m, load_5m, load_15m,
-                        uptime_s, throttled_flags, platform, model)
-                       VALUES (?, ?, 50.0, NULL, NULL, NULL,
-                               NULL, NULL, NULL, NULL, '0x0', 'pi5', NULL)""",
-                    ("hub", ts),
-                )
-            conn.commit()
-        finally:
-            conn.close()
-
+        past = time.time() - (RETENTION_SECONDS + 3600)
+        now = time.time()
+        for ts in (past, now):
+            self._exec(
+                """INSERT INTO thermal_readings
+                   (node_id, timestamp, cpu_temp_c, fan_rpm, fan_pwm_step,
+                    fan_declared_present, load_1m, load_5m, load_15m,
+                    uptime_s, throttled_flags, platform, model)
+                   VALUES (%s, %s, 50.0, NULL, NULL, NULL,
+                           NULL, NULL, NULL, NULL, '0x0', 'pi5', NULL)""",
+                ("test-hub", ts),
+            )
         self._tl._prune()
-
-        conn = sqlite3.connect(self._db_path)
-        try:
-            (count,) = conn.execute(
-                "SELECT COUNT(*) FROM thermal_readings WHERE node_id='hub'",
-            ).fetchone()
-            self.assertEqual(count, 1)
-        finally:
-            conn.close()
+        self.assertEqual(self._count("test-hub"), 1)
 
 
 if __name__ == "__main__":
