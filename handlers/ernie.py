@@ -32,16 +32,10 @@ from typing import Any
 
 logger: logging.Logger = logging.getLogger("glowup.handlers.ernie")
 
-# BLE entries older than this are pruned from the returned payload.
-# 60 s is comfortably wider than the sniffer's REPUBLISH_SECONDS=30, so
-# any currently-advertising device stays visible; anything that went
-# silent for a full minute drops off the board.
-BLE_STALE_SECONDS: float = 60.0
-
-# Hard cap on the number of BLE entries returned per request. 500 is
-# far above typical volume in a suburban house (20-80 devices) and
-# keeps the JSON response size bounded even in a crowded environment.
-BLE_MAX_RETURNED: int = 500
+# How many BLE events to return (tail of the ring buffer) per request.
+# 200 covers a few minutes of normal activity; full ring depth lives
+# on the server side.
+BLE_EVENTS_TAIL: int = 200
 
 
 class ErnieHandlerMixin:
@@ -66,29 +60,37 @@ class ErnieHandlerMixin:
             self._send_json(404, {"error": "Ernie dashboard not found"})
 
     def _handle_get_ernie_ble(self) -> None:
-        """GET /api/ernie/ble — live BLE advertisements.
+        """GET /api/ernie/ble — current BLE device catalog.
 
-        Returns every MAC seen within BLE_STALE_SECONDS, sorted by
-        most-recent first. The ``count`` field in each entry is the
-        running number of republishes from the sniffer (which itself
-        dedupes per-MAC with a 30 s floor and an RSSI delta override).
+        Returns every MAC the sniffer currently knows, including those
+        marked ``gone`` (recently departed). The v2 sniffer handles
+        staleness server-side via absence sweep + retained gone marker.
         """
-        store: dict = getattr(self, "_ernie_ble", {})
-        now: float = time.time()
-        fresh: list[dict] = []
-        for mac, rec in store.items():
-            ts = rec.get("ts", 0)
-            if (now - ts) > BLE_STALE_SECONDS:
-                continue
-            fresh.append(rec)
-        fresh.sort(key=lambda r: r.get("ts", 0), reverse=True)
-        if len(fresh) > BLE_MAX_RETURNED:
-            fresh = fresh[:BLE_MAX_RETURNED]
+        store: dict = getattr(self, "_ernie_ble_seen", {})
+        devices: list[dict] = list(store.values())
+        # Sort gone-items to the bottom; within each group sort by
+        # most-recent activity (last_heard_ts) descending.
+        def _key(r: dict) -> tuple:
+            gone: int = 1 if r.get("gone") else 0
+            ts: float = r.get("last_heard_ts") or r.get("ts") or 0
+            return (gone, -ts)
+        devices.sort(key=_key)
         self._send_json(200, {
-            "advertisements": fresh,
-            "count": len(fresh),
-            "timestamp": now,
-            "stale_seconds": BLE_STALE_SECONDS,
+            "devices": devices,
+            "count": len(devices),
+            "timestamp": time.time(),
+        })
+
+    def _handle_get_ernie_ble_events(self) -> None:
+        """GET /api/ernie/ble/events — tail of the BLE event log."""
+        ring: list = getattr(self, "_ernie_ble_events", [])
+        # Return the tail, newest last — matches a "log file" mental
+        # model for the dashboard's event stream panel.
+        tail: list = ring[-BLE_EVENTS_TAIL:]
+        self._send_json(200, {
+            "events": tail,
+            "count": len(tail),
+            "timestamp": time.time(),
         })
 
     def _handle_get_ernie_tpms(self) -> None:
@@ -119,10 +121,13 @@ class ErnieHandlerMixin:
         """
         reading: dict = getattr(self, "_ernie_thermal", {}) or {}
         now: float = time.time()
-        ble_store: dict = getattr(self, "_ernie_ble", {})
+        ble_store: dict = getattr(self, "_ernie_ble_seen", {})
         last_ble: float = 0.0
         if ble_store:
-            last_ble = max(r.get("ts", 0) for r in ble_store.values())
+            last_ble = max(
+                (r.get("last_heard_ts") or r.get("ts") or 0)
+                for r in ble_store.values()
+            )
         tpms_store: dict = getattr(self, "_ernie_tpms", {})
         last_tpms: float = 0.0
         if tpms_store:

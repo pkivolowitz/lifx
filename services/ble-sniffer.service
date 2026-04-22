@@ -1,0 +1,38 @@
+[Unit]
+# GlowUp BLE sniffer (ernie .153) — HCI raw -> MQTT.
+#
+# Captures every BLE advertisement heard on hci0, runs it through a
+# per-MAC state machine (EMA-smoothed RSSI + payload-hash + policy),
+# and publishes two topic classes:
+#
+#     glowup/ble/seen/<mac>     retained snapshot for dashboards
+#     glowup/ble/events/<mac>   non-retained event log
+#
+# Source: contrib/sensors/ble_sniffer.py
+# Deploy: /opt/ernie/ble_sniffer.py
+# Registry: /etc/glowup/ble_registry.json (optional; see .example)
+#
+# Runtime dep: aioblescan, paho-mqtt (in /opt/ernie/venv).
+#
+# The service runs as root because aioblescan needs CAP_NET_RAW on
+# the HCI socket. A proper capability-drop via AmbientCapabilities is
+# possible but collides with venv-python setcap maintenance; deferred.
+Description=GlowUp BLE sniffer (HCI raw -> MQTT)
+Documentation=file:///opt/ernie/ble_sniffer.py
+After=bluetooth.service mosquitto.service network-online.target
+Wants=bluetooth.service mosquitto.service
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+ExecStart=/opt/ernie/venv/bin/python /opt/ernie/ble_sniffer.py
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=120
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

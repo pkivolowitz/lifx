@@ -1,0 +1,25 @@
+{
+  "_comment_": "GlowUp BLE registry — MAC → label/category/handling. Copy to /etc/glowup/ble_registry.json and edit.",
+
+  "84:BA:20:40:27:B7": {
+    "label": "Bowflex T8J",
+    "category": "exercise",
+    "location": "basement gym",
+    "handling": "heartbeat_only"
+  },
+
+  "3C:8A:1F:9C:34:AA": {
+    "label": "Pura Scent Diffuser",
+    "category": "appliance",
+    "location": "living room",
+    "handling": "heartbeat_only"
+  },
+
+  "_HANDLING_VALUES": {
+    "heartbeat_only": "emit a 'still here' every 5 min + 'gone' after silence; suppress all other event types. Ideal for chatty stationary devices you only care about as a presence signal.",
+    "sensor_event":   "emit payload_changed immediately (actual data updates) + heartbeat + gone. Suppress moved — real sensors don't physically move. Ideal for ONVIS, weather stations, anything whose information lives in the advertising payload.",
+    "track":          "emit every event type including moved. Ideal for keys, deliberately tracked phones.",
+    "ignore":         "emit nothing. Ideal for known-loud neighbor devices you can't shut up.",
+    "default":        "used when a MAC is not in the registry; emits first_seen / payload_changed / moved / gone but suppresses heartbeats. Good default for stranger-detection semantics."
+  }
+}

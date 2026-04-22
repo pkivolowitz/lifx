@@ -207,6 +207,25 @@ tr.new-row td { animation: newrow 2s ease-out; }
     padding: 30px 10px;
     font-style: italic;
 }
+.band {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-family: var(--mono);
+}
+.band-very-close { background: var(--ok);      color: #fff; }
+.band-close      { background: var(--accent);  color: #fff; }
+.band-mid        { background: var(--unknown); color: #fff; }
+.band-far        { background: var(--panel-border); color: var(--fg-dim); }
+.gone-row td { opacity: 0.5; }
+.gone-row strong { text-decoration: line-through; }
+/* Event colouring — subtle left border by event type. */
+.evt-first_seen td:first-child     { border-left: 3px solid var(--ok); }
+.evt-moved td:first-child          { border-left: 3px solid var(--accent); }
+.evt-gone td:first-child           { border-left: 3px solid var(--err); }
+.evt-payload_changed td:first-child{ border-left: 3px solid var(--warn); }
+.evt-heartbeat td:first-child      { border-left: 3px solid var(--unknown); }
 </style>
 </head>
 <body>
@@ -229,20 +248,39 @@ tr.new-row td { animation: newrow 2s ease-out; }
     </section>
 
     <section class="panel">
-        <h2>BLE advertisements <span class="badge" id="ble-count">0</span></h2>
+        <h2>BLE devices <span class="badge" id="ble-count">0</span>
+            <span class="badge" id="ble-events-count" title="Event log">0 evt</span></h2>
         <div class="table-wrap">
             <table id="ble-table">
                 <thead>
                     <tr>
-                        <th data-sort="ts">When</th>
-                        <th data-sort="mac">MAC</th>
-                        <th data-sort="name">Name</th>
-                        <th data-sort="rssi">RSSI</th>
-                        <th data-sort="count">N</th>
+                        <th data-sort="category">Category</th>
+                        <th data-sort="label">Label / MAC</th>
+                        <th data-sort="vendor">Vendor</th>
+                        <th data-sort="identity">Class</th>
+                        <th data-sort="band">Band</th>
+                        <th data-sort="rssi_ema">RSSI</th>
+                        <th data-sort="last_heard_ts">Last</th>
                     </tr>
                 </thead>
                 <tbody id="ble-body">
-                    <tr><td colspan="5" class="empty">listening…</td></tr>
+                    <tr><td colspan="7" class="empty">listening…</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <h2 style="margin-top:10px">Event log</h2>
+        <div class="table-wrap" style="max-height: 180px">
+            <table id="ble-events-table">
+                <thead>
+                    <tr>
+                        <th>When</th>
+                        <th>Event</th>
+                        <th>Label / MAC</th>
+                        <th>Detail</th>
+                    </tr>
+                </thead>
+                <tbody id="ble-events-body">
+                    <tr><td colspan="4" class="empty">no events yet</td></tr>
                 </tbody>
             </table>
         </div>
@@ -281,11 +319,14 @@ const POLL_MS = 2000;
 // briefly highlighted via the .new-row animation.
 const seenMacs = new Set();
 const seenTpms = new Set();
+// Keep a monotonically-growing event dedupe set so the dashboard
+// doesn't flash the same event every 2 seconds.
+const seenEventKeys = new Set();
 
 // Current sort state per table.
 const sortState = {
-    ble:  { key: "ts",        asc: false },
-    tpms: { key: "last_seen", asc: false },
+    ble:  { key: "last_heard_ts", asc: false },
+    tpms: { key: "last_seen",     asc: false },
 };
 
 function fmtAge(ts) {
@@ -334,25 +375,90 @@ function bindSorters(tableId, which) {
 function renderBle(data) {
     document.getElementById("ble-count").textContent = data.count;
     const body = document.getElementById("ble-body");
-    if (!data.advertisements.length) {
-        body.innerHTML = '<tr><td colspan="5" class="empty">'
-            + 'no BLE activity in the last '
-            + Math.round(data.stale_seconds) + 's</td></tr>';
+    if (!data.devices.length) {
+        body.innerHTML = '<tr><td colspan="7" class="empty">'
+            + 'listening…</td></tr>';
         return;
     }
     const rows = sortRows(
-        data.advertisements, sortState.ble.key, sortState.ble.asc,
+        data.devices, sortState.ble.key, sortState.ble.asc,
     );
     const html = rows.map(r => {
         const isNew = !seenMacs.has(r.mac);
         seenMacs.add(r.mac);
+        const gone = !!r.gone;
+        const label = r.label || '';
         const name = r.name || '';
-        return `<tr class="${isNew ? 'new-row' : ''}">`
-            + `<td class="mono dim">${fmtAge(r.ts)}</td>`
-            + `<td class="mono">${r.mac}</td>`
-            + `<td>${escapeHtml(name)}</td>`
-            + `<td>${rssiBar(r.rssi)}</td>`
-            + `<td class="mono dim">${r.count || 1}</td>`
+        const labelCell = label
+            ? `<strong>${escapeHtml(label)}</strong>`
+              + ` <span class="dim mono">${r.mac || ''}</span>`
+            : `<span class="mono">${r.mac || ''}</span>`;
+        const rssiCell = (typeof r.rssi_ema === 'number')
+            ? rssiBar(Math.round(r.rssi_ema)) : '';
+        const bandCell = r.band
+            ? `<span class="band band-${r.band}">${r.band}</span>` : '';
+        const ageTs = r.last_heard_ts || r.ts || 0;
+        const cls = [];
+        if (isNew) cls.push('new-row');
+        if (gone) cls.push('gone-row');
+        // "Class" column combines Apple subtype (if known), company
+        // (if known), and MAC kind fallback. Names land here too when
+        // we have them, since the label already carries that info.
+        const identityParts = [];
+        if (r.apple_subtype) identityParts.push(r.apple_subtype);
+        else if (r.company)  identityParts.push(r.company);
+        if (name && !r.label) identityParts.push(name);
+        if (!identityParts.length) {
+            if (r.mac_kind && r.mac_kind !== 'public') {
+                identityParts.push(`<span class="dim">${r.mac_kind}</span>`);
+            }
+        }
+        const identityCell = identityParts.join(' · ');
+        return `<tr class="${cls.join(' ')}">`
+            + `<td>${escapeHtml(r.category || 'unknown')}</td>`
+            + `<td>${labelCell}</td>`
+            + `<td class="dim">${escapeHtml(r.vendor || '')}</td>`
+            + `<td>${identityCell}</td>`
+            + `<td>${bandCell}</td>`
+            + `<td>${rssiCell}</td>`
+            + `<td class="mono dim">${gone ? 'gone ' : ''}${fmtAge(ageTs)}</td>`
+            + `</tr>`;
+    }).join("");
+    body.innerHTML = html;
+}
+
+function renderBleEvents(data) {
+    document.getElementById("ble-events-count").textContent =
+        data.count + ' evt';
+    const body = document.getElementById("ble-events-body");
+    if (!data.events.length) {
+        body.innerHTML = '<tr><td colspan="4" class="empty">'
+            + 'no events yet</td></tr>';
+        return;
+    }
+    // Newest first in the display — tail the ring backwards.
+    const evs = data.events.slice().reverse();
+    const html = evs.map(e => {
+        const key = `${e.ts}:${e.mac}:${e.event}`;
+        const isNew = !seenEventKeys.has(key);
+        seenEventKeys.add(key);
+        const label = e.label ? escapeHtml(e.label)
+                              : `<span class="mono">${e.mac || ''}</span>`;
+        let detail = '';
+        if (e.event === 'moved') {
+            detail = `→ ${e.band} (${Math.round(e.rssi_ema)} dBm)`;
+        } else if (e.event === 'payload_changed') {
+            detail = `mfr=${e.mfr_data || '-'}`;
+        } else if (e.event === 'heartbeat') {
+            detail = `${e.band} (${Math.round(e.rssi_ema)} dBm)`;
+        } else if (e.event === 'first_seen') {
+            detail = (e.label ? '' : 'stranger');
+        }
+        return `<tr class="${isNew ? 'new-row' : ''} evt-${e.event}">`
+            + `<td class="mono dim">${fmtAge(e.ts)}</td>`
+            + `<td><strong>${e.event}</strong></td>`
+            + `<td>${label}</td>`
+            + `<td class="mono dim">${detail}</td>`
             + `</tr>`;
     }).join("");
     body.innerHTML = html;
@@ -487,12 +593,14 @@ async function fetchJson(url) {
 
 async function tick() {
     try {
-        const [ble, tpms, thermal] = await Promise.all([
+        const [ble, bleEvents, tpms, thermal] = await Promise.all([
             fetchJson("/api/ernie/ble"),
+            fetchJson("/api/ernie/ble/events"),
             fetchJson("/api/ernie/tpms"),
             fetchJson("/api/ernie/thermal"),
         ]);
         renderBle(ble);
+        renderBleEvents(bleEvents);
         renderTpms(tpms);
         renderThermal(thermal);
         const now = new Date();

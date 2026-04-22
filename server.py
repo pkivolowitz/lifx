@@ -389,6 +389,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_ernie_page", requires_auth=False),
     _Route("GET", ("api", "ernie", "ble"),
            "_handle_get_ernie_ble", requires_auth=False),
+    _Route("GET", ("api", "ernie", "ble", "events"),
+           "_handle_get_ernie_ble_events", requires_auth=False),
     _Route("GET", ("api", "ernie", "tpms"),
            "_handle_get_ernie_tpms", requires_auth=False),
     _Route("GET", ("api", "ernie", "thermal"),
@@ -2849,15 +2851,25 @@ def main() -> None:
                 )
 
                 # -- Ernie (.153) sniffer subscriptions -----------------
-                # Three streams bridged from ernie's local broker:
-                # BLE adverts (per-MAC), TPMS decodes (per sensor id),
-                # and thermal heartbeats. See handlers/ernie.py for the
+                # Ernie's BLE sniffer runs a per-MAC state machine and
+                # publishes on two topic classes (v2 sniffer, see
+                # contrib/sensors/ble_sniffer.py):
+                #
+                #     glowup/ble/seen/<mac>      retained snapshot
+                #     glowup/ble/events/<mac>    non-retained event log
+                #
+                # Plus TPMS decodes (per sensor id) and ernie's own
+                # thermal heartbeats. See handlers/ernie.py for the
                 # corresponding REST endpoints and the /ernie dashboard.
-                GlowUpRequestHandler._ernie_ble = {}
+                GlowUpRequestHandler._ernie_ble_seen = {}
+                # Bounded event ring — last N events across all MACs.
+                # 500 is plenty for a few hours of suburban activity.
+                GlowUpRequestHandler._ernie_ble_events = []
+                GlowUpRequestHandler._ernie_ble_events_max = 500
                 GlowUpRequestHandler._ernie_tpms = {}
                 GlowUpRequestHandler._ernie_thermal = {}
 
-                def _on_ernie_ble(
+                def _on_ernie_ble_seen(
                     client: Any, userdata: Any, message: Any,
                 ) -> None:
                     try:
@@ -2867,17 +2879,46 @@ def main() -> None:
                     mac_val: Any = payload.get("mac")
                     if not isinstance(mac_val, str):
                         return
-                    # Maintain a running count of republishes from the
-                    # sniffer — gives a rough activity signal per-MAC.
-                    prev: dict = GlowUpRequestHandler._ernie_ble.get(
-                        mac_val, {},
-                    )
-                    payload["count"] = prev.get("count", 0) + 1
-                    GlowUpRequestHandler._ernie_ble[mac_val] = payload
+                    if payload.get("gone"):
+                        # Retained "gone" marker — keep it around so the
+                        # dashboard can render MAC as recently-departed,
+                        # but don't overwrite richer prior state.
+                        prev: dict = GlowUpRequestHandler._ernie_ble_seen.get(
+                            mac_val, {},
+                        )
+                        prev["gone"] = True
+                        prev["last_heard_ts"] = payload.get("last_heard_ts")
+                        GlowUpRequestHandler._ernie_ble_seen[mac_val] = prev
+                    else:
+                        GlowUpRequestHandler._ernie_ble_seen[mac_val] = payload
 
-                proc_mqtt.subscribe("glowup/ble/adv/#", qos=0)
+                proc_mqtt.subscribe("glowup/ble/seen/#", qos=0)
                 proc_mqtt.message_callback_add(
-                    "glowup/ble/adv/#", _on_ernie_ble,
+                    "glowup/ble/seen/#", _on_ernie_ble_seen,
+                )
+
+                def _on_ernie_ble_event(
+                    client: Any, userdata: Any, message: Any,
+                ) -> None:
+                    try:
+                        payload: dict = json.loads(message.payload)
+                    except (json.JSONDecodeError, ValueError):
+                        return
+                    ring: list = GlowUpRequestHandler._ernie_ble_events
+                    ring.append(payload)
+                    # Trim in place from the head — cheaper than
+                    # collections.deque because the REST endpoint
+                    # wants slice-able access for tailing.
+                    excess: int = (
+                        len(ring)
+                        - GlowUpRequestHandler._ernie_ble_events_max
+                    )
+                    if excess > 0:
+                        del ring[:excess]
+
+                proc_mqtt.subscribe("glowup/ble/events/#", qos=0)
+                proc_mqtt.message_callback_add(
+                    "glowup/ble/events/#", _on_ernie_ble_event,
                 )
 
                 def _on_ernie_tpms(
