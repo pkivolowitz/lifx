@@ -696,6 +696,8 @@ _DRIFT_EXTRA_IGNORE: tuple[str, ...] = (
     "*.key",               # keys
     ".DS_Store",
     "*xcuserdata*",        # Xcode per-user IDE state (regenerates)
+    "installer/install.py",      # installer artifact, not in git
+    "installer/static/",         # installer web assets, not in git
 )
 
 
