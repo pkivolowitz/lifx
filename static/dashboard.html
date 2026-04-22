@@ -6,14 +6,18 @@
 <title>GlowUp Dashboard</title>
 <style>
   :root {
-    --bg: #1a1a2e;
-    --surface: #16213e;
-    --border: #0f3460;
-    --text: #e0e0e0;
-    --dim: #888;
-    --accent: #e94560;
-    --green: #4ecca3;
-    --orange: #f5a623;
+    /* Neutral dark palette — softer than navy+hot-pink.  Accent is a
+       muted indigo; status colors are desaturated so a wall of badges
+       reads calmly rather than clamoring for attention. */
+    --bg: #1a1b1f;           /* neutral dark, not navy */
+    --surface: #23252b;      /* card background */
+    --border: #33363d;       /* subtle separator */
+    --text: #e8eaed;          /* primary text */
+    --dim: #9aa0a6;           /* secondary/meta text */
+    --accent: #7c9cff;        /* soft periwinkle — titles, links */
+    --green: #57cc8a;         /* success / ON / playing */
+    --orange: #e8a04d;        /* warning / override */
+    --red: #e5767b;           /* delete / error — used via fallback */
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
