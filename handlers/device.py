@@ -35,6 +35,7 @@ from server_utils import (
     is_group_id as _is_group_id,
     group_name_from_id as _group_name_from_id,
     get_groups as _get_groups,
+    split_group_members as _split_group_members,
 )
 
 # Background worker for slow power operations (group fan-out).
@@ -45,6 +46,29 @@ _power_executor: concurrent.futures.ThreadPoolExecutor = (
         max_workers=4, thread_name_prefix="power-worker",
     )
 )
+
+
+def _plug_power_worker(plug_manager: Any, label: str, on: bool) -> None:
+    """Background worker: drive a single Zigbee plug on/off.
+
+    Called from the group power fan-out.  Failures are logged but
+    never raised — one unreachable plug must not prevent the rest of
+    the group (other plugs, LIFX bulbs, Matter devices) from being
+    commanded.  PlugManager.set_power already raises
+    :class:`PlugCommandError` on any HTTP/echo-timeout failure.
+
+    Args:
+        plug_manager: The server-side :class:`PlugManager` instance.
+        label:        Plug friendly name (e.g., ``"LRTV"``).
+        on:           ``True`` for ON, ``False`` for OFF.
+    """
+    try:
+        plug_manager.set_power(label, on=on)
+    except Exception as exc:
+        logging.warning(
+            "BG plug power %s failed for '%s': %s",
+            "on" if on else "off", label, exc,
+        )
 
 
 class DeviceHandlerMixin:
@@ -417,13 +441,41 @@ class DeviceHandlerMixin:
                 active_entry: Optional[str] = self._get_active_entry_for_ip(ip)
                 self.device_manager.mark_override(ip, active_entry)
 
+            # Group power fan-out.  Groups can mix LIFX bulbs, Matter
+            # devices, and Zigbee plugs; each transport is dispatched
+            # to its own subsystem.  The LIFX path goes through the
+            # device_manager (virtual emitter or fallback worker);
+            # matter + plug dispatches happen here regardless of
+            # whether the LIFX path has a live virtual emitter.
+            plug_labels: list[str] = []
+            if _is_group_id(ip):
+                group_name: str = _group_name_from_id(ip)
+                members: list[str] = (
+                    self.device_manager._group_config.get(group_name, [])
+                )
+                _lifx_members, _matter_members, plug_labels = (
+                    _split_group_members(members)
+                )
+                if plug_labels:
+                    # Fire plug commands in background so slow broker-2
+                    # round-trips do not block the LIFX path or the
+                    # handler thread.  Plug failures are per-plug —
+                    # logged at warning, never raised, so one dead
+                    # plug cannot mask a successful LIFX fan-out.
+                    pm: Any = getattr(self, "plug_manager", None)
+                    if pm is not None:
+                        for label in plug_labels:
+                            _power_executor.submit(
+                                _plug_power_worker, pm, label, on)
+
             # If this is a group without a virtual emitter (members were
-            # unreachable at startup), fall back to direct per-member
-            # power commands dispatched to a background worker so the
-            # handler thread is freed immediately.
+            # unreachable at startup, OR the group contains only plug
+            # members), fall back to direct per-member power commands
+            # dispatched to a background worker so the handler thread
+            # is freed immediately.
             em: Optional[Emitter] = self.device_manager.get_emitter(ip)
             if em is None and _is_group_id(ip):
-                group_name: str = _group_name_from_id(ip)
+                group_name = _group_name_from_id(ip)
                 member_ips: list[str] = (
                     self.device_manager._group_config.get(group_name, [])
                 )
@@ -456,6 +508,13 @@ class DeviceHandlerMixin:
                                     )
                                     if ok:
                                         succeeded += 1
+                                continue
+                            if mip.startswith("plug:"):
+                                # Already dispatched above in the pre-flow
+                                # plug fan-out; count as success for the
+                                # member tally so the log line reflects
+                                # the full group size.
+                                succeeded += 1
                                 continue
                             dev: LifxDevice = LifxDevice(mip)
                             try:
@@ -493,6 +552,7 @@ class DeviceHandlerMixin:
                     "ip": ip,
                     "power": "on" if on else "off",
                     "members_total": len(member_ips),
+                    "plug_members": len(plug_labels),
                 })
                 return
 
@@ -501,6 +561,8 @@ class DeviceHandlerMixin:
             # and all group members — no need to duplicate here.
             logging.info("API: power %s on %s", "on" if on else "off", ip)
             self._notify_operator_override(ip)
+            if plug_labels:
+                result["plug_members"] = len(plug_labels)
             self._send_json(200, result)
         except KeyError:
             self._send_json(404, {"error": "Device not found"})
