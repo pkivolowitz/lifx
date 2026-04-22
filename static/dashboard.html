@@ -1183,20 +1183,17 @@ async function refresh() {
         const p = plugMap[label];
         const meta = p.metadata || {};
         const room = meta.room || '';
-        const state = p.last_state;  // "ON" | "OFF" | null
-        let badge, powerOn;
-        if (state === 'ON') {
-          badge = '<span class="badge badge-playing">ON</span>';
-          powerOn = true;
-        } else if (state === 'OFF') {
-          badge = '<span class="badge badge-off">OFF</span>';
-          powerOn = false;
-        } else {
-          badge = '<span class="badge badge-stopped">?</span>';
-          powerOn = false;
-        }
+        // Tri-state: ON, OFF, or null (cache cold — no command or
+        // refresh has resolved this plug yet).  The button carries
+        // both the state display and the action; no separate badge
+        // because plugs have no effect/playing state to distinguish.
+        const state = p.last_state;
+        const powerOn = state === 'ON';
         const btnLabel = state === null ? '?' : (powerOn ? 'ON' : 'OFF');
-        const powerBtn = `<button class="btn-power ${powerOn ? 'is-on' : 'is-off'}" onclick="togglePlugPower('${esc(label).replace(/'/g, "\\'")}', ${powerOn})">${btnLabel}</button>`;
+        const btnClass = state === null
+          ? 'is-off'
+          : (powerOn ? 'is-on' : 'is-off');
+        const powerBtn = `<button class="btn-power ${btnClass}" onclick="togglePlugPower('${esc(label).replace(/'/g, "\\'")}', ${powerOn})">${btnLabel}</button>`;
         const ieee = meta.ieee ? ` &middot; ${esc(meta.ieee)}` : '';
         return `
           <div class="device-row">
@@ -1206,7 +1203,6 @@ async function refresh() {
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
               ${powerBtn}
-              ${badge}
             </div>
           </div>
         `;
