@@ -108,6 +108,12 @@ _BAND_VERY_CLOSE: int = -55
 _BAND_CLOSE: int = -70
 _BAND_MID: int = -85
 
+# Hysteresis applied to band transitions. The EMA must clear a boundary
+# by this many dBm before a band change is accepted, preventing "moved"
+# storms when RSSI straddles a threshold (e.g. device at exactly -70 dBm
+# toggling close↔mid at 6 Hz and writing retained MQTT every crossing).
+_BAND_HYSTERESIS_DB: float = 3.0
+
 # Periodic heartbeat interval. A stationary tracked device emits one
 # ``heartbeat`` event per this period so the dashboard can show "last
 # seen N seconds ago" without waiting for the next physical change.
@@ -466,7 +472,7 @@ def _extract(ev: "aiobs.HCI_Event") -> Optional[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def _band_for(rssi_ema: float) -> str:
-    """Map smoothed RSSI to an exposure band label."""
+    """Map smoothed RSSI to an exposure band label (no hysteresis)."""
     if rssi_ema >= _BAND_VERY_CLOSE:
         return "very-close"
     if rssi_ema >= _BAND_CLOSE:
@@ -474,6 +480,38 @@ def _band_for(rssi_ema: float) -> str:
     if rssi_ema >= _BAND_MID:
         return "mid"
     return "far"
+
+
+_BAND_RANK: dict[str, int] = {"far": 0, "mid": 1, "close": 2, "very-close": 3}
+_BAND_LOWER_EDGE: dict[str, float] = {
+    "mid": _BAND_MID, "close": _BAND_CLOSE, "very-close": _BAND_VERY_CLOSE,
+}
+_BAND_BY_RANK: list[str] = ["far", "mid", "close", "very-close"]
+
+
+def _next_band(rssi_ema: float, current_band: str) -> str:
+    """Band for rssi_ema with hysteresis applied against current_band.
+
+    A band change is only accepted when the EMA has cleared the boundary
+    by _BAND_HYSTERESIS_DB dBm.  Devices hovering at a threshold freeze
+    in their current band rather than oscillating.
+    """
+    if current_band not in _BAND_RANK:
+        return _band_for(rssi_ema)
+    candidate = _band_for(rssi_ema)
+    if candidate == current_band:
+        return current_band
+    H = _BAND_HYSTERESIS_DB
+    cur_rank = _BAND_RANK[current_band]
+    cand_rank = _BAND_RANK[candidate]
+    if cand_rank > cur_rank:
+        # Moving closer: must clear the lower edge of the next band up by H.
+        edge = _BAND_LOWER_EDGE[_BAND_BY_RANK[cur_rank + 1]]
+        return candidate if rssi_ema >= edge + H else current_band
+    else:
+        # Moving farther: must drop below the lower edge of current band by H.
+        edge = _BAND_LOWER_EDGE[current_band]
+        return candidate if rssi_ema < edge - H else current_band
 
 
 def _payload_hash(mfr_data: Optional[str],
@@ -639,7 +677,7 @@ class Sniffer:
         )
 
         payload_changed: bool = self._update_content(state, rec)
-        new_band: str = _band_for(state.rssi_ema)
+        new_band: str = _next_band(state.rssi_ema, state.last_band)
         band_changed: bool = (new_band != state.last_band)
         if band_changed:
             state.last_band = new_band
