@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  GlowUp Matter server — LaunchDaemon for Daedalus (Mac Studio).
+
+  Hosts the python-matter-server WebSocket API on port 5580, backed by
+  the CHIP/Matter fabric at /Users/perrykivolowitz/.matter_server.
+  The hub's glowup-adapter@matter (a Pi 5 at 10.0.0.214) connects to
+  this server to control the Linkind backyard plugs and any other
+  Matter-over-Wi-Fi devices commissioned to GlowUp's own fabric.
+
+  Install:
+    sudo cp com.glowup.matter-server.plist /Library/LaunchDaemons/
+    sudo launchctl load /Library/LaunchDaemons/com.glowup.matter-server.plist
+
+  Remove:
+    sudo launchctl unload /Library/LaunchDaemons/com.glowup.matter-server.plist
+    sudo rm /Library/LaunchDaemons/com.glowup.matter-server.plist
+
+  Logs:
+    tail -f ~/Library/Logs/glowup-matter-server.log
+    tail -f ~/Library/Logs/glowup-matter-server.err
+
+  Requires:
+    ~/matter-venv built with Python 3.13+ from python-matter-server[server]
+      (python3.13 -m venv ~/matter-venv; pip install 'python-matter-server[server]').
+    ~/.matter_server/ storage populated by prior commissioning runs —
+      the Linkind plugs are paired to this fabric. Do NOT delete this
+      directory or you will need to re-commission every plug (factory
+      reset + re-pair).
+
+  Why a LaunchDaemon (system) and not a LaunchAgent (user): KeepAlive
+  under a LaunchAgent only runs while the user is logged in. The
+  Matter server must be up whenever the Mac is up, independent of
+  anyone's login session. UserName= lets us run it as perrykivolowitz
+  so it owns the chip.json and fabric cert files in ~/.matter_server.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.glowup.matter-server</string>
+
+    <key>UserName</key>
+    <string>perrykivolowitz</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/perrykivolowitz</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/perrykivolowitz/matter-venv/bin/matter-server</string>
+        <string>--storage-path</string>
+        <string>/Users/perrykivolowitz/.matter_server</string>
+        <string>--port</string>
+        <string>5580</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/perrykivolowitz/matter-venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/perrykivolowitz</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/perrykivolowitz/Library/Logs/glowup-matter-server.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/perrykivolowitz/Library/Logs/glowup-matter-server.err</string>
+</dict>
+</plist>
