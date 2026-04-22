@@ -10,28 +10,168 @@ process boundary, and the server-side callback was never wired to
 compensate.  These tests encode the contract so it can't regress.
 
 The tests exercise the actual ``_on_remote_signal`` function extracted
-from server.py's startup path.  A real PowerLogger (temp SQLite DB) is
-used — no mocking of the recording path.
+from server.py's startup path and a real PowerLogger instance whose
+PostgreSQL connection is faked in-memory (see ``_FakePsycopg2`` below).
+No external database is required.
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__: str = "1.0"
+__version__: str = "1.1"
 
 import json
+import math
 import os
-import tempfile
+import re
+import threading
 import time
 import unittest
 from types import SimpleNamespace
 from typing import Any, Optional
+from unittest.mock import patch
 
 from infrastructure.power_logger import (
     MIN_WRITE_INTERVAL,
     POWER_PROPERTIES,
     PowerLogger,
 )
+
+
+# ---------------------------------------------------------------------------
+# In-memory fake for psycopg2 used by PowerLogger
+# ---------------------------------------------------------------------------
+#
+# PowerLogger talks to PostgreSQL exclusively; these tests need to exercise
+# the real class without a live database.  The fake emulates only the subset
+# of the DB-API surface that PowerLogger uses: a cursor context manager,
+# parameterized execute(), fetchone/fetchall, and a .description attribute.
+# SQL dispatch is keyword-driven and covers the handful of statements the
+# class issues (DDL, INSERT, the bucketed SELECT used by query(), the
+# DISTINCT device SELECT used by devices(), and the most-recent-row SELECT
+# used by mark_offline()).
+
+class _FakeCursor:
+    def __init__(self, rows: list[dict[str, Any]], lock: threading.Lock) -> None:
+        self._rows = rows
+        self._lock = lock
+        self._result: list[tuple[Any, ...]] = []
+        self.description: list[tuple[str, ...]] = []
+
+    def __enter__(self) -> "_FakeCursor":
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        stripped: str = sql.strip()
+        upper: str = stripped.upper()
+        if upper.startswith("CREATE") or upper.startswith("DELETE"):
+            self._result = []
+            self.description = []
+            return
+        if upper.startswith("INSERT"):
+            (device, ts, power, voltage, current_a, energy, pf) = params
+            with self._lock:
+                self._rows.append({
+                    "device": device,
+                    "timestamp": ts,
+                    "power": power,
+                    "voltage": voltage,
+                    "current_a": current_a,
+                    "energy": energy,
+                    "power_factor": pf,
+                })
+            self._result = []
+            self.description = []
+            return
+        if "SELECT DISTINCT DEVICE" in upper:
+            with self._lock:
+                names: list[str] = sorted({r["device"] for r in self._rows})
+            self._result = [(n,) for n in names]
+            self.description = [("device",)]
+            return
+        if "ORDER BY TIMESTAMP DESC LIMIT 1" in upper:
+            device: str = params[0]
+            with self._lock:
+                matches = [r for r in self._rows if r["device"] == device]
+            matches.sort(key=lambda r: r["timestamp"], reverse=True)
+            if matches:
+                r = matches[0]
+                self._result = [(
+                    r["power"], r["voltage"], r["current_a"],
+                    r["energy"], r["power_factor"],
+                )]
+            else:
+                self._result = []
+            self.description = [
+                ("power",), ("voltage",), ("current_a",),
+                ("energy",), ("power_factor",),
+            ]
+            return
+        if "GROUP BY BUCKET" in upper:
+            # params: (resolution, resolution, [device,] since)
+            resolution: float = float(params[0])
+            if len(params) == 4:
+                device = params[2]
+                since: float = float(params[3])
+                matches = [
+                    r for r in self._rows
+                    if r["device"] == device and r["timestamp"] >= since
+                ]
+            else:
+                since = float(params[2])
+                matches = [r for r in self._rows if r["timestamp"] >= since]
+            buckets: dict[tuple[int, str], list[dict[str, Any]]] = {}
+            for r in matches:
+                bkey = (int(math.floor(r["timestamp"] / resolution)) * int(resolution), r["device"])
+                buckets.setdefault(bkey, []).append(r)
+            out: list[tuple[Any, ...]] = []
+            for (bucket, device), group in sorted(buckets.items()):
+                def _avg(key: str) -> Optional[float]:
+                    vals = [g[key] for g in group if g[key] is not None]
+                    return sum(vals) / len(vals) if vals else None
+                def _max(key: str) -> Optional[float]:
+                    vals = [g[key] for g in group if g[key] is not None]
+                    return max(vals) if vals else None
+                out.append((
+                    bucket, device,
+                    _avg("power"), _avg("voltage"), _avg("current_a"),
+                    _max("energy"), _avg("power_factor"),
+                ))
+            self._result = out
+            self.description = [
+                ("bucket",), ("device",), ("power",), ("voltage",),
+                ("current_a",), ("energy",), ("power_factor",),
+            ]
+            return
+        # Summary queries and anything else — return empty.
+        self._result = []
+        self.description = []
+
+    def fetchone(self) -> Optional[tuple[Any, ...]]:
+        return self._result[0] if self._result else None
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return list(self._result)
+
+
+class _FakeConnection:
+    def __init__(self) -> None:
+        self._rows: list[dict[str, Any]] = []
+        self._lock: threading.Lock = threading.Lock()
+        self.autocommit: bool = False
+
+    def cursor(self) -> _FakeCursor:
+        return _FakeCursor(self._rows, self._lock)
+
+    def close(self) -> None:
+        return None
+
+
+def _fake_connect(*_args: Any, **_kwargs: Any) -> _FakeConnection:
+    return _FakeConnection()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -147,19 +287,19 @@ class TestRemoteSignalPowerRecording(unittest.TestCase):
     """Verify that power signals from adapter subprocesses get recorded."""
 
     def setUp(self) -> None:
-        """Create a temp PowerLogger for each test."""
-        self._tmpfile = tempfile.NamedTemporaryFile(
-            suffix=".db", delete=False,
+        """Create a PowerLogger backed by the in-memory psycopg2 fake."""
+        self._patcher = patch(
+            "infrastructure.power_logger.psycopg2.connect",
+            side_effect=_fake_connect,
         )
-        self._path: str = self._tmpfile.name
-        self._tmpfile.close()
-        self.pl: PowerLogger = PowerLogger(db_path=self._path)
+        self._patcher.start()
+        self.pl: PowerLogger = PowerLogger(dsn="postgresql://fake/fake")
         self.pl._last_write.clear()
 
     def tearDown(self) -> None:
-        """Clean up temp DB."""
+        """Close the logger and stop the psycopg2 patch."""
         self.pl.close()
-        os.unlink(self._path)
+        self._patcher.stop()
 
     def test_power_signal_recorded(self) -> None:
         """A power signal on glowup/signals/ML_Power:power must produce a DB row."""

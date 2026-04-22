@@ -758,9 +758,11 @@ class TestCreateMqttClient(unittest.TestCase):
                          "theremin.simulator"):
             try:
                 mod = importlib.import_module(mod_name)
-            except ImportError:
-                # theremin.display requires tkinter which may not be
-                # compiled into the Python build (e.g. Homebrew 3.14).
+            except (ImportError, SystemExit):
+                # theremin.display needs tkinter (not always compiled into
+                # the Python build) and theremin.synth calls sys.exit on
+                # missing optional deps (sounddevice). Treat both as
+                # "module unavailable in this env" and skip.
                 continue
             self.assertFalse(
                 hasattr(mod, "_PAHO_V2"),
@@ -769,20 +771,17 @@ class TestCreateMqttClient(unittest.TestCase):
             )
 
     def test_no_inline_callbackapiversion_in_theremin_modules(self) -> None:
-        """Theremin submodules must not reference CallbackAPIVersion."""
-        import inspect
-        import importlib
-        for mod_name in ("theremin.display", "theremin.synth",
-                         "theremin.simulator"):
-            try:
-                mod = importlib.import_module(mod_name)
-            except ImportError:
-                continue
-            source: str = inspect.getsource(mod)
+        """Theremin submodule source files must not reference CallbackAPIVersion."""
+        for filename in ("display.py", "synth.py", "simulator.py"):
+            filepath: str = os.path.join(
+                os.path.dirname(__file__), "..", "theremin", filename,
+            )
+            with open(filepath, "r") as f:
+                source: str = f.read()
             self.assertNotIn(
                 "CallbackAPIVersion",
                 source,
-                f"{mod_name} still references CallbackAPIVersion "
+                f"theremin/{filename} still references CallbackAPIVersion "
                 f"directly — should use create_mqtt_client",
             )
 
