@@ -247,20 +247,38 @@ class TpmsLogger:
 
     # ---- Query surface ------------------------------------------------------
 
-    def unique_sensors(self) -> list[dict[str, Any]]:
-        """Return one entry per distinct (model, sensor_id) ever seen.
+    def unique_sensors(
+        self,
+        window_s: Optional[float] = None,
+    ) -> list[dict[str, Any]]:
+        """Return one entry per distinct (model, sensor_id) recently seen.
 
         Each entry carries first/last timestamps, total observation
         count, and the most recent raw payload — matching the shape
         of the old in-memory ``_ernie_tpms`` dict so the dashboard
         API contract doesn't change.
 
+        Args:
+            window_s: If set, only include sensors whose most recent
+                observation is within ``now - window_s``.  ``first_seen``
+                and ``count`` are computed over the SAME window, so a
+                sensor that has been transmitting for weeks appears
+                freshly in the window with a count that reflects only
+                the in-window traffic.  ``None`` returns everything in
+                the retention window (expensive on long-running
+                databases — use a window for polled dashboards).
+
         Returns:
             List sorted by ``last_seen`` descending.
         """
         if self._conn is None:
             return []
-        sql: str = """
+        clause: str = ""
+        params: tuple = ()
+        if window_s is not None and window_s > 0:
+            clause = "WHERE timestamp >= %s"
+            params = (time.time() - float(window_s),)
+        sql: str = f"""
             SELECT model, sensor_id,
                    MIN(timestamp) AS first_seen,
                    MAX(timestamp) AS last_seen,
@@ -268,15 +286,20 @@ class TpmsLogger:
                    (SELECT payload FROM tpms_observations o2
                      WHERE o2.model = o1.model
                        AND o2.sensor_id = o1.sensor_id
+                       {"AND o2.timestamp >= %s" if clause else ""}
                      ORDER BY timestamp DESC LIMIT 1) AS last_payload
             FROM tpms_observations o1
+            {clause}
             GROUP BY model, sensor_id
             ORDER BY MAX(timestamp) DESC
         """
+        # Two %s substitutions when windowed: one for the subquery
+        # filter, one for the outer WHERE.
+        exec_params: tuple = (params + params) if clause else ()
         with self._lock:
             try:
                 with self._conn.cursor() as cur:
-                    cur.execute(sql)
+                    cur.execute(sql, exec_params)
                     out: list[dict[str, Any]] = []
                     for row in cur.fetchall():
                         model, sid, first_s, last_s, count, last_p = row

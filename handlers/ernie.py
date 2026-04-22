@@ -36,6 +36,15 @@ logger: logging.Logger = logging.getLogger("glowup.handlers.ernie")
 # payload small; the full 30-day history lives in PG.
 BLE_EVENTS_TAIL: int = 200
 
+# Dashboard-polling windows.  The /ernie dashboard is a live view —
+# "what's audible right now" — so the default endpoints return only
+# recently-heard sensors.  Full history remains queryable by direct
+# SQL (or by setting a longer window when a catalog view is built
+# later).  Bound here rather than in the loggers so the logger
+# API stays uncoupled from dashboard policy.
+BLE_CATALOG_WINDOW_S: float = 600.0    # 10 minutes — BLE devices in range
+TPMS_CATALOG_WINDOW_S: float = 7200.0  # 2 hours — vehicles seen today-ish
+
 # Freshness thresholds (seconds) for the derived ``/api/ernie/thermal``
 # health block.  Names mirror the sensor that produces each channel.
 HEALTH_MOSQUITTO_WINDOW_S: int = 60
@@ -46,6 +55,34 @@ HEALTH_PI_THERMAL_WINDOW_S: int = 90
 # ``ThermalLogger.latest()``.  Keeps a single spelling so a rename
 # is one place.
 ERNIE_NODE_ID: str = "ernie"
+
+
+def _parse_window_s(path: str, default: float) -> float:
+    """Extract ``?window_s=<seconds>`` from the request path.
+
+    Returns the default when the query string is missing, blank, or
+    not parseable as a non-negative float.  ``window_s=0`` is a
+    supported request meaning "no window filter, full catalog" and
+    is returned verbatim; negative values collapse to default
+    because they have no useful meaning here.
+    """
+    if "?" not in path:
+        return default
+    query: str = path.split("?", 1)[1]
+    for pair in query.split("&"):
+        if "=" not in pair:
+            continue
+        key, raw = pair.split("=", 1)
+        if key != "window_s":
+            continue
+        try:
+            val: float = float(raw)
+        except (TypeError, ValueError):
+            return default
+        if val < 0:
+            return default
+        return val
+    return default
 
 
 class ErnieHandlerMixin:
@@ -70,12 +107,25 @@ class ErnieHandlerMixin:
             self._send_json(404, {"error": "Ernie dashboard not found"})
 
     def _handle_get_ernie_ble(self) -> None:
-        """GET /api/ernie/ble — current BLE device catalog."""
+        """GET /api/ernie/ble — recently-heard BLE devices.
+
+        Default window is :data:`BLE_CATALOG_WINDOW_S` (10 min) so
+        the dashboard polls a bounded payload.  Clients that need
+        the full historical catalog can pass ``?window_s=0`` (no
+        filter) or any larger value.
+        """
+        window: float = _parse_window_s(
+            getattr(self, "path", ""), BLE_CATALOG_WINDOW_S,
+        )
         ble_log: Any = getattr(self, "ble_sniffer_logger", None)
-        devices: list[dict] = ble_log.catalog() if ble_log else []
+        devices: list[dict] = (
+            ble_log.catalog(window_s=window if window > 0 else None)
+            if ble_log else []
+        )
         self._send_json(200, {
             "devices": devices,
             "count": len(devices),
+            "window_s": window,
             "timestamp": time.time(),
         })
 
@@ -90,19 +140,25 @@ class ErnieHandlerMixin:
         })
 
     def _handle_get_ernie_tpms(self) -> None:
-        """GET /api/ernie/tpms — unique TPMS sensors seen.
+        """GET /api/ernie/tpms — recently-heard TPMS sensors.
 
-        One entry per (model, id) tuple — that pair is the durable
-        fingerprint of a physical transmitter.  Backed by
-        ``tpms_observations`` in PostgreSQL, so every frame ever
-        decoded within the retention window counts toward the sensor
-        catalog even across server restarts.
+        Default window is :data:`TPMS_CATALOG_WINDOW_S` (2 h),
+        sized for the dashboard's "vehicles seen today-ish" use
+        case.  ``?window_s=0`` drops the filter and returns the
+        full retention-window catalog.
         """
+        window: float = _parse_window_s(
+            getattr(self, "path", ""), TPMS_CATALOG_WINDOW_S,
+        )
         tpms_log: Any = getattr(self, "tpms_logger", None)
-        entries: list[dict] = tpms_log.unique_sensors() if tpms_log else []
+        entries: list[dict] = (
+            tpms_log.unique_sensors(window_s=window if window > 0 else None)
+            if tpms_log else []
+        )
         self._send_json(200, {
             "sensors": entries,
             "count": len(entries),
+            "window_s": window,
             "timestamp": time.time(),
         })
 

@@ -117,15 +117,24 @@ PostgreSQL.  They survive server restarts without losing history.
 | Method | Path | Source |
 |--------|------|--------|
 | GET | `/ernie` | static HTML (`static/ernie.html`) |
-| GET | `/api/ernie/ble` | `BleSnifferLogger.catalog()` |
+| GET | `/api/ernie/ble` | `BleSnifferLogger.catalog(window_s=600)` — last 10 min by default |
 | GET | `/api/ernie/ble/events` | `BleSnifferLogger.events_tail(n=200)` |
-| GET | `/api/ernie/tpms` | `TpmsLogger.unique_sensors()` |
+| GET | `/api/ernie/tpms` | `TpmsLogger.unique_sensors(window_s=7200)` — last 2 h by default |
 | GET | `/api/ernie/thermal` | `ThermalLogger.latest()["ernie"]` + health derived from BLE/TPMS/thermal freshness |
 
 The endpoints are `requires_auth=False` on the route table, meaning
 they are LAN-reachable without a token.  The Cloudflare tunnel gate
 in [`server.py::_dispatch`](../server.py) blocks them over
 `lights.schoolio.net` — see [Chapter 15](15-tunnel.md).
+
+### Window override
+
+`/api/ernie/ble` and `/api/ernie/tpms` accept a `?window_s=<seconds>`
+query parameter to widen or narrow the default window.  Responses
+echo the effective window in the JSON body as `window_s`.  A zero
+or negative value drops the filter and returns the full retention
+catalog — expensive on long-running databases, so the dashboard
+polling path should never send it.
 
 ---
 

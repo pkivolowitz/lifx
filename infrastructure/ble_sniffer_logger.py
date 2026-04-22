@@ -312,11 +312,23 @@ class BleSnifferLogger:
 
     # ---- Query surface ------------------------------------------------------
 
-    def catalog(self) -> list[dict[str, Any]]:
-        """Return every MAC the sniffer has seen, freshest first.
+    def catalog(
+        self,
+        window_s: Optional[float] = None,
+    ) -> list[dict[str, Any]]:
+        """Return MACs the sniffer has seen, freshest first.
 
         Drives the ``/api/ernie/ble`` dashboard endpoint.  Keeps
         ``gone`` entries at the bottom to match prior ordering.
+
+        Args:
+            window_s: If set, only include MACs whose
+                ``last_heard_ts`` is within ``now - window_s``.
+                ``gone`` entries are filtered by ``updated_ts``
+                instead — a recently-departed MAC stays visible for
+                the window after the retired-marker arrives and then
+                rotates out.  ``None`` returns the full catalog
+                (every MAC ever seen).
 
         Returns:
             List of dicts — the ``payload`` JSONB is unwrapped and
@@ -324,16 +336,32 @@ class BleSnifferLogger:
         """
         if self._conn is None:
             return []
+        # The dashboard cares about "what was recently audible", so a
+        # present MAC filters on `last_heard_ts` and a gone-marked MAC
+        # filters on `updated_ts` (the flip-to-gone moment) — otherwise
+        # a MAC that went gone hours ago but has a stale
+        # `last_heard_ts` would keep appearing.
+        clause: str = ""
+        params: tuple = ()
+        if window_s is not None and window_s > 0:
+            cutoff: float = time.time() - float(window_s)
+            clause = (
+                "WHERE (gone = 0 AND last_heard_ts >= %s) "
+                "   OR (gone = 1 AND COALESCE(updated_ts, 0) >= %s)"
+            )
+            params = (cutoff, cutoff)
+        sql: str = f"""
+            SELECT mac, first_heard_ts, last_heard_ts,
+                   gone, payload
+            FROM ble_seen
+            {clause}
+            ORDER BY gone ASC,
+                     last_heard_ts DESC NULLS LAST
+        """
         with self._lock:
             try:
                 with self._conn.cursor() as cur:
-                    cur.execute(
-                        """SELECT mac, first_heard_ts, last_heard_ts,
-                                  gone, payload
-                           FROM ble_seen
-                           ORDER BY gone ASC,
-                                    last_heard_ts DESC NULLS LAST"""
-                    )
+                    cur.execute(sql, params)
                     out: list[dict[str, Any]] = []
                     for mac, first_s, last_s, gone, payload in cur.fetchall():
                         entry: dict[str, Any] = dict(payload or {})
