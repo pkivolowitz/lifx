@@ -34,6 +34,7 @@ except ImportError:
     _HAS_YAML = False
 
 from voice import constants as C
+from zigbee_service.client import ZigbeeControlClient
 
 logger: logging.Logger = logging.getLogger("glowup.voice.executor")
 
@@ -114,6 +115,13 @@ class GlowUpExecutor:
         self._chat_model: str = chat_model
         self._ollama_host: str = ollama_host
         self._zigbee_url: str = zigbee_service_url.rstrip("/")
+        # Single canonical publisher to glowup-zigbee-service.  Replaces
+        # the local _plug_http helper so voice and the hub scheduler
+        # (phase 3) will share one client with identical error-handling
+        # and positive-handoff semantics.
+        self._zigbee: ZigbeeControlClient = ZigbeeControlClient(
+            self._zigbee_url, timeout_s=_PLUG_HTTP_TIMEOUT,
+        )
 
         # Per-room conversation history.
         self._chat_history: dict[str, list[dict[str, str]]] = {}
@@ -720,62 +728,48 @@ class GlowUpExecutor:
     # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
-    # Plug handlers — direct HTTP to glowup-zigbee-service on broker-2.
+    # Plug handlers — route through the shared ZigbeeControlClient.
     # No hub hop, no effect-engine machinery, no brightness chaining.
     # ------------------------------------------------------------------
-
-    def _plug_http(
-        self, method: str, path: str, body: Any | None = None,
-    ) -> tuple[bool, Any]:
-        """Call broker-2's zigbee service. Returns (ok, parsed_or_error)."""
-        url: str = f"{self._zigbee_url}{path}"
-        data: bytes | None = None
-        headers: dict[str, str] = {}
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(
-            url, data=data, headers=headers, method=method,
-        )
-        try:
-            with urllib.request.urlopen(
-                req, timeout=_PLUG_HTTP_TIMEOUT,
-            ) as resp:
-                raw: bytes = resp.read()
-                if not raw:
-                    return (True, {})
-                try:
-                    return (True, json.loads(raw))
-                except ValueError:
-                    return (True, raw.decode("utf-8", "replace"))
-        except urllib.error.HTTPError as exc:
-            return (False, f"HTTP {exc.code}")
-        except urllib.error.URLError as exc:
-            return (False, f"unreachable: {exc.reason}")
-        except Exception as exc:
-            return (False, str(exc))
 
     def _plug_power(
         self, zigbee_name: str, display_target: str, params: dict[str, Any],
     ) -> dict[str, Any]:
         """Turn a Zigbee plug on or off via broker-2.
 
-        POST /devices/{name}/state body {"state": "ON" | "OFF"}.
+        Uses the shared client's positive-handoff semantics — if the
+        service accepted the command but the device never echoed, the
+        spoken confirmation reflects that ambiguity rather than
+        claiming success.
         """
         on: bool = bool(params.get("on", False))
         state: str = "ON" if on else "OFF"
-        ok, result = self._plug_http(
-            "POST", f"/devices/{urllib.parse.quote(zigbee_name)}/state",
-            {"state": state},
-        )
-        if not ok:
+        result = self._zigbee.set_state(zigbee_name, state)
+        if not result.ok:
             logger.warning(
-                "Plug %s set %s failed: %s", zigbee_name, state, result,
+                "Plug %s set %s failed: %s",
+                zigbee_name, state, result.error,
             )
             return {
                 "status": "error",
                 "confirmation": (
-                    f"I couldn't reach {display_target}. {result}."
+                    f"I couldn't reach {display_target}. {result.error}."
+                ),
+                "speak": True,
+            }
+        # Service accepted but device did not echo — do not claim
+        # success to the user.  This is Perry's "military device"
+        # positive-handoff: every stage confirms receipt.
+        if not result.echoed:
+            logger.warning(
+                "Plug %s sent %s but no echo: %s",
+                zigbee_name, state, result.error,
+            )
+            return {
+                "status": "error",
+                "confirmation": (
+                    f"I sent the command but {display_target} didn't "
+                    f"confirm. It may still be switching."
                 ),
                 "speak": True,
             }
@@ -790,8 +784,18 @@ class GlowUpExecutor:
         self, zigbee_name: str, display_target: str,
     ) -> dict[str, Any]:
         """Report a plug's current ON/OFF state."""
-        ok, result = self._plug_http("GET", "/devices")
-        if not ok or not isinstance(result, dict):
+        ok, result = self._zigbee.get_device(zigbee_name)
+        if not ok:
+            # 404 from the service arrives here — treat "unknown
+            # device" distinctly from "service unreachable" so the
+            # user hears an accurate spoken report.
+            err: str = str(result)
+            if "unknown device" in err.lower():
+                return {
+                    "status": "ok",
+                    "confirmation": f"I don't know about {display_target}.",
+                    "speak": True,
+                }
             return {
                 "status": "error",
                 "confirmation": (
@@ -799,26 +803,24 @@ class GlowUpExecutor:
                 ),
                 "speak": True,
             }
-        devices: list[dict[str, Any]] = result.get("devices", [])
-        for dev in devices:
-            if dev.get("name") == zigbee_name:
-                if not dev.get("online", False):
-                    return {
-                        "status": "ok",
-                        "confirmation": (
-                            f"{display_target} is offline."
-                        ),
-                        "speak": True,
-                    }
-                dev_state: str = (dev.get("state") or "unknown").lower()
-                return {
-                    "status": "ok",
-                    "confirmation": f"{display_target} is {dev_state}.",
-                    "speak": True,
-                }
+        if not isinstance(result, dict):
+            return {
+                "status": "error",
+                "confirmation": (
+                    f"I can't check {display_target} right now."
+                ),
+                "speak": True,
+            }
+        if not result.get("online", False):
+            return {
+                "status": "ok",
+                "confirmation": f"{display_target} is offline.",
+                "speak": True,
+            }
+        dev_state: str = (result.get("state") or "unknown").lower()
         return {
             "status": "ok",
-            "confirmation": f"I don't know about {display_target}.",
+            "confirmation": f"{display_target} is {dev_state}.",
             "speak": True,
         }
 

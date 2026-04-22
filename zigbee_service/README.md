@@ -61,11 +61,32 @@ curl -s http://10.0.0.123:8422/devices | jq
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | Liveness + version |
-| GET | `/devices` | All current device state |
+| GET | `/devices` | All current device state; `?type=plug` filter supported |
 | GET | `/devices/{name}` | Single device current state |
 | GET | `/devices/{name}/history?hours=24&resolution=60` | Power history |
 | GET | `/summary?days=7&rate=0.13` | Aggregate kWh + cost |
 | POST | `/devices/{name}/state` | Body `{"state":"ON"\|"OFF"}` |
+
+## Device types
+
+Every device in `/devices` carries a `type` field set by fingerprinting
+the accumulated Z2M payload. Hub-side consumers (dashboard, group model,
+scheduler) should filter by type rather than re-implementing inference.
+
+| Type | Fingerprint | Examples |
+|---|---|---|
+| `plug` | has `state` (switchable relay; metering optional) | ThirdReality Gen3 smart plug |
+| `soil` | has `soil_moisture` | ThirdReality Soil Moisture Sensor Gen2 |
+| `contact` | has `contact` | magnet / door-window sensor |
+| `motion` | has `occupancy` or `motion` | PIR / occupancy sensor |
+| `button` | has `action` | scene controller / button remote |
+| `unknown` | default until a distinguishing field arrives | newly paired device, first heartbeat |
+
+Sensor fingerprints are checked before `plug` — a soil sensor that
+happens to publish a `state` field will still classify as `soil`. Type
+is sticky: once the device has ever reported its distinguishing field
+it stays classified even if a later heartbeat carries only
+`linkquality`.
 
 ## Config (environment variables)
 

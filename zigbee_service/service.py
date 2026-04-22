@@ -53,7 +53,7 @@ See ``glowup-zigbee-service.service`` for the systemd unit.
 
 from __future__ import annotations
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import json
 import logging
@@ -116,6 +116,40 @@ SIGNAL_QOS: int = 0
 # Command state-change wait timeout — how long POST /devices/{name}/state
 # blocks waiting for the echoed new state before returning.
 CMD_ECHO_TIMEOUT_SEC: float = 5.0
+
+# Device-type taxonomy lives in a sibling module so clients of this
+# service (hub dashboard, hub scheduler, voice coordinator) can import
+# the constants and inference function without pulling paho/sqlite.
+# Re-exported below so existing callers importing from service.py keep
+# working.
+#
+# Dual-mode import: in-repo service.py runs as a package member
+# (``zigbee_service.service``); deployed to broker-2 it runs as a bare
+# script from /opt/glowup-zigbee/ with device_types.py beside it.  The
+# fallback handles the flat-layout case without requiring a packaging
+# change on broker-2.
+try:
+    from zigbee_service.device_types import (  # noqa: F401 (re-export)
+        KNOWN_TYPES,
+        TYPE_BUTTON,
+        TYPE_CONTACT,
+        TYPE_MOTION,
+        TYPE_PLUG,
+        TYPE_SOIL,
+        TYPE_UNKNOWN,
+        infer_device_type,
+    )
+except ImportError:
+    from device_types import (  # type: ignore[no-redef]  # noqa: F401
+        KNOWN_TYPES,
+        TYPE_BUTTON,
+        TYPE_CONTACT,
+        TYPE_MOTION,
+        TYPE_PLUG,
+        TYPE_SOIL,
+        TYPE_UNKNOWN,
+        infer_device_type,
+    )
 
 logger: logging.Logger = logging.getLogger("glowup.zigbee_service")
 
@@ -256,6 +290,11 @@ class DeviceState:
     voltage: Optional[float] = None
     current_a: Optional[float] = None
     energy_kwh: Optional[float] = None
+    # Device classification; see infer_device_type.  Defaults to
+    # TYPE_UNKNOWN until the first payload with a distinguishing
+    # fingerprint arrives — the registry re-runs inference after every
+    # update, so classification is sticky once raw accumulates.
+    type: str = TYPE_UNKNOWN
     # All raw properties from the last Z2M message — for devices we
     # don't specially understand (soil sensors, etc.).
     raw: dict[str, Any] = None  # type: ignore
@@ -268,6 +307,7 @@ class DeviceState:
         """Serialize current state to a JSON-safe dict."""
         return {
             "name": self.name,
+            "type": self.type,
             "online": self.online,
             "last_seen": self.last_seen,
             "age_sec": round(time.time() - self.last_seen, 1)
@@ -328,6 +368,11 @@ class StateRegistry:
             # Keep a merged snapshot of the raw payload for opaque
             # devices (soil sensors, etc.).
             dev.raw.update(payload)
+            # Re-run type inference against the accumulated raw.  Cheap
+            # (dict membership checks) and sticky — once a soil sensor
+            # has ever reported soil_moisture it stays classified as
+            # soil even if a later heartbeat only carries linkquality.
+            dev.type = infer_device_type(dev.raw)
             # Fire any waiting Event so command handlers can unblock.
             evt: Optional[threading.Event] = self._state_events.get(name)
             if evt is not None:
@@ -628,8 +673,15 @@ class ZigbeeHTTPHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/devices":
+            # Optional ?type= filter — unknown type names yield an empty
+            # list rather than 400 so dashboards tolerate rolling
+            # upgrades (hub built against a newer taxonomy than service).
+            type_filter: Optional[str] = None
+            if "type" in qs and qs["type"]:
+                type_filter = qs["type"][0]
             devs: list[dict[str, Any]] = [
                 d.to_dict() for d in self.registry.snapshot()
+                if type_filter is None or d.type == type_filter
             ]
             devs.sort(key=lambda d: d["name"])
             self._send_json(200, {"devices": devs})
