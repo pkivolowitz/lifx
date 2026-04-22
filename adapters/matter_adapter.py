@@ -170,7 +170,10 @@ class MatterAdapter:
             try:
                 self._loop.run_until_complete(self._run_async())
                 delay = RECONNECT_DELAY  # Reset on clean exit.
-            except Exception as exc:
+            except (Exception, asyncio.CancelledError) as exc:
+                # CancelledError is BaseException in Python 3.8+; catching
+                # it explicitly prevents it from silently killing this thread
+                # when the WebSocket closes mid-session.
                 logger.warning(
                     "Matter connection failed: %s — retrying in %.0fs",
                     exc, delay,
@@ -205,6 +208,18 @@ class MatterAdapter:
             # Poll state and drain command queue while running.
             try:
                 while self._running:
+                    # Exit immediately if the WebSocket receive loop died
+                    # so _run_loop can reconnect rather than spinning
+                    # against a dead connection.
+                    if listen_task.done():
+                        exc = (listen_task.exception()
+                               if not listen_task.cancelled() else None)
+                        logger.warning(
+                            "Matter WebSocket closed: %s — reconnecting",
+                            exc,
+                        )
+                        break
+
                     # Drain pending commands from HTTP/scheduler threads.
                     while not self._cmd_queue.empty():
                         try:
@@ -222,8 +237,16 @@ class MatterAdapter:
                     await asyncio.sleep(1.0)
                     await self._sync_state()
             finally:
-                listen_task.cancel()
-                await self._client.disconnect()
+                if not listen_task.done():
+                    listen_task.cancel()
+                try:
+                    await listen_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                try:
+                    await self._client.disconnect()
+                except Exception:
+                    pass
                 self._client = None
 
     async def _sync_state(self) -> None:
