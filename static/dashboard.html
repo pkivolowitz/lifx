@@ -621,6 +621,13 @@
     </details>
   </div>
 
+  <details class="card" id="plugs-details" style="margin-top: 16px;">
+    <summary><h2 style="display:inline;cursor:pointer;">Plugs (Zigbee)</h2>
+      <button class="btn-add-schedule" onclick="event.preventDefault(); refreshPlugs();" title="Refresh live state from broker-2">&#x21bb;</button>
+    </summary>
+    <div id="plugs" style="margin-top:12px;"><div class="device-idle" style="padding:8px 0;">Loading...</div></div>
+  </details>
+
   <details class="card" style="margin-top: 16px;">
     <summary><h2 style="display:inline;cursor:pointer;">Discovered Devices (ARP Keepalive)</h2></summary>
     <div id="discovered-bulbs" style="margin-top:12px;"><div class="device-idle" style="padding:8px 0;">Waiting for ARP scan...</div></div>
@@ -792,6 +799,9 @@ window.addEventListener('load', () => {
     showDashboard();
     refresh();
     startPolling(POLL_INTERVAL_MS);
+    // Warm the plug cache once so the Plugs section shows real state
+    // on first paint instead of "?" until the user clicks a toggle.
+    refreshPlugs();
   }
 });
 
@@ -809,7 +819,7 @@ async function refresh() {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
-    const [devices, schedule, discovered, configGroups, automationsResp, stateResp, matterResp] = await Promise.all([
+    const [devices, schedule, discovered, configGroups, automationsResp, stateResp, matterResp, plugsResp] = await Promise.all([
       api('/api/devices'),
       api('/api/schedule'),
       api('/api/discovered_bulbs'),
@@ -817,9 +827,10 @@ async function refresh() {
       api('/api/automations'),
       api('/api/state'),
       api('/api/matter/devices'),
+      api('/api/plugs'),
     ]);
 
-    const results = [devices, schedule, discovered, configGroups, automationsResp, stateResp, matterResp];
+    const results = [devices, schedule, discovered, configGroups, automationsResp, stateResp, matterResp, plugsResp];
 
     // Any 401 → back to login.
     if (results.some(r => r && r._authFailed)) {
@@ -1157,6 +1168,51 @@ async function refresh() {
       }).join('');
     }
 
+    // Plugs (Zigbee smart plugs) — cached state from the hub's
+    // PlugManager.  Live state comes from broker-2 after the user
+    // (or periodic reload) calls POST /api/plugs/refresh; until
+    // then `last_state` can be null and the UI shows "?".
+    const pEl = document.getElementById('plugs');
+    const plugMap = (plugsResp && plugsResp.plugs) || {};
+    const plugNames = Object.keys(plugMap).sort();
+    if (plugNames.length === 0) {
+      pEl.innerHTML =
+        '<div class="device-idle" style="padding:8px 0;">No plugs configured</div>';
+    } else {
+      pEl.innerHTML = plugNames.map(label => {
+        const p = plugMap[label];
+        const meta = p.metadata || {};
+        const room = meta.room || '';
+        const state = p.last_state;  // "ON" | "OFF" | null
+        let badge, powerOn;
+        if (state === 'ON') {
+          badge = '<span class="badge badge-playing">ON</span>';
+          powerOn = true;
+        } else if (state === 'OFF') {
+          badge = '<span class="badge badge-off">OFF</span>';
+          powerOn = false;
+        } else {
+          badge = '<span class="badge badge-stopped">?</span>';
+          powerOn = false;
+        }
+        const btnLabel = state === null ? '?' : (powerOn ? 'ON' : 'OFF');
+        const powerBtn = `<button class="btn-power ${powerOn ? 'is-on' : 'is-off'}" onclick="togglePlugPower('${esc(label).replace(/'/g, "\\'")}', ${powerOn})">${btnLabel}</button>`;
+        const ieee = meta.ieee ? ` &middot; ${esc(meta.ieee)}` : '';
+        return `
+          <div class="device-row">
+            <div>
+              <div class="device-name">${esc(label)}</div>
+              <div class="device-meta">${esc(room)}${ieee}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              ${powerBtn}
+              ${badge}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
     // Discovered Devices — cross-reference with device list for
     // labels, product type, and zone count.  Each row exposes an
     // inline label input and an Identify button so the user can
@@ -1464,6 +1520,49 @@ async function togglePower(deviceId, currentlyOn) {
   } catch (e) {
     console.error('Power toggle request failed:', e);
   }
+}
+
+// Toggle a single Zigbee plug by its friendly name.  The hub proxies
+// to broker-2 and waits for the device to echo, so the response is
+// authoritative when it returns — refresh() after to pick up the
+// new last_state.
+async function togglePlugPower(label, currentlyOn) {
+  try {
+    const resp = await fetch(BASE + '/api/plugs/' + encodeURIComponent(label) + '/power', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + TOKEN,
+      },
+      body: JSON.stringify({ on: !currentlyOn }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      console.error('Plug toggle failed:', err.error || resp.status);
+      return;
+    }
+    refresh();
+  } catch (e) {
+    console.error('Plug toggle request failed:', e);
+  }
+}
+
+// Warm the hub's plug-state cache from broker-2.  Called on page
+// load so plugs show real state without the user having to toggle
+// them first; also bound to the "↻" button in the Plugs section.
+async function refreshPlugs() {
+  try {
+    const resp = await fetch(BASE + '/api/plugs/refresh', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN },
+    });
+    if (!resp.ok) {
+      console.warn('Plug refresh returned', resp.status);
+    }
+  } catch (e) {
+    console.warn('Plug refresh request failed:', e);
+  }
+  refresh();
 }
 
 // ---- Reintrospect (re-query zone count) ----
