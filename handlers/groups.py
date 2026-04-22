@@ -26,6 +26,41 @@ from urllib.parse import unquote
 class GroupHandlerMixin:
     """Group CRUD handlers (create, update, delete)."""
 
+    def _validate_plug_members(self, members: list[str]) -> list[str]:
+        """Return a list of error messages for unknown plug-prefixed members.
+
+        A ``plug:`` member must reference a Zigbee plug that is
+        currently configured on the hub.  Typos would otherwise create
+        silently dead group members; catching them at CRUD time is
+        both cheaper and friendlier than debugging at runtime.
+
+        Args:
+            members: Raw member strings from the request body.
+
+        Returns:
+            List of error strings — empty when every ``plug:`` member
+            resolves to a known plug.  LIFX and Matter members are
+            ignored by this validator (they have their own resolution
+            paths).
+        """
+        pm: Any = getattr(self, "plug_manager", None)
+        errors: list[str] = []
+        for m in members:
+            if not isinstance(m, str) or not m.startswith("plug:"):
+                continue
+            label: str = m[len("plug:"):]
+            if pm is None:
+                errors.append(
+                    f"Plug member '{m}' but plug subsystem not configured")
+                continue
+            if not pm.has_plug(label):
+                known: str = ", ".join(pm.list_labels()) or "(none)"
+                errors.append(
+                    f"Plug member '{m}' references unknown plug "
+                    f"'{label}'. Known: {known}"
+                )
+        return errors
+
     def _handle_post_group_create(self) -> None:
         """POST /api/groups — create a new device group.
 
@@ -63,6 +98,11 @@ class GroupHandlerMixin:
         existing_groups: dict[str, Any] = self.config.get("groups", {})
         if name and name in existing_groups:
             errors.append(f"Group '{name}' already exists")
+
+        # Validate any plug: members against the configured plug list.
+        if isinstance(members, list) and all(isinstance(m, str) for m in members):
+            errors.extend(self._validate_plug_members(
+                [m.strip() for m in members]))
 
         if errors:
             self._send_json(400, {"error": "; ".join(errors)})
@@ -134,6 +174,11 @@ class GroupHandlerMixin:
             errors.append("At least one member device is required")
         elif not all(isinstance(m, str) and m.strip() for m in members):
             errors.append("Each member must be a non-empty string")
+
+        # Validate any plug: members against the configured plug list.
+        if isinstance(members, list) and all(isinstance(m, str) for m in members):
+            errors.extend(self._validate_plug_members(
+                [m.strip() for m in members]))
 
         if errors:
             self._send_json(400, {"error": "; ".join(errors)})

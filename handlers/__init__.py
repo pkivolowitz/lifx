@@ -7,6 +7,7 @@ GlowUpRequestHandler inherits from all mixins.
 __version__: str = "1.0"
 
 from handlers.device import DeviceHandlerMixin
+from handlers.plug import PlugHandlerMixin
 from handlers.groups import GroupHandlerMixin
 from handlers.sensors import SensorHandlerMixin
 from handlers.schedule import ScheduleHandlerMixin
@@ -21,6 +22,7 @@ from handlers.static import StaticHandlerMixin
 
 __all__: list[str] = [
     "DeviceHandlerMixin",
+    "PlugHandlerMixin",
     "GroupHandlerMixin",
     "SensorHandlerMixin",
     "ScheduleHandlerMixin",

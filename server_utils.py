@@ -187,3 +187,48 @@ def get_groups(config: dict[str, Any]) -> dict[str, list[str]]:
         for name, entries in groups.items()
         if not name.startswith("_")
     }
+
+
+# Transport prefixes used to identify non-LIFX members inside a group's
+# member list.  LIFX members are bare IPs or labels (no prefix).  The
+# transport split keeps group polymorphism declarative: one string list,
+# prefix routes each entry to its subsystem.
+_MATTER_MEMBER_PREFIX: str = "matter:"
+_PLUG_MEMBER_PREFIX: str = "plug:"
+
+
+def split_group_members(
+    members: list[str],
+) -> tuple[list[str], list[str], list[str]]:
+    """Partition a group's member list by transport prefix.
+
+    Members carry a transport tag as an explicit prefix so the group
+    config stays a single flat list of strings and stays backwards
+    compatible with pure-LIFX groups.  The prefix is stripped from
+    the matter/plug buckets; LIFX members are returned as-is.
+
+    Args:
+        members: Raw member strings from the group config.  Valid
+                 shapes:
+
+                 * ``"192.0.2.25"`` — LIFX by IP
+                 * ``"Bedroom Lamp"`` — LIFX by label (resolved later
+                   by the device manager)
+                 * ``"matter:Kitchen Lamp"`` — Matter device name
+                 * ``"plug:LRTV"`` — Zigbee plug friendly name
+
+    Returns:
+        ``(lifx_members, matter_names, plug_labels)`` — three lists
+        in the same order as their source entries.
+    """
+    lifx: list[str] = []
+    matter: list[str] = []
+    plug: list[str] = []
+    for m in members:
+        if m.startswith(_MATTER_MEMBER_PREFIX):
+            matter.append(m[len(_MATTER_MEMBER_PREFIX):])
+        elif m.startswith(_PLUG_MEMBER_PREFIX):
+            plug.append(m[len(_PLUG_MEMBER_PREFIX):])
+        else:
+            lifx.append(m)
+    return lifx, matter, plug

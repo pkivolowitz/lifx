@@ -41,6 +41,9 @@ Endpoints::
     POST /api/devices/{ip}/power         Turn device on/off
     POST /api/devices/{ip}/identify      Pulse brightness to locate device
     POST /api/devices/{ip}/nickname      Set a custom display name
+    GET  /api/plugs                      List Zigbee plugs (cached state)
+    POST /api/plugs/{label}/power        Turn a Zigbee plug on/off
+    POST /api/plugs/refresh              Bulk live-state refresh from broker-2
     POST /api/effects/{name}/defaults    Save tuned params as effect defaults
     GET  /api/groups                     Device groups from config
     GET  /api/schedule                   Schedule entries with resolved times
@@ -332,9 +335,15 @@ _ROUTES: tuple[_Route, ...] = (
     _Route("GET", ("api", "thermal", "readings"),
            "_handle_get_thermal_readings", requires_auth=False),
     # POST /api/zigbee/set was removed in 2026-04-15 along with
-    # the in-process Zigbee adapter.  Plug control will return as
-    # a hub→broker-2 cross-host publish path; see
-    # docs/29-zigbee-service.md.
+    # the in-process Zigbee adapter.  Its successor lives under
+    # /api/plugs — see handlers/plug.py and docs/29-zigbee-service.md.
+    _Route("GET", ("api", "plugs"),
+           "_handle_get_plugs"),
+    _Route("POST", ("api", "plugs", "refresh"),
+           "_handle_post_plugs_refresh"),
+    _Route("POST", ("api", "plugs", "{label}", "power"),
+           "_handle_post_plug_power",
+           unquote_params=("label",)),
     _Route("GET", ("api", "operators"),
            "_handle_get_operators", requires_auth=True),
     _Route("GET", ("api", "signals", "bindings"),
@@ -609,6 +618,9 @@ _rate_limiter: _RateLimiter = _RateLimiter(
 # Device manager — extracted to device_manager.py
 from device_manager import DeviceManager
 
+# Plug manager — Zigbee smart plugs, parallel to DeviceManager
+from plug_manager import PlugManager
+
 
 # Scheduler thread — extracted to scheduling/scheduler_thread.py
 from scheduling import SchedulerThread
@@ -619,7 +631,8 @@ from scheduling import SchedulerThread
 # ---------------------------------------------------------------------------
 
 from handlers import (
-    DeviceHandlerMixin, GroupHandlerMixin, SensorHandlerMixin,
+    DeviceHandlerMixin, PlugHandlerMixin, GroupHandlerMixin,
+    SensorHandlerMixin,
     ScheduleHandlerMixin, MediaHandlerMixin, DiscoveryHandlerMixin,
     RegistryHandlerMixin, DashboardHandlerMixin, CalibrationHandlerMixin,
     DistributedHandlerMixin, DiagnosticsHandlerMixin, StaticHandlerMixin,
@@ -631,6 +644,7 @@ from handlers.ernie import ErnieHandlerMixin
 
 class GlowUpRequestHandler(
     DeviceHandlerMixin,
+    PlugHandlerMixin,
     GroupHandlerMixin,
     SensorHandlerMixin,
     ScheduleHandlerMixin,
@@ -660,6 +674,9 @@ class GlowUpRequestHandler(
 
     # These are set by main() before the server starts.
     device_manager: DeviceManager
+    # Zigbee smart-plug subsystem.  ``None`` when no plugs are
+    # configured — handlers in handlers/plug.py degrade gracefully.
+    plug_manager: Optional["PlugManager"] = None
     auth_token: str
     scheduler: Optional[SchedulerThread] = None
     config: dict[str, Any] = {}
@@ -1916,6 +1933,10 @@ def main() -> None:
     port: int = config.get("port", DEFAULT_PORT)
 
     GlowUpRequestHandler.device_manager = dm
+    # Zigbee smart-plug subsystem.  Constructs from the ``plugs`` and
+    # ``zigbee`` sections of server.json; an empty/absent section
+    # yields an empty manager (no plugs, no error).
+    GlowUpRequestHandler.plug_manager = PlugManager(config)
     GlowUpRequestHandler.auth_token = config["auth_token"]
     GlowUpRequestHandler.scheduler = None          # patched after start
     GlowUpRequestHandler.config = config
