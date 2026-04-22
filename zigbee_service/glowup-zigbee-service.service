@@ -19,7 +19,7 @@ Environment=GLZ_Z2M_PREFIX=zigbee2mqtt
 Environment=GLZ_HUB_BROKER=10.0.0.214
 Environment=GLZ_HUB_PORT=1883
 Environment=GLZ_HUB_SIGNAL_PREFIX=glowup/signals
-Environment=GLZ_DB_PATH=/var/lib/glowup-zigbee/history.db
+Environment=GLZ_DB_DSN=postgresql://glowup:changeme@10.0.0.111:5432/glowup
 Environment=GLZ_RATE_USD_PER_KWH=0.13
 Environment=GLZ_LOG_LEVEL=INFO
 
@@ -28,9 +28,6 @@ ExecStart=/opt/glowup-zigbee/venv/bin/python /opt/glowup-zigbee/service.py
 # Restart policy — stateless service, just respawn on any exit.
 Restart=always
 RestartSec=5
-
-# Filesystem writes — history DB lives here.
-ReadWritePaths=/var/lib/glowup-zigbee
 
 # Reasonable hardening that doesn't interfere with localhost MQTT or
 # /var/lib writes.

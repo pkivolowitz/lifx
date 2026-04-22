@@ -27,8 +27,8 @@ flip-flop fixes.
  Dashboard              hub mosquitto  →  SOE signal bus
 ```
 
-**broker-2 owns the data.** The service stores history in
-`/var/lib/glowup-zigbee/history.db`, responds to dashboard queries
+**broker-2 owns the data.** The service stores history in the `glowup`
+PostgreSQL database on the NAS jail (.111), responds to dashboard queries
 directly, and publishes real-time signals to hub mosquitto for
 operator/SOE consumption.
 
@@ -44,7 +44,7 @@ rsync -av service.py a@10.0.0.123:/opt/glowup-zigbee/
 
 # Create venv
 ssh a@10.0.0.123 'python3 -m venv /opt/glowup-zigbee/venv'
-ssh a@10.0.0.123 '/opt/glowup-zigbee/venv/bin/pip install paho-mqtt'
+ssh a@10.0.0.123 '/opt/glowup-zigbee/venv/bin/pip install paho-mqtt psycopg2-binary'
 
 # Install systemd unit
 sudo cp glowup-zigbee-service.service /etc/systemd/system/
@@ -100,7 +100,7 @@ it stays classified even if a later heartbeat carries only
 | `GLZ_HUB_BROKER` | `10.0.0.214` | Hub mosquitto host (empty to disable signal publish) |
 | `GLZ_HUB_PORT` | `1883` | Hub mosquitto port |
 | `GLZ_HUB_SIGNAL_PREFIX` | `glowup/signals` | Hub signal bus prefix |
-| `GLZ_DB_PATH` | `/var/lib/glowup-zigbee/history.db` | sqlite history path |
+| `GLZ_DB_DSN` | `postgresql://glowup:...@10.0.0.111:5432/glowup` | PostgreSQL DSN for history |
 | `GLZ_RATE_USD_PER_KWH` | `0.13` | Default cost rate |
 | `GLZ_LOG_LEVEL` | `INFO` | Python log level |
 

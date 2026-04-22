@@ -24,7 +24,7 @@ Design principles:
   exactly as before — they see no change.
 
 - **One file, no base classes, no framework magic.**
-  Paho client, stdlib sqlite3, stdlib http.server.  No framework.
+  Paho client, psycopg2, stdlib http.server.  No framework.
 
 Endpoints::
 
@@ -59,7 +59,6 @@ import json
 import logging
 import os
 import signal
-import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -72,6 +71,13 @@ try:
 except ImportError as exc:
     raise SystemExit(
         "paho-mqtt is required: pip install paho-mqtt"
+    ) from exc
+
+try:
+    import psycopg2
+except ImportError as exc:
+    raise SystemExit(
+        "psycopg2 is required: pip install psycopg2-binary"
     ) from exc
 
 # ---------------------------------------------------------------------------
@@ -93,10 +99,14 @@ HUB_BROKER: str = os.environ.get("GLZ_HUB_BROKER", "10.0.0.214")
 HUB_PORT: int = int(os.environ.get("GLZ_HUB_PORT", "1883"))
 HUB_SIGNAL_PREFIX: str = os.environ.get("GLZ_HUB_SIGNAL_PREFIX", "glowup/signals")
 
-# sqlite history DB path.
-DB_PATH: str = os.environ.get(
-    "GLZ_DB_PATH", "/var/lib/glowup-zigbee/history.db",
+# PostgreSQL DSN for history storage.
+DB_DSN: str = os.environ.get(
+    "GLZ_DB_DSN", "postgresql://glowup:changeme@10.0.0.111:5432/glowup",
 )
+
+# History retention and prune cadence (matches PowerLogger / ThermalLogger).
+_RETENTION_SECONDS: float = 7 * 24 * 3600
+_PRUNE_EVERY: int = 100
 
 # Default electricity rate ($/kWh) for summary rollups.  Configurable
 # per request via ?rate= query parameter.
@@ -155,40 +165,40 @@ logger: logging.Logger = logging.getLogger("glowup.zigbee_service")
 
 
 # ---------------------------------------------------------------------------
-# History database — tiny sqlite schema, per-device time series.
+# History database — PostgreSQL, per-device time series.
 # ---------------------------------------------------------------------------
 
-_DDL: str = """
-CREATE TABLE IF NOT EXISTS readings (
-    ts REAL NOT NULL,
+_PG_DDL: str = """
+CREATE TABLE IF NOT EXISTS zigbee_readings (
+    id BIGSERIAL PRIMARY KEY,
+    ts DOUBLE PRECISION NOT NULL,
     device TEXT NOT NULL,
     power_w REAL,
-    state INTEGER,
+    state SMALLINT,
     voltage REAL,
     current_a REAL,
     energy_kwh REAL
 );
-CREATE INDEX IF NOT EXISTS idx_readings_device_ts
-    ON readings(device, ts);
+CREATE INDEX IF NOT EXISTS idx_zigbee_readings_device_ts
+    ON zigbee_readings(device, ts);
 """
 
 
 class HistoryDB:
-    """Thread-safe sqlite wrapper for Zigbee device history."""
+    """Thread-safe PostgreSQL wrapper for Zigbee device history.
 
-    def __init__(self, path: str) -> None:
-        self._path: str = path
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+    All access is serialised by ``self._lock`` so psycopg2's connection
+    (not thread-safe by itself) is safe from concurrent callers.
+    """
+
+    def __init__(self, dsn: str) -> None:
+        self._dsn: str = dsn
         self._lock: threading.Lock = threading.Lock()
-        # check_same_thread=False because the flush thread commits from
-        # a different thread than the MQTT callbacks that insert rows.
-        # All access is serialised by self._lock, so sqlite is happy.
-        self._conn: sqlite3.Connection = sqlite3.connect(
-            path, check_same_thread=False, isolation_level=None,
-        )
-        self._conn.executescript(_DDL)
-        self._conn.execute("PRAGMA journal_mode = WAL")
-        self._conn.execute("PRAGMA synchronous = NORMAL")
+        self._write_count: int = 0
+        self._conn = psycopg2.connect(dsn, connect_timeout=10)
+        self._conn.autocommit = True
+        with self._conn.cursor() as cur:
+            cur.execute(_PG_DDL)
 
     def append(
         self,
@@ -199,15 +209,22 @@ class HistoryDB:
         current_a: Optional[float],
         energy_kwh: Optional[float],
     ) -> None:
-        """Append a single reading row."""
+        """Append a single reading row; prune every _PRUNE_EVERY writes."""
         with self._lock:
-            self._conn.execute(
-                "INSERT INTO readings"
-                " (ts, device, power_w, state, voltage, current_a, energy_kwh)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (time.time(), device, power_w, state, voltage, current_a,
-                 energy_kwh),
-            )
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO zigbee_readings"
+                    " (ts, device, power_w, state, voltage, current_a, energy_kwh)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (time.time(), device, power_w, state, voltage, current_a,
+                     energy_kwh),
+                )
+                self._write_count += 1
+                if self._write_count % _PRUNE_EVERY == 0:
+                    cur.execute(
+                        "DELETE FROM zigbee_readings WHERE ts < %s",
+                        (time.time() - _RETENTION_SECONDS,),
+                    )
 
     def history(
         self, device: str, hours: float, resolution_sec: int,
@@ -218,20 +235,22 @@ class HistoryDB:
         """
         cutoff: float = time.time() - hours * 3600.0
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT CAST(ts / ? AS INTEGER) * ? AS bucket,"
-                "       AVG(power_w), AVG(voltage), SUM(energy_kwh)"
-                " FROM readings"
-                " WHERE device = ? AND ts >= ? AND power_w IS NOT NULL"
-                " GROUP BY bucket ORDER BY bucket",
-                (resolution_sec, resolution_sec, device, cutoff),
-            ).fetchall()
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT floor(ts / %s)::bigint * %s AS bucket,"
+                    "       AVG(power_w), AVG(voltage), SUM(energy_kwh)"
+                    " FROM zigbee_readings"
+                    " WHERE device = %s AND ts >= %s AND power_w IS NOT NULL"
+                    " GROUP BY bucket ORDER BY bucket",
+                    (resolution_sec, resolution_sec, device, cutoff),
+                )
+                rows = cur.fetchall()
         return [
             {
                 "ts": int(bucket),
-                "watts": round(p, 2) if p is not None else None,
-                "voltage": round(v, 1) if v is not None else None,
-                "energy_kwh_delta": round(e, 4) if e is not None else None,
+                "watts": round(float(p), 2) if p is not None else None,
+                "voltage": round(float(v), 1) if v is not None else None,
+                "energy_kwh_delta": round(float(e), 4) if e is not None else None,
             }
             for bucket, p, v, e in rows
         ]
@@ -247,30 +266,31 @@ class HistoryDB:
         """
         cutoff: float = time.time() - days * 86400.0
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT device, AVG(power_w), MAX(power_w), COUNT(*)"
-                " FROM readings"
-                " WHERE ts >= ? AND power_w IS NOT NULL"
-                " GROUP BY device",
-                (cutoff,),
-            ).fetchall()
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT device, AVG(power_w), MAX(power_w), COUNT(*)"
+                    " FROM zigbee_readings"
+                    " WHERE ts >= %s AND power_w IS NOT NULL"
+                    " GROUP BY device",
+                    (cutoff,),
+                )
+                rows = cur.fetchall()
         out: dict[str, dict[str, float]] = {}
         secs_window: float = max(1.0, days * 86400.0)
         for device, avg_w, peak_w, count in rows:
             if avg_w is None:
                 continue
-            # Trapezoidal energy estimate: avg_power * window.
-            kwh: float = (avg_w * secs_window) / 3600.0 / 1000.0
+            kwh: float = (float(avg_w) * secs_window) / 3600.0 / 1000.0
             out[device] = {
-                "avg_w": round(avg_w, 2),
-                "peak_w": round(peak_w or 0.0, 2),
+                "avg_w": round(float(avg_w), 2),
+                "peak_w": round(float(peak_w or 0.0), 2),
                 "samples": int(count),
                 "kwh": round(kwh, 3),
             }
         return out
 
     def close(self) -> None:
-        """Close the sqlite database connection."""
+        """Close the PostgreSQL connection."""
         with self._lock:
             self._conn.close()
 
@@ -802,7 +822,7 @@ def serve() -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    history = HistoryDB(DB_PATH)
+    history = HistoryDB(DB_DSN)
     registry = StateRegistry()
     hub_publisher = HubPublisher()
     hub_publisher.start()
