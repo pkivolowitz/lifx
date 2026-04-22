@@ -327,6 +327,12 @@ class TestRouteFlags(unittest.TestCase):
             # SDR / ADS-B dashboard pages — same pattern as /power, /thermal.
             ("sdr",),
             ("adsb",),
+            # Ernie far-side dashboard — intentionally public, no secrets.
+            ("ernie",),
+            ("api", "ernie", "ble"),
+            ("api", "ernie", "ble", "events"),
+            ("api", "ernie", "tpms"),
+            ("api", "ernie", "thermal"),
         }
         for route in _ROUTES:
             if route.pattern in AUTH_FREE_PATTERNS:
@@ -349,8 +355,8 @@ class TestRouteCount(unittest.TestCase):
         """GET routes should match the expected count."""
         get_routes: list[_Route] = [r for r in _ROUTES if r.method == "GET"]
         self.assertEqual(
-            len(get_routes), 65,
-            f"Expected 65 GET routes, got {len(get_routes)}",
+            len(get_routes), 70,
+            f"Expected 70 GET routes, got {len(get_routes)}",
         )
 
     def test_post_route_count(self) -> None:
