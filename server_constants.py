@@ -53,6 +53,15 @@ AUTH_HEADER: str = "Authorization"
 # Bearer token prefix in the Authorization header.
 BEARER_PREFIX: str = "Bearer "
 
+# Header injected by the Cloudflare edge on every request that traverses
+# the tunnel (lights.schoolio.net).  Presence of this header is how we
+# distinguish a public-tunnel request from a LAN request: we refuse any
+# non-authenticated route when it is set, so only the iOS app's authed
+# API calls work over the tunnel while all dashboards and unauthed
+# surfaces remain LAN-only.  A LAN client that spoofs this header only
+# locks itself out of unauthed surfaces, which is harmless.
+CF_TUNNEL_HEADER: str = "CF-Connecting-IP"
+
 # Maximum failed authentication attempts per IP before throttling.
 AUTH_RATE_LIMIT: int = 10
 

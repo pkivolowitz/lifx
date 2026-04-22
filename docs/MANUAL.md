@@ -60,6 +60,7 @@ SOE graph.
 - [Adapter Base Classes](27-adapter-base.md) — MqttAdapterBase, PollingAdapterBase, AsyncPollingAdapterBase
 - [BLE Sensors](28-ble-sensors.md) — BLE sensor daemon, MQTT bridge, ONVIS
 - [Zigbee Service](29-zigbee-service.md) — `glowup-zigbee-service` on broker-2; cross-host signal publish
+- [Ernie Sniffer](37-ernie-sniffer.md) — BLE + TPMS capture on ernie (.153); PostgreSQL-backed persistence driving `/ernie`
 - [Vendor Integrations](CONTRIB.md) — Vivint, Reolink NVR, Brother printer, HDHomeRun (contrib adapters)
 
 **Automation & display:**

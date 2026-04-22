@@ -101,3 +101,22 @@ Cloudflare's edge.
 - The bearer token is still required — the tunnel doesn't bypass
   authentication.
 - Cloudflare's free plan includes unlimited tunnel bandwidth.
+
+## Tunnel Policy: Authenticated API Only
+
+Cloudflare's edge terminates TLS and can observe every byte that
+transits the tunnel.  To minimise that exposure the coordinator
+refuses any non-authenticated route when it sees the
+`CF-Connecting-IP` header (which the CF edge injects on every
+tunneled request).  In practice:
+
+- **Allowed over the tunnel:** authenticated `/api/*` calls from the
+  iOS app (bearer-token-gated).
+- **Blocked over the tunnel (`403`):** `/dashboard`, `/home`,
+  `/thermal`, `/power`, `/io`, `/vivint`, the unauthed `/api/home/*`
+  feeds, and every other `requires_auth=False` route.  These remain
+  accessible on the LAN at `http://<pi>:8420/...`.
+
+Enforcement lives in `server.py::_dispatch` rather than in the
+cloudflared ingress config so a later edit of `config.yml` cannot
+silently re-expose the dashboards.

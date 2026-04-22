@@ -205,6 +205,7 @@ from server_constants import (
     DEVICE_WAKEUP_DELAY_SECONDS, HSTS_MAX_AGE_SECONDS,
     AUDIO_QUEUE_TIMEOUT_SECONDS, CALIBRATION_SOCKET_TIMEOUT_SECONDS,
     CALIBRATION_PULSE_DELAY_SECONDS, AUTH_HEADER, BEARER_PREFIX,
+    CF_TUNNEL_HEADER,
     DEFAULT_CONFIG_PATH, EFFECT_DEFAULTS_FILENAME,
     GROUP_PREFIX, GRID_PREFIX, LOG_FORMAT, LOG_DATE_FORMAT,
     API_PREFIX, AUTH_RATE_LIMIT, AUTH_RATE_WINDOW,
@@ -677,6 +678,8 @@ class GlowUpRequestHandler(
     signal_bus: Optional[SignalBus] = None
     power_logger: Optional[Any] = None
     thermal_logger: Optional[Any] = None
+    tpms_logger: Optional[Any] = None
+    ble_sniffer_logger: Optional[Any] = None
     # Timestamp of the most recent non-time signal seen on
     # glowup/signals/#.  Populated by the _on_remote_signal callback
     # in _background_startup below.  Used by _handle_get_home_health
@@ -971,6 +974,24 @@ class GlowUpRequestHandler(
                 continue
 
             # --- Route matched ---
+
+            # Cloudflare tunnel gate.  The CF edge injects
+            # ``CF-Connecting-IP`` on every request that came through the
+            # public tunnel (lights.schoolio.net).  Policy: only
+            # authenticated routes are allowed over the tunnel, so the
+            # iOS app keeps working while every dashboard and unauthed
+            # surface is LAN-only.  This is enforced at the server so a
+            # stale/mis-edited cloudflared ingress config cannot
+            # re-expose the dashboards.
+            if (
+                not route.requires_auth
+                and self.headers.get(CF_TUNNEL_HEADER)
+            ):
+                self._send_json(
+                    403,
+                    {"error": "not available via public tunnel"},
+                )
+                return
 
             # Authentication gate.
             if route.requires_auth and not self._authenticate():
@@ -2850,125 +2871,18 @@ def main() -> None:
                     "glowup/sdr/adsb/aircraft", _on_adsb_aircraft,
                 )
 
-                # -- Ernie (.153) sniffer subscriptions -----------------
-                # Ernie's BLE sniffer runs a per-MAC state machine and
-                # publishes on two topic classes (v2 sniffer, see
-                # contrib/sensors/ble_sniffer.py):
-                #
-                #     glowup/ble/seen/<mac>      retained snapshot
-                #     glowup/ble/events/<mac>    non-retained event log
-                #
-                # Plus TPMS decodes (per sensor id) and ernie's own
-                # thermal heartbeats. See handlers/ernie.py for the
-                # corresponding REST endpoints and the /ernie dashboard.
-                GlowUpRequestHandler._ernie_ble_seen = {}
-                # Bounded event ring — last N events across all MACs.
-                # 500 is plenty for a few hours of suburban activity.
-                GlowUpRequestHandler._ernie_ble_events = []
-                GlowUpRequestHandler._ernie_ble_events_max = 500
-                GlowUpRequestHandler._ernie_tpms = {}
-                GlowUpRequestHandler._ernie_thermal = {}
-
-                def _on_ernie_ble_seen(
-                    client: Any, userdata: Any, message: Any,
-                ) -> None:
-                    try:
-                        payload: dict = json.loads(message.payload)
-                    except (json.JSONDecodeError, ValueError):
-                        return
-                    mac_val: Any = payload.get("mac")
-                    if not isinstance(mac_val, str):
-                        return
-                    if payload.get("gone"):
-                        # Retained "gone" marker — keep it around so the
-                        # dashboard can render MAC as recently-departed,
-                        # but don't overwrite richer prior state.
-                        prev: dict = GlowUpRequestHandler._ernie_ble_seen.get(
-                            mac_val, {},
-                        )
-                        prev["gone"] = True
-                        prev["last_heard_ts"] = payload.get("last_heard_ts")
-                        GlowUpRequestHandler._ernie_ble_seen[mac_val] = prev
-                    else:
-                        GlowUpRequestHandler._ernie_ble_seen[mac_val] = payload
-
-                proc_mqtt.subscribe("glowup/ble/seen/#", qos=0)
-                proc_mqtt.message_callback_add(
-                    "glowup/ble/seen/#", _on_ernie_ble_seen,
-                )
-
-                def _on_ernie_ble_event(
-                    client: Any, userdata: Any, message: Any,
-                ) -> None:
-                    try:
-                        payload: dict = json.loads(message.payload)
-                    except (json.JSONDecodeError, ValueError):
-                        return
-                    ring: list = GlowUpRequestHandler._ernie_ble_events
-                    ring.append(payload)
-                    # Trim in place from the head — cheaper than
-                    # collections.deque because the REST endpoint
-                    # wants slice-able access for tailing.
-                    excess: int = (
-                        len(ring)
-                        - GlowUpRequestHandler._ernie_ble_events_max
-                    )
-                    if excess > 0:
-                        del ring[:excess]
-
-                proc_mqtt.subscribe("glowup/ble/events/#", qos=0)
-                proc_mqtt.message_callback_add(
-                    "glowup/ble/events/#", _on_ernie_ble_event,
-                )
-
-                def _on_ernie_tpms(
-                    client: Any, userdata: Any, message: Any,
-                ) -> None:
-                    try:
-                        payload: dict = json.loads(message.payload)
-                    except (json.JSONDecodeError, ValueError):
-                        return
-                    # rtl_433's events topic nests fields inside the
-                    # outer dict. The (model, id) pair is the durable
-                    # fingerprint of a physical TPMS transmitter.
-                    model: str = str(payload.get("model", "unknown"))
-                    sensor_id: str = str(payload.get("id", "unknown"))
-                    key: str = f"{model}:{sensor_id}"
-                    now: float = time.time()
-                    prev: dict = GlowUpRequestHandler._ernie_tpms.get(
-                        key, {},
-                    )
-                    entry: dict = {
-                        "model": model,
-                        "id": sensor_id,
-                        "last_payload": payload,
-                        "last_seen": now,
-                        "first_seen": prev.get("first_seen", now),
-                        "count": prev.get("count", 0) + 1,
-                    }
-                    GlowUpRequestHandler._ernie_tpms[key] = entry
-
-                proc_mqtt.subscribe("glowup/tpms/events", qos=0)
-                proc_mqtt.message_callback_add(
-                    "glowup/tpms/events", _on_ernie_tpms,
-                )
-
-                def _on_ernie_thermal(
-                    client: Any, userdata: Any, message: Any,
-                ) -> None:
-                    try:
-                        payload: dict = json.loads(message.payload)
-                    except (json.JSONDecodeError, ValueError):
-                        return
-                    payload["_received_at"] = time.time()
-                    GlowUpRequestHandler._ernie_thermal = payload
-
-                proc_mqtt.subscribe(
-                    "glowup/hardware/thermal/ernie", qos=0,
-                )
-                proc_mqtt.message_callback_add(
-                    "glowup/hardware/thermal/ernie", _on_ernie_thermal,
-                )
+                # -- Ernie (.153) sniffer persistence -------------------
+                # BLE seen/events and TPMS decodes are now persisted in
+                # PostgreSQL by dedicated logger modules under
+                # `infrastructure/`.  Each logger owns its own paho
+                # client + subscription, so this block no longer wires
+                # the in-process ring/dict caches that used to live
+                # here.  Handlers/ernie.py queries the loggers
+                # directly — the dashboard is now durable across
+                # server restarts.  Ernie's own thermal heartbeats are
+                # captured by the generic `ThermalLogger`
+                # (`glowup/hardware/thermal/+`) — see the handler for
+                # the per-ernie lookup.
 
                 # -- Periodic satellite prober --------------------------
                 # Every HUB_SATELLITE_PROBE_INTERVAL_S the hub
@@ -3072,6 +2986,48 @@ def main() -> None:
             except Exception as exc:
                 logging.warning("Thermal logger unavailable: %s", exc)
                 thermal_log = None
+
+            # TPMS logger — PG storage for rtl_433 tire-pressure decodes
+            # published by ernie (.153).  See
+            # infrastructure/tpms_logger.py.  Same guarded-import pattern
+            # as thermal: missing psycopg2 or paho downgrades the
+            # subscriber to a no-op without crashing the server.
+            try:
+                from infrastructure.tpms_logger import (
+                    TpmsLogger,
+                    DEFAULT_DSN as _TPMS_DEFAULT_DSN,
+                )
+                tpms_log = TpmsLogger(
+                    dsn=os.environ.get("GLOWUP_DIAG_DSN", _TPMS_DEFAULT_DSN),
+                )
+                tpms_log.start_subscriber(
+                    broker_host=broker_addr,
+                    broker_port=broker_port,
+                )
+                GlowUpRequestHandler.tpms_logger = tpms_log
+            except Exception as exc:
+                logging.warning("TPMS logger unavailable: %s", exc)
+                tpms_log = None
+
+            # BLE sniffer logger — PG storage for ernie's v2 BLE
+            # state/event streams.  See
+            # infrastructure/ble_sniffer_logger.py.
+            try:
+                from infrastructure.ble_sniffer_logger import (
+                    BleSnifferLogger,
+                    DEFAULT_DSN as _BLE_DEFAULT_DSN,
+                )
+                ble_log = BleSnifferLogger(
+                    dsn=os.environ.get("GLOWUP_DIAG_DSN", _BLE_DEFAULT_DSN),
+                )
+                ble_log.start_subscriber(
+                    broker_host=broker_addr,
+                    broker_port=broker_port,
+                )
+                GlowUpRequestHandler.ble_sniffer_logger = ble_log
+            except Exception as exc:
+                logging.warning("BLE sniffer logger unavailable: %s", exc)
+                ble_log = None
 
             # Auto-migrate automations[] → trigger operators in operators[].
             config["_config_path"] = GlowUpRequestHandler.config_path
