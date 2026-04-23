@@ -29,6 +29,34 @@ import threading
 import time
 from typing import Any, Optional
 
+# ---------------------------------------------------------------------------
+# TLS root CA bootstrap
+# ---------------------------------------------------------------------------
+# Python on macOS (python.org builds) does not read the system keychain —
+# stdlib ssl.create_default_context() looks for a PEM bundle at paths that
+# the installer's "Install Certificates.command" step is supposed to
+# populate. When that step was never run (or was run against a different
+# Python), every outbound HTTPS call from urllib raises
+# ``CERTIFICATE_VERIFY_FAILED``. This surfaced 2026-04-23 on Daedalus: the
+# weather handler logged "certificate verify failed: unable to get local
+# issuer certificate" for every Open-Meteo request, which read to the user
+# as "I couldn't get the weather right now."
+#
+# Rather than patch each HTTPS client, set SSL_CERT_FILE to certifi's
+# bundle at startup.  The stdlib ``ssl`` module honors this env var for
+# ``create_default_context()``, so the fix applies to urllib / requests /
+# anything that uses the default context.  Runs before any downstream
+# import that might instantiate an SSL client.
+if "SSL_CERT_FILE" not in os.environ:
+    try:
+        import certifi as _certifi
+        os.environ["SSL_CERT_FILE"] = _certifi.where()
+    except ImportError:
+        # certifi is a transitive dep of requests/paho; if it is somehow
+        # absent, fall through and let the OS default apply.  Any HTTPS
+        # failure downstream will log the real cause via exc_info.
+        pass
+
 from voice import constants as C
 from voice.protocol import ProtocolError, decode
 from voice.coordinator.pipeline import process_utterance
