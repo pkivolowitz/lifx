@@ -52,6 +52,14 @@ try:
 except ImportError:
     _HAS_PAHO = False
 
+try:
+    from contrib.sensors._interval_watcher import IntervalWatcher
+except ImportError:
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    from _interval_watcher import IntervalWatcher  # type: ignore
+
 logger: logging.Logger = logging.getLogger("glowup.x86_thermal")
 
 # ---------------------------------------------------------------------------
@@ -323,6 +331,8 @@ def run_sensor(
             logger.warning("MQTT connect failed rc=%s", rc)
 
     client.on_connect = on_connect
+    watcher: IntervalWatcher = IntervalWatcher(interval_s)
+    watcher.attach(client)
     client.connect_async(broker_host, broker_port)
     client.loop_start()
 
@@ -344,7 +354,10 @@ def run_sensor(
             else:
                 logger.warning("Publish rc=%s", info.rc)
             # Sleep in short increments for responsive shutdown.
-            deadline: float = time.time() + interval_s
+            # Interval is read per-cycle so a fleet-wide change on
+            # glowup/config/thermal_interval_s takes effect within
+            # one current interval.
+            deadline: float = time.time() + watcher.current()
             while _running and time.time() < deadline:
                 time.sleep(1.0)
     finally:

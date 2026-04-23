@@ -68,6 +68,17 @@ try:
 except ImportError:
     _HAS_PAHO = False
 
+# The interval watcher lives next to us in contrib/sensors.  Direct
+# module-next-to-module import so this file works whether launched as
+# `python -m contrib.sensors.pi_thermal_sensor` or `python path/to/file`.
+try:
+    from contrib.sensors._interval_watcher import IntervalWatcher
+except ImportError:
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    from _interval_watcher import IntervalWatcher  # type: ignore
+
 logger: logging.Logger = logging.getLogger("glowup.pi_thermal")
 
 # ---------------------------------------------------------------------------
@@ -448,6 +459,8 @@ class PiThermalSensor:
         self._stop_event: threading.Event = threading.Event()
         self._samples_published: int = 0
         self._start_time: float = 0.0
+        # Fleet-wide interval override via retained MQTT config topic.
+        self._watcher: IntervalWatcher = IntervalWatcher(interval_s)
 
     # ---- MQTT lifecycle -----------------------------------------------------
 
@@ -479,6 +492,9 @@ class PiThermalSensor:
         )
         client.on_connect = self._on_connect
         client.on_disconnect = self._on_disconnect
+        # Attach BEFORE connect so the subscribe fires on the first
+        # CONNACK rather than racing the initial publish.
+        self._watcher.attach(client)
 
         client.connect(
             self._broker_host, self._broker_port, _MQTT_KEEPALIVE_S,
@@ -631,7 +647,9 @@ class PiThermalSensor:
                 logger.error(
                     "sample/publish failed: %s", exc, exc_info=True,
                 )
-            self._stop_event.wait(self._interval_s)
+            # Read live — respects fleet-wide updates to
+            # glowup/config/thermal_interval_s between samples.
+            self._stop_event.wait(self._watcher.current())
 
     def stop(self) -> None:
         """Graceful shutdown — publish offline and disconnect.
