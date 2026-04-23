@@ -34,6 +34,16 @@ except ImportError:
     _HAS_YAML = False
 
 from voice import constants as C
+from voice.coordinator.weather_sources import (
+    AirQuality,
+    CurrentConditions,
+    ForecastPeriod,
+    NWSSource,
+    OpenMeteoAirQuality,
+    OpenMeteoSource,
+    WeatherClient,
+    WeatherSourceError,
+)
 from zigbee_service.client import ZigbeeControlClient
 
 logger: logging.Logger = logging.getLogger("glowup.voice.executor")
@@ -44,6 +54,59 @@ logger: logging.Logger = logging.getLogger("glowup.voice.executor")
 
 # Mobile, AL residential electricity rate ($/kWh).
 _ELECTRICITY_RATE_PER_KWH: float = 0.171
+
+# Mobile, AL coordinates — shared by weather, forecast, and air quality.
+# Matches the /home dashboard's location.
+_WEATHER_LAT: float = 30.69
+_WEATHER_LON: float = -88.04
+
+# Feels-like vs. actual-temperature spread at which "feels like"
+# becomes worth mentioning on the default (all-aspects) weather
+# response.  A 5°F delta is where heat-index/wind-chill noticeably
+# changes the outdoor experience.
+_FEELS_LIKE_SPREAD_F: float = 5.0
+
+# Pollen grains/m^3 thresholds (Open-Meteo units) used to translate
+# numeric counts into spoken "low / moderate / high / very high"
+# categories.  Values reflect common allergy-forecast conventions
+# rather than a single canonical source.
+_POLLEN_THRESHOLDS: tuple[tuple[float, str], ...] = (
+    (0.1, "none"),
+    (20.0, "low"),
+    (80.0, "moderate"),
+    (200.0, "high"),
+    (float("inf"), "very high"),
+)
+
+# US AQI → plain English ranges per EPA's AQI color bands.
+_AQI_BANDS: tuple[tuple[float, str], ...] = (
+    (50.0, "good"),
+    (100.0, "moderate"),
+    (150.0, "unhealthy for sensitive groups"),
+    (200.0, "unhealthy"),
+    (300.0, "very unhealthy"),
+    (float("inf"), "hazardous"),
+)
+
+# UV index → plain English per WHO bands.
+_UV_BANDS: tuple[tuple[float, str], ...] = (
+    (3.0, "low"),
+    (6.0, "moderate"),
+    (8.0, "high"),
+    (11.0, "very high"),
+    (float("inf"), "extreme"),
+)
+
+# Human-facing pollen species labels — Open-Meteo keys strip the
+# ``_pollen`` suffix for spoken output.
+_POLLEN_LABELS: dict[str, str] = {
+    "alder_pollen": "alder",
+    "birch_pollen": "birch",
+    "grass_pollen": "grass",
+    "mugwort_pollen": "mugwort",
+    "olive_pollen": "olive",
+    "ragweed_pollen": "ragweed",
+}
 
 # Base URL for broker-2's glowup-zigbee-service HTTP API. Used by the
 # voice plug commands (power on/off, is-on queries) — direct hop from
@@ -127,6 +190,26 @@ class GlowUpExecutor:
         self._chat_history: dict[str, list[dict[str, str]]] = {}
         self._chat_timestamps: dict[str, float] = {}
 
+        # Weather client with NWS primary + Open-Meteo fallback.
+        # The fallback notice hook is rebound per-utterance by the
+        # daemon (via :meth:`set_interim_speaker`) so "retrying" is
+        # routed to the correct satellite.
+        self._weather_client: WeatherClient = WeatherClient(
+            primary=NWSSource(_WEATHER_LAT, _WEATHER_LON),
+            fallback=OpenMeteoSource(_WEATHER_LAT, _WEATHER_LON),
+            on_fallback=self._speak_interim,
+        )
+        # Air quality has no viable US fallback provider — single-source.
+        self._air_quality: OpenMeteoAirQuality = OpenMeteoAirQuality(
+            _WEATHER_LAT, _WEATHER_LON,
+        )
+
+        # Interim-speech callback — set by the daemon before each
+        # pipeline via :meth:`set_interim_speaker`.  Used by long-
+        # running handlers (weather fallback) to tell the satellite
+        # "retrying" without waiting for the final confirmation.
+        self._interim_speaker: Optional[Any] = None
+
         # Load action definitions.
         self._actions: dict[str, dict[str, Any]] = self._load_actions()
 
@@ -154,6 +237,8 @@ class GlowUpExecutor:
             "power_summary": self._handle_power_summary,
             "soil_moisture": self._handle_soil_moisture,
             "weather": self._handle_weather,
+            "air_quality": self._handle_air_quality,
+            "forecast": self._handle_forecast,
             "system_status": self._handle_system_status,
             "set_voice": self._handle_set_voice,
             "tell_time": self._handle_tell_time,
@@ -943,8 +1028,7 @@ class GlowUpExecutor:
                         return {
                             "status": "ok",
                             "confirmation": (
-                                f"The {label} temperature is "
-                                f"{f_val:.0f} degrees."
+                                f"{label} is {f_val:.0f} degrees."
                             ),
                             "speak": True,
                         }
@@ -952,8 +1036,7 @@ class GlowUpExecutor:
                         return {
                             "status": "ok",
                             "confirmation": (
-                                f"The {label} humidity is "
-                                f"{value:.0f} percent."
+                                f"{label} humidity is {value:.0f} percent."
                             ),
                             "speak": True,
                         }
@@ -968,7 +1051,7 @@ class GlowUpExecutor:
         return {
             "status": "ok",
             "confirmation": (
-                f"I don't have {sensor_type} data for {display_target}."
+                f"I don't have a {sensor_type} sensor for {display_target}."
             ),
             "speak": True,
         }
@@ -1100,34 +1183,8 @@ class GlowUpExecutor:
             }
 
     # ------------------------------------------------------------------
-    # Weather — Open-Meteo API (free, no key required)
+    # Weather — NWS primary, Open-Meteo fallback (see weather_sources.py)
     # ------------------------------------------------------------------
-
-    # Mobile, AL coordinates — same as the /home dashboard uses.
-    _WEATHER_LAT: float = 30.69
-    _WEATHER_LON: float = -88.04
-    _WEATHER_URL: str = (
-        "https://api.open-meteo.com/v1/forecast"
-        "?latitude={lat}&longitude={lon}"
-        "&current=temperature_2m,relative_humidity_2m,weather_code,"
-        "wind_speed_10m"
-        "&temperature_unit=fahrenheit&wind_speed_unit=mph"
-    )
-
-    # WMO weather interpretation codes → plain English.
-    _WMO_CODES: dict[int, str] = {
-        0: "clear sky", 1: "mainly clear", 2: "partly cloudy",
-        3: "overcast", 45: "foggy", 48: "depositing rime fog",
-        51: "light drizzle", 53: "moderate drizzle", 55: "dense drizzle",
-        61: "slight rain", 63: "moderate rain", 65: "heavy rain",
-        66: "light freezing rain", 67: "heavy freezing rain",
-        71: "slight snow", 73: "moderate snow", 75: "heavy snow",
-        77: "snow grains", 80: "slight rain showers",
-        81: "moderate rain showers", 82: "violent rain showers",
-        85: "slight snow showers", 86: "heavy snow showers",
-        95: "thunderstorm", 96: "thunderstorm with slight hail",
-        99: "thunderstorm with heavy hail",
-    }
 
     def _handle_weather(
         self,
@@ -1137,38 +1194,371 @@ class GlowUpExecutor:
         display_target: str,
         params: dict[str, Any],
     ) -> dict[str, Any]:
-        """Query current weather from Open-Meteo (free, no API key)."""
-        url: str = self._WEATHER_URL.format(
-            lat=self._WEATHER_LAT, lon=self._WEATHER_LON,
-        )
+        """Query current outdoor conditions, optionally restricted to one aspect.
+
+        ``params.aspect`` selects the subset of current conditions to
+        speak.  Valid values: ``temperature``, ``humidity``, ``wind``,
+        ``condition``, ``feels_like``, ``all`` (default).  Any other
+        value is treated as ``all``.
+        """
+        aspect: str = str(params.get("aspect", "all")).lower()
         try:
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data: dict[str, Any] = json.loads(resp.read())
-
-            current: dict[str, Any] = data.get("current", {})
-            temp: float = current.get("temperature_2m", 0)
-            humidity: float = current.get("relative_humidity_2m", 0)
-            wind: float = current.get("wind_speed_10m", 0)
-            code: int = current.get("weather_code", 0)
-            condition: str = self._WMO_CODES.get(code, "unknown conditions")
-
-            return {
-                "status": "ok",
-                "confirmation": (
-                    f"It is currently {temp:.0f} degrees with {condition}. "
-                    f"Humidity is {humidity:.0f}% and "
-                    f"wind is {wind:.0f} miles per hour."
-                ),
-                "speak": True,
-            }
-        except Exception as exc:
-            logger.error("Weather query failed: %s", exc)
+            conditions: CurrentConditions = self._weather_client.current()
+        except WeatherSourceError as exc:
+            logger.error(
+                "Both weather sources failed: %s", exc, exc_info=True,
+            )
             return {
                 "status": "error",
-                "confirmation": "I couldn't get the weather right now.",
+                "confirmation": "I couldn't reach any weather service.",
                 "speak": True,
             }
+        return {
+            "status": "ok",
+            "confirmation": self._format_weather(conditions, aspect),
+            "speak": True,
+        }
+
+    def _format_weather(
+        self, c: CurrentConditions, aspect: str,
+    ) -> str:
+        """Render a ``CurrentConditions`` into a spoken sentence.
+
+        Per-aspect paths return a single short sentence.  The default
+        ``all`` path composes temperature + feels-like (only when the
+        spread exceeds :data:`_FEELS_LIKE_SPREAD_F`) + condition +
+        humidity + wind.
+        """
+        if aspect == "temperature":
+            if c.temp_f is None:
+                return "I don't have an outdoor temperature right now."
+            return f"It is {c.temp_f:.0f} degrees outside."
+
+        if aspect == "humidity":
+            if c.humidity_pct is None:
+                return "I don't have outdoor humidity data."
+            return f"Outdoor humidity is {c.humidity_pct:.0f} percent."
+
+        if aspect == "wind":
+            if c.wind_mph is None:
+                return "I don't have wind data right now."
+            return f"Wind is {c.wind_mph:.0f} miles per hour."
+
+        if aspect == "condition":
+            return f"It is currently {c.condition}."
+
+        if aspect == "feels_like":
+            if c.apparent_f is None:
+                return "Feels-like temperature is not available."
+            return f"It feels like {c.apparent_f:.0f} degrees."
+
+        # Default: all aspects.  Build incrementally so missing fields
+        # simply drop out rather than producing "0 degrees" artifacts.
+        sentences: list[str] = []
+        if c.temp_f is not None:
+            base: str = f"It is {c.temp_f:.0f} degrees"
+            if (
+                c.apparent_f is not None
+                and abs(c.apparent_f - c.temp_f) >= _FEELS_LIKE_SPREAD_F
+            ):
+                base += f" but feels like {c.apparent_f:.0f}"
+            sentences.append(f"{base} with {c.condition}.")
+        else:
+            sentences.append(f"It is currently {c.condition}.")
+        if c.humidity_pct is not None:
+            sentences.append(
+                f"Humidity is {c.humidity_pct:.0f} percent."
+            )
+        if c.wind_mph is not None:
+            sentences.append(
+                f"Wind is {c.wind_mph:.0f} miles per hour."
+            )
+        return " ".join(sentences)
+
+    # ------------------------------------------------------------------
+    # Forecast — NWS periods (primary), Open-Meteo daily (fallback)
+    # ------------------------------------------------------------------
+
+    def _handle_forecast(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Query the forecast for a named period.
+
+        ``params.when`` selects the period: ``today`` (default),
+        ``tonight``, ``tomorrow``.  ``params.aspect`` narrows the
+        response: ``rain`` (precipitation only), ``high`` / ``low``
+        (temperature only), ``all`` (default, reads condition +
+        temperature + precipitation probability).
+        """
+        when: str = str(params.get("when", "today")).lower()
+        aspect: str = str(params.get("aspect", "all")).lower()
+
+        try:
+            periods: list[ForecastPeriod] = self._weather_client.forecast()
+        except WeatherSourceError as exc:
+            logger.error(
+                "Both forecast sources failed: %s", exc, exc_info=True,
+            )
+            return {
+                "status": "error",
+                "confirmation": "I couldn't reach any forecast service.",
+                "speak": True,
+            }
+
+        period: Optional[ForecastPeriod] = self._select_period(periods, when)
+        if period is None:
+            return {
+                "status": "error",
+                "confirmation": f"I don't have a forecast for {when}.",
+                "speak": True,
+            }
+        return {
+            "status": "ok",
+            "confirmation": self._format_forecast(period, aspect),
+            "speak": True,
+        }
+
+    def _select_period(
+        self, periods: list[ForecastPeriod], when: str,
+    ) -> Optional[ForecastPeriod]:
+        """Pick the period matching ``when`` from NWS or Open-Meteo output.
+
+        NWS names periods "Today", "This Afternoon", "Tonight", a
+        weekday name, etc.  Open-Meteo is reshaped in
+        :class:`OpenMeteoSource` to use "Today", "Today night",
+        "Tomorrow", "Tomorrow night".  The matching here accepts either
+        shape.
+        """
+        if not periods:
+            return None
+
+        def _name(p: ForecastPeriod) -> str:
+            return p.name.lower()
+
+        if when == "tonight":
+            for p in periods:
+                if _name(p) == "tonight" or _name(p) == "today night":
+                    return p
+            # Next nighttime period is a reasonable fallback.
+            for p in periods:
+                if not p.is_daytime:
+                    return p
+            return None
+
+        if when == "tomorrow":
+            for p in periods:
+                if _name(p) == "tomorrow":
+                    return p
+            # NWS uses the weekday name; the first future daytime period
+            # after "today"/"this afternoon" is tomorrow.
+            seen_today: bool = False
+            for p in periods:
+                low: str = _name(p)
+                if low.startswith("today") or low == "this afternoon":
+                    seen_today = True
+                    continue
+                if seen_today and p.is_daytime:
+                    return p
+            return None
+
+        # Default: today.
+        for p in periods:
+            low = _name(p)
+            if low in ("today", "this afternoon"):
+                return p
+        # First daytime period is "today" if NWS skipped that label.
+        for p in periods:
+            if p.is_daytime:
+                return p
+        return periods[0]
+
+    def _format_forecast(
+        self, p: ForecastPeriod, aspect: str,
+    ) -> str:
+        """Render a ``ForecastPeriod`` into a spoken forecast sentence."""
+        label: str = p.name or ("today" if p.is_daytime else "tonight")
+
+        if aspect in ("rain", "precipitation"):
+            if p.precip_probability_pct is None:
+                return f"{label}: no precipitation data."
+            return (
+                f"{label}: {p.precip_probability_pct:.0f} percent "
+                f"chance of precipitation."
+            )
+
+        if aspect == "high":
+            if p.temperature_f is None or not p.is_daytime:
+                return f"{label}: no daytime high available."
+            return f"{label}'s high is {p.temperature_f:.0f}."
+
+        if aspect == "low":
+            if p.temperature_f is None or p.is_daytime:
+                return f"{label}: no overnight low available."
+            return f"{label}'s low is {p.temperature_f:.0f}."
+
+        # Default: all — condition + temperature + precipitation chance.
+        bits: list[str] = [f"{label}: {p.condition}"]
+        if p.temperature_f is not None:
+            temp_kind: str = "high" if p.is_daytime else "low"
+            bits.append(f"{temp_kind} of {p.temperature_f:.0f}")
+        if (
+            p.precip_probability_pct is not None
+            and p.precip_probability_pct >= 10.0
+        ):
+            bits.append(
+                f"{p.precip_probability_pct:.0f} percent chance of rain"
+            )
+        return ", ".join(bits) + "."
+
+    # ------------------------------------------------------------------
+    # Air quality — Open-Meteo AQ (no NWS equivalent)
+    # ------------------------------------------------------------------
+
+    def _handle_air_quality(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Query outdoor air quality and pollen.
+
+        ``params.aspect`` selects the subset: ``pollen`` (all species
+        or one via ``params.species``), ``pm25``, ``ozone``, ``uv``,
+        ``aqi``, ``all`` (default).  When aspect is ``pollen`` and a
+        specific species is named, only that species is reported.
+        """
+        aspect: str = str(params.get("aspect", "all")).lower()
+        species: str = str(params.get("species", "")).lower().strip()
+
+        try:
+            aq: AirQuality = self._air_quality.current()
+        except WeatherSourceError as exc:
+            logger.error(
+                "Air quality fetch failed: %s", exc, exc_info=True,
+            )
+            return {
+                "status": "error",
+                "confirmation": "I couldn't reach the air-quality service.",
+                "speak": True,
+            }
+        return {
+            "status": "ok",
+            "confirmation": self._format_air_quality(aq, aspect, species),
+            "speak": True,
+        }
+
+    @staticmethod
+    def _band(value: float, bands: tuple[tuple[float, str], ...]) -> str:
+        """Translate a numeric value to a plain-English category."""
+        for threshold, label in bands:
+            if value <= threshold:
+                return label
+        return bands[-1][1]
+
+    def _format_air_quality(
+        self, aq: AirQuality, aspect: str, species: str,
+    ) -> str:
+        """Render an ``AirQuality`` snapshot into a spoken sentence."""
+        if aspect == "pollen":
+            return self._format_pollen(aq, species)
+
+        if aspect == "pm25":
+            if aq.pm2_5 is None:
+                return "PM2.5 data is not available."
+            return f"PM2.5 is {aq.pm2_5:.0f} micrograms per cubic meter."
+
+        if aspect == "ozone":
+            if aq.ozone is None:
+                return "Ozone data is not available."
+            return f"Ozone is {aq.ozone:.0f} micrograms per cubic meter."
+
+        if aspect == "uv":
+            if aq.uv_index is None:
+                return "UV index is not available."
+            band: str = self._band(aq.uv_index, _UV_BANDS)
+            return f"UV index is {aq.uv_index:.0f}, {band}."
+
+        if aspect == "aqi":
+            if aq.us_aqi is None:
+                return "Air quality index is not available."
+            band = self._band(aq.us_aqi, _AQI_BANDS)
+            return f"Air quality index is {aq.us_aqi:.0f}, {band}."
+
+        # Default: all aspects.
+        parts: list[str] = []
+        if aq.us_aqi is not None:
+            band = self._band(aq.us_aqi, _AQI_BANDS)
+            parts.append(f"Air quality is {band} at {aq.us_aqi:.0f}")
+        elif aq.pm2_5 is not None:
+            parts.append(f"PM2.5 is {aq.pm2_5:.0f}")
+        if aq.uv_index is not None:
+            uv_band: str = self._band(aq.uv_index, _UV_BANDS)
+            parts.append(f"UV index {aq.uv_index:.0f} ({uv_band})")
+        pollen_summary: str = self._pollen_summary(aq)
+        if pollen_summary:
+            parts.append(pollen_summary)
+        if not parts:
+            return "I don't have air-quality data right now."
+        return ". ".join(parts) + "."
+
+    def _format_pollen(self, aq: AirQuality, species: str) -> str:
+        """Render a pollen-only spoken response."""
+        if not aq.pollen:
+            return "I don't have pollen data right now."
+
+        if species:
+            # Accept either the bare species ("ragweed") or the full
+            # Open-Meteo key ("ragweed_pollen").
+            key: str = (
+                species if species.endswith("_pollen")
+                else f"{species}_pollen"
+            )
+            value: Optional[float] = aq.pollen.get(key)
+            if value is None:
+                return f"I don't have {species} pollen data."
+            label: str = _POLLEN_LABELS.get(key, species.replace("_", " "))
+            band: str = self._band(value, _POLLEN_THRESHOLDS)
+            return f"{label.capitalize()} pollen is {band} at {value:.0f}."
+
+        # All species — report the highest-category one.
+        summary: str = self._pollen_summary(aq)
+        if not summary:
+            return "No pollen detected right now."
+        return summary + "."
+
+    def _pollen_summary(self, aq: AirQuality) -> str:
+        """Build a short pollen summary naming dominant species.
+
+        Returns an empty string if no species report any pollen.  When
+        multiple species are in the same top category, they are listed;
+        "low"-only readings are summarized as "all low" rather than
+        enumerated, since that is the common no-news case.
+        """
+        if not aq.pollen:
+            return ""
+
+        categorized: dict[str, list[tuple[str, float]]] = {}
+        for key, val in aq.pollen.items():
+            band: str = self._band(val, _POLLEN_THRESHOLDS)
+            label: str = _POLLEN_LABELS.get(key, key.replace("_pollen", ""))
+            categorized.setdefault(band, []).append((label, val))
+
+        # Order from worst to best; surface the worst category with
+        # names, or just report "all low" when nothing is elevated.
+        for band in ("very high", "high", "moderate"):
+            if band in categorized:
+                names: list[str] = [n for n, _ in categorized[band]]
+                return f"Pollen: {', '.join(names)} {band}"
+        if "low" in categorized:
+            return "Pollen is low"
+        return ""
 
     # ------------------------------------------------------------------
     # System status — comprehensive health check
@@ -1289,6 +1679,36 @@ class GlowUpExecutor:
             tts: TextToSpeech instance from the coordinator.
         """
         self._tts = tts
+
+    def set_interim_speaker(
+        self, cb: Optional[Any],
+    ) -> None:
+        """Register a ``(room, text)`` callback for mid-handler updates.
+
+        The daemon binds this per utterance to the scoped satellite TTS
+        publisher so that long-running handlers (weather failover) can
+        emit a "retrying" notice while still running.  Clearing the
+        callback (``None``) between utterances is not required — the
+        next utterance will simply overwrite it — but the daemon does
+        so to keep the state accurate when idle.
+        """
+        self._interim_speaker = cb
+
+    def _speak_interim(self, text: str) -> None:
+        """Best-effort emit ``text`` to the active pipeline's satellite.
+
+        Silently no-ops when no callback is registered or no room is
+        currently bound.  Handler code should never depend on the
+        interim reaching the user — it is purely a "still working" hint.
+        """
+        cb = self._interim_speaker
+        room: str = getattr(self, "_current_room", "") or ""
+        if cb is None or not room:
+            return
+        try:
+            cb(room, text)
+        except Exception as exc:
+            logger.debug("Interim speaker raised: %s", exc)
 
     def set_mqtt_client(self, client: Any) -> None:
         """Set the MQTT client reference for gate publish handlers.

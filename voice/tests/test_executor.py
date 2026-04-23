@@ -881,5 +881,258 @@ class TestVoiceGateHandlers(unittest.TestCase):
         self.assertEqual(result["status"], "error")
 
 
+class TestWeatherFormatting(unittest.TestCase):
+    """Tests for _format_weather aspect routing and feels-like spread."""
+
+    def setUp(self) -> None:
+        self.ex = _MockExecutor.make()
+
+    def _cc(self, **kw: Any) -> Any:
+        from voice.coordinator.weather_sources import CurrentConditions
+        defaults: dict[str, Any] = dict(
+            temp_f=78.0, apparent_f=78.0, humidity_pct=60.0,
+            wind_mph=5.0, condition="clear sky", source="NWS",
+        )
+        defaults.update(kw)
+        return CurrentConditions(**defaults)
+
+    def test_aspect_temperature_only(self) -> None:
+        msg = self.ex._format_weather(self._cc(), "temperature")
+        self.assertEqual(msg, "It is 78 degrees outside.")
+
+    def test_aspect_humidity_only(self) -> None:
+        msg = self.ex._format_weather(self._cc(), "humidity")
+        self.assertEqual(msg, "Outdoor humidity is 60 percent.")
+
+    def test_aspect_wind_only(self) -> None:
+        msg = self.ex._format_weather(self._cc(), "wind")
+        self.assertEqual(msg, "Wind is 5 miles per hour.")
+
+    def test_aspect_condition_only(self) -> None:
+        msg = self.ex._format_weather(self._cc(), "condition")
+        self.assertEqual(msg, "It is currently clear sky.")
+
+    def test_aspect_feels_like(self) -> None:
+        msg = self.ex._format_weather(
+            self._cc(temp_f=88.0, apparent_f=98.0), "feels_like",
+        )
+        self.assertEqual(msg, "It feels like 98 degrees.")
+
+    def test_default_includes_feels_like_when_spread_large(self) -> None:
+        msg = self.ex._format_weather(
+            self._cc(temp_f=88.0, apparent_f=98.0), "all",
+        )
+        self.assertIn("feels like 98", msg)
+        self.assertIn("88 degrees", msg)
+
+    def test_default_omits_feels_like_when_spread_small(self) -> None:
+        msg = self.ex._format_weather(
+            self._cc(temp_f=70.0, apparent_f=71.0), "all",
+        )
+        self.assertNotIn("feels like", msg)
+
+    def test_default_handles_missing_temperature(self) -> None:
+        msg = self.ex._format_weather(
+            self._cc(temp_f=None, apparent_f=None), "all",
+        )
+        self.assertIn("clear sky", msg)
+        self.assertNotIn("None", msg)
+
+    def test_temperature_aspect_missing_value(self) -> None:
+        msg = self.ex._format_weather(self._cc(temp_f=None), "temperature")
+        self.assertIn("don't have", msg)
+
+
+class TestForecastFormatting(unittest.TestCase):
+    """Tests for period selection and forecast formatting."""
+
+    def setUp(self) -> None:
+        self.ex = _MockExecutor.make()
+        from voice.coordinator.weather_sources import ForecastPeriod
+        self.FP = ForecastPeriod
+        self.periods = [
+            ForecastPeriod(
+                name="Today", is_daytime=True, temperature_f=85.0,
+                condition="Sunny", precip_probability_pct=10.0,
+                wind_mph_desc="5 mph",
+            ),
+            ForecastPeriod(
+                name="Tonight", is_daytime=False, temperature_f=68.0,
+                condition="Clear", precip_probability_pct=0.0,
+                wind_mph_desc="calm",
+            ),
+            ForecastPeriod(
+                name="Tomorrow", is_daytime=True, temperature_f=88.0,
+                condition="Partly Sunny", precip_probability_pct=60.0,
+                wind_mph_desc="10 mph",
+            ),
+        ]
+
+    def test_selects_today(self) -> None:
+        p = self.ex._select_period(self.periods, "today")
+        self.assertEqual(p.name, "Today")
+
+    def test_selects_tonight(self) -> None:
+        p = self.ex._select_period(self.periods, "tonight")
+        self.assertEqual(p.name, "Tonight")
+
+    def test_selects_tomorrow(self) -> None:
+        p = self.ex._select_period(self.periods, "tomorrow")
+        self.assertEqual(p.name, "Tomorrow")
+
+    def test_tomorrow_falls_back_to_next_daytime(self) -> None:
+        """When the list lacks a "Tomorrow" label (NWS uses weekday names),
+        the next future daytime period is returned."""
+        alt = [
+            self.FP(name="This Afternoon", is_daytime=True, temperature_f=80.0,
+                    condition="Sunny", precip_probability_pct=0.0,
+                    wind_mph_desc=""),
+            self.FP(name="Tonight", is_daytime=False, temperature_f=60.0,
+                    condition="Clear", precip_probability_pct=0.0,
+                    wind_mph_desc=""),
+            self.FP(name="Thursday", is_daytime=True, temperature_f=82.0,
+                    condition="Sunny", precip_probability_pct=0.0,
+                    wind_mph_desc=""),
+        ]
+        p = self.ex._select_period(alt, "tomorrow")
+        self.assertEqual(p.name, "Thursday")
+
+    def test_empty_returns_none(self) -> None:
+        self.assertIsNone(self.ex._select_period([], "today"))
+
+    def test_format_default_all(self) -> None:
+        msg = self.ex._format_forecast(self.periods[2], "all")
+        self.assertIn("Tomorrow", msg)
+        self.assertIn("Partly Sunny", msg)
+        self.assertIn("high of 88", msg)
+        self.assertIn("60 percent chance of rain", msg)
+
+    def test_format_rain_aspect(self) -> None:
+        msg = self.ex._format_forecast(self.periods[2], "rain")
+        self.assertIn("60 percent", msg)
+
+    def test_format_high_aspect(self) -> None:
+        msg = self.ex._format_forecast(self.periods[0], "high")
+        self.assertIn("high is 85", msg)
+
+    def test_format_low_aspect(self) -> None:
+        msg = self.ex._format_forecast(self.periods[1], "low")
+        self.assertIn("low is 68", msg)
+
+    def test_format_low_night_daytime_mismatch(self) -> None:
+        """Asking for the low on a daytime period is reported as unavailable."""
+        msg = self.ex._format_forecast(self.periods[0], "low")
+        self.assertIn("no overnight low", msg)
+
+
+class TestAirQualityFormatting(unittest.TestCase):
+    """Tests for air-quality aspect routing and pollen summaries."""
+
+    def setUp(self) -> None:
+        self.ex = _MockExecutor.make()
+
+    def _aq(self, **kw: Any) -> Any:
+        from voice.coordinator.weather_sources import AirQuality
+        defaults: dict[str, Any] = dict(
+            pm2_5=12.0, pm10=25.0, ozone=50.0, us_aqi=42.0,
+            uv_index=6.0, pollen={}, source="Open-Meteo",
+        )
+        defaults.update(kw)
+        return AirQuality(**defaults)
+
+    def test_aspect_aqi_good(self) -> None:
+        msg = self.ex._format_air_quality(self._aq(us_aqi=42.0), "aqi", "")
+        self.assertIn("good", msg)
+
+    def test_aspect_aqi_unhealthy(self) -> None:
+        msg = self.ex._format_air_quality(
+            self._aq(us_aqi=175.0), "aqi", "",
+        )
+        self.assertIn("unhealthy", msg)
+
+    def test_aspect_uv_band(self) -> None:
+        msg = self.ex._format_air_quality(
+            self._aq(uv_index=9.0), "uv", "",
+        )
+        self.assertIn("very high", msg)
+
+    def test_pollen_specific_species(self) -> None:
+        msg = self.ex._format_air_quality(
+            self._aq(pollen={"ragweed_pollen": 150.0}),
+            "pollen", "ragweed",
+        )
+        self.assertIn("Ragweed pollen is high", msg)
+
+    def test_pollen_unknown_species(self) -> None:
+        msg = self.ex._format_air_quality(
+            self._aq(pollen={"grass_pollen": 5.0}),
+            "pollen", "ragweed",
+        )
+        self.assertIn("don't have", msg)
+
+    def test_pollen_all_low_summary(self) -> None:
+        msg = self.ex._format_air_quality(
+            self._aq(pollen={
+                "grass_pollen": 2.0, "ragweed_pollen": 3.0,
+            }),
+            "pollen", "",
+        )
+        self.assertIn("low", msg)
+
+    def test_pollen_surfaces_worst_category(self) -> None:
+        msg = self.ex._format_air_quality(
+            self._aq(pollen={
+                "grass_pollen": 2.0,       # low
+                "ragweed_pollen": 210.0,   # very high
+                "birch_pollen": 90.0,      # high
+            }),
+            "pollen", "",
+        )
+        self.assertIn("very high", msg)
+        self.assertIn("ragweed", msg)
+
+    def test_default_all_includes_aqi_and_pollen(self) -> None:
+        msg = self.ex._format_air_quality(
+            self._aq(pollen={"grass_pollen": 90.0}),
+            "all", "",
+        )
+        self.assertIn("good", msg)       # AQI 42 → good
+        self.assertIn("high", msg)       # Grass at 90 → high
+
+
+class TestInterimSpeaker(unittest.TestCase):
+    """Executor interim-speaker plumbing for weather retry notices."""
+
+    def test_set_and_emit(self) -> None:
+        ex = _MockExecutor.make()
+        cb = MagicMock()
+        ex.set_interim_speaker(cb)
+        ex._current_room = "Main Bedroom"
+        ex._speak_interim("Retrying with backup weather service.")
+        cb.assert_called_once_with(
+            "Main Bedroom", "Retrying with backup weather service.",
+        )
+
+    def test_no_room_noop(self) -> None:
+        ex = _MockExecutor.make()
+        cb = MagicMock()
+        ex.set_interim_speaker(cb)
+        ex._current_room = ""
+        ex._speak_interim("anything")
+        cb.assert_not_called()
+
+    def test_no_callback_noop(self) -> None:
+        ex = _MockExecutor.make()
+        ex.set_interim_speaker(None)
+        ex._current_room = "Main Bedroom"
+        ex._speak_interim("anything")  # Must not raise.
+
+    def test_callback_exception_swallowed(self) -> None:
+        ex = _MockExecutor.make()
+        ex.set_interim_speaker(MagicMock(side_effect=RuntimeError("boom")))
+        ex._current_room = "Main Bedroom"
+        ex._speak_interim("anything")  # Must not raise.
+
+
 if __name__ == "__main__":
     unittest.main()

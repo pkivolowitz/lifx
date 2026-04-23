@@ -470,6 +470,14 @@ class CoordinatorDaemon:
             """Publish TTS text with the utterance sequence number bound."""
             self._speak_for_room_seq(r, t, utterance_seq)
 
+        # Hand the same publisher to the executor for mid-handler
+        # interim speech (e.g. weather "retrying with backup").  Bound
+        # per-utterance so the seq matches the satellite's current
+        # expected response window.  Cleared in the finally block so
+        # stale callbacks cannot fire between utterances.
+        if hasattr(self._executor, "set_interim_speaker"):
+            self._executor.set_interim_speaker(scoped_publisher)
+
         # Suppress wake detection for the entire pipeline duration,
         # not just during TTS playback.  Prevents the satellite from
         # re-triggering on its own HomePod output during slow queries.
@@ -504,6 +512,10 @@ class CoordinatorDaemon:
             # Always re-enable wake detection after pipeline completes,
             # even if the pipeline crashed.
             self._notify_playback(room, False)
+            # Drop the interim speaker so a late exception path in a
+            # subsequent utterance cannot fire with stale seq.
+            if hasattr(self._executor, "set_interim_speaker"):
+                self._executor.set_interim_speaker(None)
 
         if result.get("aborted"):
             logger.info(

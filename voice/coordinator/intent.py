@@ -32,8 +32,11 @@ _SYSTEM_PROMPT_TEMPLATE: str = """You are the voice command parser for GlowUp, a
 Parse the user's spoken command into a JSON action. Think carefully about what they want.
 
 IMPORTANT: This system has physical sensors (temperature, humidity, motion) inside the home.
-- If the user asks about temperature/humidity IN A ROOM or AT A SPECIFIC SENSOR → use query_sensor
+- If the user asks about temperature/humidity IN A NAMED ROOM or AT A SPECIFIC SENSOR → use query_sensor
 - If the user asks about the temperature OUTSIDE, the weather, or mentions a city name → use query_weather
+- If the user asks about temperature/humidity/wind/rain WITHOUT naming a room or sensor → default to outdoor: query_weather (never invent a room name). Bare "what's the temperature?" means outside.
+- If the user asks about pollen, allergens, air quality, PM2.5, ozone, or UV → use query_air_quality
+- If the user asks about the FORECAST, tomorrow, tonight, "will it rain", or a future condition → use query_forecast
 
 Available actions:
 - power: turn devices on or off (params: on=true/false)
@@ -46,7 +49,9 @@ Available actions:
 - query_power: ask about power consumption or electricity cost
 - query_status: ask if lights/devices are on or off, or what effect is playing. Use this when someone asks "are the lights on?" or "is the bedroom on?"
 - query_soil: ask about soil moisture or whether to water. Use when someone asks "do I need to water?" or "how wet is the yard?"
-- query_weather: ask about outdoor temperature, weather, forecast, or conditions outside. Use when someone asks "what's the temperature outside?" or "what's the weather?" or mentions a city name with temperature.
+- query_weather: ask about CURRENT outdoor temperature, humidity, wind, or conditions. Use when someone asks "what's the temperature outside?", "what's the weather?", "how windy is it?", "how humid is it?", or a bare "what's the temperature?" / "what's the humidity?" without a room. Optional params.aspect narrows the answer: "temperature", "humidity", "wind", "condition", "feels_like", or "all" (default). Use "feels_like" when the user asks how hot/cold it feels, heat index, wind chill.
+- query_forecast: ask about FUTURE weather — today's high, tonight, tomorrow, chance of rain, will it rain. Params: when="today"|"tonight"|"tomorrow" (default "today"); optional aspect="rain"|"high"|"low"|"all" (default "all").
+- query_air_quality: ask about outdoor air quality, pollen, allergens, PM2.5, ozone, or UV index. Params: optional aspect="pollen"|"pm25"|"ozone"|"uv"|"aqi"|"all" (default "all"); optional species="grass"|"ragweed"|"birch"|"alder"|"mugwort"|"olive" when pollen aspect and a specific plant is named.
 - system_status: ask about overall system health, whether the system is working, or "what is your status?" Use when someone asks "what's your status?", "how are you doing?", "are you working?", "system check", or "status report".
 - set_voice: change the speaking voice. Target is the voice name. Use when someone says "switch to Samantha", "use the Daniel voice", "change voice to Karen", etc. (params: voice_name="Samantha")
 - repair: restart a specific adapter or subsystem. Target is the adapter name: zigbee, vivint, nvr, printer, or mqtt. Use when someone says "repair NVR", "restart vivint", "fix the printer adapter", etc.
@@ -111,9 +116,27 @@ Examples:
 - "what was my last question?" -> {{"action": "chat", "target": "all", "params": {{"message": "what was my last question?"}}}}
 - "do I need to water the backyard?" -> {{"action": "query_soil", "target": "backyard", "params": {{}}}}
 - "how wet is the listening room?" -> {{"action": "query_soil", "target": "listening room", "params": {{}}}}
-- "what's the temperature outside?" -> {{"action": "query_weather", "target": "all", "params": {{}}}}
+- "what's the temperature outside?" -> {{"action": "query_weather", "target": "all", "params": {{"aspect": "temperature"}}}}
+- "what is the temperature?" -> {{"action": "query_weather", "target": "all", "params": {{"aspect": "temperature"}}}}
+- "what's the humidity?" -> {{"action": "query_weather", "target": "all", "params": {{"aspect": "humidity"}}}}
+- "how windy is it?" -> {{"action": "query_weather", "target": "all", "params": {{"aspect": "wind"}}}}
 - "what's the weather like today?" -> {{"action": "query_weather", "target": "all", "params": {{}}}}
-- "what is the temperature in Mobile Alabama?" -> {{"action": "query_weather", "target": "all", "params": {{}}}}
+- "what does it feel like outside?" -> {{"action": "query_weather", "target": "all", "params": {{"aspect": "feels_like"}}}}
+- "what is the temperature in Mobile Alabama?" -> {{"action": "query_weather", "target": "all", "params": {{"aspect": "temperature"}}}}
+- "what's the forecast?" -> {{"action": "query_forecast", "target": "all", "params": {{"when": "today"}}}}
+- "what's the forecast this morning?" -> {{"action": "query_forecast", "target": "all", "params": {{"when": "today"}}}}
+- "will it rain today?" -> {{"action": "query_forecast", "target": "all", "params": {{"when": "today", "aspect": "rain"}}}}
+- "what's tonight's forecast?" -> {{"action": "query_forecast", "target": "all", "params": {{"when": "tonight"}}}}
+- "will it rain tonight?" -> {{"action": "query_forecast", "target": "all", "params": {{"when": "tonight", "aspect": "rain"}}}}
+- "what's tomorrow's high?" -> {{"action": "query_forecast", "target": "all", "params": {{"when": "tomorrow", "aspect": "high"}}}}
+- "what's the forecast for tomorrow?" -> {{"action": "query_forecast", "target": "all", "params": {{"when": "tomorrow"}}}}
+- "what's the pollen?" -> {{"action": "query_air_quality", "target": "all", "params": {{"aspect": "pollen"}}}}
+- "is ragweed bad today?" -> {{"action": "query_air_quality", "target": "all", "params": {{"aspect": "pollen", "species": "ragweed"}}}}
+- "how's the grass pollen?" -> {{"action": "query_air_quality", "target": "all", "params": {{"aspect": "pollen", "species": "grass"}}}}
+- "what's the air quality?" -> {{"action": "query_air_quality", "target": "all", "params": {{"aspect": "aqi"}}}}
+- "how's the air outside?" -> {{"action": "query_air_quality", "target": "all", "params": {{}}}}
+- "what's the UV index?" -> {{"action": "query_air_quality", "target": "all", "params": {{"aspect": "uv"}}}}
+- "any allergens today?" -> {{"action": "query_air_quality", "target": "all", "params": {{"aspect": "pollen"}}}}
 - "what is your status?" -> {{"action": "system_status", "target": "all", "params": {{}}}}
 - "are you working?" -> {{"action": "system_status", "target": "all", "params": {{}}}}
 - "system check" -> {{"action": "system_status", "target": "all", "params": {{}}}}

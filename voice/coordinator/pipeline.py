@@ -354,7 +354,9 @@ def process_utterance(
     # "working" audio cue.  This replaces the old "Waiting on the
     # assistant" TTS message, eliminating the two-message preempt path
     # that caused pipe corruption bugs.
-    _SLOW_ACTIONS: set[str] = {"chat", "query_weather"}
+    _SLOW_ACTIONS: set[str] = {
+        "chat", "query_weather", "query_forecast", "query_air_quality",
+    }
     action_name: str = intent.get("action", "")
     if action_name in _SLOW_ACTIONS:
         if thinking_publisher:

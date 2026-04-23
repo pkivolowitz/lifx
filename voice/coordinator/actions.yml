@@ -148,6 +148,18 @@ query_weather:
   handler: weather
   speak: true
 
+query_forecast:
+  type: query
+  label: forecast
+  handler: forecast
+  speak: true
+
+query_air_quality:
+  type: query
+  label: air quality
+  handler: air_quality
+  speak: true
+
 system_status:
   type: query
   label: system
