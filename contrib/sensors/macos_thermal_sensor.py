@@ -3,8 +3,9 @@
 
 Companion to ``pi_thermal_sensor.py`` and ``x86_thermal_sensor.py``.
 Targets Apple Silicon Macs (Mac Studio, Mac mini, MacBook Pro M-series).
-Reads CPU die temperature via ``smctemp`` (brew-installable) and
-publishes a normalized ``ThermalReading`` to the GlowUp MQTT broker::
+Reads CPU/GPU die temperatures via ``macmon`` (brew-installable,
+sudoless, Apple-Silicon-native) and publishes a normalized
+``ThermalReading`` to the GlowUp MQTT broker::
 
     glowup/hardware/thermal/<node_id>     (retained, every interval)
 
@@ -12,7 +13,9 @@ Uses the same schema as the Pi/x86 sensors so the thermal dashboard,
 logger, and fleet overview work identically.
 
 What works on macOS:
-    cpu_temp_c      — from `smctemp -c`
+    cpu_temp_c      — from `macmon pipe -s 1` (.temp.cpu_temp_avg)
+    extra.gpu_temp_c — same probe (.temp.gpu_temp_avg)
+    extra.cpu_power_w — `.cpu_power`
     load_1m/5m/15m  — `os.getloadavg()`
     uptime_s        — `sysctl -n kern.boottime`
     platform        — "macos"
@@ -24,7 +27,7 @@ What does NOT work on macOS without sudo (and is omitted):
     throttled_flags — Pi-firmware-specific (vcgencmd), no Mac equivalent
 
 Requires:
-    brew install smctemp
+    brew install macmon
     pip install paho-mqtt
 
 Usage::
@@ -101,31 +104,35 @@ class ThermalReading:
 # Readers
 # ---------------------------------------------------------------------------
 
-def read_cpu_temp() -> Optional[float]:
-    """Read CPU die temperature (°C) via ``smctemp -c``.
+def read_macmon_sample() -> dict[str, Any]:
+    """Run ``macmon pipe -s 1`` and return the parsed JSON sample.
 
-    smctemp is the Apple-Silicon-aware fork of osx-cpu-temp.  Output is
-    a single float on stdout, e.g. ``58.4\\n``.
+    macmon is a sudoless Apple Silicon system monitor.  ``pipe -s 1``
+    emits exactly one JSON line and exits.  Schema (relevant fields)::
+
+        {"temp":{"cpu_temp_avg":35.78,"gpu_temp_avg":32.03},
+         "cpu_power":0.05, "gpu_power":0.01, "all_power":0.07, ...}
 
     Returns:
-        Temperature in °C, or None on failure.
+        Parsed dict, or empty dict on any failure.
     """
     try:
         result = subprocess.run(
-            ["smctemp", "-c"],
-            capture_output=True, text=True, timeout=5,
+            ["macmon", "pipe", "-s", "1"],
+            capture_output=True, text=True, timeout=10,
         )
         if result.returncode != 0:
-            logger.warning("smctemp -c returned %d: %s",
+            logger.warning("macmon pipe returned %d: %s",
                            result.returncode, result.stderr.strip())
-            return None
-        return float(result.stdout.strip())
+            return {}
+        # `pipe -s 1` emits one line; strip + parse.
+        return json.loads(result.stdout.strip())
     except FileNotFoundError:
-        logger.error("smctemp not found — install with: brew install smctemp")
-        return None
-    except (ValueError, subprocess.TimeoutExpired) as exc:
-        logger.warning("smctemp parse/timeout: %s", exc)
-        return None
+        logger.error("macmon not found — install with: brew install macmon")
+        return {}
+    except (json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
+        logger.warning("macmon parse/timeout: %s", exc)
+        return {}
 
 
 def read_uptime_s() -> float:
@@ -170,7 +177,11 @@ def collect_reading(node_id: str) -> ThermalReading:
     Args:
         node_id: Logical node identifier.
     """
-    cpu_temp: Optional[float] = read_cpu_temp()
+    sample: dict[str, Any] = read_macmon_sample()
+    temp_block: dict[str, Any] = sample.get("temp") or {}
+    cpu_temp: Optional[float] = temp_block.get("cpu_temp_avg")
+    gpu_temp: Optional[float] = temp_block.get("gpu_temp_avg")
+
     load_1, load_5, load_15 = os.getloadavg()
     uptime: float = read_uptime_s()
     model: Optional[str] = read_model()
@@ -178,6 +189,11 @@ def collect_reading(node_id: str) -> ThermalReading:
     extra: dict[str, Any] = {}
     if model:
         extra["model"] = model
+    if gpu_temp is not None:
+        extra["gpu_temp_c"] = float(gpu_temp)
+    cpu_power: Any = sample.get("cpu_power")
+    if isinstance(cpu_power, (int, float)):
+        extra["cpu_power_w"] = float(cpu_power)
 
     return ThermalReading(
         ts=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
