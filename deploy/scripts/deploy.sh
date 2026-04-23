@@ -33,15 +33,14 @@ GLOWUP_HOST="a@10.0.0.214"
 GLOWUP_DEST="/home/a/lifx"
 
 # mbclock — Pi 4 bedroom kiosk (10.0.0.220).
-# No systemd unit; the kiosk launches from ~/.config/labwc/autostart as a
-# child of the labwc session.  deploy_mbclock() captures the running command
-# line, rsyncs, kills the kiosk process, relaunches with the same args, and
-# verifies all three services (kiosk, satellite, thermal) are healthy.
+# Kiosk is a systemd-user service (~/.config/systemd/user/kiosk.service);
+# deploy_mbclock() rsyncs then `systemctl --user restart kiosk.service`.
+# An older version here killed the kiosk by pgrep and relaunched via
+# ssh+nohup — that pattern lost the graphical-session env (DISPLAY /
+# WAYLAND_DISPLAY), so pygame initialized but nothing drew on the
+# framebuffer.  Perry caught it live on 2026-04-23; don't reintroduce.
 MBCLOCK_HOST="a@10.0.0.220"
 MBCLOCK_DEST="/home/a/lifx"
-# Venv lives at ~/venv (NOT under $MBCLOCK_DEST) — the kiosk's default
-# command line uses this absolute path when no prior kiosk is found.
-MBCLOCK_PY="/home/a/venv/bin/python"
 
 # ---------------------------------------------------------------------------
 # Rsync exclusions — dev artifacts, docs, test suite, deploy templates.
@@ -261,72 +260,33 @@ deploy_glowup() {
 # ---------------------------------------------------------------------------
 
 deploy_mbclock() {
-    # 1. Capture the running kiosk command line before touching anything.
-    #    The kiosk runs as "python -m kiosk ..." under the labwc session.
-    #    /proc/<pid>/cmdline uses NUL separators; tr converts to spaces.
-    # Match ONLY the real python kiosk process — not the bash wrapper
-    # that launched it.  A previous implementation used `pgrep -f
-    # 'python.*-m kiosk'` which matched both the python child AND the
-    # enclosing `bash -c 'cd ... && nohup ... python -m kiosk ...'`
-    # wrapper (because the wrapper's cmdline literally contains the
-    # regex).  `head -1` then picked the bash PID, the kill killed the
-    # wrapper, and the python child was orphaned — every deploy left
-    # another zombie kiosk on the framebuffer.  Requiring the basename
-    # to start with `python` fixes it.
-    local kiosk_pid kiosk_cmd
-    kiosk_pid=$(ssh "$MBCLOCK_HOST" \
-        "pgrep -f '^[^ ]*python[^ ]* -m kiosk'" 2>/dev/null || true)
-    if [ -n "$kiosk_pid" ]; then
-        kiosk_pid=$(echo "$kiosk_pid" | head -1)
-        kiosk_cmd=$(ssh "$MBCLOCK_HOST" "tr '\0' ' ' < /proc/$kiosk_pid/cmdline")
-        echo "==> mbclock: captured running kiosk (pid $kiosk_pid): $kiosk_cmd"
-    else
-        echo "==> mbclock: WARNING — no running kiosk process found, using default"
-        kiosk_cmd="$MBCLOCK_PY -m kiosk --api http://10.0.0.214:8420 --rotate 0 --mode wallclock"
-    fi
-
-    # 2. Rsync (full tree, --delete, same as every other target).
     echo "==> mbclock: syncing to $MBCLOCK_HOST:$MBCLOCK_DEST"
     ssh "$MBCLOCK_HOST" "mkdir -p '$MBCLOCK_DEST'"
     do_rsync "$MBCLOCK_HOST" "$MBCLOCK_DEST"
     write_deployed "$MBCLOCK_HOST" "$MBCLOCK_DEST"
 
     if $dry_run; then
-        echo "[dry-run] would kill and relaunch kiosk"
+        echo "[dry-run] would restart: kiosk.service (user), glowup-satellite, pi-thermal"
         return
     fi
 
-    # 3. Kill the running kiosk.
-    if [ -n "$kiosk_pid" ]; then
-        echo "==> mbclock: killing kiosk (pid $kiosk_pid)"
-        ssh "$MBCLOCK_HOST" "kill $kiosk_pid" 2>/dev/null || true
-        sleep 1
-    fi
-
-    # 4. Relaunch with the captured command line.
-    #    Run from the lifx directory, backgrounded, stdout/stderr to log.
-    #    ssh -n disconnects the ssh client's stdin so the backgrounded
-    #    kiosk doesn't inherit it; `< /dev/null` on the remote command
-    #    ensures the kiosk has no stdin to keep the ssh channel open.
-    #    Without both, ssh waits forever on the inherited stdin FD and
-    #    the deploy script hangs indefinitely after the relaunch.
-    echo "==> mbclock: relaunching kiosk"
-    ssh -n "$MBCLOCK_HOST" \
-        "cd '$MBCLOCK_DEST' && nohup $kiosk_cmd < /dev/null > /tmp/kiosk.log 2>&1 &"
+    # Restart the systemd-user kiosk service.  It inherits the
+    # graphical-session env from the user's session bus, so pygame
+    # gets a visible window — unlike the old ssh+nohup relaunch, which
+    # started pygame with no DISPLAY and silently rendered nowhere.
+    echo "==> mbclock: restarting kiosk.service (user)"
+    ssh "$MBCLOCK_HOST" "systemctl --user restart kiosk.service" || true
     sleep 2
 
-    # 5. Verify all three processes are healthy.
     local ok=true
 
-    # Kiosk process.
-    if ssh "$MBCLOCK_HOST" "pgrep -f 'python.*-m kiosk'" > /dev/null 2>&1; then
+    if ssh "$MBCLOCK_HOST" "systemctl --user is-active --quiet kiosk.service"; then
         echo "==> mbclock: kiosk running"
     else
-        echo "==> mbclock: WARNING — kiosk did not come back"
+        echo "==> mbclock: WARNING — kiosk.service not active after restart"
         ok=false
     fi
 
-    # Voice satellite (systemd).
     if ssh "$MBCLOCK_HOST" "systemctl is-active --quiet glowup-satellite"; then
         echo "==> mbclock: satellite running"
     else
@@ -334,7 +294,6 @@ deploy_mbclock() {
         ok=false
     fi
 
-    # Thermal sensor (systemd).
     if ssh "$MBCLOCK_HOST" "systemctl is-active --quiet pi-thermal"; then
         echo "==> mbclock: thermal running"
     else
