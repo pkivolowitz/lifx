@@ -351,17 +351,21 @@ class ThermalLogger:
         if self._conn is None:
             return []
         since: float = time.time() - (hours * 3600)
+        # AVG() over an integer column returns Postgres `numeric`,
+        # which psycopg maps to Python `Decimal` and json.dumps refuses
+        # to serialize.  Cast integer aggregates to double precision so
+        # the API surface stays uniformly float.
         sql: str = """
             SELECT floor(timestamp / %s)::bigint * %s AS bucket,
-                   AVG(cpu_temp_c)              AS cpu_temp_c,
-                   AVG(fan_rpm)                 AS fan_rpm,
-                   AVG(fan_pwm_step)            AS fan_pwm_step,
-                   MAX(fan_declared_present)    AS fan_declared_present,
-                   AVG(load_1m)                 AS load_1m,
-                   AVG(load_5m)                 AS load_5m,
-                   AVG(load_15m)                AS load_15m,
-                   MAX(uptime_s)                AS uptime_s,
-                   MAX(throttled_flags)         AS throttled_flags
+                   AVG(cpu_temp_c)::double precision   AS cpu_temp_c,
+                   AVG(fan_rpm)::double precision      AS fan_rpm,
+                   AVG(fan_pwm_step)::double precision AS fan_pwm_step,
+                   MAX(fan_declared_present)           AS fan_declared_present,
+                   AVG(load_1m)::double precision      AS load_1m,
+                   AVG(load_5m)::double precision      AS load_5m,
+                   AVG(load_15m)::double precision     AS load_15m,
+                   MAX(uptime_s)                       AS uptime_s,
+                   MAX(throttled_flags)                AS throttled_flags
             FROM thermal_readings
             WHERE node_id = %s AND timestamp >= %s
             GROUP BY bucket

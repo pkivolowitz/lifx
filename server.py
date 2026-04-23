@@ -78,6 +78,7 @@ import hmac
 import http.server
 import ipaddress
 import json
+from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from urllib.parse import unquote, parse_qs, urlparse
@@ -230,6 +231,18 @@ from schedule_utils import (
     days_display as _days_display,
     VALID_DAY_LETTERS as _VALID_DAY_LETTERS,
 )
+
+
+def _json_default(value: Any) -> Any:
+    """`json.dumps` fallback for types Postgres returns natively.
+
+    Decimal arises from any aggregate over an integer column
+    (`AVG(int_col)` → numeric → Decimal); without this, those endpoints
+    500 with "Object of type Decimal is not JSON serializable".
+    """
+    if isinstance(value, Decimal):
+        return float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 # ---------------------------------------------------------------------------
@@ -884,7 +897,10 @@ class GlowUpRequestHandler(
             code: HTTP status code.
             data: JSON-serializable response data.
         """
-        body: bytes = json.dumps(data, indent=2).encode("utf-8")
+        # `default=` catches Postgres `numeric` columns that arrive as
+        # Decimal — without this, any aggregate query (AVG/SUM over an
+        # integer column) silently 500s the endpoint.
+        body: bytes = json.dumps(data, indent=2, default=_json_default).encode("utf-8")
         try:
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
