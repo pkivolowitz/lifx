@@ -48,8 +48,11 @@
 
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- /usr/sbin is required: macmon shells out to powermetrics
+             (which lives at /usr/sbin/powermetrics) and silently fails
+             with "No such file or directory" if it can't find it. -->
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>HOME</key>
         <string>/Users/perrykivolowitz</string>
         <key>PYTHONUNBUFFERED</key>
