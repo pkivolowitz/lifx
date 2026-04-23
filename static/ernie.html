@@ -179,13 +179,12 @@ th {
 }
 th:hover { color: var(--fg); }
 tr:hover td { background: var(--row-hover); }
-tr.new-row td { animation: newrow 2s ease-out; }
-@keyframes newrow {
-    0% { background: var(--new-row); }
-    100% { background: transparent; }
-}
 .mono { font-family: var(--mono); }
 .dim { color: var(--fg-dim); }
+/* "converted" marks TPMS temps/pressures that came in as native °C or
+   kPa and were normalized to °F / PSI for display — italic is the
+   cue that the unit was converted, not native. */
+.converted { font-style: italic; }
 .rssi-cell {
     display: inline-block;
     width: 80px;
@@ -311,23 +310,37 @@ tr.new-row td { animation: newrow 2s ease-out; }
 <script>
 "use strict";
 
-// Poll interval. 2s is a reasonable balance between responsiveness and
-// server / battery impact; the page is a dashboard, not a console.
+// Poll interval.  The render path no longer destroys DOM, so this can
+// stay responsive without pinning the CPU.
 const POLL_MS = 2000;
 
-// Tracks MACs/TPMS-IDs we've already seen, so new arrivals can be
-// briefly highlighted via the .new-row animation.
-const seenMacs = new Set();
-const seenTpms = new Set();
-// Keep a monotonically-growing event dedupe set so the dashboard
-// doesn't flash the same event every 2 seconds.
-const seenEventKeys = new Set();
+// Fixed-size row pools — the table bodies are pre-populated with this
+// many hidden <tr> elements at page load, and updates mutate cell
+// contents in place.  No createElement/innerHTML churn per poll means
+// an M4 stops burning a core just to render this page.
+//
+// Sizes are set above the practical upper bound for each panel in a
+// home environment.  Data beyond the pool is silently truncated; the
+// "N more" chip in the panel header reports the overflow so nothing
+// is silently lost.
+const POOL_SIZES = { ble: 60, events: 40, tpms: 20 };
 
-// Current sort state per table.
 const sortState = {
     ble:  { key: "last_heard_ts", asc: false },
     tpms: { key: "last_seen",     asc: false },
 };
+
+// Pool row handles populated by buildPools() at boot.  Each element
+// is a plain object holding references to the mutable nodes of one row
+// so the render path only touches textContent / style / className.
+const pools = { ble: [], events: [], tpms: [] };
+
+// Per-table empty-state rows.  Always present in the DOM (once), shown
+// when the data array is empty, hidden when the pool has data.
+const emptyRows = { ble: null, events: null, tpms: null };
+
+// Service-dot handles, built once and mutated thereafter.
+let serviceDots = null;
 
 function fmtAge(ts) {
     if (!ts) return "—";
@@ -335,15 +348,6 @@ function fmtAge(ts) {
     if (age < 60)   return Math.round(age) + "s";
     if (age < 3600) return Math.round(age / 60) + "m";
     return Math.round(age / 3600) + "h";
-}
-
-function rssiBar(rssi) {
-    // RSSI typically ranges -30 (very close) to -100 (barely audible).
-    // Map to 0-100% width.
-    if (rssi === null || rssi === undefined) return "";
-    const pct = Math.max(0, Math.min(100, (rssi + 100) * (100 / 70)));
-    return `<span class="rssi-cell"><div style="width:${pct}%"></div></span> `
-         + `<span class="mono dim">${rssi} dBm</span>`;
 }
 
 function sortRows(rows, key, asc) {
@@ -372,168 +376,333 @@ function bindSorters(tableId, which) {
     });
 }
 
-function renderBle(data) {
-    document.getElementById("ble-count").textContent = data.count;
-    const body = document.getElementById("ble-body");
-    if (!data.devices.length) {
-        body.innerHTML = '<tr><td colspan="7" class="empty">'
-            + 'listening…</td></tr>';
-        return;
+// ---------------------------------------------------------------------
+// Pool construction — build every <tr> we will ever render once.
+// ---------------------------------------------------------------------
+
+function mk(tag, className) {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    return el;
+}
+
+function mkEmptyRow(tbody, colspan, text) {
+    const tr = mk("tr");
+    const td = mk("td", "empty");
+    td.colSpan = colspan;
+    td.textContent = text;
+    tr.append(td);
+    tbody.appendChild(tr);
+    return tr;
+}
+
+function buildBlePool(tbody, count) {
+    for (let i = 0; i < count; i++) {
+        const tr = mk("tr");
+        tr.hidden = true;
+
+        const tdCategory = mk("td");
+
+        const tdLabel = mk("td");
+        const labelStrong = mk("strong");
+        const labelSpace = document.createTextNode(" ");
+        const labelMac = mk("span", "mono dim");
+        tdLabel.append(labelStrong, labelSpace, labelMac);
+
+        const tdVendor = mk("td", "dim");
+        const tdIdentity = mk("td");
+
+        const tdBand = mk("td");
+        const bandPill = mk("span");
+        tdBand.append(bandPill);
+
+        const tdRssi = mk("td");
+        const rssiWrap = mk("span", "rssi-cell");
+        const rssiInner = mk("div");
+        rssiWrap.append(rssiInner);
+        const rssiSpace = document.createTextNode(" ");
+        const rssiText = mk("span", "mono dim");
+        tdRssi.append(rssiWrap, rssiSpace, rssiText);
+
+        const tdAge = mk("td", "mono dim");
+
+        tr.append(tdCategory, tdLabel, tdVendor, tdIdentity,
+                  tdBand, tdRssi, tdAge);
+        tbody.appendChild(tr);
+
+        pools.ble.push({
+            tr, tdCategory,
+            labelStrong, labelMac,
+            tdVendor, tdIdentity,
+            bandPill,
+            rssiWrap, rssiInner, rssiText,
+            tdAge,
+        });
     }
+}
+
+function buildEventsPool(tbody, count) {
+    for (let i = 0; i < count; i++) {
+        const tr = mk("tr");
+        tr.hidden = true;
+
+        const tdAge = mk("td", "mono dim");
+        const tdEvent = mk("td");
+        const eventStrong = mk("strong");
+        tdEvent.append(eventStrong);
+        const tdLabel = mk("td");
+        const labelText = document.createTextNode("");
+        tdLabel.append(labelText);
+        const tdDetail = mk("td", "mono dim");
+
+        tr.append(tdAge, tdEvent, tdLabel, tdDetail);
+        tbody.appendChild(tr);
+
+        pools.events.push({
+            tr, tdAge, eventStrong, tdLabel, labelText, tdDetail,
+        });
+    }
+}
+
+function buildTpmsPool(tbody, count) {
+    for (let i = 0; i < count; i++) {
+        const tr = mk("tr");
+        tr.hidden = true;
+
+        const tdAge = mk("td", "mono dim");
+        const tdModel = mk("td");
+        const tdId = mk("td", "mono");
+        const tdPsi = mk("td", "mono");
+        const tdTemp = mk("td", "mono");
+        const tdCount = mk("td", "mono dim");
+
+        tr.append(tdAge, tdModel, tdId, tdPsi, tdTemp, tdCount);
+        tbody.appendChild(tr);
+
+        pools.tpms.push({
+            tr, tdAge, tdModel, tdId, tdPsi, tdTemp, tdCount,
+        });
+    }
+}
+
+function buildServiceDots() {
+    const svcBox = document.getElementById("services");
+    const order = [
+        ["mosquitto",   "mosquitto"],
+        ["ble_sniffer", "ble-sniffer"],
+        ["rtl433",      "rtl433"],
+        ["pi_thermal",  "pi-thermal"],
+    ];
+    const map = {};
+    for (const [key, label] of order) {
+        const wrap = mk("span", "service");
+        const dot = mk("span", "dot unknown");
+        wrap.append(dot, document.createTextNode(label));
+        svcBox.append(wrap);
+        map[key] = dot;
+    }
+    return map;
+}
+
+function buildPools() {
+    const bleBody = document.getElementById("ble-body");
+    emptyRows.ble = mkEmptyRow(bleBody, 7, "listening…");
+    buildBlePool(bleBody, POOL_SIZES.ble);
+
+    const evBody = document.getElementById("ble-events-body");
+    emptyRows.events = mkEmptyRow(evBody, 4, "no events yet");
+    buildEventsPool(evBody, POOL_SIZES.events);
+
+    const tpmsBody = document.getElementById("tpms-body");
+    emptyRows.tpms = mkEmptyRow(tpmsBody, 6, "waiting for cars…");
+    buildTpmsPool(tpmsBody, POOL_SIZES.tpms);
+
+    serviceDots = buildServiceDots();
+}
+
+// ---------------------------------------------------------------------
+// Row updaters — mutate a handle in place, never create or remove DOM.
+// ---------------------------------------------------------------------
+
+function setText(node, s) {
+    // Assigning a fresh string on every poll is a hot path; skipping
+    // the write when the text is unchanged saves layout invalidations.
+    if (node.textContent !== s) node.textContent = s;
+}
+
+function setClass(node, cls) {
+    if (node.className !== cls) node.className = cls;
+}
+
+function setWidth(node, pct) {
+    const s = pct + "%";
+    if (node.style.width !== s) node.style.width = s;
+}
+
+function updateBleRow(h, r) {
+    const gone = !!r.gone;
+    const label = r.label || "";
+    const mac = r.mac || "";
+
+    setText(h.tdCategory, r.category || "unknown");
+
+    // Label + MAC: strong holds the label (empty collapses visually),
+    // mac span holds the MAC.  Both always present; a missing label
+    // means the strong renders as zero-width.
+    setText(h.labelStrong, label);
+    setText(h.labelMac, mac);
+
+    setText(h.tdVendor, r.vendor || "");
+
+    // Class / identity column.
+    const identParts = [];
+    if (r.apple_subtype) identParts.push(r.apple_subtype);
+    else if (r.company)  identParts.push(r.company);
+    if (r.name && !r.label) identParts.push(r.name);
+    if (!identParts.length && r.mac_kind && r.mac_kind !== "public") {
+        identParts.push(r.mac_kind);
+    }
+    setText(h.tdIdentity, identParts.join(" · "));
+
+    // Band pill.
+    if (r.band) {
+        setClass(h.bandPill, "band band-" + r.band);
+        setText(h.bandPill, r.band);
+        h.bandPill.hidden = false;
+    } else {
+        setText(h.bandPill, "");
+        h.bandPill.hidden = true;
+    }
+
+    // RSSI bar + dBm readout.
+    const rssi = (typeof r.rssi_ema === "number")
+        ? Math.round(r.rssi_ema) : null;
+    if (rssi === null) {
+        h.rssiWrap.hidden = true;
+        setText(h.rssiText, "");
+    } else {
+        h.rssiWrap.hidden = false;
+        // -30 dBm → 100%, -100 dBm → 0%.
+        const pct = Math.max(0, Math.min(100, (rssi + 100) * (100 / 70)));
+        setWidth(h.rssiInner, pct);
+        setText(h.rssiText, rssi + " dBm");
+    }
+
+    const ageTs = r.last_heard_ts || r.ts || 0;
+    setText(h.tdAge, (gone ? "gone " : "") + fmtAge(ageTs));
+
+    h.tr.classList.toggle("gone-row", gone);
+    h.tr.hidden = false;
+}
+
+function hideRow(h) { h.tr.hidden = true; }
+
+function renderBle(data) {
+    setText(document.getElementById("ble-count"),
+            String(data.count));
     const rows = sortRows(
-        data.devices, sortState.ble.key, sortState.ble.asc,
+        data.devices || [], sortState.ble.key, sortState.ble.asc,
     );
-    const html = rows.map(r => {
-        const isNew = !seenMacs.has(r.mac);
-        seenMacs.add(r.mac);
-        const gone = !!r.gone;
-        const label = r.label || '';
-        const name = r.name || '';
-        const labelCell = label
-            ? `<strong>${escapeHtml(label)}</strong>`
-              + ` <span class="dim mono">${r.mac || ''}</span>`
-            : `<span class="mono">${r.mac || ''}</span>`;
-        const rssiCell = (typeof r.rssi_ema === 'number')
-            ? rssiBar(Math.round(r.rssi_ema)) : '';
-        const bandCell = r.band
-            ? `<span class="band band-${r.band}">${r.band}</span>` : '';
-        const ageTs = r.last_heard_ts || r.ts || 0;
-        const cls = [];
-        if (isNew) cls.push('new-row');
-        if (gone) cls.push('gone-row');
-        // "Class" column combines Apple subtype (if known), company
-        // (if known), and MAC kind fallback. Names land here too when
-        // we have them, since the label already carries that info.
-        const identityParts = [];
-        if (r.apple_subtype) identityParts.push(r.apple_subtype);
-        else if (r.company)  identityParts.push(r.company);
-        if (name && !r.label) identityParts.push(name);
-        if (!identityParts.length) {
-            if (r.mac_kind && r.mac_kind !== 'public') {
-                identityParts.push(`<span class="dim">${r.mac_kind}</span>`);
-            }
-        }
-        const identityCell = identityParts.join(' · ');
-        return `<tr class="${cls.join(' ')}">`
-            + `<td>${escapeHtml(r.category || 'unknown')}</td>`
-            + `<td>${labelCell}</td>`
-            + `<td class="dim">${escapeHtml(r.vendor || '')}</td>`
-            + `<td>${identityCell}</td>`
-            + `<td>${bandCell}</td>`
-            + `<td>${rssiCell}</td>`
-            + `<td class="mono dim">${gone ? 'gone ' : ''}${fmtAge(ageTs)}</td>`
-            + `</tr>`;
-    }).join("");
-    body.innerHTML = html;
+    const n = Math.min(rows.length, pools.ble.length);
+    emptyRows.ble.hidden = n > 0;
+    for (let i = 0; i < pools.ble.length; i++) {
+        if (i < n) updateBleRow(pools.ble[i], rows[i]);
+        else       hideRow(pools.ble[i]);
+    }
+}
+
+function updateEventRow(h, e) {
+    setText(h.tdAge, fmtAge(e.ts));
+    setText(h.eventStrong, e.event || "");
+    setText(h.labelText, e.label || e.mac || "");
+    if (!e.label && e.mac) {
+        setClass(h.tdLabel, "mono");
+    } else {
+        setClass(h.tdLabel, "");
+    }
+    let detail = "";
+    if (e.event === "moved") {
+        detail = `→ ${e.band} (${Math.round(e.rssi_ema)} dBm)`;
+    } else if (e.event === "payload_changed") {
+        detail = `mfr=${e.mfr_data || "-"}`;
+    } else if (e.event === "heartbeat") {
+        detail = `${e.band} (${Math.round(e.rssi_ema)} dBm)`;
+    } else if (e.event === "first_seen") {
+        detail = e.label ? "" : "stranger";
+    }
+    setText(h.tdDetail, detail);
+    setClass(h.tr, "evt-" + (e.event || ""));
+    h.tr.hidden = false;
 }
 
 function renderBleEvents(data) {
-    document.getElementById("ble-events-count").textContent =
-        data.count + ' evt';
-    const body = document.getElementById("ble-events-body");
-    if (!data.events.length) {
-        body.innerHTML = '<tr><td colspan="4" class="empty">'
-            + 'no events yet</td></tr>';
-        return;
-    }
+    setText(document.getElementById("ble-events-count"),
+            (data.count || 0) + " evt");
     // Newest first in the display — tail the ring backwards.
-    const evs = data.events.slice().reverse();
-    const html = evs.map(e => {
-        const key = `${e.ts}:${e.mac}:${e.event}`;
-        const isNew = !seenEventKeys.has(key);
-        seenEventKeys.add(key);
-        const label = e.label ? escapeHtml(e.label)
-                              : `<span class="mono">${e.mac || ''}</span>`;
-        let detail = '';
-        if (e.event === 'moved') {
-            detail = `→ ${e.band} (${Math.round(e.rssi_ema)} dBm)`;
-        } else if (e.event === 'payload_changed') {
-            detail = `mfr=${e.mfr_data || '-'}`;
-        } else if (e.event === 'heartbeat') {
-            detail = `${e.band} (${Math.round(e.rssi_ema)} dBm)`;
-        } else if (e.event === 'first_seen') {
-            detail = (e.label ? '' : 'stranger');
-        }
-        return `<tr class="${isNew ? 'new-row' : ''} evt-${e.event}">`
-            + `<td class="mono dim">${fmtAge(e.ts)}</td>`
-            + `<td><strong>${e.event}</strong></td>`
-            + `<td>${label}</td>`
-            + `<td class="mono dim">${detail}</td>`
-            + `</tr>`;
-    }).join("");
-    body.innerHTML = html;
+    const evs = (data.events || []).slice().reverse();
+    const n = Math.min(evs.length, pools.events.length);
+    emptyRows.events.hidden = n > 0;
+    for (let i = 0; i < pools.events.length; i++) {
+        if (i < n) updateEventRow(pools.events[i], evs[i]);
+        else       hideRow(pools.events[i]);
+    }
 }
 
-function renderTpms(data) {
-    document.getElementById("tpms-count").textContent = data.count;
-    const body = document.getElementById("tpms-body");
-    if (!data.sensors.length) {
-        body.innerHTML = '<tr><td colspan="6" class="empty">'
-            + 'waiting for cars…</td></tr>';
-        return;
-    }
-    const decorated = data.sensors.map(s => {
-        // Normalize temperature to Fahrenheit for display. Different
-        // TPMS families report native F or C; mark converted-from-C
-        // values with an asterisk so you can tell native-F sensors
-        // from converted-C sensors at a glance.
-        let temp_f = null;
-        let temp_converted = false;
+function updateTpmsRow(h, s) {
+    setText(h.tdAge, fmtAge(s.last_seen));
+    setText(h.tdModel, s.model || "");
+    setText(h.tdId, s.id || "");
+
+    const psi = (s.pressure === null || s.pressure === undefined)
+        ? "" : s.pressure.toFixed(1) + " PSI";
+    setText(h.tdPsi, psi);
+    h.tdPsi.classList.toggle("converted", !!s.psi_converted);
+
+    const t = (s.temperature === null || s.temperature === undefined)
+        ? "" : s.temperature.toFixed(1) + " °F";
+    setText(h.tdTemp, t);
+    h.tdTemp.classList.toggle("converted", !!s.temp_converted);
+
+    setText(h.tdCount, String(s.count == null ? "" : s.count));
+    h.tr.hidden = false;
+}
+
+function decorateTpms(sensors) {
+    return (sensors || []).map(s => {
         const p = s.last_payload || {};
+        let temp_f = null, temp_converted = false;
         if (typeof p.temperature_F === "number") {
             temp_f = p.temperature_F;
         } else if (typeof p.temperature_C === "number") {
             temp_f = p.temperature_C * 9 / 5 + 32;
             temp_converted = true;
         }
-        // Normalize pressure to PSI. 1 kPa = 0.145038 PSI. Same
-        // italicize-if-converted convention as temperature.
-        let psi = null;
-        let psi_converted = false;
+        let psi = null, psi_converted = false;
         if (typeof p.pressure_PSI === "number") {
             psi = p.pressure_PSI;
         } else if (typeof p.pressure_kPa === "number") {
             psi = p.pressure_kPa * 0.145038;
             psi_converted = true;
         }
-        return {
-            ...s,
-            pressure: psi,
-            psi_converted: psi_converted,
-            temperature: temp_f,
-            temp_converted: temp_converted,
-        };
+        return { ...s,
+                 pressure: psi, psi_converted,
+                 temperature: temp_f, temp_converted };
     });
+}
+
+function renderTpms(data) {
+    setText(document.getElementById("tpms-count"),
+            String(data.count || 0));
     const rows = sortRows(
-        decorated, sortState.tpms.key, sortState.tpms.asc,
+        decorateTpms(data.sensors),
+        sortState.tpms.key, sortState.tpms.asc,
     );
-    const html = rows.map(s => {
-        const key = s.model + ":" + s.id;
-        const isNew = !seenTpms.has(key);
-        seenTpms.add(key);
-        let p = '';
-        if (s.pressure !== null && s.pressure !== undefined) {
-            const txt = `${s.pressure.toFixed(1)} PSI`;
-            p = s.psi_converted ? `<em>${txt}</em>` : txt;
-        }
-        // Italicize temps that were converted from native Celsius;
-        // native-Fahrenheit reports render upright so you can tell at
-        // a glance which sensors report in which unit.
-        let t = '';
-        if (s.temperature !== null && s.temperature !== undefined) {
-            const txt = `${s.temperature.toFixed(1)} °F`;
-            t = s.temp_converted ? `<em>${txt}</em>` : txt;
-        }
-        return `<tr class="${isNew ? 'new-row' : ''}">`
-            + `<td class="mono dim">${fmtAge(s.last_seen)}</td>`
-            + `<td>${escapeHtml(s.model)}</td>`
-            + `<td class="mono">${escapeHtml(s.id)}</td>`
-            + `<td class="mono">${p}</td>`
-            + `<td class="mono">${t}</td>`
-            + `<td class="mono dim">${s.count}</td>`
-            + `</tr>`;
-    }).join("");
-    body.innerHTML = html;
+    const n = Math.min(rows.length, pools.tpms.length);
+    emptyRows.tpms.hidden = n > 0;
+    for (let i = 0; i < pools.tpms.length; i++) {
+        if (i < n) updateTpmsRow(pools.tpms[i], rows[i]);
+        else       hideRow(pools.tpms[i]);
+    }
 }
 
 function renderThermal(data) {
@@ -542,47 +711,32 @@ function renderThermal(data) {
     const tempEl = document.getElementById("temp");
     const tempSub = document.getElementById("temp-sub");
     if (typeof temp === "number") {
-        tempEl.textContent = temp.toFixed(1) + " °C";
+        setText(tempEl, temp.toFixed(1) + " °C");
         tempEl.classList.toggle("warn", temp >= 70 && temp < 85);
         tempEl.classList.toggle("err",  temp >= 85);
     } else {
-        tempEl.textContent = "—";
+        setText(tempEl, "—");
     }
     const parts = [];
     if (typeof r.load_1m === "number") parts.push(`load ${r.load_1m}`);
     if (typeof r.uptime_s === "number") {
         const hrs = r.uptime_s / 3600;
-        parts.push(`up ${hrs < 24 ? hrs.toFixed(1) + 'h'
-                              : (hrs / 24).toFixed(1) + 'd'}`);
+        parts.push(`up ${hrs < 24 ? hrs.toFixed(1) + "h"
+                                  : (hrs / 24).toFixed(1) + "d"}`);
     }
     if (r.extra?.model) parts.push(r.extra.model);
-    tempSub.textContent = parts.join(' · ') || "no data";
+    setText(tempSub, parts.join(" · ") || "no data");
 
-    // Service dots. null => unknown (rtl433 has no cheap liveness proxy).
-    const svcBox = document.getElementById("services");
+    // Service dots — pre-built once in buildServiceDots, only the
+    // className of each dot changes per poll.
     const svcs = data.health || {};
-    const order = [
-        ["mosquitto",   "mosquitto"],
-        ["ble_sniffer", "ble-sniffer"],
-        ["rtl433",      "rtl433"],
-        ["pi_thermal",  "pi-thermal"],
-    ];
-    svcBox.innerHTML = order.map(([key, label]) => {
+    for (const key of Object.keys(serviceDots)) {
         const v = svcs[key];
-        const cls = v === true ? "ok" : v === false ? "err" : "unknown";
-        return `<span class="service"><span class="dot ${cls}"></span>`
-             + `${label}</span>`;
-    }).join('');
-}
-
-function escapeHtml(s) {
-    if (s === null || s === undefined) return '';
-    return String(s)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
+        const cls = v === true ? "dot ok"
+                  : v === false ? "dot err"
+                  : "dot unknown";
+        setClass(serviceDots[key], cls);
+    }
 }
 
 async function fetchJson(url) {
@@ -604,14 +758,15 @@ async function tick() {
         renderTpms(tpms);
         renderThermal(thermal);
         const now = new Date();
-        document.getElementById("meta").textContent =
-            `updated ${now.toLocaleTimeString()}`;
+        setText(document.getElementById("meta"),
+                `updated ${now.toLocaleTimeString()}`);
     } catch (e) {
-        document.getElementById("meta").textContent =
-            `error: ${e.message}`;
+        setText(document.getElementById("meta"),
+                `error: ${e.message}`);
     }
 }
 
+buildPools();
 bindSorters("ble-table",  "ble");
 bindSorters("tpms-table", "tpms");
 tick();
