@@ -23,9 +23,6 @@ set -euo pipefail
 DAEDALUS_HOST="perrykivolowitz@10.0.0.191"
 DAEDALUS_DEST="/Users/perrykivolowitz/lifx"
 
-PI_HOST="pi@10.0.0.48"
-PI_DEST="/home/pi/lifx"
-
 JUDY_HOST="a@10.0.0.63"
 JUDY_DEST="/home/a/lifx"
 
@@ -162,40 +159,6 @@ deploy_daedalus() {
 }
 
 # ---------------------------------------------------------------------------
-# Pi
-# ---------------------------------------------------------------------------
-
-deploy_pi() {
-    echo "==> pi: syncing to $PI_HOST:$PI_DEST"
-    ssh "$PI_HOST" "mkdir -p '$PI_DEST'"
-    do_rsync "$PI_HOST" "$PI_DEST"
-    write_deployed "$PI_HOST" "$PI_DEST"
-
-    if $dry_run; then
-        echo "[dry-run] would restart: glowup-server glowup-scheduler (+ ble-sensor if active)"
-        return
-    fi
-
-    ssh "$PI_HOST" "sudo systemctl restart glowup-server glowup-scheduler"
-
-    # ble-sensor may not be installed or enabled everywhere; only restart it
-    # if it is currently active so we don't fail on headless Pi installs.
-    ssh "$PI_HOST" \
-        "systemctl is-active --quiet glowup-ble-sensor \
-         && sudo systemctl restart glowup-ble-sensor \
-         || true"
-
-    # Restart Zigbee2MQTT if installed and active.
-    ssh "$PI_HOST" \
-        "systemctl is-active --quiet zigbee2mqtt \
-         && sudo systemctl restart zigbee2mqtt \
-         || true"
-
-    echo "==> pi: $(ssh "$PI_HOST" "cat '$PI_DEST/DEPLOYED'")"
-    echo "==> pi: deploy complete"
-}
-
-# ---------------------------------------------------------------------------
 # Judy
 # ---------------------------------------------------------------------------
 
@@ -314,13 +277,12 @@ deploy_mbclock() {
 
 case "${1:-}" in
     daedalus) deploy_daedalus ;;
-    pi)       deploy_pi       ;;
     judy)     deploy_judy     ;;
     glowup)   deploy_glowup   ;;
     mbclock)  deploy_mbclock  ;;
     *)
         echo "Usage: $0 <target> [--dry-run]"
-        echo "Targets: daedalus, pi, judy, glowup, mbclock"
+        echo "Targets: daedalus, judy, glowup, mbclock"
         exit 1
         ;;
 esac

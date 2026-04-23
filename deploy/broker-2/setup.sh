@@ -12,7 +12,7 @@
 #   - Ensures SSH access to NAS (10.0.0.24) for git clone
 #   - Clones or updates the lifx repo from staging
 #   - Installs mosquitto bridge config (forwards glowup/ble/# to
-#     primary Pi at 10.0.0.48)
+#     primary Pi at 10.0.0.214)
 #   - Installs and enables glowup-ble-sensor systemd service
 #   - Verifies the MQTT bridge is forwarding messages
 #
@@ -21,7 +21,7 @@
 #                            |
 #                       MQTT bridge
 #                            |
-#                         Pi primary (10.0.0.48, GlowUp server)
+#                         Pi primary (10.0.0.214, GlowUp server)
 #
 # Prerequisites:
 #   - Raspberry Pi OS with network configured
@@ -34,7 +34,7 @@
 #
 # Network:
 #   broker-2:   10.0.0.123
-#   Primary Pi: 10.0.0.48
+#   Primary Pi: 10.0.0.214
 #   NAS:        10.0.0.24  (git bare repo via SSH)
 #
 # Last tested: 2026-03-26, broker-2 Pi 5, Raspberry Pi OS Bookworm
@@ -47,7 +47,7 @@ set -euo pipefail
 NAS_IP="10.0.0.24"
 NAS_USER="perryk"
 NAS_REPO="${NAS_USER}@${NAS_IP}:/mnt/storage/perryk/git/lifx.git"
-PRIMARY_PI="10.0.0.48"
+PRIMARY_PI="10.0.0.214"
 BRANCH="ble-sensor"
 USER="a"
 HOME_DIR="/home/${USER}"

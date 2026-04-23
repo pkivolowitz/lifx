@@ -39,7 +39,7 @@ class TestIsMulticast(unittest.TestCase):
 
     def test_unicast_addresses(self) -> None:
         """Regular unicast addresses should return False."""
-        self.assertFalse(_is_multicast("10.0.0.48"))
+        self.assertFalse(_is_multicast("10.0.0.214"))
         self.assertFalse(_is_multicast("192.168.1.1"))
         self.assertFalse(_is_multicast("127.0.0.1"))
 

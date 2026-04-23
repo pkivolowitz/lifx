@@ -243,7 +243,7 @@ List all registered devices with live status.
 **Example:**
 
 ```bash
-curl -H "Authorization: Bearer TOKEN" http://10.0.0.48:8420/api/registry
+curl -H "Authorization: Bearer TOKEN" http://10.0.0.214:8420/api/registry
 ```
 
 ### POST /api/registry/device
@@ -308,7 +308,7 @@ Remove a device by MAC or label.
 
 ```bash
 curl -X DELETE -H "Authorization: Bearer TOKEN" \
-    http://10.0.0.48:8420/api/registry/device/porch-left
+    http://10.0.0.214:8420/api/registry/device/porch-left
 ```
 
 ### POST /api/registry/push-labels

@@ -136,8 +136,8 @@ Non-responsive devices are omitted.
 
 **Example:**
 ```bash
-curl -H "Authorization: Bearer TOKEN" http://10.0.0.48:8420/api/command/discover
-curl -H "Authorization: Bearer TOKEN" "http://10.0.0.48:8420/api/command/discover?ip=10.0.0.41"
+curl -H "Authorization: Bearer TOKEN" http://10.0.0.214:8420/api/command/discover
+curl -H "Authorization: Bearer TOKEN" "http://10.0.0.214:8420/api/command/discover?ip=10.0.0.41"
 ```
 
 #### POST /api/command/identify
@@ -192,7 +192,7 @@ resolves it to a live IP via the device registry and ARP table.
 curl -X POST -H "Authorization: Bearer TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"ip":"10.0.0.41","duration":15}' \
-  http://10.0.0.48:8420/api/command/identify
+  http://10.0.0.214:8420/api/command/identify
 ```
 
 #### DELETE /api/command/identify/{ip}
@@ -220,7 +220,7 @@ Cancel a running identify pulse early.
 **Example:**
 ```bash
 curl -X DELETE -H "Authorization: Bearer TOKEN" \
-  http://10.0.0.48:8420/api/command/identify/10.0.0.41
+  http://10.0.0.214:8420/api/command/identify/10.0.0.41
 ```
 
 #### GET /api/command/identify/cancel-all
@@ -342,7 +342,7 @@ available for programmatic use (e.g., HomeKit shortcut, HA automation).
 curl -X POST -H "Authorization: Bearer TOKEN" \
   -H "Content-Type: application/json" \
   -d '{}' \
-  http://10.0.0.48:8420/api/server/power-off-all
+  http://10.0.0.214:8420/api/server/power-off-all
 ```
 
 ---
@@ -384,7 +384,7 @@ The server probe timed out or failed.  Possible causes:
 
 Check:
 ```bash
-curl -H "Authorization: Bearer $(cat ~/.glowup_token)" http://10.0.0.48:8420/api/status
+curl -H "Authorization: Bearer $(cat ~/.glowup_token)" http://10.0.0.214:8420/api/status
 ```
 
 If it fails, debug the network/server issue.  `glowup` will fall back to
@@ -419,7 +419,7 @@ If the server doesn't respond:
 1. Try manually:
    ```bash
    curl -X DELETE -H "Authorization: Bearer $(cat ~/.glowup_token)" \
-     http://10.0.0.48:8420/api/command/identify/10.0.0.28
+     http://10.0.0.214:8420/api/command/identify/10.0.0.28
    ```
 2. If that fails, use `glowup off` (nuclear option — powers off everything).
 
@@ -433,7 +433,7 @@ simultaneously on the same IP.
 Fix: Use the cancel endpoint:
 ```bash
 curl -X DELETE -H "Authorization: Bearer $(cat ~/.glowup_token)" \
-  http://10.0.0.48:8420/api/command/identify/10.0.0.28
+  http://10.0.0.214:8420/api/command/identify/10.0.0.28
 ```
 
 Or use `glowup off`.

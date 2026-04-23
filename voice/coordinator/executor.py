@@ -1511,7 +1511,10 @@ class GlowUpExecutor:
     def _format_pollen(self, aq: AirQuality, species: str) -> str:
         """Render a pollen-only spoken response."""
         if not aq.pollen:
-            return "I don't have pollen data right now."
+            # Open-Meteo's pollen dataset is CAMS Europe; North America
+            # returns all species as null. Surface the regional reality
+            # instead of implying transience.
+            return "Pollen data isn't published for our area."
 
         if species:
             # Accept either the bare species ("ragweed") or the full

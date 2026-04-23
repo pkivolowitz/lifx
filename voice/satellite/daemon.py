@@ -351,6 +351,15 @@ class SatelliteDaemon:
         if self._gated:
             subscriptions.append((self._gate_topic, 1))
 
+        # Satellites are subscriber-dominant: between utterances they
+        # can legitimately go many minutes with no inbound application
+        # traffic. The default 120s silence watchdog therefore rebuilds
+        # the MQTT client every ~5 min during idle periods, and an
+        # utterance that lands in the rebuild window is lost — the
+        # "first query is silent, second works" symptom observed on
+        # 2026-04-23. Raise the threshold to 10 min; paho's own 30s
+        # keepalive (detection ≤ ~45s) still guards against genuine
+        # half-open TCP.
         client = MqttResilientClient(
             broker=self._mqtt_broker,
             port=self._mqtt_port,
@@ -358,6 +367,7 @@ class SatelliteDaemon:
             subscriptions=subscriptions,
             on_message=self._dispatch_mqtt_message,
             on_connected=self._on_mqtt_connected,
+            silence_threshold=600.0,
         )
         if not client.is_available:
             raise ImportError("paho-mqtt not installed")
