@@ -125,12 +125,19 @@ h1 {
 }
 /* Row goes red when last sample is older than DEAD_THRESHOLD_S (90s
    = 3× sensor interval, past 2 missed samples). Painted per-cell so
-   the contiguous red bar reads as one row across the grid. */
-.grid > .cell.dead {
-    color: var(--red);
-    background: rgba(196, 90, 58, 0.10);
-    font-weight: 600;
-    font-style: normal;
+   the contiguous red bar reads as one row across the grid. Uses
+   descendant (` `) combinator rather than child (`>`) so the rule
+   matches cells nested inside `.row-group` (display:contents) — the
+   `>` form was found unreliable under display:contents layout in
+   2026-04-25 testing. !important defeats per-column rules
+   (.cell.host, .cell.platform, .cell.ip, .cell.unknown) that share
+   specificity and would otherwise win on later definitions. */
+.grid .cell.dead {
+    color: var(--red) !important;
+    background: rgba(196, 90, 58, 0.18) !important;
+    font-weight: 700 !important;
+    font-style: normal !important;
+    border-left: 3px solid var(--red);
 }
 .grid > .cell.unknown {
     color: var(--label);
