@@ -1669,6 +1669,13 @@ class DashboardHandlerMixin:
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(content)))
+            # The dashboard HTML/JS evolves frequently and stale
+            # browser cache silently hides fixes — Perry hit this
+            # 2026-04-25 when a JS update for the dead-row indicator
+            # was masked by his cached copy.  Force a fresh fetch
+            # every time; the file is ~13 KB and the page polls a
+            # JSON API for live data anyway.
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(content)
         except FileNotFoundError:
