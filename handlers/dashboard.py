@@ -54,6 +54,29 @@ from voice.constants import (
 BROKER2_SIGNALS_STALE_SEC: float = 120.0
 
 
+# Static node_id → primary IP map for the thermals dashboard.  This
+# is intentionally a hub-side lookup rather than a self-reported field
+# in the thermal payload — adding self-reporting requires a schema
+# change to every sensor publisher and is parked behind the freeze
+# (planned to flow naturally out of the inventory-driven redesign).
+# Source of truth: ~/.claude/projects/-Users-perrykivolowitz-lifx/
+# memory/reference_network.md.  Update both this map and the memory
+# file together when an IP changes.  A node_id missing from this
+# map renders as "?" in the dashboard so the gap is visible.
+_NODE_IPS: dict[str, str] = {
+    "hub":          "10.0.0.214",
+    "broker-2":     "10.0.0.123",
+    "mbclock":      "10.0.0.220",
+    "daedalus":     "10.0.0.191",
+    "ernie":        "10.0.0.153",
+    "judy":         "10.0.0.63",
+    "pi-sensor-01": "10.0.0.112",
+    # "notapi" — node currently publishing thermal but not catalogued
+    # in reference_network.md; left out so the dashboard surfaces the
+    # gap as "?".  Resolve and add when identified.
+}
+
+
 class DashboardHandlerMixin:
     """Dashboard and /home UI endpoint handlers."""
 
@@ -1682,12 +1705,21 @@ class DashboardHandlerMixin:
         Returns a dict keyed by node_id with the most recent row for
         each known host.  The fleet dashboard polls this every 5
         seconds to refresh the grid.
+
+        Each row is augmented with an ``ip`` field resolved from the
+        module-level ``_NODE_IPS`` map.  This is a hub-side lookup
+        rather than a self-reported sensor field; see ``_NODE_IPS``
+        for the rationale.
         """
         tl: Any = getattr(self, "thermal_logger", None)
         if tl is None:
             self._send_json(200, {"hosts": {}})
             return
-        self._send_json(200, {"hosts": tl.latest()})
+        hosts: dict[str, Any] = tl.latest()
+        for node_id, reading in hosts.items():
+            if isinstance(reading, dict):
+                reading["ip"] = _NODE_IPS.get(node_id)
+        self._send_json(200, {"hosts": hosts})
 
     def _handle_get_thermal_hosts(self) -> None:
         """GET /api/thermal/hosts — distinct node_ids with any data."""

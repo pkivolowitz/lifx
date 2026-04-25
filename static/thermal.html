@@ -48,6 +48,7 @@ h1 {
     display: grid;
     grid-template-columns:
         160px   /* host */
+        108px   /* ip */
         72px    /* platform */
         88px    /* cpu °C */
         88px    /* fan rpm */
@@ -56,7 +57,7 @@ h1 {
         120px   /* uptime */
         104px   /* throttle */
         180px;  /* timestamp */
-    min-width: 1000px;
+    min-width: 1100px;
 }
 .grid > .cell {
     padding: 10px 14px;
@@ -91,7 +92,8 @@ h1 {
 .grid > .row-group:hover > .cell {
     background: rgba(196,164,74,0.06);
 }
-.grid > .cell.platform {
+.grid > .cell.platform,
+.grid > .cell.ip {
     color: var(--label);
     font-family: var(--mono);
     font-size: 0.85rem;
@@ -178,6 +180,7 @@ h1 {
 <div class="grid-wrap">
     <div class="grid" id="grid">
         <div class="cell header">host</div>
+        <div class="cell header">ip</div>
         <div class="cell header">platform</div>
         <div class="cell header num">cpu °C</div>
         <div class="cell header num">fan rpm</div>
@@ -282,6 +285,11 @@ function renderRow(nodeId, reading, nowSeconds) {
     var rowCls = staleCls + deadCls;
 
     group.appendChild(makeCell("host" + rowCls, nodeId));
+    /* IP comes from the hub-side static map (handlers/dashboard.py
+       _NODE_IPS). Uncatalogued nodes render "?" so the gap is
+       visible rather than silently appearing populated. */
+    group.appendChild(makeCell("ip" + rowCls,
+        reading && reading.ip ? reading.ip : "?"));
     group.appendChild(makeCell("platform" + rowCls,
         reading && reading.platform ? reading.platform : "—"));
 
