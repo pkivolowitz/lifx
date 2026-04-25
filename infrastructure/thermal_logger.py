@@ -50,11 +50,48 @@ Subscriber lifecycle:
 
 __version__: str = "1.0"
 
+import datetime
 import json
 import logging
 import threading
 import time
 from typing import Any, Optional
+
+
+def _parse_sample_ts(raw: Any, fallback: float) -> float:
+    """Parse the sensor's ``ts`` field into epoch seconds.
+
+    Accepts ISO 8601 strings (the format pi_thermal_sensor.py
+    publishes — e.g. ``"2026-04-23T15:26:19Z"``) or numeric
+    epoch values.  Unparseable or missing input falls back to
+    ``fallback`` (typically the receive moment).
+
+    Why this exists: the ``timestamp`` column drives the dashboard's
+    "last sample" age calculation.  Storing receipt time instead of
+    sample time made dead hosts appear fresh every time the broker
+    replayed their retained payloads to a re-subscribing logger.
+    Args:
+        raw:      The ``ts`` field value from the MQTT payload.
+        fallback: Epoch seconds to return when ``raw`` is missing
+                  or unparseable.
+
+    Returns:
+        Epoch seconds (float).
+    """
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, str):
+        # ``fromisoformat`` accepts "2026-04-23T15:26:19+00:00" but
+        # not the bare-Z form pi_thermal_sensor.py emits.  Swap "Z"
+        # for "+00:00" before parsing.
+        try:
+            dt: datetime.datetime = datetime.datetime.fromisoformat(
+                raw.replace("Z", "+00:00")
+            )
+            return dt.timestamp()
+        except ValueError:
+            pass
+    return fallback
 
 try:
     import psycopg2
@@ -200,6 +237,11 @@ class ThermalLogger:
             return
 
         now: float = time.time()
+        # Sample time as reported by the sensor itself.  Distinct from
+        # ``now`` (receipt time) because retained-payload replay during
+        # subscriber reconnect would otherwise stamp dead hosts as
+        # currently-fresh.  See ``_parse_sample_ts`` docstring.
+        sample_ts: float = _parse_sample_ts(payload.get("ts"), now)
 
         with self._lock:
             last: float = self._last_write.get(node_id, 0.0)
@@ -230,7 +272,7 @@ class ThermalLogger:
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         (
                             node_id,
-                            now,
+                            sample_ts,
                             payload.get("cpu_temp_c"),
                             payload.get("fan_rpm"),
                             payload.get("fan_pwm_step"),
