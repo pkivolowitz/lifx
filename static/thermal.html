@@ -359,10 +359,15 @@ function renderRow(nodeId, reading, nowSeconds) {
     return group;
 }
 
+/* Number of header cells in the grid — must match the count of
+   <div class="cell header"> entries in the static HTML. Bumped from
+   9 to 10 when the IP column was added (commit b86ba31).
+   removeRows() preserves exactly this many children on each poll. */
+var HEADER_CELL_COUNT = 10;
+
 function removeRows() {
     var grid = document.getElementById("grid");
-    /* Remove everything except the 9 header cells. */
-    while (grid.children.length > 9) {
+    while (grid.children.length > HEADER_CELL_COUNT) {
         grid.removeChild(grid.lastChild);
     }
 }
