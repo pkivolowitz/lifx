@@ -71,9 +71,11 @@ _NODE_IPS: dict[str, str] = {
     "ernie":        "10.0.0.153",
     "judy":         "10.0.0.63",
     "pi-sensor-01": "10.0.0.112",
-    # "notapi" — node currently publishing thermal but not catalogued
-    # in reference_network.md; left out so the dashboard surfaces the
-    # gap as "?".  Resolve and add when identified.
+    # notapi: Intel NUC ("not a pi") — retro-med dev box / Jetson
+    # staging.  Not a Pi and not a glowup runtime host, but it
+    # publishes pi-thermal so it shows up here.  Often offline; the
+    # red-row staleness indicator catches its absence visually.
+    "notapi":       "10.0.0.157",
 }
 
 
