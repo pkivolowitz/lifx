@@ -121,6 +121,15 @@ h1 {
     color: var(--label);
     font-style: italic;
 }
+/* Row goes red when last sample is older than DEAD_THRESHOLD_S (90s
+   = 3× sensor interval, past 2 missed samples). Painted per-cell so
+   the contiguous red bar reads as one row across the grid. */
+.grid > .cell.dead {
+    color: var(--red);
+    background: rgba(196, 90, 58, 0.10);
+    font-weight: 600;
+    font-style: normal;
+}
 .grid > .cell.unknown {
     color: var(--label);
 }
@@ -185,11 +194,13 @@ h1 {
     <div class="bar"></div>
     <span>85°C</span>
     <span style="margin-left:16px">throttle flag != 0x0 = red pulse</span>
+    <span style="margin-left:16px">row red = no sample for 90s+ (host probably dead)</span>
 </div>
 
 <div class="footer-note">
-    Click a row for per-host graphs.  Stale rows (&gt; 2× publish
-    interval since last sample) show grey italic.  Cells marked
+    Click a row for per-host graphs.  Stale rows (&gt; 60s since last
+    sample) show grey italic; rows older than 90s turn red and are
+    treated as offline.  Cells marked
     <span style="font-family:var(--mono)">—</span> had no value in the
     last reading.
 </div>
@@ -201,6 +212,12 @@ var POLL_MS = 5000;
    if its last sample is older than 2× this. */
 var SENSOR_INTERVAL_S = 30;
 var STALE_FACTOR = 2.0;
+
+/* "Dead" threshold (seconds) — past this point a host has missed
+   enough samples (3 × 30s interval = 2 misses) that a transient
+   MQTT reconnect or publish drop is no longer a plausible
+   explanation, and the row gets the red `dead` class. */
+var DEAD_THRESHOLD_S = 90;
 
 /* Temperature false-color gradient, 30°C (green) to 85°C (red).
    HSL hue interpolates from 120 (green) through 60 (yellow) to 0 (red).
@@ -254,22 +271,29 @@ function renderRow(nodeId, reading, nowSeconds) {
         window.location.href = "/thermal/host/" + encodeURIComponent(nodeId);
     });
 
-    var stale = false;
-    if (reading && reading.timestamp != null) {
-        stale = (nowSeconds - reading.timestamp) > (SENSOR_INTERVAL_S * STALE_FACTOR);
-    }
-    var staleCls = stale ? " stale" : "";
+    var ageS = (reading && reading.timestamp != null)
+        ? (nowSeconds - reading.timestamp) : null;
+    var stale = ageS != null && ageS > (SENSOR_INTERVAL_S * STALE_FACTOR);
+    var dead = ageS != null && ageS > DEAD_THRESHOLD_S;
+    var staleCls = (stale && !dead) ? " stale" : "";
+    var deadCls = dead ? " dead" : "";
+    /* Combined suffix applied to every cell in this row so the red
+       paint extends the full width without per-cell overrides. */
+    var rowCls = staleCls + deadCls;
 
-    group.appendChild(makeCell("host" + staleCls, nodeId));
-    group.appendChild(makeCell("platform" + staleCls,
+    group.appendChild(makeCell("host" + rowCls, nodeId));
+    group.appendChild(makeCell("platform" + rowCls,
         reading && reading.platform ? reading.platform : "—"));
 
     /* cpu °C */
     var tempCell = document.createElement("div");
-    tempCell.className = "cell temp" + staleCls;
+    tempCell.className = "cell temp" + rowCls;
     if (reading && reading.cpu_temp_c != null) {
         tempCell.textContent = reading.cpu_temp_c.toFixed(1);
-        if (!stale) {
+        /* Drop the false-color gradient when the row is stale or
+           dead — a 90s-old reading isn't current ground truth, so
+           don't paint it as if it were live. */
+        if (!stale && !dead) {
             tempCell.style.color = tempToColor(reading.cpu_temp_c);
         }
     } else {
@@ -280,7 +304,7 @@ function renderRow(nodeId, reading, nowSeconds) {
 
     /* fan rpm */
     var fanCell = document.createElement("div");
-    fanCell.className = "cell num" + staleCls;
+    fanCell.className = "cell num" + rowCls;
     if (reading && reading.fan_rpm != null) {
         fanCell.textContent = Math.round(reading.fan_rpm);
     } else if (reading && reading.fan_declared_present) {
@@ -295,20 +319,20 @@ function renderRow(nodeId, reading, nowSeconds) {
     group.appendChild(fanCell);
 
     /* step */
-    group.appendChild(makeCell("num" + staleCls,
+    group.appendChild(makeCell("num" + rowCls,
         reading && reading.fan_pwm_step != null ? reading.fan_pwm_step : "—"));
 
     /* load 1m */
-    group.appendChild(makeCell("num" + staleCls,
+    group.appendChild(makeCell("num" + rowCls,
         reading && reading.load_1m != null ? reading.load_1m.toFixed(2) : "—"));
 
     /* uptime */
-    group.appendChild(makeCell("num" + staleCls,
+    group.appendChild(makeCell("num" + rowCls,
         formatUptime(reading ? reading.uptime_s : null)));
 
     /* throttle */
     var throttleCell = document.createElement("div");
-    throttleCell.className = "cell throttle" + staleCls;
+    throttleCell.className = "cell throttle" + rowCls;
     if (reading && reading.throttled_flags) {
         throttleCell.textContent = reading.throttled_flags;
         if (reading.throttled_flags !== "0x0") {
@@ -321,7 +345,7 @@ function renderRow(nodeId, reading, nowSeconds) {
     group.appendChild(throttleCell);
 
     /* timestamp */
-    group.appendChild(makeCell("num" + staleCls,
+    group.appendChild(makeCell("num" + rowCls,
         formatTimestamp(reading ? reading.timestamp : null)));
 
     return group;
