@@ -97,6 +97,14 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 # adapter, so we hciconfig hci0 up ourselves.  The `-+` prefix means
 # "ignore failure, run as root" (needed because the daemon runs as
 # user `a` with caps, but bringing an HCI device up requires root).
+# Unblock the radio first — Debian Trixie boots with bluetooth in
+# soft-blocked state on broker-2 (post-2026-04 power-blip the
+# disable-bt dtoverlay leaves rfkill claiming the wireless slot
+# even though the onboard radio is gone — the USB ASUS BT500 ends
+# up rfkilled too until something explicitly unblocks).  Without
+# this, hciconfig hci0 up fails with `Operation not possible due to
+# RF-kill (132)` and bleak then sees `No powered Bluetooth adapters`.
+ExecStartPre=-+/usr/sbin/rfkill unblock bluetooth
 ExecStartPre=-+/usr/bin/hciconfig hci0 up
 ExecStart=/usr/bin/python3 -m ble.sensor --config /etc/glowup/ble_pairing.json
 Restart=always
