@@ -134,6 +134,15 @@ _PROTOCOL_IDS: tuple[int, ...] = (
     153,   # Neptune R900 water
 )
 
+# US ISM-band centre frequency.  ITRON ERT (electric/gas) and Neptune
+# R900 (water) all transmit in the 902-928 MHz band, hopping across
+# narrow channels.  rtl_433's default of 433.92 MHz covers European
+# ISM + TPMS + fan remotes and would silently hear ZERO US utility
+# meters — observed empirically on ernie 2026-04-25.  Override via
+# --rtl433-freq for non-US deployments (Europe is 868M, Australia
+# 928M, Japan 426M etc.).
+_DEFAULT_FREQUENCY: str = "915M"
+
 # rtl_433 model-string → our normalized meter_type tag.  Anything not
 # in this map is dropped at the schema boundary with a warning, since
 # we cannot guarantee the field shape and don't want to ship
@@ -318,6 +327,7 @@ class MeterPublisher:
         broker_port: int = 1883,
         rtl433_path: str = _DEFAULT_RTL433,
         protocol_ids: tuple[int, ...] = _PROTOCOL_IDS,
+        frequency: str = _DEFAULT_FREQUENCY,
     ) -> None:
         if not _HAS_PAHO:
             raise ImportError(
@@ -328,6 +338,7 @@ class MeterPublisher:
         self._broker_port: int = broker_port
         self._rtl433_path: str = rtl433_path
         self._protocol_ids: tuple[int, ...] = protocol_ids
+        self._frequency: str = frequency
         self._client: "mqtt.Client" = mqtt.Client(
             client_id=f"glowup-meters-{socket.gethostname().split('.')[0]}",
         )
@@ -357,7 +368,10 @@ class MeterPublisher:
             "MQTT connected to %s:%d", self._broker_host, self._broker_port,
         )
 
-        cmd: list[str] = [self._rtl433_path, "-F", "json", "-M", "utc"]
+        cmd: list[str] = [
+            self._rtl433_path, "-F", "json", "-M", "utc",
+            "-f", self._frequency,
+        ]
         for pid in self._protocol_ids:
             cmd.extend(["-R", str(pid)])
         logger.info("spawning rtl_433: %s", " ".join(cmd))
@@ -496,6 +510,12 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="Path to rtl_433 binary (default: rtl_433 on PATH).",
     )
     p.add_argument(
+        "--rtl433-freq", default=_DEFAULT_FREQUENCY,
+        help=("rtl_433 -f frequency.  Default '915M' for US ISM "
+              "(ITRON ERT + Neptune R900).  Use '868M' for Europe, "
+              "'928M' for Australia, '426M' for Japan, etc."),
+    )
+    p.add_argument(
         "--log-level", default="INFO",
         help="Python logging level (default: INFO).",
     )
@@ -532,6 +552,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         broker_host=broker_host,
         broker_port=broker_port,
         rtl433_path=args.rtl433_path,
+        frequency=args.rtl433_freq,
     )
 
     def _term(_sig: int, _frame: Any) -> None:
