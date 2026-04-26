@@ -488,12 +488,24 @@ class MeterLogger:
         """
         if self._conn is None:
             return {}
+        # utility (Gas / Water / Electric) is rtl_433's MeterType
+        # field, preserved unmodified in the raw JSONB at insert time.
+        # Extracting it at query time avoids a schema migration to
+        # add a dedicated column for what is fundamentally redundant
+        # data.  Falls back to lowercase variants other rtl_433
+        # versions may have used.
         sql: str = """
             SELECT m.meter_id, m.timestamp, m.meter_type,
                    m.consumption, m.unit,
                    m.tamper_phy, m.tamper_enc,
                    m.physical_tamper, m.leak, m.no_use,
-                   m.source_node, m.ours
+                   m.source_node, m.ours,
+                   COALESCE(
+                       m.raw->>'MeterType',
+                       m.raw->>'meter_type_label',
+                       m.raw->>'meter_type'
+                   ) AS utility,
+                   m.raw->>'EndpointType' AS endpoint_type
             FROM meter_readings m
             INNER JOIN (
                 SELECT meter_id, MAX(timestamp) AS max_ts
@@ -509,11 +521,13 @@ class MeterLogger:
                     for row in cur.fetchall():
                         (mid, ts, mtype, cons, unit,
                          tphy, tenc, ptamper, leak, no_use,
-                         src, ours) = row
+                         src, ours, utility, endpoint_type) = row
                         result[mid] = {
                             "meter_id": mid,
                             "timestamp": float(ts),
                             "meter_type": mtype,
+                            "utility": utility,
+                            "endpoint_type": endpoint_type,
                             "consumption": cons,
                             "unit": unit,
                             "tamper_phy": tphy,

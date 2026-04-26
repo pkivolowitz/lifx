@@ -330,13 +330,29 @@ def parse_packet(packet: dict[str, Any]) -> Optional[dict[str, Any]]:
         )
         return None
 
+    # rtl_433 25.02 reports the utility family ("Gas", "Water",
+    # "Electric") as MeterType — much more user-meaningful than the
+    # protocol family (ert_scm_plus).  Older rtl_433 used lowercase
+    # "meter_type"; probe both.  EndpointType (e.g. "0xBC") encodes
+    # the device class — pass through for diagnostics.
+    utility: Any = (
+        packet.get("MeterType")
+        or packet.get("meter_type_label")
+    )
+    endpoint_type: Any = (
+        packet.get("EndpointType")
+        or packet.get("endpoint_type")
+    )
+
     return {
         "ts":               ts_iso,
         "meter_id":         meter_id,
         "meter_type":       meter_type,
+        "utility":          utility,            # "Gas" / "Water" / "Electric"
+        "endpoint_type":    endpoint_type,      # e.g. "0xBC"
         "consumption":      consumption,
         "unit":             "raw",
-        "tamper_phy":       packet.get("tamper_phy"),
+        "tamper_phy":       packet.get("tamper_phy") or packet.get("Tamper"),
         "tamper_enc":       packet.get("tamper_enc"),
         "physical_tamper":  packet.get("physical_tamper"),
         "leak":             packet.get("leak"),
@@ -498,6 +514,12 @@ class MeterPublisher:
                 self._client.publish(
                     topic, payload,
                     qos=_PUBLISH_QOS, retain=False,
+                )
+                logger.info(
+                    "published %s id=%s consumption=%s",
+                    parsed.get("meter_type"),
+                    parsed.get("meter_id"),
+                    parsed.get("consumption"),
                 )
             except Exception as exc:
                 logger.warning("MQTT publish on %s failed: %s",

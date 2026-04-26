@@ -263,7 +263,11 @@ function fmtAge(tsEpoch) {
 
 function renderMineCard(meterId, r) {
     const meta = r.owned_meta || {};
-    const utility = meta.utility || "Owned meter";
+    /* Utility: prefer rtl_433's broadcast (always current) over the
+       static config; fall back to config if the broadcast is silent;
+       fall back to "Owned meter" if neither is set. */
+    const utility = r.utility || meta.utility || "Owned meter";
+    const utilityCfg = meta.utility || "";
     const type = meta.type || "—";
     const klass = meta.class ? meta.class : "";
     const account = meta.account || "";
@@ -280,12 +284,12 @@ function renderMineCard(meterId, r) {
       <div class="card mine">
         <div class="row1">
           <div>
-            <div class="label-major">${utility}</div>
+            <div class="label-major">${utility}${utilityCfg && utilityCfg !== utility ? ` <span class="label-class">(${utilityCfg})</span>` : ""}</div>
             <div class="label-class">${type}${klass ? " · " + klass : ""}</div>
           </div>
           <div class="label-class">${typeLabel}</div>
         </div>
-        <div class="meter-id">id ${meterId}</div>
+        <div class="meter-id">id ${meterId}${r.endpoint_type ? " · ept " + r.endpoint_type : ""}</div>
         <div class="reading">
           <span class="consumption">${fmtConsumption(r.consumption)}</span>
           <span class="unit">${r.unit || "raw"}</span>
@@ -302,15 +306,18 @@ function renderMineCard(meterId, r) {
 
 function renderOtherCard(meterId, r) {
     const typeLabel = TYPE_LABELS[r.meter_type] || r.meter_type || "—";
+    const utility = r.utility || "—";   /* "Gas" / "Water" / "Electric" */
     const age = fmtAge(r.timestamp);
     return `
       <div class="card other">
         <div class="row1">
           <div>
-            <div class="label-major">${typeLabel}</div>
-            <div class="meter-id">id ${meterId}</div>
+            <div class="label-major">${utility}</div>
+            <div class="label-class">${typeLabel}</div>
           </div>
+          <div class="label-class">neighbor</div>
         </div>
+        <div class="meter-id">id ${meterId}${r.endpoint_type ? " · ept " + r.endpoint_type : ""}</div>
         <div class="reading">
           <span class="consumption">${fmtConsumption(r.consumption)}</span>
           <span class="unit">${r.unit || "raw"}</span>
