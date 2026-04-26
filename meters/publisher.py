@@ -299,11 +299,23 @@ def parse_packet(packet: dict[str, Any]) -> Optional[dict[str, Any]]:
         logger.debug("rtl_433 line has no model field — not a meter")
         return None
 
+    # Permissive model handling: if the model is in our explicit
+    # table, use the normalized type tag (ert_scm_plus, neptune_r900,
+    # etc.).  Otherwise — IF the packet still has a consumption-like
+    # field — accept it under a normalized form of the model name
+    # so unknown meter brands (Badger ORION, Flowis, Sensus, etc.)
+    # surface in the dashboard rather than silently dropping.
+    # Earlier strict behaviour was masking valid decodes during the
+    # 2026-04-26 bringup; keep the explicit map for known brands
+    # (clean type tags downstream) but don't gate on it.
     meter_type: Optional[str] = _MODEL_TO_TYPE.get(model)
     if meter_type is None:
-        logger.debug("rtl_433 model %r is not an onboarded meter type",
-                     model)
-        return None
+        # Normalize "Badger-ORION" -> "badger_orion", etc.
+        meter_type = model.lower().replace("-", "_").replace(" ", "_")
+        logger.info(
+            "accepting unmapped meter model %r as type %r",
+            model, meter_type,
+        )
 
     ts_raw: Any = packet.get("time")
     if not isinstance(ts_raw, str) or not ts_raw:
