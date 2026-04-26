@@ -38,10 +38,21 @@
     <key>WorkingDirectory</key>
     <string>/Users/perrykivolowitz/lifx</string>
 
+    <!-- Run as a module (-m), not as a script.  Running as a script
+         (`python contrib/sensors/macos_thermal_sensor.py`) puts the
+         script's directory on sys.path[0], so `from glowup_site
+         import site` fails because glowup_site.py lives at the lifx
+         repo root, not under contrib/sensors/.  The -m form sets
+         sys.path[0] to cwd (the WorkingDirectory above), which DOES
+         contain glowup_site.py.  The same path-leak issue is why
+         this whole plist arguably belongs in glowup-infra and gets
+         templated per host; until that refactor lands, this one
+         line keeps the LaunchAgent working. -->
     <key>ProgramArguments</key>
     <array>
         <string>/Users/perrykivolowitz/venv/bin/python</string>
-        <string>contrib/sensors/macos_thermal_sensor.py</string>
+        <string>-m</string>
+        <string>contrib.sensors.macos_thermal_sensor</string>
         <string>--config</string>
         <string>/Users/perrykivolowitz/macos_thermal.conf</string>
     </array>
