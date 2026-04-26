@@ -443,6 +443,15 @@ class MeterPublisher:
         cmd: list[str] = [
             self._rtl433_path, "-F", "json", "-M", "utc",
             "-s", self._sample_rate,
+            # Lower the FSK pulse-detection threshold from rtl_433's
+            # default (-12 dB-ish auto) to -30 dB so weaker meter
+            # transmissions (further neighbors, low-power R900 bursts,
+            # any meter at the edge of reception) are passed to the
+            # decoders instead of being squelched at the demod layer.
+            # Trade-off is more false-positive pulse trains hitting
+            # the decoder pool; checksums then drop the noise so it
+            # doesn't reach our publish path.
+            "-Y", "level=-30",
         ]
         # Multiple -f flags: rtl_433 hops between them at -H interval.
         # Without this the receiver only sees ~2 MHz of the 26 MHz US
