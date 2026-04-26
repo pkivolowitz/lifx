@@ -65,7 +65,18 @@ Wants=network-online.target bluetooth.target
 Type=simple
 User=a
 Group=a
-WorkingDirectory=/opt/glowup-sensors
+
+# Run from the lifx clone — full repo at /home/a/lifx is the
+# canonical layout for every edge box (regularization decision,
+# 2026-04-26).  Module-form ExecStart resolves `from glowup_site`
+# correctly because cwd is on sys.path when invoked via -m.  The
+# old per-host /opt/glowup-sensors layout has been retired.
+WorkingDirectory=/home/a/lifx
+
+# Don't write .pyc cache to the read-only ProtectHome=read-only
+# tree at /home/a — saves us from listing /home/a/lifx as a
+# ReadWritePath just for bytecode.
+Environment=PYTHONDONTWRITEBYTECODE=1
 
 # Site-specific values (hub broker, port) are read at startup by the
 # program itself from /etc/glowup/site.json (see lifx/glowup_site.py).
@@ -106,7 +117,7 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-ReadWritePaths=/etc/glowup /opt/glowup-sensors
+ReadWritePaths=/etc/glowup
 
 [Install]
 WantedBy=multi-user.target

@@ -11,6 +11,17 @@ Type=simple
 User=a
 Group=a
 
+# Run from the lifx clone — full repo at /home/a/lifx is the
+# canonical layout for every edge box (regularization decision,
+# 2026-04-26).  The Python interpreter still comes from a host-
+# local venv at /opt/glowup-zigbee/venv (psycopg2-binary,
+# paho-mqtt, etc.); only the *code* moves to /home/a/lifx.
+WorkingDirectory=/home/a/lifx
+
+# Don't write .pyc to /home/a/lifx — keeps ProtectHome=read-only
+# from needing a ReadWritePaths exception.
+Environment=PYTHONDONTWRITEBYTECODE=1
+
 # Generic / fleet-default config — same on every host, no leak risk.
 # Site-specific values (hub broker, postgres DSN) are read at startup
 # by the program itself from /etc/glowup/site.json (see lifx/glowup_
@@ -25,17 +36,20 @@ Environment=GLZ_HUB_SIGNAL_PREFIX=glowup/signals
 Environment=GLZ_RATE_USD_PER_KWH=0.13
 Environment=GLZ_LOG_LEVEL=INFO
 
-ExecStart=/opt/glowup-zigbee/venv/bin/python /opt/glowup-zigbee/service.py
+# -m form so cwd (/home/a/lifx) is on sys.path, which is required
+# for `from glowup_site import site` and any other top-level
+# lifx imports.
+ExecStart=/opt/glowup-zigbee/venv/bin/python -m zigbee_service.service
 
 # Restart policy — stateless service, just respawn on any exit.
 Restart=always
 RestartSec=5
 
-# Reasonable hardening that doesn't interfere with localhost MQTT or
-# /var/lib writes.
+# Hardening that allows reading /home/a/lifx for code while still
+# locking down everything else.
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 PrivateTmp=true
 
 [Install]

@@ -1,0 +1,74 @@
+# Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+# Licensed under the MIT License. See LICENSE file in the project root.
+#
+# GlowUp pi-thermal — Raspberry Pi hardware thermal sensor.
+#
+# Publishes SoC temperature, throttling flags, fan state (if
+# declared), and load averages to MQTT every 30 s (default), so
+# every Pi appears in the GlowUp thermal fleet dashboard.
+#
+# Site-specific values (hub broker host, port) come from
+# /etc/glowup/site.json (loaded by lifx/glowup_site.py at startup).
+# The INI file at /etc/glowup/pi_thermal.conf can override broker
+# host/port, the publish interval, the node_id, and the fan
+# declaration.  Either source must resolve to a real broker
+# hostname or the program fails fast at startup with a clear
+# message.
+#
+# Install:
+#   sudo install -o root -g root -m 0644 \
+#       /home/a/lifx/deploy/pi-thermal.service \
+#       /etc/systemd/system/pi-thermal.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable pi-thermal
+#   sudo systemctl start pi-thermal
+#
+# Requires:
+#   - /home/a/lifx (full clone) — every edge box runs the full
+#     lifx tree; module-form ExecStart needs the lifx repo root
+#     on sys.path
+#   - /etc/glowup/site.json — produced by glowup-infra deploy
+#   - /etc/glowup/pi_thermal.conf — host-local config (node_id, etc.)
+#   - paho-mqtt: sudo apt install -y python3-paho-mqtt
+
+[Unit]
+Description=GlowUp Pi hardware thermal sensor
+Documentation=file:///home/a/lifx/contrib/sensors/pi_thermal_sensor.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=a
+Group=a
+
+# Run from the lifx clone — canonical edge layout (regularization
+# 2026-04-26).  The -m form puts cwd (/home/a/lifx) on sys.path so
+# `from glowup_site` resolves; running the script directly would
+# break the import.
+WorkingDirectory=/home/a/lifx
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -m contrib.sensors.pi_thermal_sensor --config /etc/glowup/pi_thermal.conf
+
+Restart=always
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi-thermal
+
+# Hardening — the sensor reads /sys + /proc, the INI config in
+# /etc/glowup, and publishes to MQTT.  No writes anywhere except
+# the mqtt socket.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadOnlyPaths=/sys /proc
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
