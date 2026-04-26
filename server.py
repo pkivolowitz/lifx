@@ -347,6 +347,15 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_thermal_hosts", requires_auth=False),
     _Route("GET", ("api", "thermal", "readings"),
            "_handle_get_thermal_readings", requires_auth=False),
+    # Meters dashboard — utility-meter telemetry from rtl_433 on the
+    # SDR host (today: pi-sensor-01).  Public read-only; no auth so a
+    # phone in the kitchen can glance at the irrigation meter without
+    # token plumbing.  See handlers/meters.py and infrastructure/
+    # meter_logger.py for the data path.
+    _Route("GET", ("meters",),
+           "_handle_get_meters_page", requires_auth=False),
+    _Route("GET", ("api", "meters", "latest"),
+           "_handle_get_meters_latest", requires_auth=False),
     # POST /api/zigbee/set was removed in 2026-04-15 along with
     # the in-process Zigbee adapter.  Its successor lives under
     # /api/plugs — see handlers/plug.py and docs/29-zigbee-service.md.
@@ -653,6 +662,7 @@ from handlers import (
 from handlers.shopping import ShoppingHandlerMixin, ShoppingStore
 from handlers.sdr import SdrHandlerMixin
 from handlers.ernie import ErnieHandlerMixin
+from handlers.meters import MetersHandlerMixin
 
 
 class GlowUpRequestHandler(
@@ -672,6 +682,7 @@ class GlowUpRequestHandler(
     ShoppingHandlerMixin,
     SdrHandlerMixin,
     ErnieHandlerMixin,
+    MetersHandlerMixin,
     http.server.BaseHTTPRequestHandler,
 ):
     """HTTP request handler for the GlowUp REST API.
@@ -710,6 +721,7 @@ class GlowUpRequestHandler(
     thermal_logger: Optional[Any] = None
     tpms_logger: Optional[Any] = None
     ble_sniffer_logger: Optional[Any] = None
+    meter_logger: Optional[Any] = None
     # Timestamp of the most recent non-time signal seen on
     # glowup/signals/#.  Populated by the _on_remote_signal callback
     # in _background_startup below.  Used by _handle_get_home_health
@@ -3065,6 +3077,30 @@ def main() -> None:
             except Exception as exc:
                 logging.warning("BLE sniffer logger unavailable: %s", exc)
                 ble_log = None
+
+            # Meter logger — PG storage for utility-meter telemetry
+            # (ITRON ERT + Neptune R900) decoded by rtl_433 on the SDR
+            # host (today: pi-sensor-01) and published over MQTT on
+            # glowup/meters/+ by meters/publisher.py.  Same guarded-
+            # import pattern as the other loggers; ours-vs-neighbor
+            # flagging is driven by /etc/glowup/meters_owned.json,
+            # not by anything in this repo.
+            try:
+                from infrastructure.meter_logger import (
+                    MeterLogger,
+                    DEFAULT_DSN as _METER_DEFAULT_DSN,
+                )
+                meter_log = MeterLogger(
+                    dsn=os.environ.get("GLOWUP_DIAG_DSN", _METER_DEFAULT_DSN),
+                )
+                meter_log.start_subscriber(
+                    broker_host=broker_addr,
+                    broker_port=broker_port,
+                )
+                GlowUpRequestHandler.meter_logger = meter_log
+            except Exception as exc:
+                logging.warning("Meter logger unavailable: %s", exc)
+                meter_log = None
 
             # Auto-migrate automations[] → trigger operators in operators[].
             config["_config_path"] = GlowUpRequestHandler.config_path

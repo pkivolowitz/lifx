@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlowUp Meters</title>
+<style>
+/* ---------------------------------------------------------------
+   Meters dashboard — light, civic palette, deliberately distinct
+   from the warm-dark family used by /thermal, /power, /sdr.
+   The data here is billing-grade evidence, not casual telemetry.
+   --------------------------------------------------------------- */
+:root {
+    --bg:         #f5f3ee;   /* warm off-white */
+    --card-bg:    #ffffff;
+    --text:       #2c2620;   /* warm near-black */
+    --label:      #6e6760;   /* muted brown */
+    --accent:     #4a8a6e;   /* sage — civic, not commercial */
+    --accent-mine:  #2c5d8c; /* deep blue — owned */
+    --accent-other: #8a8275; /* warm grey — neighbor */
+    --alert:      #b8553e;   /* warm red */
+    --border:     rgba(0,0,0,0.08);
+    --shadow:     0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.04);
+    --font:       -apple-system, BlinkMacSystemFont, "Segoe UI",
+                  "Helvetica Neue", sans-serif;
+    --mono:       "SF Mono", "Menlo", "Consolas", monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    padding: 32px 24px;
+    max-width: 1280px;
+    margin: 0 auto;
+}
+
+header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 8px;
+}
+header h1 {
+    font-size: 1.8rem;
+    font-weight: 300;
+    color: var(--text);
+    letter-spacing: -0.01em;
+}
+header .subtitle {
+    color: var(--label);
+    font-size: 0.95rem;
+}
+.nav {
+    margin-bottom: 28px;
+    font-size: 0.9rem;
+}
+.nav a {
+    color: var(--accent);
+    text-decoration: none;
+    margin-right: 18px;
+    border-bottom: 1px solid transparent;
+    padding-bottom: 2px;
+}
+.nav a:hover { border-bottom-color: var(--accent); }
+
+.meta {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--label);
+    margin-bottom: 24px;
+}
+.meta .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-right: 6px;
+    vertical-align: middle;
+}
+.meta .dot.stale { background: var(--alert); }
+
+section.group {
+    margin-bottom: 36px;
+}
+section.group > h2 {
+    font-size: 1.1rem;
+    font-weight: 500;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+section.mine > h2 { color: var(--accent-mine); }
+section.others > h2 { color: var(--accent-other); }
+section.group > h2 .count {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    color: var(--label);
+    font-weight: 400;
+}
+
+.cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 14px;
+}
+
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    box-shadow: var(--shadow);
+}
+.card.mine    { border-top: 3px solid var(--accent-mine); }
+.card.other   { border-top: 3px solid var(--accent-other); }
+
+.card .row1 {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+}
+.card .label-major {
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: var(--text);
+}
+.card .label-class {
+    font-size: 0.78rem;
+    color: var(--label);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.card .meter-id {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--label);
+    margin-top: 2px;
+}
+
+.card .reading {
+    margin-top: 14px;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+.card .consumption {
+    font-family: var(--mono);
+    font-size: 1.6rem;
+    font-weight: 400;
+    color: var(--text);
+}
+.card .unit {
+    font-size: 0.8rem;
+    color: var(--label);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.card .footer {
+    margin-top: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 0.78rem;
+    color: var(--label);
+    font-family: var(--mono);
+}
+.card .footer .age.stale {
+    color: var(--alert);
+    font-weight: 500;
+}
+.card .account {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--label);
+    margin-top: 6px;
+}
+.card .alerts {
+    margin-top: 8px;
+    font-size: 0.78rem;
+    color: var(--alert);
+    font-family: var(--mono);
+}
+
+.empty {
+    color: var(--label);
+    font-style: italic;
+    padding: 12px 0;
+}
+</style>
+</head>
+<body>
+<header>
+    <h1>Meters</h1>
+    <div class="subtitle">Utility-meter telemetry · captured by SDR</div>
+</header>
+<nav class="nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/home">Home</a>
+    <a href="/thermal">Thermal</a>
+    <a href="/power">Power</a>
+    <a href="/sdr">SDR</a>
+    <a href="/ernie">Ernie</a>
+</nav>
+<div class="meta">
+    <span id="status-dot" class="dot"></span>
+    <span id="status-text">loading…</span>
+    &nbsp;·&nbsp; updates every 10 s
+</div>
+
+<section class="group mine">
+    <h2>Yours <span id="mine-count" class="count">— 0 of 0</span></h2>
+    <div id="mine-cards" class="cards"></div>
+</section>
+
+<section class="group others">
+    <h2>Others (within hearing) <span id="others-count" class="count">— 0</span></h2>
+    <div id="others-cards" class="cards"></div>
+</section>
+
+<script>
+/* ----------------------------------------------------------------
+   The page polls /api/meters/latest every POLL_MS and re-renders
+   the two card grids in place.  No virtual DOM — these card
+   counts are bounded and the data shape is dictated by the JSON
+   response, so a straightforward redraw is the right tool.
+   -------------------------------------------------------------- */
+const POLL_MS = 10000;
+const STALE_AFTER_S = 30 * 60;   /* mark age red after 30 min */
+
+const TYPE_LABELS = {
+    "ert_scm":      "ERT SCM",
+    "ert_scm_plus": "ERT SCM+",
+    "ert_idm":      "ERT IDM",
+    "ert_net_idm":  "ERT NetIDM",
+    "neptune_r900": "Neptune R900",
+};
+
+function fmtConsumption(v) {
+    if (v == null || isNaN(v)) return "—";
+    /* Show full integer count to preserve civic-evidence precision;
+       only thousands grouping for legibility. */
+    if (Math.abs(v) >= 1000) return Math.round(v).toLocaleString("en-US");
+    return v.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+function fmtAge(tsEpoch) {
+    if (!tsEpoch) return { text: "—", stale: true };
+    const ageS = Math.max(0, Date.now() / 1000 - tsEpoch);
+    let text;
+    if (ageS < 60) text = Math.floor(ageS) + "s ago";
+    else if (ageS < 3600) text = Math.floor(ageS / 60) + "m ago";
+    else if (ageS < 86400) text = Math.floor(ageS / 3600) + "h ago";
+    else text = Math.floor(ageS / 86400) + "d ago";
+    return { text, stale: ageS >= STALE_AFTER_S };
+}
+
+function renderMineCard(meterId, r) {
+    const meta = r.owned_meta || {};
+    const utility = meta.utility || "Owned meter";
+    const type = meta.type || "—";
+    const klass = meta.class ? meta.class : "";
+    const account = meta.account || "";
+    const typeLabel = TYPE_LABELS[r.meter_type] || r.meter_type || "—";
+    const age = fmtAge(r.timestamp);
+
+    const alerts = [];
+    if (r.tamper_phy)      alerts.push("tamper-phy");
+    if (r.tamper_enc)      alerts.push("tamper-enc");
+    if (r.physical_tamper) alerts.push("physical-tamper");
+    if (r.leak)            alerts.push("leak");
+
+    return `
+      <div class="card mine">
+        <div class="row1">
+          <div>
+            <div class="label-major">${utility}</div>
+            <div class="label-class">${type}${klass ? " · " + klass : ""}</div>
+          </div>
+          <div class="label-class">${typeLabel}</div>
+        </div>
+        <div class="meter-id">id ${meterId}</div>
+        <div class="reading">
+          <span class="consumption">${fmtConsumption(r.consumption)}</span>
+          <span class="unit">${r.unit || "raw"}</span>
+        </div>
+        ${account ? `<div class="account">acct ${account}</div>` : ""}
+        ${alerts.length ? `<div class="alerts">⚠ ${alerts.join(", ")}</div>` : ""}
+        <div class="footer">
+          <span>${r.source_node || ""}</span>
+          <span class="age ${age.stale ? "stale" : ""}">${age.text}</span>
+        </div>
+      </div>
+    `;
+}
+
+function renderOtherCard(meterId, r) {
+    const typeLabel = TYPE_LABELS[r.meter_type] || r.meter_type || "—";
+    const age = fmtAge(r.timestamp);
+    return `
+      <div class="card other">
+        <div class="row1">
+          <div>
+            <div class="label-major">${typeLabel}</div>
+            <div class="meter-id">id ${meterId}</div>
+          </div>
+        </div>
+        <div class="reading">
+          <span class="consumption">${fmtConsumption(r.consumption)}</span>
+          <span class="unit">${r.unit || "raw"}</span>
+        </div>
+        <div class="footer">
+          <span>${r.source_node || ""}</span>
+          <span class="age ${age.stale ? "stale" : ""}">${age.text}</span>
+        </div>
+      </div>
+    `;
+}
+
+async function tick() {
+    const dot = document.getElementById("status-dot");
+    const txt = document.getElementById("status-text");
+    try {
+        const resp = await fetch("/api/meters/latest", { cache: "no-store" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data = await resp.json();
+        const mine = data.mine || {};
+        const others = data.others || {};
+
+        const mineEl = document.getElementById("mine-cards");
+        const mineKeys = Object.keys(mine).sort();
+        mineEl.innerHTML = mineKeys.length
+            ? mineKeys.map(k => renderMineCard(k, mine[k])).join("")
+            : `<div class="empty">No owned-meter readings yet.  Check
+                  /etc/glowup/meters_owned.json on the hub and the
+                  publisher service on the SDR host.</div>`;
+
+        /* "Yours" subtitle counts owned meters HEARD vs configured.
+           Configured = mineKeys + any owned_meta entries we know
+           about but haven't heard yet (heard count is what mine has).
+           For now both come from heard-data; an explicit
+           "configured-but-not-heard" pass would need the owned
+           config server-side join — TODO if the gap matters. */
+        document.getElementById("mine-count").textContent =
+            "— " + mineKeys.length + " heard";
+
+        const othersEl = document.getElementById("others-cards");
+        const otherKeys = Object.keys(others).sort();
+        othersEl.innerHTML = otherKeys.length
+            ? otherKeys.map(k => renderOtherCard(k, others[k])).join("")
+            : `<div class="empty">No neighbor meters heard yet.</div>`;
+        document.getElementById("others-count").textContent =
+            "— " + otherKeys.length;
+
+        dot.classList.remove("stale");
+        txt.textContent = "live";
+    } catch (e) {
+        dot.classList.add("stale");
+        txt.textContent = "stale (fetch failed: " + e.message + ")";
+    }
+}
+
+tick();
+setInterval(tick, POLL_MS);
+</script>
+</body>
+</html>
