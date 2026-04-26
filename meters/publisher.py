@@ -140,19 +140,29 @@ _PROTOCOL_IDS: tuple[int, ...] = (
 # every meter we have to make rtl_433 hop too.  rtl_433 accepts
 # multiple -f flags and rotates through them every -H seconds.
 #
-# Three hops at 905/915/925 MHz cover the band with overlap (each
-# RTL-SDR window is ±1 MHz, so 905 covers 904-906, 915 covers
-# 914-916, 925 covers 924-926; ITRON channels in between are caught
-# on the next rotation).  60-second hop dwell is generous — ITRON
-# transmitters broadcast every 30-60s so dwelling at least one full
-# transmission cycle per band-third guarantees we hear each meter
-# at least every 3 hops (~3 minutes worst case).
+# Five hops at 906/911/916/921/926 MHz with 5 MHz spacing cover the
+# band tightly (each RTL-SDR window with -s 2048k is ~2 MHz, so 906
+# covers 905-907, 911 covers 910-912, etc).  Recipe confirmed
+# working on ernie 2026-04-25 (caught a neighbor SCM+ gas meter)
+# and replicated on pi-sensor-01 2026-04-26 (decoded SCMplus
+# id=101903449).  30-second hop dwell is the proven value — half
+# the worst-case time-to-hear vs. 60s, ITRON broadcasts every
+# 30-60s so we get at least one transmission window per hop.
 #
 # Override via --rtl433-freqs / --rtl433-hop-interval for non-US
-# deployments (Europe is 868M single-channel, Australia 915-928,
-# Japan 426M, etc.).
-_DEFAULT_FREQUENCIES: tuple[str, ...] = ("905M", "915M", "925M")
-_DEFAULT_HOP_INTERVAL_S: int = 60
+# deployments (Europe is 868M single-channel, Japan 426M, etc.).
+_DEFAULT_FREQUENCIES: tuple[str, ...] = (
+    "906M", "911M", "916M", "921M", "926M",
+)
+_DEFAULT_HOP_INTERVAL_S: int = 30
+
+# RTL-SDR sample rate.  rtl_433's new defaults (25.02+) implicitly
+# tune sample rate per protocol, but ITRON SCM/SCM+/IDM and Neptune
+# R900 specifically need a wider window than 1 MHz to catch the
+# FSK deviation cleanly — 2048k (2 MS/s) is the empirically proven
+# value from ernie 2026-04-25.  At 250k (the new "narrow" default)
+# decoders silently fail to checksum despite RX showing pulses.
+_DEFAULT_SAMPLE_RATE: str = "2048k"
 
 # rtl_433 model-string → our normalized meter_type tag.  Anything not
 # in this map is dropped at the schema boundary with a warning, since
@@ -340,6 +350,7 @@ class MeterPublisher:
         protocol_ids: tuple[int, ...] = _PROTOCOL_IDS,
         frequencies: tuple[str, ...] = _DEFAULT_FREQUENCIES,
         hop_interval_s: int = _DEFAULT_HOP_INTERVAL_S,
+        sample_rate: str = _DEFAULT_SAMPLE_RATE,
     ) -> None:
         if not _HAS_PAHO:
             raise ImportError(
@@ -352,6 +363,7 @@ class MeterPublisher:
         self._protocol_ids: tuple[int, ...] = protocol_ids
         self._frequencies: tuple[str, ...] = frequencies
         self._hop_interval_s: int = hop_interval_s
+        self._sample_rate: str = sample_rate
         self._client: "mqtt.Client" = mqtt.Client(
             client_id=f"glowup-meters-{socket.gethostname().split('.')[0]}",
         )
@@ -381,7 +393,10 @@ class MeterPublisher:
             "MQTT connected to %s:%d", self._broker_host, self._broker_port,
         )
 
-        cmd: list[str] = [self._rtl433_path, "-F", "json", "-M", "utc"]
+        cmd: list[str] = [
+            self._rtl433_path, "-F", "json", "-M", "utc",
+            "-s", self._sample_rate,
+        ]
         # Multiple -f flags: rtl_433 hops between them at -H interval.
         # Without this the receiver only sees ~2 MHz of the 26 MHz US
         # ISM band and misses meters whose frequency-hop landed
@@ -539,10 +554,17 @@ def _build_argparser() -> argparse.ArgumentParser:
         "--rtl433-hop-interval", type=int,
         default=_DEFAULT_HOP_INTERVAL_S,
         help=("Seconds to dwell on each frequency before hopping.  "
-              "Default 60 — one full ITRON transmit cycle (30-60s) "
-              "per band-third, so each meter is heard at most every "
-              "len(freqs) * hop_interval seconds.  Ignored if only "
-              "one frequency is given."),
+              "Default 30 (proven on ernie 2026-04-25) — one full "
+              "ITRON transmit cycle, so each meter is heard at most "
+              "every len(freqs) * hop_interval seconds.  Ignored if "
+              "only one frequency is given."),
+    )
+    p.add_argument(
+        "--rtl433-sample-rate", default=_DEFAULT_SAMPLE_RATE,
+        help=("rtl_433 -s sample rate.  Default '2048k' (2 MS/s) — "
+              "ITRON SCM/SCM+/IDM and Neptune R900 need this wider "
+              "FSK window; the new (25.02+) 'narrow' default of "
+              "250k silently fails to checksum these protocols."),
     )
     p.add_argument(
         "--log-level", default="INFO",
@@ -590,6 +612,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         rtl433_path=args.rtl433_path,
         frequencies=freqs,
         hop_interval_s=args.rtl433_hop_interval,
+        sample_rate=args.rtl433_sample_rate,
     )
 
     def _term(_sig: int, _frame: Any) -> None:
