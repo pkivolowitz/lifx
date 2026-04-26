@@ -15,3 +15,8 @@ shopping.json
 site-settings/
 venv/
 build/
+
+# secrets overlay — never commit a populated secrets.json. Per-file
+# guard plus an explicit allowlist for the example template.
+secrets.json
+!secrets.json.example

@@ -62,6 +62,25 @@ Public-fork user experience
 
 A future installer (``python3 -m glowup.install`` or similar) will
 automate the cp + edit by prompting for or auto-discovering values.
+
+Secrets overlay
+---------------
+
+Sensitive values (database passwords, API tokens) live in a
+companion file:
+
+    /etc/glowup/secrets.json
+
+Same JSON shape as site.json, gitignored everywhere, never committed.
+The operator drops it manually until the age-encrypted secrets store
+exists.  Loaded after site.json and merged on top — any key in
+secrets.json wins over the same key in site.json.  This lets the
+glowup-infra renderer keep producing site.json from inventory while
+sensitive values stay out of the rendered payload entirely.
+
+Empty / missing secrets.json is fine; programs that need a
+secret-only key fail fast at .require() the same way they would for
+any other missing site value.
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
@@ -93,6 +112,19 @@ SUPPORTED_SCHEMA_VERSION: int = 1
 _ENV_PATH_VAR: str = "GLOWUP_SITE_JSON"
 _SYSTEM_PATH: Path = Path("/etc/glowup/site.json")
 _USER_PATH: Path = Path.home() / ".glowup" / "site.json"
+
+# Secrets overlay — read after the main site config and merged on
+# top, so any key present in secrets.json wins.  Same JSON shape as
+# site.json but typically only the sensitive keys (postgres_dsn, API
+# tokens, etc.).  Lives at /etc/glowup/secrets.json (or
+# ~/.glowup/secrets.json), gitignored everywhere, never committed —
+# the operator drops it manually until the age-encrypted secrets
+# store exists.  Empty / missing is fine; programs that need a
+# secret-only key fail fast at .require() the same way they would
+# for any other missing site value.
+_ENV_SECRETS_VAR: str = "GLOWUP_SECRETS_JSON"
+_SYSTEM_SECRETS: Path = Path("/etc/glowup/secrets.json")
+_USER_SECRETS: Path = Path.home() / ".glowup" / "secrets.json"
 
 # Regex matching ``<...>`` placeholder strings. Site.json templates
 # (site.json.example) use this style for documentation; a value
@@ -175,57 +207,95 @@ class _Site:
         return v
 
 
-def _candidate_paths() -> list[Path]:
-    """Return the ordered list of paths to try for site.json.
+def _candidate_paths(env_var: str, system_path: Path, user_path: Path) -> list[Path]:
+    """Return the ordered list of paths to try for a config file.
 
     Order:
-      1. ``$GLOWUP_SITE_JSON`` if set — explicit override for tests
-         and dev.
-      2. ``/etc/glowup/site.json`` — production deploy target on
+      1. ``$<env_var>`` if set — explicit override for tests and dev.
+      2. The system path (``/etc/glowup/...``) — production drop on
          Linux fleet hosts.
-      3. ``~/.glowup/site.json`` — per-user fallback (Mac dev,
-         non-root installs).
+      3. The per-user path (``~/.glowup/...``) — Mac dev / non-root.
 
-    The first existing file wins. If none exist, an empty config is
-    used and every :meth:`_Site.get` returns ``None``; programs that
-    need values fail fast via :meth:`_Site.require`.
+    The first existing file wins. None existing is fine for the
+    secrets overlay (no overlay applied) and for the main site config
+    (empty, every ``get`` returns None).
     """
     paths: list[Path] = []
-    env_path: str | None = os.environ.get(_ENV_PATH_VAR)
+    env_path: str | None = os.environ.get(env_var)
     if env_path:
         paths.append(Path(env_path))
-    paths.append(_SYSTEM_PATH)
-    paths.append(_USER_PATH)
+    paths.append(system_path)
+    paths.append(user_path)
     return paths
 
 
+def _read_json_config(path: Path) -> dict[str, Any]:
+    """Read + minimally validate a site/secrets JSON document.
+
+    Validates the top-level shape (must be a JSON object) and the
+    optional ``schema_version`` field (must match this loader's
+    supported version when present).  Other validation is per-call
+    via :meth:`_Site.get` / :meth:`_Site.require`.
+    """
+    try:
+        text: str = path.read_text(encoding="utf-8")
+        data: Any = json.loads(text)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SiteConfigError(
+            f"failed to read site/secrets config at {path}: {exc}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise SiteConfigError(
+            f"config at {path} must be a JSON object, "
+            f"got {type(data).__name__}"
+        )
+    schema: Any = data.get("schema_version")
+    if schema is not None and schema != SUPPORTED_SCHEMA_VERSION:
+        raise SiteConfigError(
+            f"config at {path} declares schema_version "
+            f"{schema!r}; this loader supports "
+            f"{SUPPORTED_SCHEMA_VERSION}"
+        )
+    return data
+
+
 def _load() -> _Site:
-    """Locate, parse, and validate site.json. Returns an empty site
-    if no candidate path exists — that is intentional, see the module
-    docstring."""
-    for path in _candidate_paths():
+    """Locate, parse, and merge site.json + secrets.json.
+
+    Returns an empty site if no candidate site path exists — that is
+    intentional, see the module docstring.  Secrets are merged on top
+    (same-named keys win), so a sensitive value can sit in
+    secrets.json while the rest of site.json stays freely renderable
+    from inventory.
+
+    ``schema_version`` is special: secrets.json's value (if any) is
+    validated but does not overwrite site.json's.
+    """
+    site_data: dict[str, Any] = {}
+    sources: list[str] = []
+
+    # Main site config — pick the first existing.
+    for path in _candidate_paths(_ENV_PATH_VAR, _SYSTEM_PATH, _USER_PATH):
         if path.is_file():
-            try:
-                text: str = path.read_text(encoding="utf-8")
-                data: Any = json.loads(text)
-            except (OSError, json.JSONDecodeError) as exc:
-                raise SiteConfigError(
-                    f"failed to read site config at {path}: {exc}"
-                ) from exc
-            if not isinstance(data, dict):
-                raise SiteConfigError(
-                    f"site config at {path} must be a JSON object, "
-                    f"got {type(data).__name__}"
-                )
-            schema: Any = data.get("schema_version")
-            if schema is not None and schema != SUPPORTED_SCHEMA_VERSION:
-                raise SiteConfigError(
-                    f"site config at {path} declares schema_version "
-                    f"{schema!r}; this loader supports "
-                    f"{SUPPORTED_SCHEMA_VERSION}"
-                )
-            return _Site(data, str(path))
-    return _Site({}, "(no site.json found)")
+            site_data = _read_json_config(path)
+            sources.append(str(path))
+            break
+
+    # Secrets overlay — pick the first existing; values overwrite
+    # matching keys in site_data.
+    for path in _candidate_paths(_ENV_SECRETS_VAR, _SYSTEM_SECRETS, _USER_SECRETS):
+        if path.is_file():
+            secrets_data: dict[str, Any] = _read_json_config(path)
+            # Don't let secrets.json clobber a different schema_version
+            # in site.json — the validation already ran in
+            # _read_json_config; keep the original.
+            secrets_data.pop("schema_version", None)
+            site_data = {**site_data, **secrets_data}
+            sources.append(str(path))
+            break
+
+    label: str = " + ".join(sources) if sources else "(no site.json found)"
+    return _Site(site_data, label)
 
 
 # Module-level singleton. Loaded once at import; tests that need a
