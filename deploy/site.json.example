@@ -1,0 +1,21 @@
+{
+  "_comment_top": "GlowUp site configuration template. Copy to /etc/glowup/site.json (or ~/.glowup/site.json on a dev Mac) and replace every <placeholder> with your real value, or remove the key to disable the optional feature it controls.  Loaded by glowup_site.py at module import; programs read from glowup_site.site.",
+
+  "schema_version": 1,
+
+  "hub_broker": "<hub host or IP — REQUIRED for any service that publishes to the hub>",
+  "hub_port": 1883,
+
+  "_comment_optional": "Everything below is optional — remove a key to disable its feature.",
+
+  "broker_2": "<secondary broker host, if you run a per-room mosquitto>",
+
+  "node_ips": {
+    "_comment": "node_id -> IP. Optional. Used by the hub dashboard's thermal page to enrich rows with each host's IP. Lowercase node_id keys (matches MQTT publishers).",
+    "<node-id>": "<host or IP>"
+  },
+
+  "postgres_dsn": "<postgresql://user:pass@host:5432/db — for zigbee_service history>",
+
+  "printer": "<printer host or IP — for the printer adapter>"
+}
