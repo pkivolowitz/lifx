@@ -67,13 +67,9 @@ User=a
 Group=a
 WorkingDirectory=/opt/glowup-sensors
 
-# Hub broker is host-specific and lives outside this generic unit.
-# /etc/default/glowup-ble-sensor is dropped at deploy time by the
-# private glowup-infra repo and must define GLB_HUB_BROKER.  The
-# program fails fast (parser.error) if it ends up unset, so a bad
-# deploy surfaces at startup rather than later at MQTT connect time.
-EnvironmentFile=-/etc/default/glowup-ble-sensor
-Environment=GLB_HUB_PORT=1883
+# Site-specific values (hub broker, port) are read at startup by the
+# program itself from /etc/glowup/site.json (see lifx/glowup_site.py).
+# This unit file carries no addresses.
 
 # BLE adapter selection: broker-2 boots with `dtoverlay=disable-bt` in
 # /boot/firmware/config.txt (FLEET_REBUILD § 4.2.3 step 4), which kills

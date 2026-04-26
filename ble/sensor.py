@@ -129,22 +129,19 @@ NUMERIC_SUBTOPICS: frozenset[str] = frozenset({
     "motion", "temperature", "humidity",
 })
 
-# Hub broker — read from GLB_HUB_BROKER.  No hardcoded IP fallback:
-# any specific address is fleet-topology, not generic GlowUp source,
-# and a fallback would let a broken deploy silently connect to the
-# wrong host (or, with a placeholder fallback, fail late on a hostname
-# that the service unit "looked configured" but wasn't).  If the env
-# var isn't set, argparse will require --hub-broker on the command
-# line; if neither is supplied, parser.error exits with a clear
-# message at startup before any MQTT connection is attempted.
-#
-# The systemd unit no longer hardcodes this either.  /etc/default/
-# glowup-ble-sensor (deployed by glowup-infra) provides the value via
-# the EnvironmentFile= directive in the unit.
-DEFAULT_HUB_BROKER: str | None = os.environ.get("GLB_HUB_BROKER") or None
+# Hub broker — single source of truth is /etc/glowup/site.json
+# (see glowup_site).  No hardcoded IP fallback in source.  If the
+# site config does not provide hub_broker, --hub-broker on the
+# command line is required; if neither is supplied, parser.error
+# exits with a clear message before any MQTT connection is
+# attempted.  This replaces the older GLB_HUB_BROKER env-var pattern.
+from glowup_site import site as _site
+DEFAULT_HUB_BROKER: str | None = _site.get("hub_broker")
 
 # Default MQTT port.
-DEFAULT_MQTT_PORT: int = int(os.environ.get("GLB_HUB_PORT", "1883"))
+# Default MQTT port pulls from site config; falls back to the standard
+# 1883 if the site doesn't override.  Generic value, no leak risk.
+DEFAULT_MQTT_PORT: int = int(_site.get("hub_port", 1883))
 
 # BLE adapter to use — read from GLB_BLE_ADAPTER so the systemd unit
 # can pin to a specific HCI device (e.g. "hci1" for the ASUS USB

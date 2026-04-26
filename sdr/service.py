@@ -72,15 +72,16 @@ logger: logging.Logger = logging.getLogger("glowup.sdr_service")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Hub broker — read from GLB_HUB_BROKER.  No hardcoded IP fallback;
-# any specific address is fleet-topology, not generic GlowUp source.
-# /etc/default/glowup-sdr (deployed by glowup-infra) provides the
-# value via EnvironmentFile= in the systemd unit.  If neither env nor
-# --hub-broker is supplied, the program exits at startup.
-DEFAULT_HUB_BROKER: str | None = os.environ.get("GLB_HUB_BROKER") or None
+# Hub broker — single source of truth is /etc/glowup/site.json (see
+# glowup_site).  No hardcoded IP fallback.  If neither the site
+# config nor --hub-broker provides a value, parser.error exits at
+# startup before any MQTT attempt.
+from glowup_site import site as _site
+DEFAULT_HUB_BROKER: str | None = _site.get("hub_broker")
 
-# Default MQTT port.
-DEFAULT_MQTT_PORT: int = int(os.environ.get("GLB_HUB_PORT", "1883"))
+# Default MQTT port — site config may override; standard 1883 fallback
+# is generic, no leak risk.
+DEFAULT_MQTT_PORT: int = int(_site.get("hub_port", 1883))
 
 # Default frequency (Hz).  433.92 MHz is the richest ISM band in the US:
 # weather stations, TPMS, garage doors, soil sensors, doorbells.

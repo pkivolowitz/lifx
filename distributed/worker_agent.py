@@ -389,10 +389,15 @@ class WorkerAgent:
         if configured:
             return configured
 
-        # Auto-detect by connecting to an external address.
+        # Auto-detect by asking the OS routing table which local IP
+        # would be used to reach an external address.  UDP connect()
+        # is local-only — no packets are sent — so the destination
+        # is just a routing hint.  We use a well-known public anycast
+        # address (Google DNS) so this works on any network without
+        # leaking the operator's specific gateway.
         try:
             s: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("10.0.0.1", 80))
+            s.connect(("8.8.8.8", 80))
             ip: str = s.getsockname()[0]
             s.close()
             return ip

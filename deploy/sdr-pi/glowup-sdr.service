@@ -53,17 +53,13 @@ User=a
 Group=a
 WorkingDirectory=/opt/glowup-sdr
 
-# Hub broker is host-specific and lives outside this generic unit.
-# /etc/default/glowup-sdr is dropped at deploy time by the private
-# glowup-infra repo and must define GLB_HUB_BROKER.  The program fails
-# fast (parser.error) if it ends up unset, so a bad deploy surfaces
-# at startup rather than later at MQTT connect time.
-EnvironmentFile=-/etc/default/glowup-sdr
-Environment=GLB_HUB_PORT=1883
+# Site-specific values (hub broker, port) are read at startup by the
+# program itself from /etc/glowup/site.json (see lifx/glowup_site.py).
+# This unit file carries no addresses.
 
-# Default frequency — 433.92 MHz (US ISM band).
-# Change to 315000000 for US TPMS, or use the MQTT command
-# topic to switch at runtime without a restart.
+# Default frequency — 433.92 MHz (US ISM band).  Change to 315000000
+# for US TPMS, or use the MQTT command topic to switch at runtime
+# without a restart.  Frequency is generic, no leak.
 Environment=GLB_SDR_FREQ=433920000
 
 ExecStart=/usr/bin/python3 -m sdr.service

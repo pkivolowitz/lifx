@@ -54,55 +54,47 @@ from voice.constants import (
 BROKER2_SIGNALS_STALE_SEC: float = 120.0
 
 
-# Path on hub where the rendered node_id → IP map lives.  Source of
-# truth is the private glowup-infra repo's fleet/inventory.yaml; the
-# JSON file at this path is rendered from it by
-# tools/render-node-ips.py and dropped at deploy time.  This file
-# does NOT carry IPs in source — that was a fleet-topology leak in a
-# public repo (github.com/pkivolowitz/lifx).  A missing or unreadable
-# file degrades to an empty map; the IP column in the dashboard goes
-# blank for the affected rows but nothing else breaks.
-_NODE_IPS_PATH: str = "/etc/glowup/node_ips.json"
+# Node-id → IP map for the thermal dashboard.  Source of truth is
+# /etc/glowup/site.json (see glowup_site); the renderer in glowup-
+# infra populates the ``node_ips`` key from inventory.yaml.  This
+# replaces the older /etc/glowup/node_ips.json drop and is the single
+# place a fleet operator edits to add a host to the dashboard.  An
+# absent or empty ``node_ips`` value renders the dashboard's IP
+# column blank — no crash, no late failure.
+from glowup_site import site as _site, SiteConfigError
 
 
-def _load_node_ips(path: str) -> dict[str, str]:
-    """Load node_id → IP map from a JSON file on disk.
+def _load_node_ips() -> dict[str, str]:
+    """Pull the lowercase ``node_id`` → IPv4 map from site config.
 
-    Returns an empty dict on any failure (missing file, parse error,
-    permission denied, wrong shape).  The dashboard treats absence
-    the same as "no IP recorded" — the IP column simply renders blank
-    rather than crashing the request.
+    Returns an empty dict if site.json is missing, has no
+    ``node_ips`` key, or holds a non-dict value.  Defensive isinstance
+    filters drop any non-string keys/values without crashing — the
+    dashboard's IP column is a "show what you can" surface.
 
-    Args:
-        path: filesystem path to the JSON file.
-
-    Returns:
-        Dict mapping lowercase ``node_id`` strings to IPv4 strings.
-        Non-string values are filtered out defensively.
+    Catches :class:`SiteConfigError` (raised on placeholder values) and
+    logs at warning level so the operator sees an actionable message
+    in the journal but the dashboard request itself doesn't fail.
     """
     try:
-        with open(path, "r") as f:
-            data: Any = json.load(f)
-    except (FileNotFoundError, PermissionError, OSError):
-        logger.info("node_ips file not present at %s; IP column will be blank", path)
+        raw: Any = _site.get("node_ips") or {}
+    except SiteConfigError as exc:
+        logger.warning("site.node_ips holds a placeholder: %s", exc)
         return {}
-    except json.JSONDecodeError as exc:
-        logger.warning("node_ips file at %s is not valid JSON: %s", path, exc)
-        return {}
-    if not isinstance(data, dict):
-        logger.warning("node_ips file at %s is not a JSON object", path)
+    if not isinstance(raw, dict):
+        logger.warning("site.node_ips is not a JSON object: %r", type(raw).__name__)
         return {}
     return {
         str(k): str(v)
-        for k, v in data.items()
+        for k, v in raw.items()
         if isinstance(k, str) and isinstance(v, str)
     }
 
 
 # Loaded once at module import.  Restart of glowup-server picks up
-# inventory changes; that matches the existing /etc/glowup/server.json
+# site.json edits; matches the existing /etc/glowup/server.json
 # convention where edits require a service restart.
-_NODE_IPS: dict[str, str] = _load_node_ips(_NODE_IPS_PATH)
+_NODE_IPS: dict[str, str] = _load_node_ips()
 
 
 class DashboardHandlerMixin:

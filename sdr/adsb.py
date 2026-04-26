@@ -59,10 +59,11 @@ logger: logging.Logger = logging.getLogger("glowup.sdr_adsb")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Hub broker — read from GLB_HUB_BROKER, no fallback IP.  Set via
-# EnvironmentFile=-/etc/default/glowup-adsb in the systemd unit.
-DEFAULT_HUB_BROKER: str | None = os.environ.get("GLB_HUB_BROKER") or None
-DEFAULT_MQTT_PORT: int = int(os.environ.get("GLB_HUB_PORT", "1883"))
+# Hub broker — single source of truth is /etc/glowup/site.json
+# (see glowup_site).  No hardcoded IP fallback.
+from glowup_site import site as _site
+DEFAULT_HUB_BROKER: str | None = _site.get("hub_broker")
+DEFAULT_MQTT_PORT: int = int(_site.get("hub_port", 1883))
 
 # dump1090 JSON endpoint — default for dump1090-mutability.
 DEFAULT_DUMP1090_URL: str = "http://localhost:8080/data/aircraft.json"

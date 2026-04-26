@@ -11,26 +11,19 @@ Type=simple
 User=a
 Group=a
 
-# Generic / fleet-default config (same on every host, no leak).
+# Generic / fleet-default config — same on every host, no leak risk.
+# Site-specific values (hub broker, postgres DSN) are read at startup
+# by the program itself from /etc/glowup/site.json (see lifx/glowup_
+# site.py).  An unset hub_broker means the service runs local-only
+# (no cross-host signal publishing) — valid for a public-fork user.
 Environment=GLZ_HTTP_BIND=0.0.0.0
 Environment=GLZ_HTTP_PORT=8422
 Environment=GLZ_Z2M_BROKER=localhost
 Environment=GLZ_Z2M_PORT=1883
 Environment=GLZ_Z2M_PREFIX=zigbee2mqtt
-Environment=GLZ_HUB_PORT=1883
 Environment=GLZ_HUB_SIGNAL_PREFIX=glowup/signals
 Environment=GLZ_RATE_USD_PER_KWH=0.13
 Environment=GLZ_LOG_LEVEL=INFO
-
-# Host-specific config (hub broker, postgres DSN) lives outside this
-# generic unit.  /etc/default/glowup-zigbee-service is dropped at
-# deploy time by the private glowup-infra repo and is expected to
-# define GLZ_HUB_BROKER and GLZ_DB_DSN (the latter only matters if
-# you want power-history persistence; an empty / missing DSN means
-# the service runs without postgres).  An empty / missing
-# GLZ_HUB_BROKER means the service runs as local-only (no cross-host
-# signal publishing) — that's a valid mode for a public-fork user.
-EnvironmentFile=-/etc/default/glowup-zigbee-service
 
 ExecStart=/opt/glowup-zigbee/venv/bin/python /opt/glowup-zigbee/service.py
 

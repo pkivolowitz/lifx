@@ -85,12 +85,15 @@ logger: logging.Logger = logging.getLogger("glowup.pi_thermal")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Default broker host — Pi 5 "glowup" hub runs the canonical MQTT broker.
-# See reference_project_state.md.
-_DEFAULT_BROKER_HOST: str = "10.0.0.214"
+# Default broker host — single source of truth is /etc/glowup/site.json
+# (see glowup_site).  No hardcoded fallback IP.  May still be overridden
+# at runtime via the INI config (see _DEFAULT_CONFIG_PATH below) or
+# --broker on the command line.
+from glowup_site import site as _site
+_DEFAULT_BROKER_HOST: str | None = _site.get("hub_broker")
 
-# Default MQTT port — mosquitto stock listener.
-_DEFAULT_BROKER_PORT: int = 1883
+# Default MQTT port — site config may override; standard 1883 is generic.
+_DEFAULT_BROKER_PORT: int = int(_site.get("hub_port", 1883))
 
 # Default publish interval (seconds).  30s balances trend resolution
 # against MQTT/retain churn on the broker.
@@ -815,6 +818,19 @@ def main() -> int:
         cfg.interval_s = args.interval
     if args.node_id is not None:
         cfg.node_id = args.node_id
+
+    # Fail fast if no broker resolved from any source — INI config,
+    # site.json hub_broker, or --broker.  Better to refuse to start
+    # with a clear message than to publish to the wrong host or loop
+    # on a bogus hostname.
+    if not cfg.broker_host:
+        logger.error(
+            "no MQTT broker configured: set hub_broker in "
+            "/etc/glowup/site.json, set [mqtt] broker in %s, or pass "
+            "--broker on the command line",
+            args.config,
+        )
+        return 2
 
     pi_model: str = _read_pi_model()
     platform: str = _platform_slug(pi_model)

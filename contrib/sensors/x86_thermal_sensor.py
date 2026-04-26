@@ -70,13 +70,11 @@ logger: logging.Logger = logging.getLogger("glowup.x86_thermal")
 # Constants
 # ---------------------------------------------------------------------------
 
-# MQTT broker — read from GLB_HUB_BROKER env var if set; no hardcoded
-# fallback IP.  /etc/default/glowup-x86-thermal (deployed by glowup-
-# infra) provides the value; the systemd unit's EnvironmentFile pulls
-# it in.  Argparse --broker overrides; if neither env nor --broker is
-# supplied, the program exits at startup with a clear error.
-_DEFAULT_BROKER_HOST: str | None = os.environ.get("GLB_HUB_BROKER") or None
-_DEFAULT_BROKER_PORT: int = 1883
+# MQTT broker — single source of truth is /etc/glowup/site.json
+# (see glowup_site).  No hardcoded fallback IP.
+from glowup_site import site as _site
+_DEFAULT_BROKER_HOST: str | None = _site.get("hub_broker")
+_DEFAULT_BROKER_PORT: int = int(_site.get("hub_port", 1883))
 _DEFAULT_INTERVAL_S: float = 30.0
 _THERMAL_TOPIC_PREFIX: str = "glowup/hardware/thermal"
 _STATUS_TOPIC_PREFIX: str = "glowup/node"

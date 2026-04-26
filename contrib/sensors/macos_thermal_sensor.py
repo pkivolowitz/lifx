@@ -50,6 +50,7 @@ import re
 import signal
 import socket
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from types import FrameType
@@ -75,8 +76,11 @@ logger: logging.Logger = logging.getLogger("glowup.macos_thermal")
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_BROKER_HOST: str = "10.0.0.214"
-_DEFAULT_BROKER_PORT: int = 1883
+# Default broker — single source of truth is /etc/glowup/site.json
+# (or ~/.glowup/site.json on a Mac).  No hardcoded fallback IP.
+from glowup_site import site as _site
+_DEFAULT_BROKER_HOST: str | None = _site.get("hub_broker")
+_DEFAULT_BROKER_PORT: int = int(_site.get("hub_port", 1883))
 _DEFAULT_INTERVAL_S: float = 30.0
 _THERMAL_TOPIC_PREFIX: str = "glowup/hardware/thermal"
 _STATUS_TOPIC_PREFIX: str = "glowup/node"
@@ -327,7 +331,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--broker", default=_DEFAULT_BROKER_HOST,
-        help=f"MQTT broker (default: {_DEFAULT_BROKER_HOST})",
+        help=(
+            "MQTT broker.  Default from site.json hub_broker; no "
+            "hardcoded fallback — required."
+        ),
     )
     parser.add_argument(
         "--port", type=int, default=_DEFAULT_BROKER_PORT,
@@ -363,6 +370,17 @@ def main() -> None:
             override: str = cp.get("sensor", "node_id", fallback="").strip()
             if override:
                 node_id = override
+
+    # Fail fast if no broker resolved from any source — site.json,
+    # --broker, or --config.  Better than late MQTT failure on a
+    # bogus hostname.
+    if not broker:
+        sys.stderr.write(
+            "macos_thermal_sensor: no broker resolved from --broker, "
+            "site.json hub_broker, or --config; aborting before "
+            "MQTT connect.\n"
+        )
+        sys.exit(2)
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
