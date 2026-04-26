@@ -188,19 +188,27 @@ _MODEL_TO_TYPE: dict[str, str] = {
     "ERT-NetIDM":   "ert_net_idm",
 }
 
-# rtl_433 meter-id field varies by model.  Probe in this order.
+# rtl_433 meter-id field varies by model AND rtl_433 version.  rtl_433
+# 25.02 emits CamelCase JSON keys ("EndpointID", "Consumption") for
+# meter protocols where older versions used snake_case.  Probe both.
 _METER_ID_FIELDS: tuple[str, ...] = (
-    "id",                # most common
+    "id",                # rtl_433 default ("id" stayed lowercase)
+    "EndpointID",        # rtl_433 25.02+ SCMplus / IDM
+    "endpoint_id",       # legacy snake_case variant
     "meter_id",          # some forks
     "ert_id",            # very old rtl_433 builds
 )
 
-# rtl_433 consumption field, similarly.
+# rtl_433 consumption field, similarly.  rtl_433 25.02 emits
+# "Consumption" (CamelCase); legacy rtl_433 used "consumption".
 _CONSUMPTION_FIELDS: tuple[str, ...] = (
-    "consumption",       # ERT-SCM and SCM+
-    "consumption_data",  # ERT-IDM
+    "Consumption",       # rtl_433 25.02+ SCM/SCMplus/IDM
+    "consumption",       # legacy ERT-SCM and SCM+
+    "Consumption_Data",  # 25.02 IDM
+    "consumption_data",  # legacy IDM
     "consumption_kwh",   # some forks
-    "value",             # R900
+    "value",             # R900 (lowercase historically; verify)
+    "Value",             # R900 if 25.02 also CamelCased it
     "consumption_raw",   # fallback
 )
 
