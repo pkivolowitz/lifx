@@ -124,15 +124,15 @@ logger: logging.Logger = logging.getLogger("glowup.meters.publisher")
 # rtl_433 binary on PATH.  Override via --rtl433-path.
 _DEFAULT_RTL433: str = "rtl_433"
 
-# rtl_433 protocol decoder IDs we enable.  Source: `rtl_433 -R help`
-# documented behaviour; verified empirically on 2026-04-25.
-_PROTOCOL_IDS: tuple[int, ...] = (
-    53,    # ITRON ERT IDM
-    54,    # ITRON ERT NetIDM
-    55,    # ITRON ERT SCM+
-    56,    # ITRON ERT SCM
-    153,   # Neptune R900 water
-)
+# rtl_433 protocol decoder IDs to PIN with -R.  Empty = use rtl_433's
+# default decoder set (which includes ITRON ERT and Neptune R900).
+# We default to empty because rtl_433 25.02's protocol-ID mapping
+# silently mismatched our tuple (53/54/55/56/153) and dropped every
+# decode despite strong RX — proven 2026-04-26 on pi-sensor-01,
+# decoded SCMplus immediately on first run when -R was removed.
+# Filtering to the meter subset happens in parse_packet() at the
+# Python layer, where we control the model→type table directly.
+_PROTOCOL_IDS: tuple[int, ...] = ()
 
 # US ISM-band coverage.  ITRON ERT (electric/gas) and Neptune R900
 # (water) frequency-hop across the full 902-928 MHz band; the RTL-SDR
@@ -169,12 +169,23 @@ _DEFAULT_SAMPLE_RATE: str = "2048k"
 # we cannot guarantee the field shape and don't want to ship
 # unstructured payloads downstream.  Add a row here when a new meter
 # type is intentionally onboarded — never silently passthrough.
+#
+# rtl_433 25.02 changed the bare names (was "ERT-SCM+", now
+# "SCMplus" — confirmed empirically from emitted JSON 2026-04-26 on
+# pi-sensor-01).  Keep the legacy strings in the table so a
+# downgrade/upgrade of rtl_433 doesn't silently break parsing.
 _MODEL_TO_TYPE: dict[str, str] = {
-    "ERT-SCM":     "ert_scm",
-    "ERT-SCM+":    "ert_scm_plus",
-    "ERT-IDM":     "ert_idm",
-    "ERT-NetIDM":  "ert_net_idm",
+    # rtl_433 25.02+ bare names
+    "SCM":          "ert_scm",
+    "SCMplus":      "ert_scm_plus",
+    "IDM":          "ert_idm",
+    "NetIDM":       "ert_net_idm",
     "Neptune-R900": "neptune_r900",
+    # Legacy rtl_433 (<25.02) names — kept for forward/backward compat
+    "ERT-SCM":      "ert_scm",
+    "ERT-SCM+":     "ert_scm_plus",
+    "ERT-IDM":      "ert_idm",
+    "ERT-NetIDM":   "ert_net_idm",
 }
 
 # rtl_433 meter-id field varies by model.  Probe in this order.
@@ -405,6 +416,18 @@ class MeterPublisher:
             cmd.extend(["-f", freq])
         if len(self._frequencies) > 1:
             cmd.extend(["-H", str(self._hop_interval_s)])
+        # Note: no -R filter.  rtl_433 25.02 silently failed to decode
+        # SCMplus when -R 53/54/55/56/153 was passed (proven empirically
+        # 2026-04-26 — same hop / sample rate config decoded a neighbor
+        # gas meter immediately when -R was removed).  Protocol-ID
+        # mappings may have shifted between rtl_433 versions; rather
+        # than hand-track them, run the default decoder set and let
+        # parse_packet() in this module filter to _MODEL_TO_TYPE at
+        # the Python boundary.  CPU cost is modest, the filter
+        # behaviour is then under our control.  protocol_ids is kept
+        # in the API surface for callers who explicitly want the
+        # restriction (e.g. testing one decoder); empty default tuple
+        # means "let rtl_433 decide".
         for pid in self._protocol_ids:
             cmd.extend(["-R", str(pid)])
         logger.info("spawning rtl_433: %s", " ".join(cmd))
