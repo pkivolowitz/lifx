@@ -23,6 +23,25 @@ import time
 from datetime import datetime
 from typing import Any, Callable
 
+from glowup_site import site as _site
+
+# glowup-server's HTTP port — generic, same on every host that
+# runs the server.  Not exposed as a site.json key because changing
+# it would require touching multiple consumers; if that ever
+# becomes desired, add a `glowup_server_port` site key.
+_GLOWUP_SERVER_PORT: int = 8420
+
+# Default API URL: derived from site.json hub_broker if present, so
+# every kiosk on the fleet picks up the hub's address from one place.
+# Fallback to localhost for hosts that run their own glowup-server
+# (hub, Daedalus) or for a public-fork user without site.json yet.
+_HUB_BROKER: str | None = _site.get("hub_broker")
+_DEFAULT_API: str = (
+    f"http://{_HUB_BROKER}:{_GLOWUP_SERVER_PORT}"
+    if _HUB_BROKER
+    else f"http://localhost:{_GLOWUP_SERVER_PORT}"
+)
+
 try:
     import pygame
 except ImportError:
@@ -189,8 +208,15 @@ def main() -> None:
         description="GlowUp Kiosk — native Pi dashboard",
     )
     parser.add_argument(
-        "--api", type=str, default="http://localhost:8420",
-        help="GlowUp server URL",
+        "--api", type=str, default=_DEFAULT_API,
+        help=(
+            "GlowUp server URL.  Default derived from "
+            "/etc/glowup/site.json hub_broker (so a kiosk far from "
+            "the hub picks up its address from a single editable "
+            "place); falls back to localhost if site.json has no "
+            "hub_broker (a hub-co-resident kiosk works without "
+            "extra config)."
+        ),
     )
     parser.add_argument(
         "--night", action="store_true",

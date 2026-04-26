@@ -70,10 +70,16 @@ logger: logging.Logger = logging.getLogger("glowup.tpms_logger")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Default PostgreSQL DSN.  Override via GLOWUP_DIAG_DSN env var in server.py.
-# Kept in sync with thermal_logger / power_logger — a single env var
-# points every diagnostic logger at the same cluster.
-DEFAULT_DSN: str = "postgresql://glowup:changeme@10.0.0.111:5432/glowup"
+# Default PostgreSQL DSN — same resolution order as power_logger:
+# /etc/glowup/secrets.json postgres_dsn, then GLOWUP_DIAG_DSN env,
+# else empty.  No hardcoded credentials in source.
+import os as _os
+from glowup_site import site as _site
+DEFAULT_DSN: str = (
+    _site.get("postgres_dsn")
+    or _os.environ.get("GLOWUP_DIAG_DSN")
+    or ""
+)
 
 # 30-day retention.  TPMS fingerprints stabilize within a week per the
 # design memo (project_tpms_vehicle_detection.md); 30 d gives a full

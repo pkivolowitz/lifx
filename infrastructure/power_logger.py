@@ -45,8 +45,20 @@ logger: logging.Logger = logging.getLogger("glowup.power_logger")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Default PostgreSQL DSN.  Override via GLOWUP_DIAG_DSN env var in server.py.
-DEFAULT_DSN: str = "postgresql://glowup:changeme@10.0.0.111:5432/glowup"
+# Default PostgreSQL DSN.  Resolved (in priority order) from:
+#   1. /etc/glowup/secrets.json key "postgres_dsn" (preferred)
+#   2. GLOWUP_DIAG_DSN environment variable (legacy /etc/glowup/diag.env)
+#   3. empty string -> caller passes None / fails fast
+# No hardcoded credentials in source — that was a leak in the public
+# repo (Perry's jail IP + a placeholder password) and would cause
+# late failures on a deploy without proper secrets.
+import os as _os  # avoid shadowing if `os` is imported below
+from glowup_site import site as _site
+DEFAULT_DSN: str = (
+    _site.get("postgres_dsn")
+    or _os.environ.get("GLOWUP_DIAG_DSN")
+    or ""
+)
 
 # Data retention in seconds (7 days).
 RETENTION_SECONDS: float = 7 * 24 * 3600

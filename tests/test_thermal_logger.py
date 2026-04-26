@@ -11,9 +11,10 @@ Covers the persistence surface without touching MQTT:
 - fan_declared_present bool round-trip
 - Extras (throttled_flags, model) extracted from the payload
 
-Tests require a live PostgreSQL connection.  Set GLOWUP_DIAG_DSN or the
-DEFAULT_DSN default (postgresql://glowup:changeme@10.0.0.111:5432/glowup)
-must be reachable.  Skipped automatically otherwise.
+Tests require a live PostgreSQL connection.  The DSN comes from
+glowup_site (``postgres_dsn`` key in /etc/glowup/secrets.json) or the
+``GLOWUP_DIAG_DSN`` env var.  Skipped automatically when neither is
+set or the cluster is unreachable.
 
 Run::
 

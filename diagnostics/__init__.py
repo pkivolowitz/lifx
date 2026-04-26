@@ -48,11 +48,19 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 
-#: Default connection string (override with GLOWUP_DIAG_DSN env var).
-DEFAULT_DSN: str = f"postgresql://glowup:changeme@{net.db_host}:5432/glowup"
-
-#: Environment variable for the connection string.
+#: Environment variable for the connection string (legacy).
 DSN_ENV_VAR: str = "GLOWUP_DIAG_DSN"
+
+#: Default connection string — resolved from /etc/glowup/secrets.json
+#: ``postgres_dsn``, falling back to the GLOWUP_DIAG_DSN env var,
+#: else empty.  No hardcoded credentials in source.
+import os as _os
+from glowup_site import site as _site
+DEFAULT_DSN: str = (
+    _site.get("postgres_dsn")
+    or _os.environ.get(DSN_ENV_VAR)
+    or ""
+)
 
 
 # ---------------------------------------------------------------------------

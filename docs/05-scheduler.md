@@ -167,40 +167,40 @@ Use this to verify your config before deploying.
 1. **Clone the repository** to the target machine:
 
 ```bash
-git clone https://github.com/pkivolowitz/lifx.git /home/pi/lifx
+git clone https://github.com/pkivolowitz/lifx.git /home/a/lifx
 ```
 
 2. **Create the config file** at `/etc/glowup/schedule.json`:
 
 ```bash
 sudo mkdir -p /etc/glowup
-sudo cp /home/pi/lifx/schedule.json.example /etc/glowup/schedule.json
+sudo cp /home/a/lifx/schedule.json.example /etc/glowup/schedule.json
 sudo nano /etc/glowup/schedule.json   # edit for your location, devices, schedule
 ```
 
 3. **Test with dry run** to verify times resolve correctly:
 
 ```bash
-python3 /home/pi/lifx/scheduler.py --dry-run /etc/glowup/schedule.json
+python3 /home/a/lifx/scheduler.py --dry-run /etc/glowup/schedule.json
 ```
 
 4. **Test live** before installing the service:
 
 ```bash
-python3 /home/pi/lifx/scheduler.py /etc/glowup/schedule.json
+python3 /home/a/lifx/scheduler.py /etc/glowup/schedule.json
 # Watch the logs, Ctrl+C to stop
 ```
 
 5. **Install the systemd service**:
 
 ```bash
-sudo cp /home/pi/lifx/deploy/glowup-scheduler.service /etc/systemd/system/
+sudo cp /home/a/lifx/deploy/glowup-scheduler.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable glowup-scheduler
 sudo systemctl start glowup-scheduler
 ```
 
-If your install path is not `/home/pi/lifx`, edit the service file first:
+If your install path is not `/home/a/lifx`, edit the service file first:
 
 ```bash
 sudo nano /etc/systemd/system/glowup-scheduler.service

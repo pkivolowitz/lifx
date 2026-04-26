@@ -9,8 +9,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=a
-ExecStart=/usr/bin/python3 /home/pi/lifx/server.py /etc/glowup/server.json
-WorkingDirectory=/home/pi/lifx
+ExecStart=/usr/bin/python3 /home/a/lifx/server.py /etc/glowup/server.json
+WorkingDirectory=/home/a/lifx
 Restart=always
 RestartSec=10
 StandardOutput=journal
