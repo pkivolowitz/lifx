@@ -93,16 +93,25 @@ Z2M_BROKER: str = os.environ.get("GLZ_Z2M_BROKER", "localhost")
 Z2M_PORT: int = int(os.environ.get("GLZ_Z2M_PORT", "1883"))
 Z2M_PREFIX: str = os.environ.get("GLZ_Z2M_PREFIX", "zigbee2mqtt")
 
-# Hub MQTT (where glowup signal subscribers live).  Leave empty to
-# disable signal publishing and run as a local-only service.
-HUB_BROKER: str = os.environ.get("GLZ_HUB_BROKER", "10.0.0.214")
+# Hub MQTT (where glowup signal subscribers live).  Empty / unset =
+# disable signal publishing and run as a local-only service.  No
+# hardcoded fallback IP — host-specific addresses live in
+# /etc/default/glowup-zigbee-service, dropped by the private glowup-
+# infra deploy step.  A bare clone of the public lifx repo
+# defaults to local-only; an explicit GLZ_HUB_BROKER turns the
+# cross-host publisher on.
+HUB_BROKER: str = os.environ.get("GLZ_HUB_BROKER", "")
 HUB_PORT: int = int(os.environ.get("GLZ_HUB_PORT", "1883"))
 HUB_SIGNAL_PREFIX: str = os.environ.get("GLZ_HUB_SIGNAL_PREFIX", "glowup/signals")
 
-# PostgreSQL DSN for history storage.
-DB_DSN: str = os.environ.get(
-    "GLZ_DB_DSN", "postgresql://glowup:changeme@10.0.0.111:5432/glowup",
-)
+# PostgreSQL DSN for history storage.  Required — HistoryDB connects
+# unconditionally at startup, so an empty DSN crashes immediately
+# (acceptable fail-fast).  Real value lives in /etc/default/glowup-
+# zigbee-service in glowup-infra.  TODO(separate cleanup): rework
+# HistoryDB to support a no-op / in-memory mode so empty DSN means
+# "no persistent history" instead of "crash" — that would let public
+# fork users run the service without postgres.
+DB_DSN: str = os.environ.get("GLZ_DB_DSN", "")
 
 # History retention and prune cadence (matches PowerLogger / ThermalLogger).
 _RETENTION_SECONDS: float = 7 * 24 * 3600

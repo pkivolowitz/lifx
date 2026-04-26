@@ -27,7 +27,7 @@ automations (e.g., alert when a specific tail number appears).
 Usage::
 
     python3 -m sdr.adsb --config /etc/glowup/adsb_config.json
-    python3 -m sdr.adsb --hub-broker 10.0.0.214
+    python3 -m sdr.adsb --hub-broker <broker-host>
 
 Requires:
     - dump1090-mutability or dump1090-fa installed and running
@@ -59,7 +59,9 @@ logger: logging.Logger = logging.getLogger("glowup.sdr_adsb")
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_HUB_BROKER: str = os.environ.get("GLB_HUB_BROKER", "10.0.0.214")
+# Hub broker — read from GLB_HUB_BROKER, no fallback IP.  Set via
+# EnvironmentFile=-/etc/default/glowup-adsb in the systemd unit.
+DEFAULT_HUB_BROKER: str | None = os.environ.get("GLB_HUB_BROKER") or None
 DEFAULT_MQTT_PORT: int = int(os.environ.get("GLB_HUB_PORT", "1883"))
 
 # dump1090 JSON endpoint — default for dump1090-mutability.
@@ -392,7 +394,11 @@ def main() -> None:
     parser.add_argument("--config", default=None, help="Config JSON path")
     parser.add_argument(
         "--hub-broker", default=DEFAULT_HUB_BROKER,
-        help=f"Hub broker (default: {DEFAULT_HUB_BROKER})",
+        help=(
+            "Hub broker.  Default from GLB_HUB_BROKER env var (set "
+            "via EnvironmentFile=-/etc/default/glowup-adsb in the "
+            "systemd unit).  No hardcoded fallback — required."
+        ),
     )
     parser.add_argument(
         "--hub-port", type=int, default=DEFAULT_MQTT_PORT,
@@ -418,6 +424,13 @@ def main() -> None:
         "--verbose", "-v", action="store_true", help="Debug logging",
     )
     args = parser.parse_args()
+
+    # Fail fast — no broker means we can't run.
+    if not args.hub_broker:
+        parser.error(
+            "no hub broker configured: set GLB_HUB_BROKER (typically "
+            "via /etc/default/glowup-adsb) or pass --hub-broker"
+        )
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

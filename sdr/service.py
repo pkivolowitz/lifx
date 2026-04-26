@@ -72,9 +72,12 @@ logger: logging.Logger = logging.getLogger("glowup.sdr_service")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Default hub broker — read from GLB_HUB_BROKER so the systemd unit
-# owns the configuration (installer-owns-config rule).
-DEFAULT_HUB_BROKER: str = os.environ.get("GLB_HUB_BROKER", "10.0.0.214")
+# Hub broker — read from GLB_HUB_BROKER.  No hardcoded IP fallback;
+# any specific address is fleet-topology, not generic GlowUp source.
+# /etc/default/glowup-sdr (deployed by glowup-infra) provides the
+# value via EnvironmentFile= in the systemd unit.  If neither env nor
+# --hub-broker is supplied, the program exits at startup.
+DEFAULT_HUB_BROKER: str | None = os.environ.get("GLB_HUB_BROKER") or None
 
 # Default MQTT port.
 DEFAULT_MQTT_PORT: int = int(os.environ.get("GLB_HUB_PORT", "1883"))
@@ -640,8 +643,9 @@ def main() -> None:
         "--hub-broker",
         default=DEFAULT_HUB_BROKER,
         help=(
-            f"Hub mosquitto address (default: {DEFAULT_HUB_BROKER}, "
-            "from GLB_HUB_BROKER env var)"
+            "Hub mosquitto address.  Default from GLB_HUB_BROKER env "
+            "var (set via EnvironmentFile=-/etc/default/glowup-sdr in "
+            "the systemd unit).  No hardcoded fallback — required."
         ),
     )
     parser.add_argument(
@@ -678,6 +682,13 @@ def main() -> None:
         help="Debug logging",
     )
     args = parser.parse_args()
+
+    # Fail fast — no broker means we can't run.
+    if not args.hub_broker:
+        parser.error(
+            "no hub broker configured: set GLB_HUB_BROKER (typically "
+            "via /etc/default/glowup-sdr) or pass --hub-broker"
+        )
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

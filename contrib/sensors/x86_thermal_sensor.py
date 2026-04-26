@@ -16,8 +16,12 @@ Requires ``lm-sensors`` installed (``sudo apt install lm-sensors``).
 
 Usage::
 
-    python3 x86_thermal_sensor.py --broker 10.0.0.214 --node notapi
+    python3 x86_thermal_sensor.py --broker <hub-host> --node <name>
     python3 x86_thermal_sensor.py --config /etc/glowup/x86_thermal.conf
+
+The systemd unit (deploy/sdr-pi/glowup-x86-thermal.service) reads
+GLB_HUB_BROKER from /etc/default/glowup-x86-thermal.  No hardcoded
+broker IP in source.
 
 Deploy:
     - Copy to /opt/glowup-sensors/x86_thermal_sensor.py
@@ -66,7 +70,12 @@ logger: logging.Logger = logging.getLogger("glowup.x86_thermal")
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_BROKER_HOST: str = "10.0.0.214"
+# MQTT broker — read from GLB_HUB_BROKER env var if set; no hardcoded
+# fallback IP.  /etc/default/glowup-x86-thermal (deployed by glowup-
+# infra) provides the value; the systemd unit's EnvironmentFile pulls
+# it in.  Argparse --broker overrides; if neither env nor --broker is
+# supplied, the program exits at startup with a clear error.
+_DEFAULT_BROKER_HOST: str | None = os.environ.get("GLB_HUB_BROKER") or None
 _DEFAULT_BROKER_PORT: int = 1883
 _DEFAULT_INTERVAL_S: float = 30.0
 _THERMAL_TOPIC_PREFIX: str = "glowup/hardware/thermal"
@@ -386,7 +395,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--broker", default=_DEFAULT_BROKER_HOST,
-        help=f"MQTT broker (default: {_DEFAULT_BROKER_HOST})",
+        help=(
+            "MQTT broker.  Default from GLB_HUB_BROKER env var (set "
+            "via /etc/default/glowup-x86-thermal in the systemd unit).  "
+            "No hardcoded fallback — required."
+        ),
     )
     parser.add_argument(
         "--port", type=int, default=_DEFAULT_BROKER_PORT,
@@ -404,6 +417,16 @@ def main() -> None:
         "--verbose", "-v", action="store_true", help="Debug logging",
     )
     args = parser.parse_args()
+
+    # Fail fast — no broker means we can't run.  --config can override
+    # later, but if --config is also unset the user gets a clear error
+    # immediately rather than a hostname-resolution failure loop.
+    if not args.broker and not args.config:
+        parser.error(
+            "no broker configured: set GLB_HUB_BROKER (typically via "
+            "/etc/default/glowup-x86-thermal), pass --broker, or "
+            "supply --config"
+        )
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -426,6 +449,16 @@ def main() -> None:
         port = cp.getint(sec, "broker_port", fallback=port)
         interval = cp.getfloat(sec, "interval", fallback=interval)
         fan = cp.getboolean(sec, "fan_declared_present", fallback=fan)
+
+    # Final fail-fast check: --config can leave broker unset if the
+    # config file is malformed or doesn't declare broker_host.  Don't
+    # try to connect with an empty string — exit with a useful message.
+    if not broker:
+        sys.stderr.write(
+            "x86_thermal_sensor: no broker resolved from --broker, "
+            "GLB_HUB_BROKER, or --config; aborting before MQTT connect.\n"
+        )
+        sys.exit(2)
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)

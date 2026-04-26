@@ -34,7 +34,9 @@
 #   - RTL-SDR dongle plugged in (lsusb shows RTL2832U)
 #   - paho-mqtt: pip install paho-mqtt
 #   - sdr/ python package at /opt/glowup-sdr/sdr/
-#   - Network reachability to hub mosquitto (10.0.0.214:1883)
+#   - /etc/default/glowup-sdr defining GLB_HUB_BROKER (host-specific;
+#     dropped by the private glowup-infra deploy step)
+#   - Network reachability to that hub mosquitto on port 1883
 #
 # Rollback:
 #   sudo systemctl stop glowup-sdr
@@ -51,9 +53,12 @@ User=a
 Group=a
 WorkingDirectory=/opt/glowup-sdr
 
-# Hub mosquitto address — the systemd unit owns this (per the
-# installer-owns-config rule).
-Environment=GLB_HUB_BROKER=10.0.0.214
+# Hub broker is host-specific and lives outside this generic unit.
+# /etc/default/glowup-sdr is dropped at deploy time by the private
+# glowup-infra repo and must define GLB_HUB_BROKER.  The program fails
+# fast (parser.error) if it ends up unset, so a bad deploy surfaces
+# at startup rather than later at MQTT connect time.
+EnvironmentFile=-/etc/default/glowup-sdr
 Environment=GLB_HUB_PORT=1883
 
 # Default frequency — 433.92 MHz (US ISM band).

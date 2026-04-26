@@ -36,7 +36,14 @@ User=a
 Group=a
 WorkingDirectory=/opt/glowup-sdr
 
-Environment=GLB_HUB_BROKER=10.0.0.214
+# Hub broker is host-specific and lives outside this generic unit.
+# /etc/default/glowup-adsb is dropped at deploy time by the private
+# glowup-infra repo and must define GLB_HUB_BROKER.  The leading '-'
+# means systemd doesn't fail if the file is missing — but the program
+# itself fails fast (parser.error) if GLB_HUB_BROKER ends up unset,
+# so a bad deploy surfaces immediately at startup rather than later
+# at MQTT connect time.
+EnvironmentFile=-/etc/default/glowup-adsb
 Environment=GLB_HUB_PORT=1883
 
 ExecStart=/usr/bin/python3 -m sdr.adsb

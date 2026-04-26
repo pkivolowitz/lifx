@@ -53,11 +53,14 @@ Usage::
 
     python3 -m ble.sensor
     python3 -m ble.sensor --config /path/to/ble_pairing.json
-    python3 -m ble.sensor --hub-broker 10.0.0.214 --hub-port 1883
+    python3 -m ble.sensor --hub-broker <broker-host> --hub-port 1883
 
-The systemd unit owns configuration via the ``GLB_HUB_BROKER`` and
-``GLB_HUB_PORT`` environment variables — never hand-edit (see
-feedback_installer_owns_config).
+Configuration comes from ``GLB_HUB_BROKER`` and ``GLB_HUB_PORT``
+environment variables, supplied at runtime by an EnvironmentFile in
+the systemd unit (``/etc/default/glowup-ble-sensor``, dropped by the
+private glowup-infra deploy step).  No fallback hub IP is baked into
+the source — a misconfigured deploy fails fast at startup with a
+clear error rather than connecting to the wrong host.
 
 Press Ctrl+C to stop.
 """
@@ -126,12 +129,19 @@ NUMERIC_SUBTOPICS: frozenset[str] = frozenset({
     "motion", "temperature", "humidity",
 })
 
-# Default hub broker — read from the GLB_HUB_BROKER environment
-# variable so the systemd unit owns the configuration (per the
-# installer-owns-config rule in feedback_installer_owns_config).  The
-# fallback 10.0.0.214 is the production hub IP; do not bake any other
-# value here without also updating the systemd unit on broker-2.
-DEFAULT_HUB_BROKER: str = os.environ.get("GLB_HUB_BROKER", "10.0.0.214")
+# Hub broker — read from GLB_HUB_BROKER.  No hardcoded IP fallback:
+# any specific address is fleet-topology, not generic GlowUp source,
+# and a fallback would let a broken deploy silently connect to the
+# wrong host (or, with a placeholder fallback, fail late on a hostname
+# that the service unit "looked configured" but wasn't).  If the env
+# var isn't set, argparse will require --hub-broker on the command
+# line; if neither is supplied, parser.error exits with a clear
+# message at startup before any MQTT connection is attempted.
+#
+# The systemd unit no longer hardcodes this either.  /etc/default/
+# glowup-ble-sensor (deployed by glowup-infra) provides the value via
+# the EnvironmentFile= directive in the unit.
+DEFAULT_HUB_BROKER: str | None = os.environ.get("GLB_HUB_BROKER") or None
 
 # Default MQTT port.
 DEFAULT_MQTT_PORT: int = int(os.environ.get("GLB_HUB_PORT", "1883"))
@@ -1117,10 +1127,13 @@ def main() -> None:
         "--hub-broker",
         default=DEFAULT_HUB_BROKER,
         help=(
-            f"Hub mosquitto address (default: {DEFAULT_HUB_BROKER}, "
-            "from GLB_HUB_BROKER env var).  This service publishes "
-            "cross-host directly to the hub — do NOT point it at "
-            "broker-2's localhost mosquitto."
+            "Hub mosquitto address.  Default comes from the "
+            "GLB_HUB_BROKER environment variable (set via "
+            "EnvironmentFile=-/etc/default/glowup-ble-sensor in the "
+            "systemd unit).  No hardcoded fallback — if neither is "
+            "provided, this program exits at startup.  This service "
+            "publishes cross-host directly to the hub; do NOT point "
+            "it at broker-2's localhost mosquitto."
         ),
     )
     parser.add_argument(
@@ -1151,6 +1164,15 @@ def main() -> None:
         help="Debug logging",
     )
     args = parser.parse_args()
+
+    # Fail fast — no broker means we can't run.  Better to refuse to
+    # start with a clear message than to publish to the wrong host or
+    # log "name or service not known" loops indefinitely.
+    if not args.hub_broker:
+        parser.error(
+            "no hub broker configured: set GLB_HUB_BROKER (typically "
+            "via /etc/default/glowup-ble-sensor) or pass --hub-broker"
+        )
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

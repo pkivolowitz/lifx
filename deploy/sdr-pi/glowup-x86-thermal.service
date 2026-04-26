@@ -24,7 +24,15 @@ Wants=network-online.target
 Type=simple
 User=a
 WorkingDirectory=/opt/glowup-sensors
-ExecStart=/usr/bin/python3 x86_thermal_sensor.py --broker 10.0.0.214 --interval 30
+
+# Hub broker is host-specific and lives outside this generic unit.
+# /etc/default/glowup-x86-thermal is dropped at deploy time by the
+# private glowup-infra repo and must define GLB_HUB_BROKER.  The
+# program (x86_thermal_sensor.py) fails fast if no broker is resolved
+# from any of {GLB_HUB_BROKER, --broker, --config}.
+EnvironmentFile=-/etc/default/glowup-x86-thermal
+
+ExecStart=/usr/bin/python3 x86_thermal_sensor.py --interval 30
 Restart=always
 RestartSec=10
 StandardOutput=journal
