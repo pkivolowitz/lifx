@@ -10,6 +10,8 @@
 
   "broker_2": "<secondary broker host, if you run a per-room mosquitto>",
 
+  "zigbee_service_url": "<full URL of glowup-zigbee-service HTTP API, e.g. http://broker-2.local:8422 — REQUIRED for voice coordinator plug commands>",
+
   "node_ips": {
     "_comment": "node_id -> IP. Optional. Used by the hub dashboard's thermal page to enrich rows with each host's IP. Lowercase node_id keys (matches MQTT publishers).",
     "<node-id>": "<host or IP>"

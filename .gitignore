@@ -16,6 +16,12 @@ site-settings/
 venv/
 build/
 
+# Deploy stamp written by glowup-infra/deploy/scripts/deploy.sh on each
+# fleet host after a successful git-based deploy. Untracked so it
+# survives `git reset --hard staging/master`; gitignored so it doesn't
+# show as dirty on dev workstations that ever happen to write one.
+DEPLOYED
+
 # secrets overlay — never commit a populated secrets.json. Per-file
 # guard plus an explicit allowlist for the example template.
 secrets.json

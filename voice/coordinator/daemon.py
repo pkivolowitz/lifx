@@ -185,9 +185,10 @@ class CoordinatorDaemon:
             ollama_host=intent_cfg.get(
                 "ollama_host", "http://localhost:11434",
             ),
-            zigbee_service_url=zigbee_cfg.get(
-                "service_url", "http://10.0.0.123:8422",
-            ),
+            # No fallback — executor resolves from site.json
+            # (zigbee_service_url) when this is None.  Coordinator
+            # config zigbee.service_url is for one-off dev overrides.
+            zigbee_service_url=zigbee_cfg.get("service_url"),
         )
 
     def _init_tts(self) -> None:

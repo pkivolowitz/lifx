@@ -33,6 +33,7 @@ except ImportError:
     yaml = None  # type: ignore[assignment]
     _HAS_YAML = False
 
+from glowup_site import site, SiteConfigError
 from voice import constants as C
 from voice.coordinator.weather_sources import (
     AirQuality,
@@ -108,11 +109,15 @@ _POLLEN_LABELS: dict[str, str] = {
     "ragweed_pollen": "ragweed",
 }
 
-# Base URL for broker-2's glowup-zigbee-service HTTP API. Used by the
-# voice plug commands (power on/off, is-on queries) — direct hop from
-# the coordinator on Daedalus, not via the hub, so latency stays low.
-# Overridable via coordinator_config.json -> zigbee.service_url.
-_BROKER2_ZIGBEE_DEFAULT: str = "http://10.0.0.123:8422"
+# Default URL for the glowup-zigbee-service HTTP API.  Voice plug
+# commands (power on/off, is-on queries) hit it directly from the
+# coordinator — not via the hub — so latency stays low.  The household-
+# specific URL lives in /etc/glowup/site.json under "zigbee_service_url"
+# (rendered from glowup-infra/fleet/inventory.yaml on each deploy);
+# this generic source file just looks it up.  An explicit
+# coordinator_config.json -> zigbee.service_url still wins over the
+# site value, for one-off overrides during dev/test.
+_ZIGBEE_SERVICE_URL_FROM_SITE: Optional[str] = site.get("zigbee_service_url")
 
 # Timeout for plug HTTP calls — plugs actuate in <500 ms over Zigbee;
 # anything longer means the radio is wedged, bail.
@@ -170,14 +175,31 @@ class GlowUpExecutor:
         auth_token: str = "",
         chat_model: str = "gemma3:27b",
         ollama_host: str = "http://localhost:11434",
-        zigbee_service_url: str = _BROKER2_ZIGBEE_DEFAULT,
+        zigbee_service_url: Optional[str] = None,
     ) -> None:
-        """Initialize the executor."""
+        """Initialize the executor.
+
+        ``zigbee_service_url`` resolution order: explicit argument →
+        ``site.json`` ``zigbee_service_url`` key → fail.  The voice
+        coordinator's plug commands cannot work without this URL, so
+        a missing value is fatal at construction time rather than at
+        first plug call.
+        """
         self._api_base: str = api_base.rstrip("/")
         self._auth_token: str = auth_token
         self._chat_model: str = chat_model
         self._ollama_host: str = ollama_host
-        self._zigbee_url: str = zigbee_service_url.rstrip("/")
+        resolved_zigbee_url: Optional[str] = (
+            zigbee_service_url or _ZIGBEE_SERVICE_URL_FROM_SITE
+        )
+        if not resolved_zigbee_url:
+            raise SiteConfigError(
+                "voice coordinator requires zigbee_service_url; set "
+                "'zigbee_service_url' in /etc/glowup/site.json (rendered "
+                "from glowup-infra/fleet/inventory.yaml on deploy) or "
+                "pass coordinator_config zigbee.service_url"
+            )
+        self._zigbee_url: str = resolved_zigbee_url.rstrip("/")
         # Single canonical publisher to glowup-zigbee-service.  Replaces
         # the local _plug_http helper so voice and the hub scheduler
         # (phase 3) will share one client with identical error-handling
