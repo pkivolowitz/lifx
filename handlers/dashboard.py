@@ -54,29 +54,55 @@ from voice.constants import (
 BROKER2_SIGNALS_STALE_SEC: float = 120.0
 
 
-# Static node_id → primary IP map for the thermals dashboard.  This
-# is intentionally a hub-side lookup rather than a self-reported field
-# in the thermal payload — adding self-reporting requires a schema
-# change to every sensor publisher and is parked behind the freeze
-# (planned to flow naturally out of the inventory-driven redesign).
-# Source of truth: ~/.claude/projects/-Users-perrykivolowitz-lifx/
-# memory/reference_network.md.  Update both this map and the memory
-# file together when an IP changes.  A node_id missing from this
-# map renders as "?" in the dashboard so the gap is visible.
-_NODE_IPS: dict[str, str] = {
-    "hub":          "10.0.0.214",
-    "broker-2":     "10.0.0.123",
-    "mbclock":      "10.0.0.220",
-    "daedalus":     "10.0.0.191",
-    "ernie":        "10.0.0.153",
-    "judy":         "10.0.0.63",
-    "pi-sensor-01": "10.0.0.112",
-    # notapi: Intel NUC ("not a pi") — retro-med dev box / Jetson
-    # staging.  Not a Pi and not a glowup runtime host, but it
-    # publishes pi-thermal so it shows up here.  Often offline; the
-    # red-row staleness indicator catches its absence visually.
-    "notapi":       "10.0.0.157",
-}
+# Path on hub where the rendered node_id → IP map lives.  Source of
+# truth is the private glowup-infra repo's fleet/inventory.yaml; the
+# JSON file at this path is rendered from it by
+# tools/render-node-ips.py and dropped at deploy time.  This file
+# does NOT carry IPs in source — that was a fleet-topology leak in a
+# public repo (github.com/pkivolowitz/lifx).  A missing or unreadable
+# file degrades to an empty map; the IP column in the dashboard goes
+# blank for the affected rows but nothing else breaks.
+_NODE_IPS_PATH: str = "/etc/glowup/node_ips.json"
+
+
+def _load_node_ips(path: str) -> dict[str, str]:
+    """Load node_id → IP map from a JSON file on disk.
+
+    Returns an empty dict on any failure (missing file, parse error,
+    permission denied, wrong shape).  The dashboard treats absence
+    the same as "no IP recorded" — the IP column simply renders blank
+    rather than crashing the request.
+
+    Args:
+        path: filesystem path to the JSON file.
+
+    Returns:
+        Dict mapping lowercase ``node_id`` strings to IPv4 strings.
+        Non-string values are filtered out defensively.
+    """
+    try:
+        with open(path, "r") as f:
+            data: Any = json.load(f)
+    except (FileNotFoundError, PermissionError, OSError):
+        logger.info("node_ips file not present at %s; IP column will be blank", path)
+        return {}
+    except json.JSONDecodeError as exc:
+        logger.warning("node_ips file at %s is not valid JSON: %s", path, exc)
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("node_ips file at %s is not a JSON object", path)
+        return {}
+    return {
+        str(k): str(v)
+        for k, v in data.items()
+        if isinstance(k, str) and isinstance(v, str)
+    }
+
+
+# Loaded once at module import.  Restart of glowup-server picks up
+# inventory changes; that matches the existing /etc/glowup/server.json
+# convention where edits require a service restart.
+_NODE_IPS: dict[str, str] = _load_node_ips(_NODE_IPS_PATH)
 
 
 class DashboardHandlerMixin:
