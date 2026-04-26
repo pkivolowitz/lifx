@@ -134,14 +134,25 @@ _PROTOCOL_IDS: tuple[int, ...] = (
     153,   # Neptune R900 water
 )
 
-# US ISM-band centre frequency.  ITRON ERT (electric/gas) and Neptune
-# R900 (water) all transmit in the 902-928 MHz band, hopping across
-# narrow channels.  rtl_433's default of 433.92 MHz covers European
-# ISM + TPMS + fan remotes and would silently hear ZERO US utility
-# meters — observed empirically on ernie 2026-04-25.  Override via
-# --rtl433-freq for non-US deployments (Europe is 868M, Australia
-# 928M, Japan 426M etc.).
-_DEFAULT_FREQUENCY: str = "915M"
+# US ISM-band coverage.  ITRON ERT (electric/gas) and Neptune R900
+# (water) frequency-hop across the full 902-928 MHz band; the RTL-SDR
+# only sees ~2 MHz at a time (the sample rate window), so to catch
+# every meter we have to make rtl_433 hop too.  rtl_433 accepts
+# multiple -f flags and rotates through them every -H seconds.
+#
+# Three hops at 905/915/925 MHz cover the band with overlap (each
+# RTL-SDR window is ±1 MHz, so 905 covers 904-906, 915 covers
+# 914-916, 925 covers 924-926; ITRON channels in between are caught
+# on the next rotation).  60-second hop dwell is generous — ITRON
+# transmitters broadcast every 30-60s so dwelling at least one full
+# transmission cycle per band-third guarantees we hear each meter
+# at least every 3 hops (~3 minutes worst case).
+#
+# Override via --rtl433-freqs / --rtl433-hop-interval for non-US
+# deployments (Europe is 868M single-channel, Australia 915-928,
+# Japan 426M, etc.).
+_DEFAULT_FREQUENCIES: tuple[str, ...] = ("905M", "915M", "925M")
+_DEFAULT_HOP_INTERVAL_S: int = 60
 
 # rtl_433 model-string → our normalized meter_type tag.  Anything not
 # in this map is dropped at the schema boundary with a warning, since
@@ -327,7 +338,8 @@ class MeterPublisher:
         broker_port: int = 1883,
         rtl433_path: str = _DEFAULT_RTL433,
         protocol_ids: tuple[int, ...] = _PROTOCOL_IDS,
-        frequency: str = _DEFAULT_FREQUENCY,
+        frequencies: tuple[str, ...] = _DEFAULT_FREQUENCIES,
+        hop_interval_s: int = _DEFAULT_HOP_INTERVAL_S,
     ) -> None:
         if not _HAS_PAHO:
             raise ImportError(
@@ -338,7 +350,8 @@ class MeterPublisher:
         self._broker_port: int = broker_port
         self._rtl433_path: str = rtl433_path
         self._protocol_ids: tuple[int, ...] = protocol_ids
-        self._frequency: str = frequency
+        self._frequencies: tuple[str, ...] = frequencies
+        self._hop_interval_s: int = hop_interval_s
         self._client: "mqtt.Client" = mqtt.Client(
             client_id=f"glowup-meters-{socket.gethostname().split('.')[0]}",
         )
@@ -368,10 +381,15 @@ class MeterPublisher:
             "MQTT connected to %s:%d", self._broker_host, self._broker_port,
         )
 
-        cmd: list[str] = [
-            self._rtl433_path, "-F", "json", "-M", "utc",
-            "-f", self._frequency,
-        ]
+        cmd: list[str] = [self._rtl433_path, "-F", "json", "-M", "utc"]
+        # Multiple -f flags: rtl_433 hops between them at -H interval.
+        # Without this the receiver only sees ~2 MHz of the 26 MHz US
+        # ISM band and misses meters whose frequency-hop landed
+        # outside the slice we're tuned to.
+        for freq in self._frequencies:
+            cmd.extend(["-f", freq])
+        if len(self._frequencies) > 1:
+            cmd.extend(["-H", str(self._hop_interval_s)])
         for pid in self._protocol_ids:
             cmd.extend(["-R", str(pid)])
         logger.info("spawning rtl_433: %s", " ".join(cmd))
@@ -510,10 +528,21 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="Path to rtl_433 binary (default: rtl_433 on PATH).",
     )
     p.add_argument(
-        "--rtl433-freq", default=_DEFAULT_FREQUENCY,
-        help=("rtl_433 -f frequency.  Default '915M' for US ISM "
-              "(ITRON ERT + Neptune R900).  Use '868M' for Europe, "
-              "'928M' for Australia, '426M' for Japan, etc."),
+        "--rtl433-freqs", default=",".join(_DEFAULT_FREQUENCIES),
+        help=("Comma-separated rtl_433 -f frequencies for hopping.  "
+              "Default '905M,915M,925M' covers the full US 902-928 "
+              "MHz ISM band where ITRON ERT and Neptune R900 "
+              "frequency-hop.  Use '868M' (single) for Europe, "
+              "'426M' for Japan, etc."),
+    )
+    p.add_argument(
+        "--rtl433-hop-interval", type=int,
+        default=_DEFAULT_HOP_INTERVAL_S,
+        help=("Seconds to dwell on each frequency before hopping.  "
+              "Default 60 — one full ITRON transmit cycle (30-60s) "
+              "per band-third, so each meter is heard at most every "
+              "len(freqs) * hop_interval seconds.  Ignored if only "
+              "one frequency is given."),
     )
     p.add_argument(
         "--log-level", default="INFO",
@@ -548,11 +577,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         return 2
 
+    freqs: tuple[str, ...] = tuple(
+        f.strip() for f in args.rtl433_freqs.split(",") if f.strip()
+    )
+    if not freqs:
+        logger.error("--rtl433-freqs must list at least one frequency")
+        return 2
+
     pub: MeterPublisher = MeterPublisher(
         broker_host=broker_host,
         broker_port=broker_port,
         rtl433_path=args.rtl433_path,
-        frequency=args.rtl433_freq,
+        frequencies=freqs,
+        hop_interval_s=args.rtl433_hop_interval,
     )
 
     def _term(_sig: int, _frame: Any) -> None:
