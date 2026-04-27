@@ -12,7 +12,6 @@
      zoom, well within bounds for a single-user dashboard). -->
 <link rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
       crossorigin="" />
 
 <style>
@@ -96,9 +95,14 @@ header.bar .nav a {
 }
 header.bar .nav a:hover { opacity: 1; }
 
-/* Map fills remaining vertical space. */
+/* Map fills remaining vertical space.  Leaflet REQUIRES the map
+   container to have a non-zero height at init — flex sizing alone
+   has been observed to race with the script and yield a 0-height
+   container.  Belt-and-braces: explicit min-height on top of the
+   flex grow, and a call to map.invalidateSize() after init below. */
 #map {
     flex: 1 1 auto;
+    min-height: 80vh;
     background: var(--bg);
 }
 
@@ -182,7 +186,6 @@ header.bar .nav a:hover { opacity: 1; }
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
         crossorigin=""></script>
 <script>
 "use strict";
@@ -237,6 +240,14 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
 }).addTo(map);
+
+/* Belt-and-braces against the flex-layout / script race.  After the
+   browser has had a chance to lay out the page (rAF callback runs
+   post-layout), tell Leaflet to recompute the map container's size
+   so tiles and markers are positioned against the actual viewport
+   rather than whatever the container measured at script-run time. */
+requestAnimationFrame(() => map.invalidateSize());
+window.addEventListener("resize", () => map.invalidateSize());
 
 /* ----- Vessel layer state ----- */
 /* Marker per MMSI.  Each marker is a CircleMarker whose colour
