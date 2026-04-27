@@ -51,27 +51,39 @@ Type=simple
 # beyond the SDR open.
 User=root
 
+# Optional secrets file — host-managed, NOT in this repo.  Provides
+# AISCATCHER_UUID for named-station contribution to aiscatcher.org.
+# When the file is absent (or the variable is unset), AIS-catcher's
+# argument parser sees an empty -X argument and refuses to start;
+# operators who want anonymous contribution should remove the -X
+# line below entirely instead of leaving the variable empty.
+# File format (one line):  AISCATCHER_UUID=<station-uuid>
+# Ownership / mode:        root:root  0640
+EnvironmentFile=-/etc/glowup/maritime.conf
+
 # Flag rationale:
 #   -d:0       select RTL-SDR device index 0 (override if the host
 #              runs multiple dongles)
 #   -q         suppress per-message NMEA on stdout (we route via MQTT)
 #   -v 60      print decoder stats every 60 s — useful heartbeat in
 #              journalctl ("[AIS engine] received: N msgs, rate: ...")
-#   -X         share our decodes with the aiscatcher.org community
-#              feed (no argument = enable as anonymous contributor;
-#              passing a UUID would tie the contribution to a named
-#              station).  Outbound contribution only — the public
-#              map at aiscatcher.org renders our station's coverage.
-#              This does NOT merge global data back into the local
-#              /maritime view; for that, a separate aisstream.io
-#              ingester would be needed.
+#   -X UUID    share our decodes with the aiscatcher.org community
+#              feed as a named station.  The UUID is supplied via
+#              EnvironmentFile from /etc/glowup/maritime.conf — never
+#              committed to this repo.  When the env var is unset the
+#              service refuses to start, by design (see the
+#              EnvironmentFile comment above).  Outbound contribution
+#              only — the public map at aiscatcher.org renders our
+#              station's coverage.  This does NOT merge global data
+#              back into the local /maritime view; for that, a
+#              separate aisstream.io ingester would be needed.
 #   -Q ...     publish JSON_FULL to MQTT.  TOPIC sets the publish
 #              topic; CLIENT_ID identifies this receiver to the broker
 #              and prevents collisions if a second AIS host appears
 ExecStart=/usr/local/bin/AIS-catcher \
     -d:0 \
     -q -v 60 \
-    -X \
+    -X ${AISCATCHER_UUID} \
     -Q mqtt://127.0.0.1:1883 \
         TOPIC glowup/maritime/ais \
         CLIENT_ID glowup-maritime
