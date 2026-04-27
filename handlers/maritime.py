@@ -27,7 +27,7 @@ __version__: str = "1.1"
 import logging
 import os
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 
 logger: logging.Logger = logging.getLogger("glowup.handlers.maritime")
@@ -84,32 +84,26 @@ class MaritimeHandlerMixin:
 
     # -- /api/maritime/vessel/<mmsi> -----------------------------------------
 
-    def _handle_get_maritime_vessel(self) -> None:
+    def _handle_get_maritime_vessel(self, mmsi: str) -> None:
         """GET /api/maritime/vessel/<mmsi> — full state for one vessel.
 
-        Path-tail digit is the MMSI.  Returns 404 if unknown, 400 if
-        non-numeric.  Same shape as one entry in ``vessels()``, with
-        the full breadcrumb the buffer is currently retaining for
-        that vessel.
+        ``mmsi`` is captured by the route dispatcher (which passes
+        path-pattern ``{name}`` segments as positional args; see
+        server.py:1118-1123).  Validated as numeric here; 400 on
+        non-numeric, 404 on unknown.  Same shape as one entry in
+        ``vessels()``, with the full breadcrumb the buffer is
+        currently retaining for that vessel.
         """
         mb: Any = getattr(self, "maritime_buffer", None)
-        path_parts: list[str] = [
-            p for p in urlparse(self.path).path.split("/") if p
-        ]
-        # Routed as ("api", "maritime", "vessel", "*") — path_parts[3] is
-        # the MMSI capture.
-        if len(path_parts) < 4:
-            self._send_json(400, {"error": "missing mmsi"})
-            return
         try:
-            mmsi: int = int(path_parts[3])
+            mmsi_i: int = int(unquote(mmsi))
         except ValueError:
             self._send_json(400, {"error": "mmsi must be numeric"})
             return
         if mb is None:
             self._send_json(404, {"error": "buffer unavailable"})
             return
-        v: Any = mb.vessel(mmsi)
+        v: Any = mb.vessel(mmsi_i)
         if v is None:
             self._send_json(404, {"error": "unknown mmsi"})
             return
