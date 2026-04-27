@@ -152,6 +152,51 @@ header.bar .nav a:hover { opacity: 1; }
     margin-left: 6px;
 }
 
+/* Vessel glyphs — boat-shape DivIcon used when we have a real
+   heading (so the icon's orientation conveys "this ship is pointed
+   that way" at a glance, Marine-Traffic-style).  CircleMarkers are
+   used as a fallback when the AIS heading is unknown / sentinel
+   511 — there's nothing to rotate to, so a directional shape would
+   lie.  Sizes are deliberately oversize for trackpad clicks; the
+   dark stroke ensures contrast against any basemap colour. */
+.vessel-icon { background: transparent !important; border: none !important; }
+.vessel-glyph {
+    transform: rotate(var(--rot, 0deg));
+    transform-origin: 50% 50%;
+    width: 100%; height: 100%;
+}
+.vessel-glyph svg { width: 100%; height: 100%; display: block; }
+.vessel-glyph svg path {
+    fill: var(--fill, #ff00ff);
+    fill-opacity: var(--alpha, 0.95);
+    stroke: #0a1018;
+    stroke-width: 2;
+    stroke-linejoin: round;
+}
+
+/* Vessel name label — permanent tooltip for named vessels only.
+   Compact, monospaced, dark with thin border so it stays readable
+   over busy port-area tiles without overpowering the map. */
+.vessel-label {
+    background: rgba(22, 26, 33, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+.vessel-label::before { display: none !important; }
+.vessel-label.stale { opacity: 0.55; }
+.vessel-label .speed {
+    color: var(--accent-2);
+    margin-left: 6px;
+    font-weight: 400;
+}
+
 /* Leaflet attribution / controls — keep them but mute the colors so
    they don't clash with the dashboard palette. */
 .leaflet-control-attribution {
@@ -302,6 +347,33 @@ function popupHtml(v) {
     const heading = realHeading(v.heading);
     const course = realHeading(v.course);
     const ageS = (Date.now()/1000) - (v.last_seen || 0);
+    const seenForS = v.seen_for_s || 0;
+    /* Vessel dimensions: AIS reports four offsets from the GPS
+       reference point (to_bow / to_stern / to_port / to_starboard,
+       all metres).  Length = bow + stern, beam = port + starboard. */
+    const len = (v.to_bow != null && v.to_stern != null)
+        ? (v.to_bow + v.to_stern) : null;
+    const beam = (v.to_port != null && v.to_starboard != null)
+        ? (v.to_port + v.to_starboard) : null;
+    /* Signal stats — running mean over the per-vessel sample buffer,
+       plus the min/max envelope.  Useful for antenna experiments. */
+    const sMean = v.signal_power_mean;
+    const sMin  = v.signal_power_min;
+    const sMax  = v.signal_power_max;
+    const sN    = v.signal_power_count;
+    let sigRow = "";
+    if (sMean != null && sN > 0) {
+        const range = (sMin != null && sMax != null && sN > 1)
+            ? ` <span class="lbl" style="margin:0;text-transform:none">range</span> ${sMin.toFixed(1)} / ${sMax.toFixed(1)}`
+            : "";
+        sigRow =
+          `<div class="row"><span class="lbl">Signal</span>` +
+          `<span class="val">mean ${sMean.toFixed(1)} dBFS  (n=${sN})${range} · ch ${escapeHtml(v.last_channel || "?")}</span></div>`;
+    } else if (v.last_signal_power != null) {
+        sigRow = `<div class="row"><span class="lbl">Signal</span><span class="val">${v.last_signal_power.toFixed(1)} dBFS · ch ${escapeHtml(v.last_channel || "?")}</span></div>`;
+    }
+    const decodeRate = v.decode_rate_per_min;
+
     return (
       `<div class="name">${escapeHtml(v.shipname || "—")}${stale}</div>` +
       `<div class="mmsi">MMSI ${v.mmsi}` +
@@ -313,10 +385,36 @@ function popupHtml(v) {
       (speed != null ? `<div class="row"><span class="lbl">Speed</span><span class="val">${speed.toFixed(1)} kt</span></div>` : "") +
       (heading != null ? `<div class="row"><span class="lbl">Heading</span><span class="val">${heading}°</span></div>` : "") +
       (course != null && course !== heading ? `<div class="row"><span class="lbl">Course</span><span class="val">${course}°</span></div>` : "") +
+      (len != null ? `<div class="row"><span class="lbl">Dimensions</span><span class="val">${len} m × ${beam != null ? beam + " m" : "—"}</span></div>` : "") +
       (v.destination ? `<div class="row"><span class="lbl">Destination</span><span class="val">${escapeHtml(v.destination)}</span></div>` : "") +
       `<div class="row"><span class="lbl">Last heard</span><span class="val">${fmtAge(ageS)} ago</span></div>` +
-      (v.last_signal_power != null ? `<div class="row"><span class="lbl">Signal</span><span class="val">${v.last_signal_power.toFixed(1)} dBFS · ch ${escapeHtml(v.last_channel || "?")}</span></div>` : "")
+      `<div class="row"><span class="lbl">Tracked</span><span class="val">${fmtAge(seenForS)} (${v.msg_count} decodes` +
+        (decodeRate ? `, ${decodeRate.toFixed(1)}/min` : "") + `)</span></div>` +
+      sigRow
     );
+}
+
+/* Boat-shape SVG path.  Bow tip at top (heading 0° = north), stern
+   notch at bottom — looks like a stylised vessel from above.  Drawn
+   in a 24×32 viewBox.  CSS rotates the whole glyph to point in the
+   reported heading; --fill / --alpha pick up the type colour and
+   stale-state opacity. */
+const BOAT_PATH = "M12 2 L20 22 L20 28 L13 26 L11 26 L4 28 L4 22 Z";
+
+function makeVesselIcon(colour, heading, alpha, size) {
+    const sz = size || 22;
+    const html =
+      `<div class="vessel-glyph" style="--rot:${heading || 0}deg;--fill:${colour};--alpha:${alpha}">` +
+        `<svg viewBox="0 0 24 32" preserveAspectRatio="xMidYMid meet">` +
+          `<path d="${BOAT_PATH}"></path>` +
+        `</svg>` +
+      `</div>`;
+    return L.divIcon({
+        className: "vessel-icon",
+        html: html,
+        iconSize: [sz, Math.round(sz * 32 / 24)],
+        iconAnchor: [sz / 2, Math.round(sz * 32 / 24) / 2],
+    });
 }
 
 function upsertVessel(v) {
@@ -325,39 +423,86 @@ function upsertVessel(v) {
     const heading = realHeading(v.heading);
     const speed = realSpeed(v.speed);
     const isMoving = speed != null && speed > 0.5;
-    /* Sized for trackpad click-targets: small circles at zoom <14
-       are nearly impossible to hit precisely with a trackpad.  These
-       give an underway vessel a ~26 px diameter (radius 13 + 3 px
-       stroke each side), an idle vessel ~22 px, a stale vessel ~18 px
-       — readable at the typical port-area zoom and still tappable
-       on touch.  Tradeoff is more overlap when vessels cluster at
-       the dock; that's acceptable since clustering is itself useful
-       information. */
-    const radius = v.stale ? 8 : (isMoving ? 13 : 10);
+    const alpha = v.stale ? 0.45 : 0.95;
+    /* Marker size — sized for trackpad click-targets and to read at
+       the typical port-area zoom.  Boat-icon glyphs use a square box
+       and the SVG renders inside; circle markers use the same value
+       as a radius. */
+    const sz = v.stale ? 18 : (isMoving ? 26 : 22);
     const pos = [v.lat, v.lon];
 
+    /* Marker shape choice: boat-triangle when heading is known
+       (orientation conveys real information), CircleMarker when
+       heading is unknown / sentinel (a directional shape would lie
+       about facing).  Switching shape requires destroy+recreate on
+       Leaflet so we replace the marker on type change rather than
+       try to mutate. */
+    const wantBoat = heading != null;
     let entry = markers.get(v.mmsi);
+    if (entry && entry.kind !== (wantBoat ? "boat" : "circle")) {
+        map.removeLayer(entry.marker);
+        entry = null;
+        markers.delete(v.mmsi);
+    }
+
     if (!entry) {
-        const circle = L.circleMarker(pos, {
-            radius:      radius,
-            color:       MARKER_STROKE,
-            weight:      3,
-            fillColor:   colour,
-            fillOpacity: v.stale ? 0.45 : 0.95,
-        }).addTo(map);
-        circle.bindPopup(popupHtml(v));
-        entry = { circle, heading: null };
+        let m;
+        if (wantBoat) {
+            m = L.marker(pos, {
+                icon: makeVesselIcon(colour, heading, alpha, sz),
+                riseOnHover: true,
+            }).addTo(map);
+        } else {
+            m = L.circleMarker(pos, {
+                radius:      sz / 2,
+                color:       MARKER_STROKE,
+                weight:      3,
+                fillColor:   colour,
+                fillOpacity: alpha,
+            }).addTo(map);
+        }
+        m.bindPopup(popupHtml(v));
+        entry = { marker: m, heading: null, kind: wantBoat ? "boat" : "circle" };
         markers.set(v.mmsi, entry);
     } else {
-        entry.circle.setLatLng(pos);
-        entry.circle.setStyle({
-            color:       MARKER_STROKE,
-            weight:      3,
-            fillColor:   colour,
-            fillOpacity: v.stale ? 0.45 : 0.95,
-            radius:      radius,
-        });
-        entry.circle.setPopupContent(popupHtml(v));
+        entry.marker.setLatLng(pos);
+        if (wantBoat) {
+            entry.marker.setIcon(makeVesselIcon(colour, heading, alpha, sz));
+        } else {
+            entry.marker.setStyle({
+                color: MARKER_STROKE, weight: 3,
+                fillColor: colour, fillOpacity: alpha,
+                radius: sz / 2,
+            });
+        }
+        entry.marker.setPopupContent(popupHtml(v));
+    }
+
+    /* Permanent name label — only shown when shipname is known
+       (avoids cluttering the map with magenta "unknown" markers
+       that have no name yet).  Speed appended in amber when
+       reported, so the label doubles as an at-a-glance speed read.
+       Re-bind on every poll so name/speed/stale state stay current. */
+    if (v.shipname && v.shipname.trim()) {
+        const speedTag = (speed != null && speed >= 0.1)
+            ? `<span class="speed">${speed.toFixed(1)} kt</span>` : "";
+        const labelHtml = escapeHtml(v.shipname.trim()) + speedTag;
+        const labelClass = "vessel-label" + (v.stale ? " stale" : "");
+        if (entry.marker.getTooltip()) {
+            entry.marker.setTooltipContent(labelHtml);
+            const tt = entry.marker.getTooltip();
+            tt.options.className = labelClass;
+        } else {
+            entry.marker.bindTooltip(labelHtml, {
+                permanent:   true,
+                direction:   "right",
+                offset:      [sz / 2 + 4, 0],
+                className:   labelClass,
+                opacity:     1.0,
+            });
+        }
+    } else if (entry.marker.getTooltip()) {
+        entry.marker.unbindTooltip();
     }
 
     /* Heading indicator: a thick polyline from the marker in the
@@ -411,7 +556,7 @@ function upsertVessel(v) {
 function removeMissingVessels(currentMmsis) {
     for (const [mmsi, entry] of markers) {
         if (!currentMmsis.has(mmsi)) {
-            map.removeLayer(entry.circle);
+            map.removeLayer(entry.marker);
             if (entry.heading) map.removeLayer(entry.heading);
             if (entry.headingBacking) map.removeLayer(entry.headingBacking);
             markers.delete(mmsi);

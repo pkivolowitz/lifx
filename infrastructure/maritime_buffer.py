@@ -251,11 +251,31 @@ class MaritimeBuffer:
                 if key in packet and packet[key] is not None:
                     v[key] = packet[key]
 
-            # Track signal-quality of the most-recent decode (purely
-            # informational for the popup; not persisted per-point).
+            # Per-vessel running signal-power stats.  We keep
+            # min / max / sum / count rather than a full sample buffer
+            # because the buffer would unbounded-grow per vessel; the
+            # streaming stats give us mean (sum/count) on read and are
+            # an O(1) update per decode.  Useful for antenna-quality
+            # experiments — ground-plane / antenna swaps can be
+            # compared by per-vessel mean on a same-MMSI basis without
+            # the small-sample composition artifacts that bite when
+            # using last-decode signal power alone.
             sp: Any = packet.get("signalpower")
             if isinstance(sp, (int, float)):
-                v["last_signal_power"] = float(sp)
+                sp_f: float = float(sp)
+                v["last_signal_power"] = sp_f
+                cur_min: Any = v.get("signal_power_min")
+                cur_max: Any = v.get("signal_power_max")
+                if cur_min is None or sp_f < cur_min:
+                    v["signal_power_min"] = sp_f
+                if cur_max is None or sp_f > cur_max:
+                    v["signal_power_max"] = sp_f
+                v["signal_power_sum"] = (
+                    float(v.get("signal_power_sum") or 0.0) + sp_f
+                )
+                v["signal_power_count"] = (
+                    int(v.get("signal_power_count") or 0) + 1
+                )
             ch: Any = packet.get("channel")
             if isinstance(ch, str):
                 v["last_channel"] = ch
@@ -283,16 +303,54 @@ class MaritimeBuffer:
 
     # ---- Read accessors ----------------------------------------------------
 
+    def _materialise(
+        self,
+        v: dict[str, Any],
+        now: float,
+    ) -> dict[str, Any]:
+        """Inner helper — copy + derive read-only fields for the API.
+
+        Computes signal_power_mean from the running sum/count, decode
+        rate per minute from msg_count and the seen window, and the
+        stale flag from last_seen against ``self._stale_after_s``.
+        Caller already holds ``self._lock``.
+        """
+        copy: dict[str, Any] = {
+            k: v[k] for k in v if k != "track"
+        }
+        copy["track"] = list(v["track"])
+        # Streaming-stat derivations.
+        cnt: int = int(copy.get("signal_power_count") or 0)
+        if cnt > 0:
+            copy["signal_power_mean"] = (
+                float(copy.get("signal_power_sum") or 0.0) / cnt
+            )
+        else:
+            copy["signal_power_mean"] = None
+        first_seen: float = float(copy.get("first_seen") or now)
+        last_seen: float = float(copy.get("last_seen") or now)
+        elapsed_s: float = max(1.0, last_seen - first_seen)
+        copy["decode_rate_per_min"] = (
+            (copy.get("msg_count") or 0) / (elapsed_s / 60.0)
+        )
+        copy["seen_for_s"] = elapsed_s
+        copy["stale"] = (now - last_seen) > self._stale_after_s
+        return copy
+
     def vessels(
         self,
         with_position_only: bool = True,
     ) -> list[dict[str, Any]]:
         """Return one shallow dict per vessel, current state.
 
-        The ``track`` deque is converted to a plain list and capped
-        to the most-recent points — no caller can mutate the live
-        state.  Set ``with_position_only=False`` to include vessels
-        we have heard from but never received a valid lat/lon for.
+        The ``track`` deque is converted to a plain list — no caller
+        can mutate the live state.  Set ``with_position_only=False``
+        to include vessels we have heard from but never received a
+        valid lat/lon for.
+
+        Each entry includes derived fields the producer side can't
+        compute streamingly: ``signal_power_mean``,
+        ``decode_rate_per_min``, ``seen_for_s``, and ``stale``.
         """
         now: float = time.time()
         with self._lock:
@@ -300,15 +358,7 @@ class MaritimeBuffer:
             for v in self._vessels.values():
                 if with_position_only and v.get("lat") is None:
                     continue
-                # Shallow copy with deque → list materialization.
-                copy: dict[str, Any] = {
-                    k: v[k] for k in v if k != "track"
-                }
-                copy["track"] = list(v["track"])
-                # Stale flag — convenience for the dashboard.
-                ls: float = float(v.get("last_seen") or 0.0)
-                copy["stale"] = (now - ls) > self._stale_after_s
-                out.append(copy)
+                out.append(self._materialise(v, now))
         # Newest-active first.  Lets the dashboard render most-
         # recently-heard vessels on top of the marker layer.
         out.sort(key=lambda r: r.get("last_seen") or 0.0, reverse=True)
@@ -316,13 +366,12 @@ class MaritimeBuffer:
 
     def vessel(self, mmsi: int) -> Optional[dict[str, Any]]:
         """Return one vessel's full state, or ``None`` if unknown."""
+        now: float = time.time()
         with self._lock:
             v: Optional[dict[str, Any]] = self._vessels.get(mmsi)
             if v is None:
                 return None
-            copy: dict[str, Any] = {k: v[k] for k in v if k != "track"}
-            copy["track"] = list(v["track"])
-        return copy
+            return self._materialise(v, now)
 
     def stats(self) -> dict[str, Any]:
         """Return small summary metrics for the dashboard header."""
