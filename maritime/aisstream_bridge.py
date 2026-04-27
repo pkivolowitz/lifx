@@ -73,6 +73,7 @@ import json
 import logging
 import os
 import signal
+import ssl
 import sys
 import time
 from typing import Any, Optional
@@ -88,6 +89,22 @@ try:
     _HAS_WS: bool = True
 except ImportError:
     _HAS_WS = False
+
+# certifi ships an up-to-date Mozilla root CA bundle; we need it to
+# build an SSL context that can verify wss://stream.aisstream.io.
+# macOS Python.framework installs do NOT ship with the system root
+# CAs accessible to ssl.create_default_context(), so without an
+# explicit cafile every WebSocket attempt fails with
+# CERTIFICATE_VERIFY_FAILED.  certifi is a transitive dep of every
+# requests / aiohttp / paho-derived stack so it is always already
+# present in the venv.  Soft import: if absent, fall back to the
+# system default and surface the certifi-missing case in the error
+# rather than fail at import time.
+try:
+    import certifi
+    _HAS_CERTIFI: bool = True
+except ImportError:
+    _HAS_CERTIFI = False
 
 # Site config — single source of truth for the hub broker host/port.
 try:
@@ -451,7 +468,17 @@ class AISStreamBridge:
                 "StaticDataReport",
             ],
         }
-        async with websockets.connect(_AISSTREAM_URL) as ws:
+        # Build an SSL context pinned to certifi's CA bundle when
+        # available — works around macOS Python.framework's lack of
+        # system root CAs.  See _HAS_CERTIFI comment at imports.
+        ssl_ctx: ssl.SSLContext
+        if _HAS_CERTIFI:
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        else:
+            ssl_ctx = ssl.create_default_context()
+        async with websockets.connect(
+            _AISSTREAM_URL, ssl=ssl_ctx,
+        ) as ws:
             await ws.send(json.dumps(sub))
             logger.info(
                 "aisstream subscribed: bbox=%s message_types=%d",
