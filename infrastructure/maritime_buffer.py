@@ -44,6 +44,11 @@ try:
 except ImportError:
     _HAS_PAHO = False
 
+from infrastructure.maritime_mid import (
+    iso2_to_emoji as _mid_iso2_to_emoji,
+    lookup as _mid_lookup,
+)
+
 
 logger: logging.Logger = logging.getLogger("glowup.maritime")
 
@@ -335,6 +340,16 @@ class MaritimeBuffer:
         )
         copy["seen_for_s"] = elapsed_s
         copy["stale"] = (now - last_seen) > self._stale_after_s
+        # MID → flag enrichment.  ITU-R M.585: first 3 digits of an
+        # MMSI identify country of registration.  Pure static lookup,
+        # no network cost.  Unknown MIDs fall through to (None, None)
+        # — the dashboard popup just omits the flag row.
+        mmsi: Any = copy.get("mmsi")
+        if isinstance(mmsi, int):
+            iso2, country_name = _mid_lookup(mmsi)
+            copy["flag_iso"] = iso2
+            copy["flag_country"] = country_name
+            copy["flag_emoji"] = _mid_iso2_to_emoji(iso2)
         return copy
 
     def vessels(

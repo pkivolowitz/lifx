@@ -288,10 +288,35 @@ const map = L.map("map", {
     attributionControl: true,
 }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
 
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+/* Base layer: OpenStreetMap, the standard reference basemap.
+   Free, no key.  Polling tiles only on user pan/zoom keeps us well
+   within OSM's tile-usage policy for a single-user dashboard. */
+const osmBase = L.tileLayer(
+    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
 }).addTo(map);
+
+/* Overlay: OpenSeaMap nautical chart.  Community-maintained
+   transparent overlay served from openseamap.org — buoys, lights,
+   depth marks, channel markers, restricted areas, marina symbols.
+   Tile URL stable for ~15 years and license-compatible (CC-BY-SA).
+   Toggleable via the layer-control widget below. */
+const openSeaMap = L.tileLayer(
+    "https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png", {
+    attribution: '&copy; <a href="https://www.openseamap.org/">OpenSeaMap</a> contributors (CC-BY-SA)',
+    maxZoom: 18,
+    opacity: 0.95,
+}).addTo(map);
+
+/* Layer control — top-right collapsible widget.  Lets the operator
+   turn the seamark overlay on/off without leaving the page (e.g.
+   to read OSM road labels under a dense buoy field). */
+L.control.layers(
+    { "OpenStreetMap": osmBase },
+    { "Nautical chart (OpenSeaMap)": openSeaMap },
+    { collapsed: true, position: "topright" },
+).addTo(map);
 
 /* Belt-and-braces against the flex-layout / script race.  After the
    browser has had a chance to lay out the page (rAF callback runs
@@ -374,11 +399,23 @@ function popupHtml(v) {
     }
     const decodeRate = v.decode_rate_per_min;
 
+    /* Flag block: emoji + country name from the ITU MID lookup the
+       server adds to every vessel.  Renders as e.g. "🇺🇸 United
+       States" on platforms with emoji presentation; falls back to
+       just the country name on platforms that don't render the
+       regional-indicator letter pair as a flag. */
+    const flagEmoji = v.flag_emoji || "";
+    const flagCountry = v.flag_country || "";
+    const flagBlock = flagCountry
+        ? `<div class="row"><span class="lbl">Flag</span><span class="val">${escapeHtml(flagEmoji)} ${escapeHtml(flagCountry)}</span></div>`
+        : "";
+
     return (
       `<div class="name">${escapeHtml(v.shipname || "—")}${stale}</div>` +
       `<div class="mmsi">MMSI ${v.mmsi}` +
         (v.callsign ? ` · <span class="callsign">${escapeHtml(v.callsign)}</span>` : "") +
       `</div>` +
+      flagBlock +
       `<div class="row"><span class="lbl">Type</span><span class="val">${escapeHtml(v.shiptype_text || "—")}</span></div>` +
       (v.status_text ? `<div class="row"><span class="lbl">Status</span><span class="val">${escapeHtml(v.status_text)}</span></div>` : "") +
       `<div class="row"><span class="lbl">Position</span><span class="val">${(v.lat||0).toFixed(5)}, ${(v.lon||0).toFixed(5)}</span></div>` +
