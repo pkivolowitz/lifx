@@ -556,17 +556,28 @@ def _build_argparser() -> argparse.ArgumentParser:
 
 
 def _resolve_broker(arg: Optional[str], port: Optional[int]) -> tuple[str, int]:
-    """Resolve broker host/port from CLI or site.json."""
+    """Resolve broker host/port from CLI or site.json.
+
+    glowup_site exposes a ``.get(key, default)`` / ``.require(key)``
+    API rather than attributes — the dict-like form makes it explicit
+    which keys are looked up and lets us share the missing-key
+    error message with the rest of the program.
+
+    Site keys consumed:
+      - ``hub_broker``  — required when --broker is not passed
+      - ``hub_port``    — optional, default 1883
+    """
     host: Optional[str] = arg
     if host is None and _site is not None:
-        host = getattr(_site, "hub_broker", None)
+        host = _site.get("hub_broker")
     if not host:
         raise RuntimeError(
-            "MQTT broker not specified (no --broker, no site.hub_broker)",
+            "MQTT broker not specified (no --broker, no "
+            "hub_broker in site.json)",
         )
     p: Optional[int] = port
     if p is None and _site is not None:
-        p = getattr(_site, "hub_broker_port", None)
+        p = _site.get("hub_port")
     if not p:
         p = 1883
     return (host, int(p))
