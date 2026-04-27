@@ -120,6 +120,23 @@ class AirwavesHandlerMixin:
             return
         self._send_json(200, {"protocols": ab.by_protocol()})
 
+    # -- /api/airwaves/tuner -------------------------------------------------
+
+    def _handle_get_airwaves_tuner(self) -> None:
+        """GET /api/airwaves/tuner — what the SDR is scanning right now.
+
+        Returns the publisher's last-known tuner state, augmented by
+        the buffer with ``dwell_remaining_s`` (seconds left in this
+        slot) and ``next_freq_MHz`` (next hop target).  ``state`` is
+        ``null`` until the publisher reports its first retune — the
+        dashboard renders a "starting…" placeholder in that case.
+        """
+        ab: Any = getattr(self, "airwaves_buffer", None)
+        if ab is None:
+            self._send_json(200, {"state": None})
+            return
+        self._send_json(200, {"state": ab.tuner_state()})
+
     # -- /api/airwaves/transmitters ------------------------------------------
 
     def _handle_get_airwaves_transmitters(self) -> None:

@@ -48,6 +48,13 @@ logger: logging.Logger = logging.getLogger("glowup.airwaves")
 # Mirrored on the publisher side as ``meters.publisher._RAW_TOPIC``.
 RAW_TOPIC: str = "glowup/sub_ghz/raw"
 
+# Retained tuner-state topic.  The publisher republishes a fresh
+# payload on every rtl_433 retune; the broker holds the latest value
+# so a freshly-loaded dashboard sees current state immediately.
+# Mirrored on the publisher side as ``meters.publisher._TUNER_TOPIC``.
+# Payload:  {host, freq_MHz, tuned_at, rotation_MHz: [...], dwell_s}
+TUNER_TOPIC: str = "glowup/sub_ghz/tuner"
+
 # How many packets to keep in the ring.  500 at ~5 packets/min works
 # out to roughly 1.5 hours of history — enough to scroll back and see
 # the morning's garage-door activity, short enough that memory cost
@@ -133,6 +140,10 @@ class AirwavesBuffer:
         self._by_transmitter: dict[tuple[str, str], dict[str, Any]] = {}
         # Per-protocol counts.  Same lifetime caveat.
         self._by_protocol: dict[str, dict[str, Any]] = {}
+        # Latest tuner-state payload from the SDR publisher (retained
+        # MQTT message).  None until the first packet arrives or the
+        # broker delivers the retained value on subscribe.
+        self._tuner_state: Optional[dict[str, Any]] = None
 
     # ---- MQTT lifecycle ----------------------------------------------------
 
@@ -192,10 +203,21 @@ class AirwavesBuffer:
         flags: dict[str, Any],
         rc: int,
     ) -> None:
-        """paho callback — (re)subscribe on every connect."""
+        """paho callback — (re)subscribe on every connect.
+
+        Re-subscribing on every (re)connect is mandatory: paho's
+        client does NOT persist subscriptions across the broker-level
+        reconnect handshake, so a one-shot subscription at startup
+        would silently deafen after any network blip.  Pinned in
+        ``feedback_paho_resubscribe_on_connect.md``.
+        """
         if rc == 0:
             client.subscribe(RAW_TOPIC, qos=0)
-            logger.info("airwaves subscribed to %s", RAW_TOPIC)
+            client.subscribe(TUNER_TOPIC, qos=1)
+            logger.info(
+                "airwaves subscribed to %s and %s",
+                RAW_TOPIC, TUNER_TOPIC,
+            )
         else:
             logger.error("airwaves connect rc=%d", rc)
 
@@ -205,7 +227,7 @@ class AirwavesBuffer:
         userdata: Any,
         msg: "mqtt.MQTTMessage",
     ) -> None:
-        """paho callback — append a decoded packet to the ring."""
+        """paho callback — dispatch by topic to ring or tuner-state."""
         try:
             packet: Any = json.loads(msg.payload.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -218,6 +240,14 @@ class AirwavesBuffer:
                 "airwaves message is not a dict: %s",
                 type(packet).__name__,
             )
+            return
+
+        # Tuner state is a small, retained, separate stream — handle
+        # it before the ring/aggregate code which expects rtl_433
+        # packet shape.
+        if msg.topic == TUNER_TOPIC:
+            with self._lock:
+                self._tuner_state = packet
             return
 
         model: str = str(packet.get("model") or "unknown")
@@ -324,6 +354,59 @@ class AirwavesBuffer:
             ]
         rows.sort(key=lambda r: (r["count"], r["last_seen"]), reverse=True)
         return rows[:max(0, limit)]
+
+    def tuner_state(self) -> Optional[dict[str, Any]]:
+        """Return the latest tuner state, or ``None`` if not seen yet.
+
+        Augments the publisher's retained payload with two derived
+        fields computed at request time:
+
+        - ``dwell_remaining_s``: seconds left in the current dwell,
+          ``max(0, dwell_s - (now - tuned_at))``.  Reads as 0 once the
+          slot has expired without a fresh hop event (e.g. SDR host
+          hung) — the dashboard treats sustained-zero as "stale".
+        - ``next_freq_MHz``: the freq the next hop will land on, or
+          ``None`` if the current freq is not in the rotation list
+          (defensive — shouldn't happen with a well-formed publisher).
+
+        Returns a shallow copy so the caller cannot mutate the cached
+        state under the network thread.
+        """
+        with self._lock:
+            state: Optional[dict[str, Any]] = (
+                dict(self._tuner_state) if self._tuner_state else None
+            )
+        if state is None:
+            return None
+        try:
+            tuned_at: float = float(state.get("tuned_at") or 0.0)
+            dwell_s: float = float(state.get("dwell_s") or 0.0)
+            elapsed: float = max(0.0, time.time() - tuned_at)
+            state["dwell_remaining_s"] = max(0.0, dwell_s - elapsed)
+        except (TypeError, ValueError):
+            state["dwell_remaining_s"] = 0.0
+
+        rotation: list[Any] = state.get("rotation_MHz") or []
+        current: Any = state.get("freq_MHz")
+        next_freq: Optional[float] = None
+        if isinstance(rotation, list) and current is not None:
+            try:
+                # Float compare with a tolerance — rtl_433 reports
+                # "911.000MHz" exactly, but a configured "911M" parses
+                # to 911.0; tolerance shrugs off any future formatting
+                # drift (e.g. 911.000000001 from an FP round-trip).
+                cur_f: float = float(current)
+                idx: int = -1
+                for i, f in enumerate(rotation):
+                    if abs(float(f) - cur_f) < 0.001:
+                        idx = i
+                        break
+                if idx >= 0 and rotation:
+                    next_freq = float(rotation[(idx + 1) % len(rotation)])
+            except (TypeError, ValueError):
+                next_freq = None
+        state["next_freq_MHz"] = next_freq
+        return state
 
     def stats(self) -> dict[str, Any]:
         """Return small summary metrics for the dashboard header."""

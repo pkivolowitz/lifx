@@ -92,6 +92,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -234,10 +235,52 @@ _TOPIC_PREFIX: str = "glowup/meters"
 # forget — the meter pipeline above is the durable path.
 _RAW_TOPIC: str = "glowup/sub_ghz/raw"
 
+# Retained tuner-state topic.  Published every time rtl_433 reports
+# "Tuned to <freq>MHz." on stdout (which it does on every retune,
+# given -vvvvv -F log,v=5 — see _RTL433_VERBOSITY_ARGS below).  The
+# /airwaves dashboard subscribes and renders a "now scanning" header
+# strip with a client-side countdown.  Retained so a freshly-loaded
+# dashboard sees the last known state immediately instead of waiting
+# up to dwell-seconds for the next hop.
+_TUNER_TOPIC: str = "glowup/sub_ghz/tuner"
+
 # QoS for the raw firehose.  0 = fire-and-forget; we don't care if a
 # duplicate or two slips through and we don't care if one is lost.
 # This is a UI nicety, not a measurement record.
 _RAW_QOS: int = 0
+
+# QoS for tuner state.  1 = at-least-once.  Tune events are sparse
+# (one per dwell, ~5 per cycle) so the cost is trivial and we want
+# the dashboard's header to reliably reflect ground truth.
+_TUNER_QOS: int = 1
+
+# Stdout regex for rtl_433's per-retune NOTICE message.  rtl_433
+# 25.02 prints exactly "SDR: Tuned to <ddd.ddd>MHz." (no trailing
+# whitespace) when ``cfg->verbosity >= LOG_NOTICE`` (5) AND a log
+# output handler is attached at filter level 5.  We unlock this by
+# adding ``-vvvvv -F log,v=5`` to the rtl_433 invocation; the log
+# stream interleaves with -F json on stdout, but log lines fail JSON
+# parse and tune lines are matched by this regex before being
+# discarded as noise.  Discovered Bed, 2026-04-26 night — see the
+# `print_logf(LOG_NOTICE, "SDR", "Tuned to %s.", ...)` call in
+# upstream src/sdr.c sdr_set_center_freq().
+_TUNE_LINE_RE: re.Pattern[str] = re.compile(
+    r"^SDR: Tuned to ([\d.]+)MHz\.\s*$",
+)
+
+# Verbosity / log-output flags appended to the rtl_433 command line
+# to surface tune events.  ``-vvvvv`` raises cfg->verbosity to 5
+# (LOG_NOTICE), unblocking the log_handler verbosity gate.
+# ``-F log,v=5`` adds a log output handler at filter level 5 so
+# NOTICE-and-below messages reach stdout.  Pulse-data trace dumps
+# are gated separately at LOG_TRACE=8 in upstream sdr.c, so we do
+# NOT see the per-pulse spam at this verbosity — only NOTICE level.
+# The ``-v`` flag in upstream rtl_433 takes no argument despite the
+# help text suggesting ``-v <num>``; the only way to reach
+# verbosity 5 from the CLI is five literal v's.
+_RTL433_VERBOSITY_ARGS: tuple[str, ...] = (
+    "-vvvvv", "-F", "log,v=5",
+)
 
 # QoS for publishes.  1 = at-least-once.  Meters transmit every
 # 30-60s so a duplicate from a redelivery is harmless (logger
@@ -438,6 +481,23 @@ class MeterPublisher:
         )
         self._proc: Optional[subprocess.Popen[str]] = None
         self._stopping: bool = False
+        # Numeric rotation in MHz, parsed once from the configured
+        # frequency strings ("433.92M" → 433.92).  Cached for the
+        # tuner-state payload so /airwaves can show "next: <freq>"
+        # without re-parsing per hop.  Strings that don't match the
+        # ``<float>M`` pattern are dropped from this list with a warn
+        # — the rotation is still honoured at the rtl_433 level
+        # (publisher just won't surface those slots in the indicator).
+        self._rotation_MHz: list[float] = []
+        for f in self._frequencies:
+            try:
+                self._rotation_MHz.append(float(f.rstrip("M").rstrip("m")))
+            except ValueError:
+                logger.warning(
+                    "rotation slot %r does not parse as <MHz>M; "
+                    "tuner-state payload will omit it", f,
+                )
+        self._host_short: str = socket.gethostname().split(".")[0]
 
     def start(self) -> None:
         """Connect MQTT, spawn rtl_433, run the read loop until stop().
@@ -475,6 +535,14 @@ class MeterPublisher:
             "-M", "time:utc:usec",
             "-M", "level",
             "-s", self._sample_rate,
+            # Verbosity flags that unlock the per-retune NOTICE log
+            # message ("SDR: Tuned to ...MHz.") on stdout.  The
+            # publisher reads these lines, parses out the freq, and
+            # publishes a retained tuner-state message to MQTT —
+            # ground truth for the /airwaves dashboard's "now
+            # scanning" indicator.  See _RTL433_VERBOSITY_ARGS in
+            # the constants block for the rationale.
+            *_RTL433_VERBOSITY_ARGS,
             # No -Y level= flag.  Commit 50eb015 added "-Y level=-30"
             # intending to lower the pulse-detection threshold to catch
             # weaker meter transmissions, but rtl_433 25.02's level=
@@ -529,6 +597,47 @@ class MeterPublisher:
         finally:
             self._cleanup()
 
+    def _publish_tuner_state(self, freq_MHz: float) -> None:
+        """Publish a retained tuner-state message after a rtl_433 retune.
+
+        Called from :meth:`_read_loop` whenever a stdout line matches
+        :data:`_TUNE_LINE_RE`.  Payload format::
+
+            {
+                "host":          "pi-sensor-01",
+                "freq_MHz":      911.0,
+                "tuned_at":      1714187654.123,
+                "rotation_MHz":  [345.0, 433.92, 868.0, 911.0, 921.0],
+                "dwell_s":       30
+            }
+
+        Retained at QoS 1 so a freshly-loaded /airwaves dashboard
+        sees the last known state immediately.  Published with
+        ``retain=True`` — paho will issue a clean update on every
+        tune; the broker only ever holds the latest value.
+        """
+        payload: dict[str, Any] = {
+            "host":         self._host_short,
+            "freq_MHz":     freq_MHz,
+            "tuned_at":     time.time(),
+            "rotation_MHz": list(self._rotation_MHz),
+            "dwell_s":      self._hop_interval_s,
+        }
+        try:
+            self._client.publish(
+                _TUNER_TOPIC, json.dumps(payload),
+                qos=_TUNER_QOS, retain=True,
+            )
+            logger.debug("tuner state -> %.3f MHz", freq_MHz)
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "tuner-state serialize failed (freq=%s): %s",
+                freq_MHz, exc,
+            )
+        except Exception as exc:
+            # MQTT layer hiccups — not fatal to the meter pipeline.
+            logger.debug("tuner-state publish failed: %s", exc)
+
     def _read_loop(self) -> None:
         """Read rtl_433 stdout line-by-line, parse, publish."""
         assert self._proc is not None
@@ -542,11 +651,17 @@ class MeterPublisher:
             try:
                 packet: Any = json.loads(line)
             except json.JSONDecodeError as exc:
-                # rtl_433 occasionally emits non-JSON banner / status
-                # lines; log at debug to avoid noise but never silently
-                # swallow.
-                logger.debug("non-JSON line from rtl_433: %s (%s)",
-                             line[:80], exc)
+                # Not JSON — could be a tune-event log line (which we
+                # care about) or rtl_433 banner / decoder noise (which
+                # we don't).  Try the tune-line regex before discarding.
+                tune_match: Optional[re.Match[str]] = (
+                    _TUNE_LINE_RE.match(line)
+                )
+                if tune_match is not None:
+                    self._publish_tuner_state(float(tune_match.group(1)))
+                else:
+                    logger.debug("non-JSON line from rtl_433: %s (%s)",
+                                 line[:80], exc)
                 continue
 
             # ---- Raw firehose to the /airwaves dashboard ----

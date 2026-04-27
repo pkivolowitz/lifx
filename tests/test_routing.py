@@ -345,6 +345,7 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "airwaves", "feed"),
             ("api", "airwaves", "protocols"),
             ("api", "airwaves", "transmitters"),
+            ("api", "airwaves", "tuner"),
         }
         for route in _ROUTES:
             if route.pattern in AUTH_FREE_PATTERNS:

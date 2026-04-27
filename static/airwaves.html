@@ -105,6 +105,60 @@ header .live .dot {
 }
 .stat .value .accent { color: var(--accent); }
 
+/* ---- Tuner strip (now-scanning indicator) ---------------------------------
+   A thin bar below the header showing what the SDR is tuned to right now,
+   with a client-side countdown of the dwell remaining and the next freq in
+   the rotation.  Source of truth: rtl_433's per-retune NOTICE log line,
+   parsed by meters/publisher.py and republished to retained MQTT topic
+   ``glowup/sub_ghz/tuner``.  Drift-free — every value here came from a
+   real tuner-state event, never deduced.
+---------------------------------------------------------------------------- */
+.tuner {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+}
+.tuner .lbl {
+    font-size: 0.72rem;
+    color: var(--label);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.tuner .now {
+    color: var(--accent);
+    font-size: 1.1rem;
+    font-weight: 500;
+}
+.tuner .next { color: var(--accent-2); }
+.tuner .countdown { color: var(--text); min-width: 5ch; }
+.tuner .host { color: var(--label); margin-left: auto; }
+.tuner .bar {
+    flex: 1 1 140px;
+    height: 4px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 2px;
+    overflow: hidden;
+    min-width: 100px;
+}
+.tuner .bar-fill {
+    height: 100%;
+    background: var(--accent);
+    width: 0%;
+    transition: width 0.25s linear;
+}
+.tuner.stale .now,
+.tuner.stale .next,
+.tuner.stale .countdown { color: var(--label); }
+.tuner.stale .bar-fill { background: var(--label); }
+
 .layout {
     display: grid;
     grid-template-columns: 1.6fr 1fr;
@@ -257,6 +311,14 @@ td.last {
     <a href="/power">power</a>
 </div>
 
+<div class="tuner" id="tuner">
+    <div><span class="lbl">now scanning</span> <span class="now" id="tuner-now">—</span></div>
+    <div class="bar"><div class="bar-fill" id="tuner-bar"></div></div>
+    <div><span class="countdown" id="tuner-countdown">—</span></div>
+    <div><span class="lbl">next</span> <span class="next" id="tuner-next">—</span></div>
+    <div class="host" id="tuner-host"></div>
+</div>
+
 <div class="stats" id="stats">
     <div class="stat"><div class="label">packets in ring</div>
         <div class="value"><span id="ring-len" class="accent">–</span> / <span id="ring-size">–</span></div></div>
@@ -339,21 +401,83 @@ function detailLine(raw) {
     return parts.join("  ");
 }
 
+/* ---- Tuner strip (now-scanning indicator) ---------------------------------
+   Source of truth: /api/airwaves/tuner, which echoes the publisher's last
+   retained MQTT message plus server-computed dwell_remaining_s and
+   next_freq_MHz.  We poll once per POLL_MS for fresh state, then tick the
+   countdown locally between polls so the bar drains smoothly.  Treat the
+   strip as "stale" when no fresh hop has arrived for more than 2× dwell —
+   that's the heuristic for "publisher hung" or "rtl_433 crashed".
+---------------------------------------------------------------------------- */
+let tunerState = null;          // last server payload, or null pre-first-tune
+let tunerFetchedAt = 0;          // performance.now() when payload landed
+
+function fmtFreq(mhz) {
+    if (mhz == null || isNaN(mhz)) return "—";
+    // 433.92 stays 433.92; 911.0 → 911; 345.0 → 345.  Trim trailing zeros.
+    return (Math.round(mhz * 100) / 100).toString() + " MHz";
+}
+
+function tickTuner() {
+    const nowEl   = document.getElementById("tuner-now");
+    const nextEl  = document.getElementById("tuner-next");
+    const cdEl    = document.getElementById("tuner-countdown");
+    const barEl   = document.getElementById("tuner-bar");
+    const hostEl  = document.getElementById("tuner-host");
+    const root    = document.getElementById("tuner");
+
+    if (!tunerState) {
+        nowEl.textContent = "—";
+        nextEl.textContent = "—";
+        cdEl.textContent = "starting…";
+        barEl.style.width = "0%";
+        hostEl.textContent = "";
+        root.classList.remove("stale");
+        return;
+    }
+    const localElapsed = (performance.now() - tunerFetchedAt) / 1000;
+    const remaining = Math.max(0, (tunerState.dwell_remaining_s || 0) - localElapsed);
+    const dwell = tunerState.dwell_s || 0;
+    const pct = dwell > 0 ? Math.max(0, Math.min(100, (remaining / dwell) * 100)) : 0;
+
+    nowEl.textContent  = fmtFreq(tunerState.freq_MHz);
+    nextEl.textContent = fmtFreq(tunerState.next_freq_MHz);
+    cdEl.textContent   = remaining >= 1
+        ? Math.ceil(remaining) + "s left"
+        : (remaining > 0 ? "<1s" : "0s");
+    barEl.style.width  = pct + "%";
+    hostEl.textContent = tunerState.host ? "via " + tunerState.host : "";
+
+    // Sustained-zero remaining means no fresh hop arrived — flag stale.
+    // Threshold is 2× dwell to absorb one missed hop without alarming.
+    const sinceTune = (Date.now() / 1000) - (tunerState.tuned_at || 0);
+    if (dwell > 0 && sinceTune > dwell * 2) root.classList.add("stale");
+    else root.classList.remove("stale");
+}
+setInterval(tickTuner, 250);
+
 async function poll() {
-    let feedJson, protoJson, txJson;
+    let feedJson, protoJson, txJson, tunerJson;
     try {
-        const [a, b, c] = await Promise.all([
+        const [a, b, c, d] = await Promise.all([
             fetch("/api/airwaves/feed?limit=" + FEED_LIMIT),
             fetch("/api/airwaves/protocols"),
             fetch("/api/airwaves/transmitters?limit=" + TX_LIMIT),
+            fetch("/api/airwaves/tuner"),
         ]);
         feedJson  = await a.json();
         protoJson = await b.json();
         txJson    = await c.json();
+        tunerJson = await d.json();
     } catch (e) {
         console.error("poll failed", e);
         return;
     }
+
+    /* ---- tuner strip ---- */
+    tunerState = tunerJson && tunerJson.state ? tunerJson.state : null;
+    tunerFetchedAt = performance.now();
+    tickTuner();
 
     /* ---- stats ---- */
     const s = feedJson.stats || {};

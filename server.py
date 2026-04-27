@@ -368,6 +368,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_airwaves_protocols", requires_auth=False),
     _Route("GET", ("api", "airwaves", "transmitters"),
            "_handle_get_airwaves_transmitters", requires_auth=False),
+    _Route("GET", ("api", "airwaves", "tuner"),
+           "_handle_get_airwaves_tuner", requires_auth=False),
     # POST /api/zigbee/set was removed in 2026-04-15 along with
     # the in-process Zigbee adapter.  Its successor lives under
     # /api/plugs — see handlers/plug.py and docs/29-zigbee-service.md.
