@@ -127,45 +127,71 @@ logger: logging.Logger = logging.getLogger("glowup.meters.publisher")
 # rtl_433 binary on PATH.  Override via --rtl433-path.
 _DEFAULT_RTL433: str = "rtl_433"
 
-# rtl_433 protocol decoder IDs to PIN with -R.  Empty = use rtl_433's
-# default decoder set (which includes ITRON ERT and Neptune R900).
-# We default to empty because rtl_433 25.02's protocol-ID mapping
-# silently mismatched our tuple (53/54/55/56/153) and dropped every
-# decode despite strong RX — proven 2026-04-26 on pi-sensor-01,
-# decoded SCMplus immediately on first run when -R was removed.
-# Filtering to the meter subset happens in parse_packet() at the
-# Python layer, where we control the model→type table directly.
-_PROTOCOL_IDS: tuple[int, ...] = ()
-
-# Mixed-band coverage: US ISM meters + European ISM + 433.92 MHz
-# consumer-electronics chatter + 345 MHz US security sensors.
+# rtl_433 protocol decoder IDs to PIN with -R.
 #
-# Five hops, 30-second dwell each:
+# Three modes:
+#   ()                    — discover all 269 protocols at startup
+#                           and enable them ALL (the "scoop
+#                           everything, winnow later" stance).  This
+#                           is the default since ``-G`` was deprecated
+#                           in rtl_433 25.02 and ``-R`` on the CLI is
+#                           "enable only the listed" rather than
+#                           "add to default" (proven 2026-04-26 when
+#                           -R 53/54/55/56/153 silently dropped every
+#                           ITRON SCM+ decode despite strong RX).
+#   ("default",)          — let rtl_433 use its built-in default set
+#                           (no -R flags emitted).  Sentinel string,
+#                           since () already means discover-all.
+#   (53, 70, 154, ...)    — pin to the explicit numeric set.  Use
+#                           when reproducing a historical run or
+#                           narrowing a known-bad decoder.
+#
+# Filtering to the meter subset happens in parse_packet() at the
+# Python layer, where we control the model→type table directly —
+# false positives from rare/disabled-by-default decoders show up on
+# the /airwaves dashboard but never pollute the durable meter
+# pipeline (which keys off model name in _MODEL_TO_TYPE).
+_PROTOCOL_IDS: tuple[Any, ...] = ()
+
+# Sentinel marker for "use rtl_433's compiled-in default set".
+_PROTOCOL_IDS_DEFAULT_SENTINEL: str = "default"
+
+# Mixed-band coverage tuned for North-American urban capture
+# breadth.  Four hops, 12-second dwell (48-second full cycle) —
+# overnight test on the prior 5-band/30s rotation captured only 12
+# distinct transmitters across 12 hours in an urban setting; the
+# community consensus from rtl_433-based projects is that 433.92
+# MHz needs a much larger time-share than rotating bands, and that
+# 902-928 ISM is fully covered by a single 915 MHz tune given
+# rtl_433's 2048k sample-rate window (~26 MHz coverage).
+#
+# Four hops, 12-second dwell each:
+#   315 MHz     North American TPMS (older Toyota / Hyundai), garage
+#               door remotes, some keyless-entry fobs.  Drive-by
+#               capture — expect spikes when traffic passes.
 #   345 MHz     Honeywell / 2GIG / Vivint security sensors — door,
-#               window, motion, glass-break.  Event-driven, not
-#               periodic; expect long quiet stretches.
+#               window, motion, glass-break.  Event-driven; long
+#               quiet stretches are normal.
 #   433.92 MHz  Acurite/LaCrosse/OS weather stations, Chamberlain/
 #               Genie garage doors, Markisol blinds, Regency fans,
-#               Honeywell ActivLink doorbells, european TPMS
-#   868 MHz     European ISM (meters, weather stations) — peek for
-#               anything broadcasting there in a US deployment
-#   911 MHz     US ISM mid — proven hot spot for ITRON SCM+ gas
-#               meters (id=101903449 decoded here repeatedly)
-#   921 MHz     US ISM mid
+#               Honeywell ActivLink doorbells, European TPMS, the
+#               densest consumer-electronics band by a wide margin.
+#   915 MHz     902-928 MHz US ISM block, single tune.  ITRON SCM /
+#               SCMplus / IDM / NetIDM utility meters span this
+#               whole band; rtl_433's 2 MS/s window covers it from
+#               one center freq.  Replaces the prior 911/921 split.
 #
-# 916 MHz dropped after a full session of zero decodes there; 345
-# took the slot to surface the household alarm-system traffic.  Band-
-# edge slots (906 MHz, 926 MHz) were dropped earlier to make room for
-# 868 and 433.92.  ITRON broadcasts every 30-60s so each remaining US
-# slot gets ~30s of every 150s = roughly 50% catch probability per
-# cycle for any given meter.
+# 868 MHz European ISM dropped — vanishingly rare in southern
+# Alabama; the time slot is better spent on 433.92.  916 MHz
+# dropped earlier (zero decodes); 911 and 921 collapsed into the
+# 915 single-tune.
 #
 # Override via --rtl433-freqs / --rtl433-hop-interval for other
 # regions (Japan is 426M, etc.).
 _DEFAULT_FREQUENCIES: tuple[str, ...] = (
-    "345M", "433.92M", "868M", "911M", "921M",
+    "315M", "345M", "433.92M", "915M",
 )
-_DEFAULT_HOP_INTERVAL_S: int = 30
+_DEFAULT_HOP_INTERVAL_S: int = 12
 
 # RTL-SDR sample rate.  rtl_433's new defaults (25.02+) implicitly
 # tune sample rate per protocol, but ITRON SCM/SCM+/IDM and Neptune
@@ -464,8 +490,15 @@ class MeterPublisher:
         broker_host:   MQTT broker hostname / IP (the hub).
         broker_port:   MQTT broker TCP port.
         rtl433_path:   Path to the rtl_433 binary.
-        protocol_ids:  Tuple of rtl_433 ``-R`` decoder IDs to enable.
-                       Defaults to the meter-protocol set.
+        protocol_ids:  Three-mode decoder selector — see the
+                       ``_PROTOCOL_IDS`` module constant for the full
+                       contract.  ``()`` (the default) discovers all
+                       supported rtl_433 protocols at startup and
+                       enables every one — the "scoop everything,
+                       winnow at the Python boundary" stance.
+                       ``("default",)`` lets rtl_433 use its built-in
+                       set.  A tuple of ints pins to that explicit
+                       set.
     """
 
     def __init__(
@@ -473,7 +506,7 @@ class MeterPublisher:
         broker_host: str,
         broker_port: int = 1883,
         rtl433_path: str = _DEFAULT_RTL433,
-        protocol_ids: tuple[int, ...] = _PROTOCOL_IDS,
+        protocol_ids: tuple[Any, ...] = _PROTOCOL_IDS,
         frequencies: tuple[str, ...] = _DEFAULT_FREQUENCIES,
         hop_interval_s: int = _DEFAULT_HOP_INTERVAL_S,
         sample_rate: str = _DEFAULT_SAMPLE_RATE,
@@ -486,7 +519,10 @@ class MeterPublisher:
         self._broker_host: str = broker_host
         self._broker_port: int = broker_port
         self._rtl433_path: str = rtl433_path
-        self._protocol_ids: tuple[int, ...] = protocol_ids
+        # tuple[Any, ...] supports the three-mode contract documented
+        # at _PROTOCOL_IDS: empty for scoop-everything, ("default",)
+        # to use rtl_433's built-ins, or numeric IDs to pin.
+        self._protocol_ids: tuple[Any, ...] = protocol_ids
         self._frequencies: tuple[str, ...] = frequencies
         self._hop_interval_s: int = hop_interval_s
         self._sample_rate: str = sample_rate
@@ -596,19 +632,39 @@ class MeterPublisher:
             cmd.extend(["-f", freq])
         if len(self._frequencies) > 1:
             cmd.extend(["-H", str(self._hop_interval_s)])
-        # Note: no -R filter.  rtl_433 25.02 silently failed to decode
-        # SCMplus when -R 53/54/55/56/153 was passed (proven empirically
-        # 2026-04-26 — same hop / sample rate config decoded a neighbor
-        # gas meter immediately when -R was removed).  Protocol-ID
-        # mappings may have shifted between rtl_433 versions; rather
-        # than hand-track them, run the default decoder set and let
-        # parse_packet() in this module filter to _MODEL_TO_TYPE at
-        # the Python boundary.  CPU cost is modest, the filter
-        # behaviour is then under our control.  protocol_ids is kept
-        # in the API surface for callers who explicitly want the
-        # restriction (e.g. testing one decoder); empty default tuple
-        # means "let rtl_433 decide".
-        for pid in self._protocol_ids:
+        # Decoder protocol selection.  See _PROTOCOL_IDS docstring for
+        # the three modes.  In "scoop everything" mode (empty tuple,
+        # the default), we discover all 269 protocols at startup and
+        # emit a -R flag for each — this enables every decoder
+        # including the disabled-by-default ones (rare TPMS variants,
+        # security panels, regional weather sensors) at the cost of a
+        # longer argv and slightly more demod CPU.  rtl_433 25.02
+        # deprecated -G (which previously enabled-all in one flag);
+        # the conf-file path was an alternative but adds a deploy
+        # artifact, where the dynamic-discovery path stays
+        # self-contained in this module.
+        active_pids: tuple[int, ...]
+        if self._protocol_ids == ():
+            active_pids = self._discover_all_protocol_ids()
+            logger.info(
+                "decoder mode: scoop-everything (%d protocols enabled "
+                "via -R; false positives expected, parse_packet() "
+                "filters meters at the Python boundary)",
+                len(active_pids),
+            )
+        elif self._protocol_ids == (_PROTOCOL_IDS_DEFAULT_SENTINEL,):
+            active_pids = ()
+            logger.info(
+                "decoder mode: rtl_433 built-in defaults (no -R flags)",
+            )
+        else:
+            # Caller passed explicit numeric IDs — treat as a pin.
+            active_pids = tuple(int(p) for p in self._protocol_ids)
+            logger.info(
+                "decoder mode: explicit pin (%d protocols)",
+                len(active_pids),
+            )
+        for pid in active_pids:
             cmd.extend(["-R", str(pid)])
         logger.info("spawning rtl_433: %s", " ".join(cmd))
 
@@ -640,6 +696,58 @@ class MeterPublisher:
             self._read_loop()
         finally:
             self._cleanup()
+
+    def _discover_all_protocol_ids(self) -> tuple[int, ...]:
+        """Run ``rtl_433 -R help`` and return every protocol ID it lists.
+
+        Output format (rtl_433 25.02)::
+
+            [01]  Silvercrest Remote Control
+            [02]  Rubicson, TFA 30.3197 ...
+            [06]* ELV EM 1000           # disabled-by-default — '*' suffix
+            ...
+            [275]  GM-Aftermarket TPMS
+
+        We extract every numeric ID regardless of the disabled marker
+        — the whole point of this code path is to enable all of them.
+        Empty result triggers a fail-fast warning rather than a
+        silent fallback to default protocols, since the caller asked
+        for "everything" and a degraded set is a misrepresentation.
+
+        Cached on the first call (self-imposed: rtl_433's protocol
+        list is stable for a process lifetime; re-running ``-R help``
+        on each restart is cheap but unnecessary).
+        """
+        # Pattern matches '[NN]' or '[NN]*' at start of line.
+        line_re: re.Pattern[str] = re.compile(
+            r"^\s*\[(\d+)\][\s*]",
+        )
+        try:
+            out: str = subprocess.check_output(
+                [self._rtl433_path, "-R", "help"],
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=5,
+            )
+        except (subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+                FileNotFoundError) as exc:
+            logger.warning(
+                "could not enumerate rtl_433 protocols (%s); falling "
+                "back to built-in defaults", exc,
+            )
+            return ()
+        ids: list[int] = []
+        for line in out.splitlines():
+            m: Optional[re.Match[str]] = line_re.match(line)
+            if m is not None:
+                ids.append(int(m.group(1)))
+        if not ids:
+            logger.warning(
+                "rtl_433 -R help returned no protocol IDs; falling "
+                "back to built-in defaults",
+            )
+        return tuple(ids)
 
     def _drain_stderr(self) -> None:
         """Continuously read rtl_433 stderr into a bounded ring.
