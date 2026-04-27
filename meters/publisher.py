@@ -457,15 +457,17 @@ class MeterPublisher:
         cmd: list[str] = [
             self._rtl433_path, "-F", "json", "-M", "utc",
             "-s", self._sample_rate,
-            # Lower the FSK pulse-detection threshold from rtl_433's
-            # default (-12 dB-ish auto) to -30 dB so weaker meter
-            # transmissions (further neighbors, low-power R900 bursts,
-            # any meter at the edge of reception) are passed to the
-            # decoders instead of being squelched at the demod layer.
-            # Trade-off is more false-positive pulse trains hitting
-            # the decoder pool; checksums then drop the noise so it
-            # doesn't reach our publish path.
-            "-Y", "level=-30",
+            # No -Y level= flag.  Commit 50eb015 added "-Y level=-30"
+            # intending to lower the pulse-detection threshold to catch
+            # weaker meter transmissions, but rtl_433 25.02's level=
+            # semantics are inverted from what that commit assumed —
+            # negative values are stricter than default, not laxer.
+            # Empirically (Bed, 2026-04-26 night): with `-Y level=-30`
+            # rtl_433 produced ZERO decodes across 433.92 MHz and all
+            # five 902-928 MHz hops over multiple minutes; removing
+            # the flag, the loud neighbor ITRON SCM+ at 911 MHz
+            # decoded on the first try.  rtl_433's default auto-tracked
+            # threshold is the right default — let it do its job.
         ]
         # Multiple -f flags: rtl_433 hops between them at -H interval.
         # Without this the receiver only sees ~2 MHz of the 26 MHz US
