@@ -140,7 +140,7 @@ section.panel > h2 {
     padding: 10px 14px;
     border-bottom: 1px solid var(--border);
     display: grid;
-    grid-template-columns: 70px 1fr auto;
+    grid-template-columns: 70px 90px 60px 1fr;
     gap: 12px;
     align-items: center;
     font-size: 0.88rem;
@@ -180,13 +180,20 @@ section.panel > h2 {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.feed-row .badge {
+.feed-row .freq {
     font-family: var(--mono);
-    font-size: 0.7rem;
+    font-size: 0.95rem;
     color: var(--accent-2);
-    background: rgba(255,179,71,0.08);
-    padding: 2px 6px;
-    border-radius: 3px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    text-align: left;
+}
+.feed-row .freq.empty { color: var(--label); font-weight: 400; }
+.feed-row .rssi {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--label);
+    text-align: right;
 }
 .feed-row.new {
     animation: flash 1.6s ease-out;
@@ -368,18 +375,29 @@ async function poll() {
             const tsKey = String(p.received_ts) + "|" + p.transmitter_id;
             const isNew = !seenTs.has(tsKey);
             seenTs.add(tsKey);
-            const freq = p.freq_MHz ? `<span class="badge">${escapeHtml(p.freq_MHz)} MHz</span>` : "";
+            // rtl_433's freq field is a number in MHz (e.g. 911.0).
+            // Display compactly as "911.0".  Empty when the publisher
+            // didn't supply -M ...:freq (older builds).
+            const freqVal = p.freq_MHz;
+            const freqText = (freqVal !== null && freqVal !== undefined)
+                ? (typeof freqVal === "number" ? freqVal.toFixed(1) : String(freqVal))
+                : "—";
+            const freqCls = (freqVal !== null && freqVal !== undefined) ? "freq" : "freq empty";
+            const rssiText = (p.rssi !== null && p.rssi !== undefined)
+                ? (typeof p.rssi === "number" ? p.rssi.toFixed(0) + " dB" : String(p.rssi))
+                : "";
             const detail = escapeHtml(detailLine(p.raw));
             return (
               `<div class="feed-row${isNew ? " new" : ""}">` +
                 `<div class="age">${ago(nowS() - p.received_ts)}</div>` +
+                `<div class="${freqCls}">${escapeHtml(freqText)}</div>` +
+                `<div class="rssi">${escapeHtml(rssiText)}</div>` +
                 `<div class="body">` +
                   `<span class="friendly">${escapeHtml(p.friendly)}</span>` +
                   `<span class="model">${escapeHtml(p.model)}</span>` +
                   `<span class="id">${escapeHtml(p.transmitter_id)}</span>` +
                   (detail ? `<span class="detail">${detail}</span>` : "") +
                 `</div>` +
-                freq +
               `</div>`
             );
         }).join("");

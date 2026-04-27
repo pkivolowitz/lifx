@@ -134,25 +134,29 @@ _DEFAULT_RTL433: str = "rtl_433"
 # Python layer, where we control the model→type table directly.
 _PROTOCOL_IDS: tuple[int, ...] = ()
 
-# US ISM-band coverage.  ITRON ERT (electric/gas) and Neptune R900
-# (water) frequency-hop across the full 902-928 MHz band; the RTL-SDR
-# only sees ~2 MHz at a time (the sample rate window), so to catch
-# every meter we have to make rtl_433 hop too.  rtl_433 accepts
-# multiple -f flags and rotates through them every -H seconds.
+# US ISM-band coverage + a peek at the European 868 MHz band.
+# ITRON ERT (electric/gas) and Neptune R900 (water) frequency-hop
+# across the full 902-928 MHz US band; the RTL-SDR only sees ~2 MHz
+# at a time (the sample rate window), so to catch every meter we
+# have to make rtl_433 hop too.
 #
-# Five hops at 906/911/916/921/926 MHz with 5 MHz spacing cover the
-# band tightly (each RTL-SDR window with -s 2048k is ~2 MHz, so 906
-# covers 905-907, 911 covers 910-912, etc).  Recipe confirmed
-# working on ernie 2026-04-25 (caught a neighbor SCM+ gas meter)
-# and replicated on pi-sensor-01 2026-04-26 (decoded SCMplus
-# id=101903449).  30-second hop dwell is the proven value — half
-# the worst-case time-to-hear vs. 60s, ITRON broadcasts every
-# 30-60s so we get at least one transmission window per hop.
+# Five hops at 911/916/921/926 + 868 MHz, 5 MHz spacing across the
+# US slot, plus one slot dedicated to Europe's 868 MHz ISM band so
+# we surface anything broadcasting there too.  Recipe (US-only)
+# confirmed working 2026-04-26 on pi-sensor-01 (decoded SCMplus
+# id=101903449 first try after dropping the broken -Y level=-30).
+# 906 MHz dropped from the rotation 2026-04-26 to make room for
+# 868 MHz — the 906 slot covered 905-907 MHz which is the lowest
+# edge of the US ISM band; 911-926 still covers 910-927 MHz which
+# is where the meaty meter traffic lives.  30-second hop dwell is
+# the proven value — half the worst-case time-to-hear vs. 60s,
+# ITRON broadcasts every 30-60s so we get at least one transmission
+# window per hop.
 #
-# Override via --rtl433-freqs / --rtl433-hop-interval for non-US
-# deployments (Europe is 868M single-channel, Japan 426M, etc.).
+# Override via --rtl433-freqs / --rtl433-hop-interval for other
+# regions (Japan is 426M, etc.).
 _DEFAULT_FREQUENCIES: tuple[str, ...] = (
-    "906M", "911M", "916M", "921M", "926M",
+    "868M", "911M", "916M", "921M", "926M",
 )
 _DEFAULT_HOP_INTERVAL_S: int = 30
 
@@ -455,7 +459,16 @@ class MeterPublisher:
         )
 
         cmd: list[str] = [
-            self._rtl433_path, "-F", "json", "-M", "utc",
+            self._rtl433_path, "-F", "json",
+            # Per-packet metadata: utc time, microsecond resolution,
+            # tuned frequency at decode time, and demod RSSI/SNR.
+            # Without these, packets carry only model+id+payload, which
+            # makes the /airwaves dashboard's freq column / signal-
+            # strength indicator empty.  The metadata fields land in
+            # the JSON object alongside model — AirwavesBuffer already
+            # probes packet.get("freq") and packet.get("rssi") /
+            # packet.get("snr").
+            "-M", "time:utc:usec:freq:level",
             "-s", self._sample_rate,
             # No -Y level= flag.  Commit 50eb015 added "-Y level=-30"
             # intending to lower the pulse-detection threshold to catch
