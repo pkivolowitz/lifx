@@ -460,15 +460,16 @@ class MeterPublisher:
 
         cmd: list[str] = [
             self._rtl433_path, "-F", "json",
-            # Per-packet metadata: utc time, microsecond resolution,
-            # tuned frequency at decode time, and demod RSSI/SNR.
-            # Without these, packets carry only model+id+payload, which
-            # makes the /airwaves dashboard's freq column / signal-
-            # strength indicator empty.  The metadata fields land in
-            # the JSON object alongside model — AirwavesBuffer already
-            # probes packet.get("freq") and packet.get("rssi") /
-            # packet.get("snr").
-            "-M", "time:utc:usec:freq:level",
+            # Per-packet metadata: utc time + microsecond resolution
+            # in the timestamp, plus 'level' which adds 'freq' (tuned
+            # MHz at decode time), 'rssi', 'snr', 'noise', and 'mod'
+            # to every JSON line.  Two separate -M flags by design —
+            # rtl_433 25.02 takes 'level' and 'time' as sibling
+            # selectors, not nested options under time:.  Without
+            # 'level' the freq/rssi/snr fields are absent and the
+            # /airwaves dashboard's freq column shows em-dashes.
+            "-M", "time:utc:usec",
+            "-M", "level",
             "-s", self._sample_rate,
             # No -Y level= flag.  Commit 50eb015 added "-Y level=-30"
             # intending to lower the pulse-detection threshold to catch
