@@ -89,6 +89,8 @@ FRIENDLY_NAMES: dict[str, str] = {
     "LaCrosse-TX":      "LaCrosse weather sensor",
     "OS":               "Oregon Scientific weather sensor",
     "Fineoffset":       "Fine Offset weather sensor",
+    "inFactory-TH":     "your inFactory temp/humidity sensor",
+    "inFactory":        "your inFactory weather sensor",
 }
 
 
