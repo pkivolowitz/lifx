@@ -95,15 +95,175 @@ header.bar .nav a {
 }
 header.bar .nav a:hover { opacity: 1; }
 
-/* Map fills remaining vertical space.  Leaflet REQUIRES the map
-   container to have a non-zero height at init — flex sizing alone
-   has been observed to race with the script and yield a 0-height
-   container.  Belt-and-braces: explicit min-height on top of the
-   flex grow, and a call to map.invalidateSize() after init below. */
+/* Below the top bar lives a horizontal flex container holding the
+   map (left, growing) and an optional vessel-table side panel
+   (right, fixed-but-draggable).  ``min-height: 0`` is required so
+   the inner flex children can actually shrink — without it the
+   map's intrinsic size dominates and the panel is forced to wrap. */
+#content {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: row;
+    min-height: 0;
+}
+
+/* Map fills the remaining horizontal space inside #content.  The
+   prior layout used min-height: 80vh as a belt-and-braces guard
+   against the Leaflet 0-height race; with #content as a definite-
+   height flex parent the map inherits a real size, so min-height
+   drops to 0 (otherwise it would force overflow when a tall panel
+   is open on a short window). */
 #map {
     flex: 1 1 auto;
-    min-height: 80vh;
+    min-height: 0;
     background: var(--bg);
+}
+
+/* Drag handle — 5 px sliver between map and panel.  cursor:
+   col-resize hints the affordance; hover lights the accent so the
+   target is discoverable.  Drag logic is in JS below. */
+#resize-handle {
+    flex: 0 0 5px;
+    cursor: col-resize;
+    background: var(--border);
+    transition: background 0.15s;
+}
+#resize-handle:hover { background: var(--accent); }
+body.panel-hidden #resize-handle { display: none; }
+
+/* Vessel-table side panel.  Width comes from --panel-width which
+   the JS keeps in sync with the localStorage-persisted size; the
+   240–50% bounds are enforced at drag time so we don't need CSS
+   min/max here.  display: flex column lets the header sit above a
+   scrolling table region. */
+#panel {
+    flex: 0 0 var(--panel-width, 360px);
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    min-width: 0;
+    overflow: hidden;
+}
+body.panel-hidden #panel { display: none; }
+
+.panel-header {
+    flex: 0 0 auto;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.78rem;
+}
+.panel-title {
+    font-family: var(--mono);
+    color: var(--label);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.panel-count {
+    font-family: var(--mono);
+    color: var(--text);
+    font-size: 0.82rem;
+}
+.panel-count .v { color: var(--accent); }
+
+/* Range segmented control — one button per N option (25/50/100/All).
+   Active button paints in the accent colour; the whole strip is
+   hidden when no maritime_reference is configured (no distance →
+   range filter is meaningless). */
+.range-control {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-left: auto;
+}
+.range-control button {
+    background: transparent;
+    color: var(--label);
+    border: 0;
+    padding: 4px 9px;
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    cursor: pointer;
+    border-right: 1px solid var(--border);
+}
+.range-control button:last-child { border-right: 0; }
+.range-control button:hover { color: var(--text); }
+.range-control button.active {
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 600;
+}
+body.no-distance .range-control { display: none; }
+
+/* Vessel table.  Scrolls vertically inside the panel; header row
+   sticks to the top.  Rows are clickable — click pans the map to
+   the vessel and opens its popup.  Sortable columns swap a sort
+   indicator on click. */
+.vtable-wrap { flex: 1 1 auto; overflow: auto; }
+table.vtable {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    font-family: var(--mono);
+}
+.vtable thead th {
+    position: sticky;
+    top: 0;
+    background: var(--panel);
+    color: var(--label);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 500;
+    font-size: 0.7rem;
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+.vtable thead th .sort-indicator {
+    color: var(--accent);
+    margin-left: 4px;
+    font-size: 0.7rem;
+}
+.vtable thead th:hover { color: var(--text); }
+.vtable tbody tr {
+    cursor: pointer;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.vtable tbody tr:hover { background: rgba(255,255,255,0.04); }
+.vtable tbody td {
+    padding: 4px 8px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 140px;
+}
+.vtable tbody td.col-name { color: var(--accent); }
+.vtable tbody td.col-distance,
+.vtable tbody td.col-heading,
+.vtable tbody td.col-speed { text-align: right; }
+.vtable tbody td.col-local { text-align: center; color: var(--accent-2); }
+.vtable .stale td { opacity: 0.55; }
+
+/* Vessel-name labels are now clickable — open the popup.  Default
+   Leaflet style sets pointer-events: none on .leaflet-tooltip so
+   markers underneath stay reachable; we override for our permanent
+   name labels because the click-to-open-popup affordance is the
+   whole point of making the name "feel like" a link. */
+.vessel-label {
+    pointer-events: auto;
+    cursor: pointer;
+}
+.vessel-label:hover {
+    background: rgba(40, 50, 65, 0.95);
+    border-color: var(--accent);
 }
 
 /* Leaflet popup theming.  Default popup is light-on-light; override
@@ -269,7 +429,28 @@ body.no-vessel-labels .leaflet-tooltip.vessel-label { display: none !important; 
     </div>
 </header>
 
-<div id="map"></div>
+<div id="content">
+    <div id="map"></div>
+    <div id="resize-handle" title="Drag to resize panel"></div>
+    <aside id="panel" aria-label="Vessel table">
+        <div class="panel-header">
+            <span class="panel-title">Vessels</span>
+            <span class="panel-count"><span class="v" id="panel-shown">0</span>/<span id="panel-total">0</span></span>
+            <div class="range-control" id="range-control" role="tablist" aria-label="Range filter">
+                <button data-n="25" class="active" type="button">25</button>
+                <button data-n="50" type="button">50</button>
+                <button data-n="100" type="button">100</button>
+                <button data-n="all" type="button">All</button>
+            </div>
+        </div>
+        <div class="vtable-wrap">
+            <table class="vtable">
+                <thead><tr id="vthead"></tr></thead>
+                <tbody id="vtbody"></tbody>
+            </table>
+        </div>
+    </aside>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         crossorigin=""></script>
@@ -374,13 +555,127 @@ const LabelsToggleLayer = L.Layer.extend({
 });
 const labelsToggle = (new LabelsToggleLayer()).addTo(map);
 
-/* Layer control — top-right collapsible widget.  Tile basemap and
-   nautical-chart overlay are radio / overlay tile layers; the four
-   feature groups + labels toggle let the operator hide/show vessel
-   classes, breadcrumb tracks, heading indicators, and name labels
-   independently.  Collapses by default; cracking the ☰ control
-   reveals the full set. */
-L.control.layers(
+/* ----- Vessel state -----
+   Declared up here (before the panel/layer-control init below)
+   because the column-toggle restoration calls renderTable, which
+   reads from lastVesselsById.  If these were declared in their
+   prior textual position later in the script, the temporal dead
+   zone would ReferenceError on first restore.
+
+   markers:         mmsi -> { marker, heading, headingBacking, kind, layer }
+                    (layer is the LayerGroup the marker is currently in,
+                     so we can move it on source change without leaks)
+   trackLines:      mmsi -> Polyline (lives in trackLayer)
+   lastVesselsById: mmsi -> raw vessel record from the most recent poll;
+                    used by the moveend handler to re-render after a
+                    pan/zoom without waiting for the next poll cycle,
+                    and by the side-panel renderer to drive the table. */
+const markers = new Map();
+const trackLines = new Map();
+const lastVesselsById = new Map();
+let firstFitDone = false;
+
+/* ----- Vessel-table side panel + persisted view state -----
+   Persistence is browser-local (localStorage) — that's the right
+   layer for per-device UI state (panel width, column visibility,
+   sort, range), distinct from the per-fork operator config that
+   lives in /etc/glowup/site.json (lat/lon reference, etc.).  All
+   panel state lives under one key so a single read/write covers
+   everything. */
+const PANEL_STORAGE_KEY = "maritime.panel.v1";
+const PANEL_DEFAULTS = {
+    shown:   true,
+    width:   360,
+    range:   "25",                /* "25" | "50" | "100" | "all" */
+    sort:    { key: "distance", dir: "asc" },
+    columns: { distance: true, name: true, type: true,
+               heading: true, speed: true, local: true },
+};
+function loadPanelState() {
+    try {
+        const raw = localStorage.getItem(PANEL_STORAGE_KEY);
+        if (!raw) return { ...PANEL_DEFAULTS, columns: { ...PANEL_DEFAULTS.columns } };
+        const got = JSON.parse(raw);
+        return {
+            shown:   typeof got.shown === "boolean" ? got.shown : PANEL_DEFAULTS.shown,
+            width:   typeof got.width === "number" && got.width >= 240 ? got.width : PANEL_DEFAULTS.width,
+            range:   ["25","50","100","all"].includes(got.range) ? got.range : PANEL_DEFAULTS.range,
+            sort:    (got.sort && typeof got.sort.key === "string" && (got.sort.dir === "asc" || got.sort.dir === "desc"))
+                     ? got.sort : { ...PANEL_DEFAULTS.sort },
+            columns: { ...PANEL_DEFAULTS.columns, ...(got.columns || {}) },
+        };
+    } catch (e) {
+        return { ...PANEL_DEFAULTS, columns: { ...PANEL_DEFAULTS.columns } };
+    }
+}
+const panelState = loadPanelState();
+function savePanelState() {
+    try { localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(panelState)); }
+    catch (e) { /* localStorage full / disabled — ignore, in-memory state still works */ }
+}
+
+/* Apply persisted width before Leaflet init so the map gets its
+   correct initial size on first frame.  Subsequent drag updates go
+   through setPanelWidth() below. */
+document.documentElement.style.setProperty("--panel-width", panelState.width + "px");
+if (!panelState.shown) document.body.classList.add("panel-hidden");
+
+/* Operator-set reference (postal_code, country, lat, lon) from
+   /etc/glowup/site.json.  Fetched once at page load.  When absent
+   the distance column / range filter are useless, so we hide them
+   via the body.no-distance class.  Set after fetch resolves. */
+let referenceConfig = null;
+
+/* ----- Layer control — top-right collapsible widget.
+   Builds in two passes so the column-toggle layers can be created
+   before the control is constructed (the layers themselves drive
+   panel column visibility through the Leaflet add/remove hooks). */
+
+/* Column-toggle layers — no-op L.Layer subclass that flips a JS
+   flag and re-renders the table.  One per togglable column,
+   wired into the same layer-control widget as the map overlays so
+   all "what is shown on screen" toggles live in one menu. */
+function makeColumnToggle(key) {
+    const ToggleLayer = L.Layer.extend({
+        onAdd:    function() { panelState.columns[key] = true;  rebuildTableHead(); renderTable(); savePanelState(); },
+        onRemove: function() { panelState.columns[key] = false; rebuildTableHead(); renderTable(); savePanelState(); },
+    });
+    return new ToggleLayer();
+}
+const colToggles = {
+    distance: makeColumnToggle("distance"),
+    name:     makeColumnToggle("name"),
+    type:     makeColumnToggle("type"),
+    heading:  makeColumnToggle("heading"),
+    speed:    makeColumnToggle("speed"),
+    local:    makeColumnToggle("local"),
+};
+
+/* Master "vessel table" toggle — same shape as the column toggles
+   but flips body.panel-hidden, which CSS uses to hide the whole
+   right pane.  invalidateSize() after the toggle so Leaflet
+   reflows tiles + markers to the new map width. */
+const TableMasterToggle = L.Layer.extend({
+    onAdd:    function() {
+        panelState.shown = true;
+        document.body.classList.remove("panel-hidden");
+        requestAnimationFrame(() => map.invalidateSize());
+        savePanelState();
+    },
+    onRemove: function() {
+        panelState.shown = false;
+        document.body.classList.add("panel-hidden");
+        requestAnimationFrame(() => map.invalidateSize());
+        savePanelState();
+    },
+});
+const tableMasterToggle = new TableMasterToggle();
+
+/* The layer control.  Map basemap + nautical chart at top, then
+   vessel layer groups + labels, then the table master + per-column
+   toggles.  Indented column labels make the hierarchy obvious in
+   Leaflet's flat checkbox list. */
+const layerControl = L.control.layers(
     { "OpenStreetMap": osmBase },
     {
         "Nautical chart (OpenSeaMap)": openSeaMap,
@@ -389,9 +684,289 @@ L.control.layers(
         "Breadcrumb tracks":           trackLayer,
         "Heading indicators":          headingLayer,
         "Vessel name labels":          labelsToggle,
+        "Vessel table":                tableMasterToggle,
+        "  ↳ col: Distance":           colToggles.distance,
+        "  ↳ col: Name":               colToggles.name,
+        "  ↳ col: Type":               colToggles.type,
+        "  ↳ col: Heading":            colToggles.heading,
+        "  ↳ col: Speed":              colToggles.speed,
+        "  ↳ col: Seen local":         colToggles.local,
     },
     { collapsed: true, position: "topright" },
 ).addTo(map);
+
+/* Persisted overlay state is restored at the END of the panel
+   block below — after COLUMNS / renderTable / etc. are
+   initialized.  Doing it here would temporal-dead-zone on the
+   first toggle's onAdd → renderTable → COLUMNS access. */
+
+/* ----- Vessel-table column definitions, rendering, sort, range -----
+
+   COLUMNS is the schema; each entry has a ``key`` matching
+   panelState.columns/sort, a header label, a value extractor used
+   for both sort and display, and a formatter that produces the
+   final HTML-escaped cell content.  Adding a new column = one
+   entry here + one entry in the layer-control's column toggles
+   above + one slot in PANEL_DEFAULTS.columns. */
+const COLUMNS = [
+    { key: "distance", label: "Dist nmi",
+      get: v => v.distance_nmi,
+      cmp: "num",
+      fmt: v => v == null ? "—" : v.toFixed(1) },
+    { key: "name", label: "Name",
+      get: v => (v.shipname && v.shipname.trim()) || ("MMSI " + v.mmsi),
+      cmp: "str",
+      fmt: v => escapeHtml(v) },
+    { key: "type", label: "Type",
+      get: v => v.shiptype_text || null,
+      cmp: "str",
+      fmt: v => v == null ? "—" : escapeHtml(v) },
+    { key: "heading", label: "Hdg",
+      /* Sort uses the realHeading() output (511 sentinel folded to
+         null so unknown-heading vessels sink to the bottom of an
+         ascending sort).  Display rounds to integer degrees. */
+      get: v => realHeading(v.heading),
+      cmp: "num",
+      fmt: v => v == null ? "—" : (Math.round(v).toString().padStart(3, "0") + "°") },
+    { key: "speed", label: "Spd kt",
+      get: v => realSpeed(v.speed),
+      cmp: "num",
+      fmt: v => v == null ? "—" : v.toFixed(1) },
+    { key: "local", label: "Loc",
+      /* Sort by sticky seen_local flag — true sorts before false in
+         ascending order so an asc click bubbles "loc" rows up. */
+      get: v => !!v.seen_local,
+      cmp: "bool",
+      fmt: v => v ? "✓" : "" },
+];
+function colByKey(k) { return COLUMNS.find(c => c.key === k); }
+
+/* Click on a column header: cycle sort.  Same key → flip direction;
+   different key → switch to that key, default direction asc.
+   Persisted via savePanelState. */
+function rebuildTableHead() {
+    const head = document.getElementById("vthead");
+    if (!head) return;
+    const sortKey = panelState.sort.key;
+    const sortDir = panelState.sort.dir;
+    head.innerHTML = COLUMNS
+        .filter(c => panelState.columns[c.key])
+        .map(c => {
+            const ind = (c.key === sortKey)
+                ? `<span class="sort-indicator">${sortDir === "asc" ? "▲" : "▼"}</span>`
+                : "";
+            return `<th data-key="${c.key}">${escapeHtml(c.label)}${ind}</th>`;
+        })
+        .join("");
+    head.querySelectorAll("th").forEach(th => {
+        th.addEventListener("click", () => {
+            const k = th.getAttribute("data-key");
+            if (panelState.sort.key === k) {
+                panelState.sort.dir = (panelState.sort.dir === "asc" ? "desc" : "asc");
+            } else {
+                panelState.sort.key = k;
+                panelState.sort.dir = "asc";
+            }
+            savePanelState();
+            rebuildTableHead();
+            renderTable();
+        });
+    });
+}
+
+/* Compute the table rows from the currently-cached vessel set.
+   Pipeline:
+     1. Filter to vessels with a position fix.
+     2. If a reference is set AND range != all, take the closest N
+        by distance — this is the "always-by-distance preselect"
+        contract: range chooses the geographic neighbourhood, sort
+        chooses the order within it.
+     3. Apply the user's sort within the chosen slice.
+     4. Render. */
+function panelRows(vessels) {
+    let with_pos = vessels.filter(v => v.lat != null && v.lon != null);
+    const total = with_pos.length;
+    const haveDistance = (referenceConfig != null) &&
+        with_pos.some(v => v.distance_nmi != null);
+    if (panelState.range !== "all" && haveDistance) {
+        const n = parseInt(panelState.range, 10);
+        with_pos = with_pos
+            .slice()
+            .sort((a, b) => (a.distance_nmi ?? Infinity) - (b.distance_nmi ?? Infinity))
+            .slice(0, n);
+    }
+    const col = colByKey(panelState.sort.key);
+    if (col) {
+        const dir = panelState.sort.dir === "asc" ? 1 : -1;
+        with_pos.sort((a, b) => {
+            const av = col.get(a);
+            const bv = col.get(b);
+            /* Null-last in either direction.  An asc sort puts
+               valid values first; a desc sort puts them first too
+               (you didn't ask to see "no value" promoted by
+               flipping). */
+            if (av == null && bv == null) return 0;
+            if (av == null) return 1;
+            if (bv == null) return -1;
+            if (col.cmp === "num")  return (av - bv) * dir;
+            if (col.cmp === "bool") return ((av ? 1 : 0) - (bv ? 1 : 0)) * dir;
+            return av.localeCompare(bv) * dir;
+        });
+    }
+    return { rows: with_pos, total: total };
+}
+
+/* Render the <tbody> for the current vessel cache + state.  Each
+   row carries its MMSI as a data attribute; click pans the map to
+   the vessel and opens the marker's popup (same UX as clicking
+   the name label on the map itself). */
+function renderTable() {
+    if (document.body.classList.contains("panel-hidden")) return;
+    const { rows, total } = panelRows(Array.from(lastVesselsById.values()));
+    const cols = COLUMNS.filter(c => panelState.columns[c.key]);
+    const tbody = document.getElementById("vtbody");
+    if (!tbody) return;
+    tbody.innerHTML = rows.map(v => {
+        const cells = cols.map(c => {
+            const cls = "col-" + c.key;
+            return `<td class="${cls}">${c.fmt(c.get(v))}</td>`;
+        }).join("");
+        const stale = v.stale ? ' class="stale"' : "";
+        return `<tr data-mmsi="${v.mmsi}"${stale}>${cells}</tr>`;
+    }).join("");
+    document.getElementById("panel-shown").textContent = rows.length;
+    document.getElementById("panel-total").textContent = total;
+    /* Row click → focus the vessel on the map.  panTo first so the
+       popup is visible after openPopup(); openPopup also auto-pans
+       but with a less-controlled offset. */
+    tbody.querySelectorAll("tr").forEach(tr => {
+        tr.addEventListener("click", () => {
+            const mmsi = parseInt(tr.getAttribute("data-mmsi"), 10);
+            focusVessel(mmsi);
+        });
+    });
+}
+
+/* Focus a vessel by MMSI: pan the map + open the popup.  Used by
+   both the table-row click handler and the on-map name-label
+   click handler.  No-op if the vessel isn't in the marker map
+   (e.g. it just dropped out of the viewport-cull window). */
+function focusVessel(mmsi) {
+    const entry = markers.get(mmsi);
+    if (!entry) return;
+    const ll = entry.marker.getLatLng();
+    map.panTo(ll);
+    entry.marker.openPopup();
+}
+
+/* Range segmented control wiring.  One button per N option; click
+   updates panelState.range, persists, and re-renders the table.
+   The control itself is hidden by CSS when no reference is
+   configured (body.no-distance class). */
+function wireRangeControl() {
+    const buttons = document.querySelectorAll("#range-control button");
+    function refresh() {
+        buttons.forEach(b => {
+            b.classList.toggle("active", b.getAttribute("data-n") === panelState.range);
+        });
+    }
+    refresh();
+    buttons.forEach(b => {
+        b.addEventListener("click", () => {
+            panelState.range = b.getAttribute("data-n");
+            savePanelState();
+            refresh();
+            renderTable();
+        });
+    });
+}
+wireRangeControl();
+
+/* Drag-resize the panel.  Mouse-down on the handle starts a drag
+   that translates pointer X into a new panel width (240 px floor,
+   50%-of-window ceiling).  Map's invalidateSize is rAF-throttled
+   during drag so the basemap reflows live without overwhelming
+   the renderer; the localStorage write happens once on mouseup. */
+let _dragging = false, _dragStartX = 0, _dragStartW = 0, _dragRaf = null;
+function setPanelWidth(w) {
+    panelState.width = w;
+    document.documentElement.style.setProperty("--panel-width", w + "px");
+}
+const _handle = document.getElementById("resize-handle");
+_handle.addEventListener("mousedown", e => {
+    _dragging = true;
+    _dragStartX = e.clientX;
+    _dragStartW = document.getElementById("panel").offsetWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    e.preventDefault();
+});
+document.addEventListener("mousemove", e => {
+    if (!_dragging) return;
+    /* Drag handle is to the LEFT of the panel; dragging left
+       widens the panel (pointer moved toward map → panel grew). */
+    const dx = _dragStartX - e.clientX;
+    let w = _dragStartW + dx;
+    w = Math.max(240, Math.min(Math.floor(window.innerWidth * 0.5), w));
+    setPanelWidth(w);
+    if (!_dragRaf) {
+        _dragRaf = requestAnimationFrame(() => {
+            map.invalidateSize();
+            _dragRaf = null;
+        });
+    }
+});
+document.addEventListener("mouseup", () => {
+    if (!_dragging) return;
+    _dragging = false;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    savePanelState();
+    map.invalidateSize();
+});
+
+/* Reference config fetch — once at page load.  Drives:
+     - the "Dist nmi" column header (we keep the static label; the
+       value comes from the server's distance_nmi field)
+     - the body.no-distance class which hides the range control
+   Fetched non-blocking; the panel works without it (distance
+   shows "—", range is always "all" effectively). */
+async function fetchMaritimeConfig() {
+    try {
+        const r = await fetch("/api/maritime/config");
+        const j = await r.json();
+        referenceConfig = j.reference || null;
+    } catch (e) {
+        referenceConfig = null;
+    }
+    if (!referenceConfig) {
+        document.body.classList.add("no-distance");
+    } else {
+        document.body.classList.remove("no-distance");
+    }
+    /* Re-render — initial table render may have happened before
+       the config arrived. */
+    renderTable();
+}
+fetchMaritimeConfig();
+
+/* Initial table head + first render (on cache, which is empty
+   until the first poll).  Subsequent renders are kicked from the
+   poll() handler below. */
+rebuildTableHead();
+renderTable();
+
+/* Restore persisted overlay state.  Adding a layer to the map
+   ticks its checkbox AND drives our onAdd hooks; renderTable +
+   rebuildTableHead are defined above this point so the hook calls
+   are safe.  The savePanelState() calls during restore are no-ops
+   in effect (they write back the same values they restored). */
+if (panelState.shown) tableMasterToggle.addTo(map);
+else map.removeLayer(tableMasterToggle);
+for (const [k, layer] of Object.entries(colToggles)) {
+    if (panelState.columns[k]) layer.addTo(map);
+    else map.removeLayer(layer);
+}
 
 /* Fullscreen toggle — custom Leaflet control mirroring the look of
    the built-in zoom control (top-left, square buttons).  Click
@@ -434,25 +1009,17 @@ window.addEventListener("resize", () => map.invalidateSize());
 document.addEventListener("fullscreenchange",
     () => requestAnimationFrame(() => map.invalidateSize()));
 
-/* ----- Vessel state -----
-   markers:         mmsi -> { marker, heading, headingBacking, kind, layer }
-                    (layer is the LayerGroup the marker is currently in,
-                     so we can move it on source change without leaks)
-   trackLines:      mmsi -> Polyline (lives in trackLayer)
-   lastVesselsById: mmsi -> raw vessel record from the most recent poll;
-                    used by the moveend handler to re-render after a
-                    pan/zoom without waiting for the next poll cycle.
-
-   Screen-space culling: every poll AND every map moveend pass the
+/* Screen-space culling: every poll AND every map moveend pass the
    data through filterToViewport(), which drops vessels outside
    map.getBounds().pad(0.3).  Off-screen vessels get their markers
    removed (cheap on Leaflet; O(1) per marker) so the engine is only
    rendering what the operator can actually see.  Critical at the
-   1000+ vessel scale aisstream pumps in. */
-const markers = new Map();
-const trackLines = new Map();
-const lastVesselsById = new Map();
-let firstFitDone = false;
+   1000+ vessel scale aisstream pumps in.
+
+   markers / trackLines / lastVesselsById / firstFitDone are
+   declared earlier in this script — see the "Vessel state" block
+   above the panel init.  This kept the temporal-dead-zone-free
+   ordering needed by the column-toggle restoration. */
 
 /* Clamp the AIS-style "no data" sentinels.  AIS uses 511 for "no
    heading", -128 for "no rate-of-turn", etc.  Don't render those. */
@@ -697,6 +1264,14 @@ function upsertVessel(v) {
                 offset:      [sz / 2 + 4, 0],
                 className:   labelClass,
                 opacity:     1.0,
+                /* interactive=true makes the tooltip's DOM element
+                   receive pointer events; clicks propagate to the
+                   bound marker, whose bindPopup() above handles the
+                   open.  Without this flag Leaflet sets pointer-
+                   events: none on the tooltip and the name label is
+                   purely decorative.  CSS adds cursor: pointer + a
+                   hover state so the affordance is visible. */
+                interactive: true,
             });
         }
     } else if (entry.marker.getTooltip()) {
@@ -841,6 +1416,11 @@ async function poll() {
     }
 
     renderVessels(vessels);
+    /* Re-render the side-panel table off the same cache.  The
+       table is independent from the map's viewport culling — it
+       shows the closest-N (or all) vessels in the buffer regardless
+       of what is currently on screen. */
+    renderTable();
 }
 
 poll();

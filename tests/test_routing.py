@@ -351,6 +351,7 @@ class TestRouteFlags(unittest.TestCase):
             ("maritime",),
             ("api", "maritime", "vessels"),
             ("api", "maritime", "vessel", "{mmsi}"),
+            ("api", "maritime", "config"),
         }
         for route in _ROUTES:
             if route.pattern in AUTH_FREE_PATTERNS:

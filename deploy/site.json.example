@@ -22,5 +22,13 @@
   "printer": "<printer host or IP — for the printer adapter>",
 
   "_comment_contact": "Operator contact email used for any external API that requires a callback — currently NWS (api.weather.gov) for the voice coordinator's weather source. NWS rate-limits or blocks opaque User-Agents; supplying a real email lets them reach you before pulling the plug. Optional: omit and the User-Agent will be name-only, accepting NWS's possibly-degraded service.",
-  "contact_email": "<operator contact email, e.g. ops@example.com>"
+  "contact_email": "<operator contact email, e.g. ops@example.com>",
+
+  "_comment_maritime_reference": "Reference point for the /maritime dashboard's vessel-table side panel — drives the distance column (nautical miles) and the closest-N range filter (25/50/100/All). The lat/lon do the math; postal_code and country are display labels only (no runtime geocoding). Omit the whole block to disable distance/range — the side panel still works, it just hides the range control and shows '—' in the distance column.",
+  "maritime_reference": {
+    "postal_code": "<your postal code, e.g. 36602>",
+    "country":     "<ISO-2 country code, e.g. US>",
+    "lat":         "<reference latitude in WGS-84 decimal degrees>",
+    "lon":         "<reference longitude in WGS-84 decimal degrees>"
+  }
 }

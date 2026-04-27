@@ -1,13 +1,16 @@
 """Hub-side HTTP handlers for the /maritime dashboard.
 
-Exposes the static map at ``/maritime`` and two JSON feeds that
-power the live vessel layer:
+Exposes the static map at ``/maritime`` and three JSON feeds that
+power the live vessel layer and the vessel-table side panel:
 
 - ``GET /api/maritime/vessels``       — current state of every
                                         vessel we've heard from
                                         (newest-active first)
 - ``GET /api/maritime/vessel/<mmsi>`` — full state + breadcrumb
                                         track for one vessel
+- ``GET /api/maritime/config``        — operator-set reference point
+                                        (for the table's distance
+                                        column / range filter)
 
 Backed by an in-memory per-vessel state map maintained by
 :class:`infrastructure.maritime_buffer.MaritimeBuffer`, which
@@ -19,7 +22,7 @@ subscribes to ``glowup/maritime/ais`` from the AIS-catcher receiver.
 
 from __future__ import annotations
 
-__version__: str = "1.0"
+__version__: str = "1.1"
 
 import logging
 import os
@@ -111,3 +114,20 @@ class MaritimeHandlerMixin:
             self._send_json(404, {"error": "unknown mmsi"})
             return
         self._send_json(200, v)
+
+    # -- /api/maritime/config ------------------------------------------------
+
+    def _handle_get_maritime_config(self) -> None:
+        """GET /api/maritime/config — dashboard-side configuration.
+
+        Currently exposes only the operator-set reference point —
+        ``{reference: {lat, lon, postal_code, country}}`` or
+        ``{reference: null}`` when the operator hasn't set
+        ``maritime_reference`` in /etc/glowup/site.json.  The
+        dashboard fetches this once at page load to label the
+        distance column / disable the range filter when no
+        reference is configured.
+        """
+        mb: Any = getattr(self, "maritime_buffer", None)
+        ref: Any = mb.reference if mb is not None else None
+        self._send_json(200, {"reference": ref})

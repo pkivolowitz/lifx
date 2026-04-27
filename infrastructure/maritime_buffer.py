@@ -29,11 +29,12 @@ more than a few microseconds.
 
 from __future__ import annotations
 
-__version__: str = "1.0"
+__version__: str = "1.1"
 
 import collections
 import json
 import logging
+import math
 import threading
 import time
 from typing import Any, Optional
@@ -87,6 +88,20 @@ DEFAULT_STALE_AFTER_S: float = 600.0
 # paho keepalive (seconds).  Match the airwaves subscriber.
 _MQTT_KEEPALIVE_S: int = 60
 
+# Earth's mean radius in nautical miles.  Maritime convention is
+# nautical miles (1 nmi = 1.852 km), so distances in this buffer
+# are reported in nmi to match what the rest of the maritime
+# ecosystem (chartplotters, AIS displays, vessel ETAs) uses.  The
+# /maritime dashboard renders the same unit.
+_EARTH_RADIUS_NMI: float = 3440.065
+
+# External-source markers carried in the AIS packet's ``"source"``
+# field.  Local AIS-catcher messages carry no ``source`` field at
+# all (treated as "local-RX" by default).  Anything other than
+# these markers is treated as external for the seen_local /
+# seen_external flag accounting.
+_EXTERNAL_SOURCE_MARKERS: frozenset[str] = frozenset({"aisstream"})
+
 # AIS message fields we promote onto the per-vessel state on every
 # incoming message.  Any field present in the packet overwrites the
 # corresponding state value; missing fields keep the prior value
@@ -119,16 +134,33 @@ class MaritimeBuffer:
         track_len:        Max breadcrumb length per vessel.
         stale_after_s:    Default cutoff for the ``stale`` flag in
                           ``vessels()`` results.
+        reference:        Optional dict ``{lat, lon, postal_code,
+                          country}`` defining a fixed reference point
+                          (typically the operator's home port or
+                          downtown).  When set, every vessel's
+                          ``distance_nmi`` is computed at materialise
+                          time so the dashboard can sort/filter by
+                          distance without each browser re-doing the
+                          haversine.  The ``postal_code`` and
+                          ``country`` fields are display labels only;
+                          ``lat`` and ``lon`` do the math, no runtime
+                          geocoding.  Sourced from
+                          ``site.maritime_reference``; absent / None
+                          leaves ``distance_nmi`` set to None.
     """
 
     def __init__(
         self,
         track_len: int = DEFAULT_TRACK_LEN,
         stale_after_s: float = DEFAULT_STALE_AFTER_S,
+        reference: Optional[dict[str, Any]] = None,
     ) -> None:
         """See class docstring."""
         self._track_len: int = track_len
         self._stale_after_s: float = stale_after_s
+        self._reference: Optional[dict[str, Any]] = (
+            self._validate_reference(reference)
+        )
         self._vessels: dict[int, dict[str, Any]] = {}
         self._lock: threading.Lock = threading.Lock()
         self._client: Optional["mqtt.Client"] = None
@@ -137,6 +169,49 @@ class MaritimeBuffer:
         self._msg_count: int = 0
         self._first_msg_ts: Optional[float] = None
         self._last_msg_ts: Optional[float] = None
+
+    @staticmethod
+    def _validate_reference(
+        reference: Optional[dict[str, Any]],
+    ) -> Optional[dict[str, Any]]:
+        """Coerce a site.maritime_reference dict into a usable form.
+
+        A valid reference must carry numeric ``lat`` / ``lon`` in
+        WGS-84 ranges; anything else is rejected at construction
+        rather than crashing per-vessel later.  Missing optional
+        labels (``postal_code``, ``country``) are tolerated — they
+        only affect display.  Returning None disables distance
+        computation entirely.
+        """
+        if not isinstance(reference, dict):
+            return None
+        lat: Any = reference.get("lat")
+        lon: Any = reference.get("lon")
+        if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+            logger.warning(
+                "maritime_reference rejected — lat/lon must be numeric, "
+                "got lat=%r lon=%r",
+                lat, lon,
+            )
+            return None
+        if not (-90.0 <= float(lat) <= 90.0) or not (-180.0 <= float(lon) <= 180.0):
+            logger.warning(
+                "maritime_reference rejected — lat/lon out of range "
+                "(lat=%r lon=%r)",
+                lat, lon,
+            )
+            return None
+        return {
+            "lat":         float(lat),
+            "lon":         float(lon),
+            "postal_code": reference.get("postal_code"),
+            "country":     reference.get("country"),
+        }
+
+    @property
+    def reference(self) -> Optional[dict[str, Any]]:
+        """Return the configured reference point dict, or None."""
+        return self._reference
 
     # ---- MQTT lifecycle ----------------------------------------------------
 
@@ -266,10 +341,34 @@ class MaritimeBuffer:
                     "last_position_ts": None,
                     "last_signal_power": None,
                     "last_channel":     None,
+                    # Sticky per-source flags — once set true, stay
+                    # true while the vessel is in the buffer.  Answers
+                    # the more useful "did our antenna ever hear this"
+                    # question rather than "what was the most recent
+                    # decode".  ``source`` (last-source-wins via
+                    # _MERGED_FIELDS below) still tracks the most
+                    # recent source for the popup's "Source" row.
+                    "seen_local":       False,
+                    "seen_external":    False,
                 },
             )
             v["last_seen"] = now
             v["msg_count"] = v["msg_count"] + 1
+
+            # Sticky source-presence accounting.  Local AIS-catcher
+            # publishes carry no ``source`` field; external bridges
+            # (currently only aisstream, see _EXTERNAL_SOURCE_MARKERS)
+            # tag their messages.  Set the matching flag true on
+            # every message; never clear — once heard, always heard
+            # for the lifetime of this buffer entry.
+            packet_source: Any = packet.get("source")
+            if (
+                isinstance(packet_source, str)
+                and packet_source in _EXTERNAL_SOURCE_MARKERS
+            ):
+                v["seen_external"] = True
+            else:
+                v["seen_local"] = True
 
             # Promote merge fields when present and non-null.
             for key in _MERGED_FIELDS:
@@ -328,6 +427,27 @@ class MaritimeBuffer:
 
     # ---- Read accessors ----------------------------------------------------
 
+    @staticmethod
+    def _haversine_nmi(
+        lat1: float, lon1: float, lat2: float, lon2: float,
+    ) -> float:
+        """Great-circle distance in nautical miles.
+
+        WGS-84 is treated as a sphere — sub-percent error is fine
+        for at-a-glance dashboard distances.  Accurate ETA / nav
+        computations would use Vincenty or similar; we are not
+        doing nav, we are sorting a table.
+        """
+        p1: float = math.radians(lat1)
+        p2: float = math.radians(lat2)
+        dp: float = math.radians(lat2 - lat1)
+        dl: float = math.radians(lon2 - lon1)
+        a: float = (
+            math.sin(dp / 2) ** 2
+            + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        )
+        return 2.0 * _EARTH_RADIUS_NMI * math.asin(math.sqrt(a))
+
     def _materialise(
         self,
         v: dict[str, Any],
@@ -370,6 +490,19 @@ class MaritimeBuffer:
             copy["flag_iso"] = iso2
             copy["flag_country"] = country_name
             copy["flag_emoji"] = _mid_iso2_to_emoji(iso2)
+        # Distance enrichment — only when a reference is configured
+        # AND the vessel has a current position.  Computed server-side
+        # so 3000-vessel browsers don't each re-haversine on every
+        # poll, and so server-side sort/range filters are stable.
+        copy["distance_nmi"] = None
+        if self._reference is not None:
+            lat: Any = copy.get("lat")
+            lon: Any = copy.get("lon")
+            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                copy["distance_nmi"] = self._haversine_nmi(
+                    self._reference["lat"], self._reference["lon"],
+                    float(lat), float(lon),
+                )
         return copy
 
     def vessels(

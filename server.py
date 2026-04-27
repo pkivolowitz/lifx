@@ -379,6 +379,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_maritime_vessels", requires_auth=False),
     _Route("GET", ("api", "maritime", "vessel", "{mmsi}"),
            "_handle_get_maritime_vessel", requires_auth=False),
+    _Route("GET", ("api", "maritime", "config"),
+           "_handle_get_maritime_config", requires_auth=False),
     # POST /api/zigbee/set was removed in 2026-04-15 along with
     # the in-process Zigbee adapter.  Its successor lives under
     # /api/plugs — see handlers/plug.py and docs/29-zigbee-service.md.
@@ -3148,9 +3150,18 @@ def main() -> None:
             # Maritime buffer — per-vessel state for the /maritime
             # map, fed by AIS-catcher's MQTT firehose at
             # ``glowup/maritime/ais``.  Same guarded-import pattern.
+            # The optional ``maritime_reference`` site key (lat/lon
+            # + postal_code/country labels) drives per-vessel
+            # distance enrichment that powers the vessel-table side
+            # panel's distance column and closest-N range filter.
+            # Absent reference disables those features cleanly —
+            # distance_nmi falls through as None and the dashboard
+            # hides the range control.
             try:
                 from infrastructure.maritime_buffer import MaritimeBuffer
-                maritime_buf = MaritimeBuffer()
+                from glowup_site import site as _site
+                maritime_ref: Any = _site.get("maritime_reference")
+                maritime_buf = MaritimeBuffer(reference=maritime_ref)
                 maritime_buf.start_subscriber(
                     broker_host=broker_addr,
                     broker_port=broker_port,
