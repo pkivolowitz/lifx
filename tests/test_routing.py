@@ -339,6 +339,10 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "maritime", "vessels"),
             ("api", "maritime", "vessel", "{mmsi}"),
             ("api", "maritime", "config"),
+            # Aircraft data feed — polled by /maritime, /air, and
+            # /traffic JS for the aircraft layer.  Same public
+            # read-only stance as the other map data feeds.
+            ("api", "sdr", "adsb", "aircraft"),
             # /buoys/<station> + history endpoints — NDBC observation
             # data, public read-only.  Same rationale as /maritime.
             ("buoys", "{station_id}"),

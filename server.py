@@ -463,7 +463,7 @@ _ROUTES: tuple[_Route, ...] = (
     # endpoint stays — it's what the maritime page's aircraft layer
     # polls.
     _Route("GET", ("api", "sdr", "adsb", "aircraft"),
-           "_handle_get_adsb_aircraft"),
+           "_handle_get_adsb_aircraft", requires_auth=False),
 
     # -- Ernie (.153) sniffer dashboard retired 2026-04-27 -----------------
     # /ernie page + every /api/ernie/* endpoint removed.  The Ernie
