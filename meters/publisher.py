@@ -522,7 +522,17 @@ class MeterPublisher:
             "MQTT connected to %s:%d", self._broker_host, self._broker_port,
         )
 
+        # ``stdbuf -oL`` forces line-buffered stdout in the child.
+        # Without it, glibc block-buffers a 4 KiB pipe, so short log
+        # lines ("SDR: Tuned to <f>MHz.") sit in the buffer until JSON
+        # decode packets push it past block size.  At 30s dwell on
+        # quiet bands that means tune events arrive minutes late or
+        # not at all — the first deploy-with-pipe symptom was the
+        # /airwaves dashboard freezing on the startup tune forever.
+        # ``-eL`` covers stderr too in case any future code paths
+        # emit to stderr.  Both are coreutils standard.
         cmd: list[str] = [
+            "stdbuf", "-oL", "-eL",
             self._rtl433_path, "-F", "json",
             # Per-packet metadata: utc time + microsecond resolution
             # in the timestamp, plus 'level' which adds 'freq' (tuned
