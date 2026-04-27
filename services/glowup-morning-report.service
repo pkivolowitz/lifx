@@ -2,7 +2,9 @@
 #
 # Gathers fleet health data from all hosts, checks API/adapter status,
 # optionally runs the test suite on a dev Mac, and sends a formatted
-# HTML email to perry@kivolowitz.com.
+# HTML email to whichever address is configured in
+# /etc/glowup/email.json (the "to" key — file is mode 0600 and lives
+# outside the repo).
 #
 # Install:
 #   sudo cp /home/a/lifx/services/glowup-morning-report.service /etc/systemd/system/
