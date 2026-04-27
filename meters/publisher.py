@@ -89,6 +89,7 @@ from __future__ import annotations
 __version__: str = "1.0"
 
 import argparse
+import collections
 import json
 import logging
 import os
@@ -97,8 +98,9 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
-from typing import Any, Optional
+from typing import Any, Deque, Optional
 
 try:
     import paho.mqtt.client as mqtt
@@ -291,6 +293,18 @@ _PUBLISH_QOS: int = 1
 # Seconds between MQTT keepalives.
 _MQTT_KEEPALIVE_S: int = 60
 
+# How many recent stderr lines from rtl_433 to retain for crash
+# diagnostics.  rtl_433 at -vvvvv emits megabytes of pulse-data
+# trace per minute on stderr (direct fprintf, not through the log
+# subsystem), so we MUST drain the pipe continuously — otherwise it
+# fills the 64 KiB pipe buffer, rtl_433 blocks on write(stderr), the
+# read loop on stdout starves, tune events never reach the publisher,
+# and the /airwaves indicator freezes.  Bed, 2026-04-26 night /
+# 2026-04-27 early — confirmed via /proc/<pid>/wchan = pipe_write.
+# A bounded deque is the right shape: cheap, drops oldest first,
+# preserves a useful tail for the post-mortem print on rc != 0.
+_STDERR_RING_SIZE: int = 64
+
 
 # ---------------------------------------------------------------------------
 # Schema validation at the rtl_433 boundary
@@ -481,6 +495,15 @@ class MeterPublisher:
         )
         self._proc: Optional[subprocess.Popen[str]] = None
         self._stopping: bool = False
+        # Bounded ring of recent stderr lines from rtl_433.  Drained
+        # by a daemon thread spawned in start() so the pipe never
+        # fills (see _STDERR_RING_SIZE comment for the failure mode).
+        # The crash-tail diagnostic (in _read_loop) reads from here
+        # instead of from the pipe.
+        self._stderr_ring: Deque[str] = collections.deque(
+            maxlen=_STDERR_RING_SIZE,
+        )
+        self._stderr_thread: Optional[threading.Thread] = None
         # Numeric rotation in MHz, parsed once from the configured
         # frequency strings ("433.92M" → 433.92).  Cached for the
         # tuner-state payload so /airwaves can show "next: <freq>"
@@ -602,10 +625,57 @@ class MeterPublisher:
                          self._rtl433_path, exc)
             raise
 
+        # Start the stderr drain thread BEFORE entering the read loop.
+        # rtl_433 at -vvvvv firehoses pulse-data trace lines on stderr;
+        # if we let that pipe back up, rtl_433 blocks on write(stderr)
+        # and the stdout-side read loop never sees another line.
+        self._stderr_thread = threading.Thread(
+            target=self._drain_stderr,
+            name="rtl_433-stderr-drain",
+            daemon=True,
+        )
+        self._stderr_thread.start()
+
         try:
             self._read_loop()
         finally:
             self._cleanup()
+
+    def _drain_stderr(self) -> None:
+        """Continuously read rtl_433 stderr into a bounded ring.
+
+        rtl_433 at -vvvvv emits very high-volume trace data on stderr
+        via direct ``fprintf(stderr, ...)`` (Pulse data dumps,
+        per-pulse timing, decoder bitrows, etc.).  We can't simply
+        let that pipe buffer fill because rtl_433 will then block on
+        ``write(stderr)`` — confirmed via /proc/<pid>/wchan reading
+        ``pipe_write`` after a few minutes of operation, with the
+        stdout side of rtl_433 starving the publisher's read loop.
+
+        Discarding the bytes is fine — the pulse-trace stream has no
+        operational value here.  We retain the last
+        :data:`_STDERR_RING_SIZE` lines into ``self._stderr_ring`` so
+        a non-zero rtl_433 exit can include a useful tail in the
+        crash log without ever blocking the producer.
+
+        Runs as a daemon thread; exits naturally when the rtl_433
+        process exits and stderr closes (readline returns "").
+        """
+        assert self._proc is not None
+        if self._proc.stderr is None:
+            return
+        try:
+            for line in self._proc.stderr:
+                # Bounded deque appends drop the oldest line for free
+                # — no per-line cost beyond the rstrip; volume here
+                # can be tens of thousands of lines per second at
+                # peak, so this loop body must stay tight.
+                self._stderr_ring.append(line.rstrip("\n"))
+        except Exception as exc:  # pragma: no cover
+            # If readline raises (e.g. pipe broken mid-shutdown), log
+            # at debug and exit the thread.  The rtl_433 exit-code
+            # path will surface any actual failure to the operator.
+            logger.debug("stderr drain ended: %s", exc)
 
     def _publish_tuner_state(self, freq_MHz: float) -> None:
         """Publish a retained tuner-state message after a rtl_433 retune.
@@ -740,15 +810,19 @@ class MeterPublisher:
         # decides via the proc's returncode.
         rc: Optional[int] = self._proc.poll()
         if rc is not None and rc != 0 and not self._stopping:
-            stderr_tail: str = ""
-            if self._proc.stderr is not None:
-                try:
-                    stderr_tail = self._proc.stderr.read() or ""
-                except Exception:  # pragma: no cover
-                    stderr_tail = "(stderr unreadable)"
+            # Pull diagnostics from the drain thread's ring rather
+            # than reading the stderr pipe directly — the drain
+            # thread has been consuming bytes the whole time, so the
+            # pipe is empty by now and a .read() would just block or
+            # return empty.  Snapshot under no lock: deque.append /
+            # iteration interleave is GIL-safe and we tolerate a
+            # partial-update read here (last line might be truncated
+            # — fine for a post-mortem hint).
+            tail_lines: list[str] = list(self._stderr_ring)
+            stderr_tail: str = "\n".join(tail_lines)
             logger.error(
-                "rtl_433 exited with code %d.  stderr tail:\n%s",
-                rc, stderr_tail[-2000:],
+                "rtl_433 exited with code %d.  stderr tail (last %d lines):\n%s",
+                rc, len(tail_lines), stderr_tail[-2000:],
             )
             raise RuntimeError(f"rtl_433 exited rc={rc}")
 
