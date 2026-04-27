@@ -1,0 +1,78 @@
+# GlowUp maritime AIS receiver — AIS-catcher → MQTT bridge for marine
+# AIS broadcasts on 161.975 / 162.025 MHz (channels A / B).  Receives
+# both channels simultaneously on a single RTL-SDR R820T, decodes
+# JSON-Full per AIS message, and publishes to the local broker.
+#
+# Runs on the operator's maritime SDR host (whichever box carries the
+# RTL-SDR + antenna positioned for marine VHF reception — Mobile Bay
+# in Perry's deployment, on Ernie at 10.0.0.153).  The service is
+# host-agnostic by design — installer-managed config provides the
+# broker host/port via the AIS-catcher CLI args below.
+#
+# AIS-catcher binary: built from source at github.com/jvde-github/
+# AIS-catcher and installed to /usr/local/bin/AIS-catcher.  Build
+# deps (Ubuntu 22.04+):
+#   sudo apt-get install -y cmake pkg-config librtlsdr-dev \
+#       libusb-1.0-0-dev libsoxr-dev libmosquitto-dev libssl-dev \
+#       zlib1g-dev libcurl4-openssl-dev
+#   git clone --depth=1 https://github.com/jvde-github/AIS-catcher.git
+#   cd AIS-catcher && mkdir build && cd build && cmake .. && make -j4
+#   sudo install -m 0755 AIS-catcher /usr/local/bin/AIS-catcher
+#
+# Install
+# -------
+#   sudo install -m 644 maritime/glowup-maritime.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now glowup-maritime
+#
+# Verify
+# ------
+#   sudo journalctl -u glowup-maritime -f
+#   mosquitto_sub -h 127.0.0.1 -t 'glowup/maritime/ais' -v
+#
+# Bridge note: the host's mosquitto broker must forward
+# glowup/maritime/# out to the hub.  On Ernie this is in
+# /etc/mosquitto/conf.d/ernie.conf alongside the existing
+# glowup/ble/#, glowup/tpms/#, glowup/hardware/#, glowup/node/#
+# topic forwards.
+
+[Unit]
+Description=GlowUp AIS-catcher (RTL-SDR maritime AIS → MQTT)
+Documentation=https://github.com/jvde-github/AIS-catcher
+After=mosquitto.service network-online.target
+Wants=mosquitto.service network-online.target
+Requires=mosquitto.service
+
+[Service]
+Type=simple
+# AIS-catcher needs USB read access to the RTL-SDR.  Running as root
+# matches the existing rtl_433 unit on this host and avoids a plugdev
+# / udev rules dance; the binary itself does no privileged operations
+# beyond the SDR open.
+User=root
+
+# Flag rationale:
+#   -d:0       select RTL-SDR device index 0 (only one dongle on Ernie)
+#   -q         suppress per-message NMEA on stdout (we route via MQTT)
+#   -v 60      print decoder stats every 60 s — useful heartbeat in
+#              journalctl ("[AIS engine] received: N msgs, rate: ...")
+#   -X off     disable community feed sharing to aiscatcher.org
+#              (operator has not consented to public sharing)
+#   -Q ...     publish JSON_FULL to MQTT.  TOPIC sets the publish
+#              topic; CLIENT_ID identifies this receiver to the broker
+#              and prevents collisions if a second AIS host appears
+ExecStart=/usr/local/bin/AIS-catcher \
+    -d:0 \
+    -q -v 60 \
+    -X off \
+    -Q mqtt://127.0.0.1:1883 \
+        TOPIC glowup/maritime/ais \
+        CLIENT_ID glowup-maritime
+
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
