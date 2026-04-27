@@ -122,6 +122,16 @@ _TOPIC_PREFIX: str = "glowup/maritime/buoy"
 # constraint at the postgres logger.
 _MQTT_QOS: int = 1
 
+# Retain the most recent publish per station.  Buoy obs are slow-
+# moving (10-min cadence on NDBC's side, 5-min poll on ours) and
+# users restart glowup-server far more frequently than that —
+# without retain, BuoyBuffer would start cold and the /api/buoys/
+# current response would be empty for up to a full poll interval
+# after every server restart.  retain=True makes the broker hand
+# the latest payload to a freshly-subscribing buffer immediately.
+# Same pattern airwaves/tuner uses for the same reason.
+_MQTT_RETAIN: bool = True
+
 # m/s → knots conversion factor.  Keeping wind in knots throughout
 # the maritime stack (vessels' AIS speed is also kt) matches the
 # unit displayed on every chartplotter and AIS receiver.
@@ -392,7 +402,7 @@ class BuoyScraper:
         }
         topic: str = f"{_TOPIC_PREFIX}/{sid}"
         info: Any = self._client.publish(
-            topic, json.dumps(payload), qos=_MQTT_QOS,
+            topic, json.dumps(payload), qos=_MQTT_QOS, retain=_MQTT_RETAIN,
         )
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             logger.warning(

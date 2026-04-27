@@ -30,6 +30,12 @@
 Description=GlowUp NDBC buoy scraper (realtime2 → MQTT)
 After=network-online.target mosquitto.service
 Wants=network-online.target
+# Start-rate limit: if we crash 5 times in 60 s, give up — usually
+# means a config / dependency problem that won't fix itself.
+# (Modern systemd parses these in [Unit]; the older [Service]
+# placement is silently ignored, so flag was useless before.)
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -41,10 +47,6 @@ WorkingDirectory=/home/a/lifx
 ExecStart=/usr/bin/python3 -m maritime.buoy_scraper
 Restart=on-failure
 RestartSec=10
-# Start-rate limit: if we crash 5 times in 60 s, give up — usually
-# means a config / dependency problem that won't fix itself.
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 # Sandboxing — read-only filesystem with a few targeted writes.
 # Network access is required (NDBC HTTPS + hub MQTT).
