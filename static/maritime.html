@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlowUp Maritime</title>
+
+<!-- Leaflet 1.9.4 from unpkg, BSD-2-clause.  No API key required;
+     uses OpenStreetMap tiles by default (also no key, but heavy
+     polling should be avoided per OSM's tile usage policy — we
+     poll JSON every few seconds and only fetch tiles on user pan/
+     zoom, well within bounds for a single-user dashboard). -->
+<link rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin="" />
+
+<style>
+/* -------------------------------------------------------------------
+   Maritime dashboard — full-bleed map, minimum chrome.  Per the
+   spec: most of the real estate goes to the map.  The thin top bar
+   carries dataset-status + nav; the popup carries per-vessel detail.
+   ------------------------------------------------------------------- */
+:root {
+    --bg:        #0c0e12;
+    --panel:     #161a21;
+    --text:      #d8dde6;
+    --label:     #6f7a8a;
+    --accent:    #6dd9c8;     /* mint — same as /airwaves */
+    --accent-2:  #ffb347;     /* warm amber */
+    --new:       #ffd966;
+    --border:    rgba(255,255,255,0.08);
+    --mono:      "SF Mono", "Menlo", "Consolas", monospace;
+    --font:      -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 "Helvetica Neue", sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    line-height: 1.4;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Top strip — slim, monospaced status + nav. */
+header.bar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 8px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+    flex-wrap: wrap;
+}
+header.bar h1 {
+    font-weight: 400;
+    font-size: 1.0rem;
+    letter-spacing: -0.01em;
+}
+header.bar h1 .accent { color: var(--accent); }
+header.bar .live {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--label);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+header.bar .live .dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-right: 6px;
+    animation: blink 1.6s ease-in-out infinite;
+}
+@keyframes blink { 50% { opacity: 0.3; } }
+header.bar .stat {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--label);
+}
+header.bar .stat .v { color: var(--text); }
+header.bar .nav { margin-left: auto; }
+header.bar .nav a {
+    color: var(--accent);
+    text-decoration: none;
+    margin-left: 14px;
+    opacity: 0.8;
+    font-size: 0.85rem;
+}
+header.bar .nav a:hover { opacity: 1; }
+
+/* Map fills remaining vertical space. */
+#map {
+    flex: 1 1 auto;
+    background: var(--bg);
+}
+
+/* Leaflet popup theming.  Default popup is light-on-light; override
+   to match the dark dashboard palette. */
+.leaflet-popup-content-wrapper {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.6);
+}
+.leaflet-popup-tip { background: var(--panel); }
+.leaflet-popup-content {
+    margin: 10px 14px;
+    font-size: 0.85rem;
+    line-height: 1.45;
+}
+.leaflet-popup-content .name {
+    color: var(--accent);
+    font-weight: 500;
+    font-size: 0.95rem;
+}
+.leaflet-popup-content .mmsi,
+.leaflet-popup-content .callsign {
+    font-family: var(--mono);
+    color: var(--label);
+    font-size: 0.78rem;
+}
+.leaflet-popup-content .row {
+    display: flex;
+    gap: 10px;
+    margin-top: 4px;
+}
+.leaflet-popup-content .row .lbl {
+    color: var(--label);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.7rem;
+    min-width: 6em;
+}
+.leaflet-popup-content .row .val { font-family: var(--mono); }
+.leaflet-popup-content .stale-tag {
+    color: var(--accent-2);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    margin-left: 6px;
+}
+
+/* Leaflet attribution / controls — keep them but mute the colors so
+   they don't clash with the dashboard palette. */
+.leaflet-control-attribution {
+    background: rgba(22, 26, 33, 0.85) !important;
+    color: var(--label) !important;
+    border-top: 1px solid var(--border);
+}
+.leaflet-control-attribution a { color: var(--accent) !important; }
+.leaflet-control-zoom a {
+    background: var(--panel) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+}
+</style>
+</head>
+<body>
+
+<header class="bar">
+    <h1>GlowUp <span class="accent">Maritime</span></h1>
+    <div class="live"><span class="dot"></span>live · AIS</div>
+    <div class="stat"><span class="v" id="vessel-count">0</span> vessels</div>
+    <div class="stat"><span class="v" id="vessel-pos-count">0</span> with position</div>
+    <div class="stat">last msg <span class="v" id="last-msg">–</span></div>
+    <div class="stat">total <span class="v" id="msg-total">0</span></div>
+    <div class="nav">
+        <a href="/home">home</a>
+        <a href="/airwaves">airwaves</a>
+        <a href="/meters">meters</a>
+    </div>
+</header>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------
+   /maritime — live AIS map.
+
+   Source of truth: GET /api/maritime/vessels returns
+   {stats, vessels: [...]} where each vessel carries last-known
+   position, identifiers, course/speed/heading, and a recent
+   breadcrumb track.  Producer is AIS-catcher → MQTT → hub-side
+   MaritimeBuffer.
+
+   Polling cadence: every 3 s.  AIS Class A position broadcasts
+   are 2-10 s for vessels under way, much sparser when anchored,
+   so 3 s gives near-real-time motion without hammering the API.
+   ------------------------------------------------------------------ */
+
+const POLL_MS = 3000;
+const DEFAULT_CENTER = [30.69, -88.04];   /* fallback if no vessels yet */
+const DEFAULT_ZOOM = 11;
+
+/* Ship-type colour map.  AIS shiptype is a 0-99 integer; the
+   "shiptype_text" string from AIS-catcher already groups it into
+   human categories (Tug, Cargo, Tanker, Passenger, etc.) so we
+   colour-by-string for readability.  Unknowns → mint. */
+const SHIP_COLOURS = {
+    "Tug":               "#ffb347",  /* amber */
+    "Cargo":             "#7aa6ff",  /* blue */
+    "Tanker":            "#ff6b6b",  /* red */
+    "Passenger":         "#9be37b",  /* green */
+    "Fishing":           "#c896ff",  /* purple */
+    "Pilot Vessel":      "#ffd966",  /* yellow */
+    "Pleasure craft":    "#7adfff",  /* cyan */
+    "Sailing":           "#a8d2a8",
+    "Search and Rescue": "#ff9a3d",
+    "Law enforcement":   "#5b8cff",
+    "Military ops":      "#7e57c2",
+};
+function colourFor(typeText) {
+    if (!typeText) return "#6dd9c8";
+    return SHIP_COLOURS[typeText] || "#6dd9c8";
+}
+
+/* ----- Map setup ----- */
+const map = L.map("map", {
+    zoomControl: true,
+    attributionControl: true,
+}).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19,
+}).addTo(map);
+
+/* ----- Vessel layer state ----- */
+/* Marker per MMSI.  Each marker is a CircleMarker whose colour
+   reflects ship type and whose size grows slightly with movement
+   (so an underway vessel reads more strongly than a stationary
+   one).  A small heading line is drawn from the marker pointing
+   in the vessel's reported heading. */
+const markers = new Map();          /* mmsi -> { circle, heading, popupTpl } */
+const trackLines = new Map();       /* mmsi -> Polyline (most-recent track) */
+let firstFitDone = false;
+
+/* Clamp the AIS-style "no data" sentinels.  AIS uses 511 for "no
+   heading", -128 for "no rate-of-turn", etc.  Don't render those. */
+function realHeading(h) {
+    if (h == null) return null;
+    if (h === 511) return null;
+    if (h < 0 || h >= 360) return null;
+    return h;
+}
+function realSpeed(s) {
+    if (s == null) return null;
+    /* 102.3 = "speed not available" sentinel in the protocol */
+    if (s >= 102.3) return null;
+    return s;
+}
+
+function escapeHtml(s) {
+    if (s == null) return "";
+    return String(s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function fmtAge(secs) {
+    if (secs == null || isNaN(secs)) return "–";
+    if (secs < 0) secs = 0;
+    if (secs < 60)   return Math.floor(secs) + "s";
+    if (secs < 3600) return Math.floor(secs / 60) + "m";
+    return Math.floor(secs / 3600) + "h";
+}
+
+function popupHtml(v) {
+    const stale = v.stale ? '<span class="stale-tag">stale</span>' : "";
+    const speed = realSpeed(v.speed);
+    const heading = realHeading(v.heading);
+    const course = realHeading(v.course);
+    const ageS = (Date.now()/1000) - (v.last_seen || 0);
+    return (
+      `<div class="name">${escapeHtml(v.shipname || "—")}${stale}</div>` +
+      `<div class="mmsi">MMSI ${v.mmsi}` +
+        (v.callsign ? ` · <span class="callsign">${escapeHtml(v.callsign)}</span>` : "") +
+      `</div>` +
+      `<div class="row"><span class="lbl">Type</span><span class="val">${escapeHtml(v.shiptype_text || "—")}</span></div>` +
+      (v.status_text ? `<div class="row"><span class="lbl">Status</span><span class="val">${escapeHtml(v.status_text)}</span></div>` : "") +
+      `<div class="row"><span class="lbl">Position</span><span class="val">${(v.lat||0).toFixed(5)}, ${(v.lon||0).toFixed(5)}</span></div>` +
+      (speed != null ? `<div class="row"><span class="lbl">Speed</span><span class="val">${speed.toFixed(1)} kt</span></div>` : "") +
+      (heading != null ? `<div class="row"><span class="lbl">Heading</span><span class="val">${heading}°</span></div>` : "") +
+      (course != null && course !== heading ? `<div class="row"><span class="lbl">Course</span><span class="val">${course}°</span></div>` : "") +
+      (v.destination ? `<div class="row"><span class="lbl">Destination</span><span class="val">${escapeHtml(v.destination)}</span></div>` : "") +
+      `<div class="row"><span class="lbl">Last heard</span><span class="val">${fmtAge(ageS)} ago</span></div>` +
+      (v.last_signal_power != null ? `<div class="row"><span class="lbl">Signal</span><span class="val">${v.last_signal_power.toFixed(1)} dBFS · ch ${escapeHtml(v.last_channel || "?")}</span></div>` : "")
+    );
+}
+
+function upsertVessel(v) {
+    if (v.lat == null || v.lon == null) return;
+    const colour = colourFor(v.shiptype_text);
+    const heading = realHeading(v.heading);
+    const speed = realSpeed(v.speed);
+    const isMoving = speed != null && speed > 0.5;
+    const radius = v.stale ? 4 : (isMoving ? 7 : 5);
+    const pos = [v.lat, v.lon];
+
+    let entry = markers.get(v.mmsi);
+    if (!entry) {
+        const circle = L.circleMarker(pos, {
+            radius:      radius,
+            color:       colour,
+            weight:      2,
+            fillColor:   colour,
+            fillOpacity: 0.55,
+        }).addTo(map);
+        circle.bindPopup(popupHtml(v));
+        entry = { circle, heading: null };
+        markers.set(v.mmsi, entry);
+    } else {
+        entry.circle.setLatLng(pos);
+        entry.circle.setStyle({
+            color: colour, fillColor: colour,
+            fillOpacity: v.stale ? 0.25 : 0.55,
+            radius: radius,
+        });
+        entry.circle.setPopupContent(popupHtml(v));
+    }
+
+    /* Heading indicator: short polyline from the marker in the
+       reported heading direction.  Length scales with zoom so it
+       remains visible at city / harbour scales but doesn't dominate
+       at ocean scales.  Skip if heading is unknown. */
+    if (entry.heading) {
+        map.removeLayer(entry.heading);
+        entry.heading = null;
+    }
+    if (heading != null) {
+        const lengthDeg = 0.003 * Math.pow(2, 13 - map.getZoom());  /* ~300 m at z=13 */
+        const rad = (heading - 90) * Math.PI / 180;       /* 0° = north */
+        const headEnd = [
+            v.lat + Math.sin((90 - heading) * Math.PI / 180) * lengthDeg,
+            v.lon + Math.cos((90 - heading) * Math.PI / 180) * lengthDeg,
+        ];
+        entry.heading = L.polyline([pos, headEnd], {
+            color: colour, weight: 2, opacity: 0.7,
+        }).addTo(map);
+    }
+
+    /* Breadcrumb track — light polyline through recent positions.
+       Replace whole-cloth on each update so we don't need to dedup. */
+    if (Array.isArray(v.track) && v.track.length >= 2) {
+        const pts = v.track.map(p => [p.lat, p.lon]);
+        const old = trackLines.get(v.mmsi);
+        if (old) map.removeLayer(old);
+        const line = L.polyline(pts, {
+            color: colour, weight: 1.5, opacity: 0.4,
+        }).addTo(map);
+        trackLines.set(v.mmsi, line);
+    }
+}
+
+function removeMissingVessels(currentMmsis) {
+    for (const [mmsi, entry] of markers) {
+        if (!currentMmsis.has(mmsi)) {
+            map.removeLayer(entry.circle);
+            if (entry.heading) map.removeLayer(entry.heading);
+            markers.delete(mmsi);
+            const tl = trackLines.get(mmsi);
+            if (tl) { map.removeLayer(tl); trackLines.delete(mmsi); }
+        }
+    }
+}
+
+async function poll() {
+    let json;
+    try {
+        const r = await fetch("/api/maritime/vessels");
+        json = await r.json();
+    } catch (e) {
+        console.error("maritime poll failed", e);
+        return;
+    }
+
+    const vessels = json.vessels || [];
+    const stats = json.stats || {};
+
+    document.getElementById("vessel-count").textContent     = stats.n_vessels ?? 0;
+    document.getElementById("vessel-pos-count").textContent = stats.n_with_position ?? 0;
+    document.getElementById("msg-total").textContent        = stats.msg_count ?? 0;
+    document.getElementById("last-msg").textContent =
+        stats.last_msg_ts ? fmtAge(Date.now()/1000 - stats.last_msg_ts) + " ago" : "–";
+
+    const seen = new Set();
+    vessels.forEach(v => {
+        seen.add(v.mmsi);
+        upsertVessel(v);
+    });
+    removeMissingVessels(seen);
+
+    /* Auto-fit on first non-empty payload — gives operator the right
+       viewport without hardcoded coordinates.  After that we let the
+       user pan/zoom freely. */
+    if (!firstFitDone && vessels.length > 0) {
+        const bounds = L.latLngBounds(vessels.map(v => [v.lat, v.lon]));
+        if (bounds.isValid()) {
+            map.fitBounds(bounds.pad(0.2), { maxZoom: 13 });
+            firstFitDone = true;
+        }
+    }
+}
+
+poll();
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>

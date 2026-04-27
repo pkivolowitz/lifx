@@ -370,6 +370,15 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_airwaves_transmitters", requires_auth=False),
     _Route("GET", ("api", "airwaves", "tuner"),
            "_handle_get_airwaves_tuner", requires_auth=False),
+    # Maritime dashboard — live AIS vessel positions on a map.
+    # Public read-only — same rationale as /airwaves and /meters
+    # (curiosity surface, no actuation, no operator credentials).
+    _Route("GET", ("maritime",),
+           "_handle_get_maritime_page", requires_auth=False),
+    _Route("GET", ("api", "maritime", "vessels"),
+           "_handle_get_maritime_vessels", requires_auth=False),
+    _Route("GET", ("api", "maritime", "vessel", "{mmsi}"),
+           "_handle_get_maritime_vessel", requires_auth=False),
     # POST /api/zigbee/set was removed in 2026-04-15 along with
     # the in-process Zigbee adapter.  Its successor lives under
     # /api/plugs — see handlers/plug.py and docs/29-zigbee-service.md.
@@ -678,6 +687,7 @@ from handlers.sdr import SdrHandlerMixin
 from handlers.ernie import ErnieHandlerMixin
 from handlers.meters import MetersHandlerMixin
 from handlers.airwaves import AirwavesHandlerMixin
+from handlers.maritime import MaritimeHandlerMixin
 
 
 class GlowUpRequestHandler(
@@ -699,6 +709,7 @@ class GlowUpRequestHandler(
     ErnieHandlerMixin,
     MetersHandlerMixin,
     AirwavesHandlerMixin,
+    MaritimeHandlerMixin,
     http.server.BaseHTTPRequestHandler,
 ):
     """HTTP request handler for the GlowUp REST API.
@@ -3133,6 +3144,21 @@ def main() -> None:
             except Exception as exc:
                 logging.warning("Airwaves buffer unavailable: %s", exc)
                 airwaves_buf = None
+
+            # Maritime buffer — per-vessel state for the /maritime
+            # map, fed by AIS-catcher's MQTT firehose at
+            # ``glowup/maritime/ais``.  Same guarded-import pattern.
+            try:
+                from infrastructure.maritime_buffer import MaritimeBuffer
+                maritime_buf = MaritimeBuffer()
+                maritime_buf.start_subscriber(
+                    broker_host=broker_addr,
+                    broker_port=broker_port,
+                )
+                GlowUpRequestHandler.maritime_buffer = maritime_buf
+            except Exception as exc:
+                logging.warning("Maritime buffer unavailable: %s", exc)
+                maritime_buf = None
 
             # Auto-migrate automations[] → trigger operators in operators[].
             config["_config_path"] = GlowUpRequestHandler.config_path

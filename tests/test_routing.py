@@ -346,6 +346,11 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "airwaves", "protocols"),
             ("api", "airwaves", "transmitters"),
             ("api", "airwaves", "tuner"),
+            # /maritime — live AIS vessel map.  Public read-only;
+            # curiosity surface, no actuation.
+            ("maritime",),
+            ("api", "maritime", "vessels"),
+            ("api", "maritime", "vessel", "{mmsi}"),
         }
         for route in _ROUTES:
             if route.pattern in AUTH_FREE_PATTERNS:
