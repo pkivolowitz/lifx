@@ -57,9 +57,11 @@ User=root
 #   -q         suppress per-message NMEA on stdout (we route via MQTT)
 #   -v 60      print decoder stats every 60 s — useful heartbeat in
 #              journalctl ("[AIS engine] received: N msgs, rate: ...")
-#   -X on      share our decodes with the aiscatcher.org community
-#              feed.  Outbound contribution only — the public map
-#              at aiscatcher.org renders our station's coverage.
+#   -X         share our decodes with the aiscatcher.org community
+#              feed (no argument = enable as anonymous contributor;
+#              passing a UUID would tie the contribution to a named
+#              station).  Outbound contribution only — the public
+#              map at aiscatcher.org renders our station's coverage.
 #              This does NOT merge global data back into the local
 #              /maritime view; for that, a separate aisstream.io
 #              ingester would be needed.
@@ -69,7 +71,7 @@ User=root
 ExecStart=/usr/local/bin/AIS-catcher \
     -d:0 \
     -q -v 60 \
-    -X on \
+    -X \
     -Q mqtt://127.0.0.1:1883 \
         TOPIC glowup/maritime/ais \
         CLIENT_ID glowup-maritime
