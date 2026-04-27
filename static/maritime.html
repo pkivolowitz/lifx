@@ -207,6 +207,36 @@ header.bar .nav a:hover { opacity: 1; }
     margin-left: 6px;
     font-weight: 400;
 }
+/* "Vessel name labels" overlay toggle — when LabelsToggleLayer is
+   removed from the map, body gets this class and every permanent
+   tooltip drops out of the viewport without us re-binding 1300
+   tooltips.  CSS does the heavy lifting in a single rule. */
+body.no-vessel-labels .vessel-label,
+body.no-vessel-labels .leaflet-tooltip.vessel-label { display: none !important; }
+
+/* Fullscreen toggle button — square 30 px control matching Leaflet's
+   built-in zoom buttons in style. */
+.leaflet-control-fullscreen a {
+    background-color: #fff;
+    width: 30px;
+    height: 30px;
+    line-height: 30px;
+    text-align: center;
+    text-decoration: none;
+    color: #333;
+    font-size: 18px;
+    display: block;
+}
+.leaflet-control-fullscreen a:hover { background-color: #f4f4f4; }
+/* Dark-theme override to match the rest of the dashboard chrome. */
+.leaflet-control-fullscreen a {
+    background-color: var(--panel) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+}
+.leaflet-control-fullscreen a:hover {
+    background-color: var(--panel-2) !important;
+}
 
 /* Leaflet attribution / controls — keep them but mute the colors so
    they don't clash with the dashboard palette. */
@@ -320,31 +350,108 @@ const openSeaMap = L.tileLayer(
     opacity: 0.95,
 }).addTo(map);
 
-/* Layer control — top-right collapsible widget.  Lets the operator
-   turn the seamark overlay on/off without leaving the page (e.g.
-   to read OSM road labels under a dense buoy field). */
+/* ----- Feature layer groups -----
+   Each toggleable feature lives in its own LayerGroup so the
+   layer-control checkboxes drive add/remove uniformly.  Vessel
+   markers go into either the local-RX or external group based
+   on their ``source`` field; tracks and heading indicators each
+   get their own group so they can be hidden independently of the
+   markers themselves. */
+const localVesselLayer    = L.featureGroup().addTo(map);
+const externalVesselLayer = L.featureGroup().addTo(map);
+const trackLayer          = L.featureGroup().addTo(map);
+const headingLayer        = L.featureGroup().addTo(map);
+
+/* Labels are bound directly to markers as Leaflet tooltips, so they
+   can't be added to a LayerGroup the same way.  Workaround: a
+   no-render custom layer whose add/remove flips a body-class that
+   CSS uses to hide all .vessel-label tooltips at once.  This lets
+   the layer-control widget treat labels as a first-class togglable
+   overlay without us building a separate UI. */
+const LabelsToggleLayer = L.Layer.extend({
+    onAdd:    function() { document.body.classList.remove("no-vessel-labels"); },
+    onRemove: function() { document.body.classList.add("no-vessel-labels"); },
+});
+const labelsToggle = (new LabelsToggleLayer()).addTo(map);
+
+/* Layer control — top-right collapsible widget.  Tile basemap and
+   nautical-chart overlay are radio / overlay tile layers; the four
+   feature groups + labels toggle let the operator hide/show vessel
+   classes, breadcrumb tracks, heading indicators, and name labels
+   independently.  Collapses by default; cracking the ☰ control
+   reveals the full set. */
 L.control.layers(
     { "OpenStreetMap": osmBase },
-    { "Nautical chart (OpenSeaMap)": openSeaMap },
+    {
+        "Nautical chart (OpenSeaMap)": openSeaMap,
+        "Vessels — local RX":          localVesselLayer,
+        "Vessels — aisstream":         externalVesselLayer,
+        "Breadcrumb tracks":           trackLayer,
+        "Heading indicators":          headingLayer,
+        "Vessel name labels":          labelsToggle,
+    },
     { collapsed: true, position: "topright" },
 ).addTo(map);
 
-/* Belt-and-braces against the flex-layout / script race.  After the
-   browser has had a chance to lay out the page (rAF callback runs
-   post-layout), tell Leaflet to recompute the map container's size
-   so tiles and markers are positioned against the actual viewport
-   rather than whatever the container measured at script-run time. */
+/* Fullscreen toggle — custom Leaflet control mirroring the look of
+   the built-in zoom control (top-left, square buttons).  Click
+   requests document fullscreen on the map's container; click again
+   exits.  Browser API takes care of the actual fullscreen UX
+   (escape key to exit, etc.). */
+const FullscreenControl = L.Control.extend({
+    options: { position: "topleft" },
+    onAdd: function() {
+        const c = L.DomUtil.create(
+            "div",
+            "leaflet-bar leaflet-control leaflet-control-fullscreen",
+        );
+        const a = L.DomUtil.create("a", "", c);
+        a.href = "#";
+        a.title = "Toggle fullscreen";
+        a.setAttribute("role", "button");
+        a.setAttribute("aria-label", "Toggle fullscreen");
+        a.innerHTML = "&#x26F6;";  /* ⛶ — fullscreen glyph */
+        L.DomEvent.disableClickPropagation(c);
+        L.DomEvent.on(a, "click", L.DomEvent.preventDefault);
+        L.DomEvent.on(a, "click", () => {
+            const root = document.documentElement;
+            if (!document.fullscreenElement) {
+                (root.requestFullscreen || root.webkitRequestFullscreen)?.call(root);
+            } else {
+                (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+            }
+        });
+        return c;
+    },
+});
+map.addControl(new FullscreenControl());
+
+/* Recompute Leaflet's internal sizing on any layout change.  Three
+   triggers:  initial rAF (defeats flex-layout race), window resize,
+   and entering/exiting fullscreen (the map container resizes). */
 requestAnimationFrame(() => map.invalidateSize());
 window.addEventListener("resize", () => map.invalidateSize());
+document.addEventListener("fullscreenchange",
+    () => requestAnimationFrame(() => map.invalidateSize()));
 
-/* ----- Vessel layer state ----- */
-/* Marker per MMSI.  Each marker is a CircleMarker whose colour
-   reflects ship type and whose size grows slightly with movement
-   (so an underway vessel reads more strongly than a stationary
-   one).  A small heading line is drawn from the marker pointing
-   in the vessel's reported heading. */
-const markers = new Map();          /* mmsi -> { circle, heading, popupTpl } */
-const trackLines = new Map();       /* mmsi -> Polyline (most-recent track) */
+/* ----- Vessel state -----
+   markers:         mmsi -> { marker, heading, headingBacking, kind, layer }
+                    (layer is the LayerGroup the marker is currently in,
+                     so we can move it on source change without leaks)
+   trackLines:      mmsi -> Polyline (lives in trackLayer)
+   lastVesselsById: mmsi -> raw vessel record from the most recent poll;
+                    used by the moveend handler to re-render after a
+                    pan/zoom without waiting for the next poll cycle.
+
+   Screen-space culling: every poll AND every map moveend pass the
+   data through filterToViewport(), which drops vessels outside
+   map.getBounds().pad(0.3).  Off-screen vessels get their markers
+   removed (cheap on Leaflet; O(1) per marker) so the engine is only
+   rendering what the operator can actually see.  Critical at the
+   1000+ vessel scale aisstream pumps in. */
+const markers = new Map();
+const trackLines = new Map();
+const lastVesselsById = new Map();
 let firstFitDone = false;
 
 /* Clamp the AIS-style "no data" sentinels.  AIS uses 511 for "no
@@ -501,13 +608,18 @@ function upsertVessel(v) {
         markers.delete(v.mmsi);
     }
 
+    /* Pick the right LayerGroup based on source.  Local-RX vessels go
+       into localVesselLayer, aisstream-fed into externalVesselLayer
+       — the layer-control checkboxes can hide either independently. */
+    const targetLayer = external ? externalVesselLayer : localVesselLayer;
+
     if (!entry) {
         let m;
         if (wantBoat) {
             m = L.marker(pos, {
                 icon: makeVesselIcon(colour, heading, alpha, sz, external),
                 riseOnHover: true,
-            }).addTo(map);
+            }).addTo(targetLayer);
         } else {
             m = L.circleMarker(pos, {
                 radius:      sz / 2,
@@ -516,11 +628,37 @@ function upsertVessel(v) {
                 fillColor:   colour,
                 fillOpacity: external ? 0.18 : alpha,
                 dashArray:   external ? "3 2" : null,
-            }).addTo(map);
+            }).addTo(targetLayer);
         }
         m.bindPopup(popupHtml(v));
-        entry = { marker: m, heading: null, kind: wantBoat ? "boat" : "circle" };
+        entry = {
+            marker: m, heading: null,
+            kind: wantBoat ? "boat" : "circle",
+            layer: targetLayer,
+        };
         markers.set(v.mmsi, entry);
+    } else if (entry.layer !== targetLayer) {
+        /* Source flipped (rare — vessel we first heard via aisstream
+           is now also being decoded locally, or vice versa).  Move
+           between layer groups by removing from old + re-adding to
+           new; resetting the icon/style happens below. */
+        entry.layer.removeLayer(entry.marker);
+        targetLayer.addLayer(entry.marker);
+        entry.layer = targetLayer;
+        entry.marker.setLatLng(pos);
+        if (wantBoat) {
+            entry.marker.setIcon(makeVesselIcon(colour, heading, alpha, sz, external));
+        } else {
+            entry.marker.setStyle({
+                color:       external ? colour : MARKER_STROKE,
+                weight:      external ? 2 : 3,
+                fillColor:   colour,
+                fillOpacity: external ? 0.18 : alpha,
+                radius:      sz / 2,
+                dashArray:   external ? "3 2" : null,
+            });
+        }
+        entry.marker.setPopupContent(popupHtml(v));
     } else {
         entry.marker.setLatLng(pos);
         if (wantBoat) {
@@ -588,13 +726,14 @@ function upsertVessel(v) {
         ];
         /* Dark backing line goes down first, slightly thicker, so the
            coloured top line reads as a stroked indicator regardless
-           of basemap colour underneath. */
+           of basemap colour underneath.  Both go into headingLayer
+           so the layer-control toggle hides them as a pair. */
         entry.headingBacking = L.polyline([pos, headEnd], {
             color: MARKER_STROKE, weight: 5, opacity: 0.6,
-        }).addTo(map);
+        }).addTo(headingLayer);
         entry.heading = L.polyline([pos, headEnd], {
             color: colour, weight: 3, opacity: 0.95,
-        }).addTo(map);
+        }).addTo(headingLayer);
     }
 
     /* Breadcrumb track — polyline through recent positions.  Replace
@@ -605,10 +744,10 @@ function upsertVessel(v) {
     if (Array.isArray(v.track) && v.track.length >= 2) {
         const pts = v.track.map(p => [p.lat, p.lon]);
         const old = trackLines.get(v.mmsi);
-        if (old) map.removeLayer(old);
+        if (old) trackLayer.removeLayer(old);
         const line = L.polyline(pts, {
             color: colour, weight: 2.5, opacity: 0.7,
-        }).addTo(map);
+        }).addTo(trackLayer);
         trackLines.set(v.mmsi, line);
     }
 }
@@ -616,15 +755,49 @@ function upsertVessel(v) {
 function removeMissingVessels(currentMmsis) {
     for (const [mmsi, entry] of markers) {
         if (!currentMmsis.has(mmsi)) {
-            map.removeLayer(entry.marker);
-            if (entry.heading) map.removeLayer(entry.heading);
-            if (entry.headingBacking) map.removeLayer(entry.headingBacking);
+            entry.layer.removeLayer(entry.marker);
+            if (entry.heading) headingLayer.removeLayer(entry.heading);
+            if (entry.headingBacking) headingLayer.removeLayer(entry.headingBacking);
             markers.delete(mmsi);
             const tl = trackLines.get(mmsi);
-            if (tl) { map.removeLayer(tl); trackLines.delete(mmsi); }
+            if (tl) { trackLayer.removeLayer(tl); trackLines.delete(mmsi); }
         }
     }
 }
+
+/* ---------- Screen-space culling -------------------------------------------
+   At the 1000+ vessel scale aisstream emits, drawing every vessel everywhere
+   in the bbox makes Leaflet sluggish even on fast hardware.  Cull to the
+   current viewport plus a 30 % pad — vessels just off-edge stay rendered so
+   panning doesn't flash them in/out, but the global Gulf herd doesn't drag
+   on the renderer when the operator is zoomed in on Mobile Bay. */
+
+function inViewport(v, bounds) {
+    if (v.lat == null || v.lon == null) return false;
+    return bounds.contains([v.lat, v.lon]);
+}
+
+function renderVessels(vessels) {
+    const bounds = map.getBounds().pad(0.3);
+    const visible = vessels.filter(v => inViewport(v, bounds));
+    const seen = new Set();
+    visible.forEach(v => {
+        seen.add(v.mmsi);
+        upsertVessel(v);
+    });
+    /* removeMissingVessels evicts both off-viewport AND truly-gone
+       vessels — a single pass covers both because the seen set only
+       contains in-viewport ones. */
+    removeMissingVessels(seen);
+}
+
+/* Re-render on every map pan/zoom so vessels just brought into view
+   appear immediately instead of waiting for the next 3 s poll.  No
+   network call — uses the cached vessels from lastVesselsById. */
+map.on("moveend", () => {
+    if (lastVesselsById.size === 0) return;
+    renderVessels(Array.from(lastVesselsById.values()));
+});
 
 async function poll() {
     let json;
@@ -645,23 +818,29 @@ async function poll() {
     document.getElementById("last-msg").textContent =
         stats.last_msg_ts ? fmtAge(Date.now()/1000 - stats.last_msg_ts) + " ago" : "–";
 
-    const seen = new Set();
-    vessels.forEach(v => {
-        seen.add(v.mmsi);
-        upsertVessel(v);
-    });
-    removeMissingVessels(seen);
+    /* Cache the full vessel set keyed by MMSI so the moveend handler
+       can re-render off-cached data when the user pans/zooms without
+       waiting for the next poll cycle. */
+    lastVesselsById.clear();
+    vessels.forEach(v => { if (v.mmsi != null) lastVesselsById.set(v.mmsi, v); });
 
-    /* Auto-fit on first non-empty payload — gives operator the right
-       viewport without hardcoded coordinates.  After that we let the
-       user pan/zoom freely. */
+    /* Auto-fit on first non-empty payload — but use ONLY local-RX
+       vessels for the framing rather than the full Gulf-wide
+       aisstream herd.  Local vessels reflect what the operator's
+       actual antenna can hear; an autofit including Houston and
+       Tampa would zoom out so far that nothing reads at all.  Fall
+       back to the full set if there's no local data yet. */
     if (!firstFitDone && vessels.length > 0) {
-        const bounds = L.latLngBounds(vessels.map(v => [v.lat, v.lon]));
+        const localOnly = vessels.filter(v => !v.source || v.source === "local");
+        const fitSet = (localOnly.length > 0 ? localOnly : vessels);
+        const bounds = L.latLngBounds(fitSet.map(v => [v.lat, v.lon]));
         if (bounds.isValid()) {
             map.fitBounds(bounds.pad(0.2), { maxZoom: 13 });
             firstFitDone = true;
         }
     }
+
+    renderVessels(vessels);
 }
 
 poll();
