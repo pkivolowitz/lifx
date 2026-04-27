@@ -211,24 +211,31 @@ const DEFAULT_ZOOM = 11;
 /* Ship-type colour map.  AIS shiptype is a 0-99 integer; the
    "shiptype_text" string from AIS-catcher already groups it into
    human categories (Tug, Cargo, Tanker, Passenger, etc.) so we
-   colour-by-string for readability.  Unknowns → mint. */
+   colour-by-string.  These fills are tuned for an OSM background
+   (light water + cream land + grey roads), so the original
+   dark-UI palette (mint / pale-cyan / pale-green) was scrapped:
+   those blend INTO water.  Every marker also gets a dark outline
+   below (weight 2.5 stroke #0a1018) so the fill colour does not
+   have to fight the basemap alone. */
 const SHIP_COLOURS = {
-    "Tug":               "#ffb347",  /* amber */
-    "Cargo":             "#7aa6ff",  /* blue */
-    "Tanker":            "#ff6b6b",  /* red */
-    "Passenger":         "#9be37b",  /* green */
-    "Fishing":           "#c896ff",  /* purple */
-    "Pilot Vessel":      "#ffd966",  /* yellow */
-    "Pleasure craft":    "#7adfff",  /* cyan */
-    "Sailing":           "#a8d2a8",
-    "Search and Rescue": "#ff9a3d",
-    "Law enforcement":   "#5b8cff",
-    "Military ops":      "#7e57c2",
+    "Tug":               "#ff7a00",  /* deep orange — pops on water + land */
+    "Cargo":             "#1f4eff",  /* deep blue — saturated past water */
+    "Tanker":            "#cc0033",  /* deep red */
+    "Passenger":         "#1aa84a",  /* forest green — darker than OSM land */
+    "Fishing":           "#7e3aff",  /* violet */
+    "Pilot Vessel":      "#ffcc00",  /* gold yellow */
+    "Pleasure craft":    "#ff33aa",  /* hot pink */
+    "Sailing":           "#ff5500",  /* vermilion — distinct from Tug orange */
+    "Search and Rescue": "#ff0000",  /* pure red — emergency-coded */
+    "Law enforcement":   "#003fbf",  /* navy */
+    "Military ops":      "#5e2b97",  /* dark purple */
 };
+const UNKNOWN_COLOUR = "#ff00ff";    /* magenta — never the basemap */
 function colourFor(typeText) {
-    if (!typeText) return "#6dd9c8";
-    return SHIP_COLOURS[typeText] || "#6dd9c8";
+    if (!typeText) return UNKNOWN_COLOUR;
+    return SHIP_COLOURS[typeText] || UNKNOWN_COLOUR;
 }
+const MARKER_STROKE = "#0a1018";      /* near-black outline on every marker */
 
 /* ----- Map setup ----- */
 const map = L.map("map", {
@@ -325,10 +332,10 @@ function upsertVessel(v) {
     if (!entry) {
         const circle = L.circleMarker(pos, {
             radius:      radius,
-            color:       colour,
-            weight:      2,
-            fillColor:   colour,
-            fillOpacity: 0.55,
+            color:       MARKER_STROKE,   /* dark outline */
+            weight:      2.5,
+            fillColor:   colour,           /* type colour as fill */
+            fillOpacity: v.stale ? 0.45 : 0.95,
         }).addTo(map);
         circle.bindPopup(popupHtml(v));
         entry = { circle, heading: null };
@@ -336,9 +343,10 @@ function upsertVessel(v) {
     } else {
         entry.circle.setLatLng(pos);
         entry.circle.setStyle({
-            color: colour, fillColor: colour,
-            fillOpacity: v.stale ? 0.25 : 0.55,
-            radius: radius,
+            color:       MARKER_STROKE,
+            fillColor:   colour,
+            fillOpacity: v.stale ? 0.45 : 0.95,
+            radius:      radius,
         });
         entry.circle.setPopupContent(popupHtml(v));
     }
