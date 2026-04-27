@@ -120,9 +120,10 @@ def write_state(
 ) -> None:
     """Atomically write the STT engine state file.
 
-    Consumed by ``services/morning_report.py`` (via SSH+cat) to decide
-    whether Daedalus STT is healthy.  Degraded state = ``engine`` is
-    not the configured primary, OR ``fallback_reason`` is non-empty.
+    Intended for consumption by an external fleet-monitoring tool
+    (read over SSH+cat) to decide whether STT is healthy.  Degraded
+    state = ``engine`` is not the configured primary, OR
+    ``fallback_reason`` is non-empty.
 
     Args:
         engine:          Name of the engine currently serving

@@ -154,9 +154,10 @@ final rename is atomic on POSIX even under concurrent contention.
 ```
 
 Degraded = `engine != primary_engine` **or** `fallback_reason` is
-non-empty. The morning report at `services/morning_report.py` reads
-this file over SSH to Daedalus and renders the Daedalus voice row in
-red when degraded, with the reason text quoted verbatim.
+non-empty. An external fleet-monitoring script (e.g. an operator's
+private morning-report tool) can read this file over SSH and render
+its own status display when degraded, with the reason text quoted
+verbatim.
 
 The file is overwritten on every facade construction — it reflects
 the active state, not a transition log. A missing file is ambiguous
