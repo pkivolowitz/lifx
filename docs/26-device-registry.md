@@ -110,7 +110,7 @@ server owns the registry file; this tool never touches it directly.
 #### Register a Device
 
 ```bash
-python3 register_device.py 10.0.0.164 "porch-left"
+python3 register_device.py 192.0.2.164 "porch-left"
 python3 register_device.py d0:73:d5:69:70:db "porch-left"
 ```
 
@@ -122,14 +122,14 @@ firmware (LIFX `SetLabel`).
 If the label is omitted, the tool prompts interactively:
 
 ```bash
-python3 register_device.py 10.0.0.164
-Label for 10.0.0.164: porch-left
+python3 register_device.py 192.0.2.164
+Label for 192.0.2.164: porch-left
 ```
 
 #### Register an Offline Device
 
 ```bash
-python3 register_device.py --offline 10.0.0.200 aa:bb:cc:dd:ee:ff "nvr-cam-1"
+python3 register_device.py --offline 192.0.2.200 aa:bb:cc:dd:ee:ff "nvr-cam-1"
 ```
 
 When both IP and MAC are known but the device is not reachable, use
@@ -165,7 +165,7 @@ and notes.
 ```
 MAC Address           Label                     IP Address       Status    Notes
 ================================================================================
-d0:73:d5:69:70:db     porch-left                10.0.0.164       online    front porch
+d0:73:d5:69:70:db     porch-left                192.0.2.164       online    front porch
 d0:73:d5:69:e3:82     bedroom-neon              -                offline   above headboard
 ```
 
@@ -183,7 +183,7 @@ new bulbs in bulk.
 Output reports per-device status:
 
 ```
-  OK       d0:73:d5:69:70:db  porch-left -> 10.0.0.164
+  OK       d0:73:d5:69:70:db  porch-left -> 192.0.2.164
   OFFLINE  d0:73:d5:69:e3:82  bedroom-neon
 
 Pushed: 1  Failed: 0  Offline: 1
@@ -192,7 +192,7 @@ Pushed: 1  Failed: 0  Offline: 1
 #### Clear a Firmware Label
 
 ```bash
-python3 register_device.py --clear-label 10.0.0.164
+python3 register_device.py --clear-label 192.0.2.164
 python3 register_device.py --clear-label d0:73:d5:69:70:db
 ```
 
@@ -232,7 +232,7 @@ List all registered devices with live status.
         {
             "mac": "d0:73:d5:69:70:db",
             "label": "porch-left",
-            "ip": "10.0.0.164",
+            "ip": "192.0.2.164",
             "online": true,
             "notes": "front porch"
         }
@@ -243,7 +243,7 @@ List all registered devices with live status.
 **Example:**
 
 ```bash
-curl -H "Authorization: Bearer TOKEN" http://10.0.0.214:8420/api/registry
+curl -H "Authorization: Bearer TOKEN" http://192.0.2.214:8420/api/registry
 ```
 
 ### POST /api/registry/device
@@ -254,7 +254,7 @@ Register or update a device.
 
 ```json
 {
-    "ip": "10.0.0.164",
+    "ip": "192.0.2.164",
     "label": "porch-left",
     "force": false
 }
@@ -308,7 +308,7 @@ Remove a device by MAC or label.
 
 ```bash
 curl -X DELETE -H "Authorization: Bearer TOKEN" \
-    http://10.0.0.214:8420/api/registry/device/porch-left
+    http://192.0.2.214:8420/api/registry/device/porch-left
 ```
 
 ### POST /api/registry/push-labels
@@ -325,7 +325,7 @@ Write all registry labels to bulb firmware.
         {
             "mac": "d0:73:d5:69:70:db",
             "label": "porch-left",
-            "ip": "10.0.0.164",
+            "ip": "192.0.2.164",
             "status": "ok"
         },
         {
@@ -345,7 +345,7 @@ Write a specific label to a single device's firmware.
 
 ```json
 {
-    "ip": "10.0.0.164",
+    "ip": "192.0.2.164",
     "label": "porch-left"
 }
 ```
@@ -398,7 +398,7 @@ mac, label = registry.resolve_identifier("porch-left")
 mac, label = registry.resolve_identifier("d0:73:d5:69:70:db")
 # mac = "d0:73:d5:69:70:db", label = "porch-left"
 
-mac, label = registry.resolve_identifier("10.0.0.164")
+mac, label = registry.resolve_identifier("192.0.2.164")
 # mac = None, label = None  (IP requires ARP table, not available here)
 ```
 
@@ -407,7 +407,7 @@ takes a keepalive daemon instance:
 
 ```python
 ip = registry.resolve_to_ip("porch-left", keepalive)
-# ip = "10.0.0.164"  (or None if offline)
+# ip = "192.0.2.164"  (or None if offline)
 ```
 
 ---

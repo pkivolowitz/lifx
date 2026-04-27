@@ -8,7 +8,7 @@ without a redeploy or restart.
 
 Fleet-wide change::
 
-    mosquitto_pub -h 10.0.0.214 -r \\
+    mosquitto_pub -h <hub-broker> -r \\
         -t glowup/config/thermal_interval_s \\
         -m '{"interval_s": 60}'
 

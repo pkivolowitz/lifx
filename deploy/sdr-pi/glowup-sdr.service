@@ -19,8 +19,8 @@
 #
 # Install / update on the SDR Pi:
 #
-#   scp deploy/sdr-pi/glowup-sdr.service a@<ip>:/tmp/glowup-sdr.service
-#   ssh a@<ip> \
+#   scp deploy/sdr-pi/glowup-sdr.service mortimer.snerd@<ip>:/tmp/glowup-sdr.service
+#   ssh mortimer.snerd@<ip> \
 #     'sudo install -o root -g root -m 0644 \
 #        /tmp/glowup-sdr.service \
 #        /etc/systemd/system/glowup-sdr.service && \

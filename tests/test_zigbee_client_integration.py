@@ -1,9 +1,12 @@
 """Live integration tests for ``zigbee_service.client.ZigbeeControlClient``.
 
 Exercises the client against the real glowup-zigbee-service running
-on broker-2 (10.0.0.123:8422).  If the service is unreachable these
-tests are skipped, so a headless run without fleet access still
-passes — same pattern as test_pi_thermal_integration.
+on the operator's broker-2 host.  The service URL must be supplied via
+the ``GLOWUP_TEST_ZIGBEE_SERVICE`` environment variable; no
+site-specific default lives in the repo.  If the env var is unset or
+the service is unreachable these tests are skipped, so a headless run
+without fleet access still passes — same pattern as
+test_pi_thermal_integration.
 
 **Safety budget**:
 
@@ -17,8 +20,7 @@ passes — same pattern as test_pi_thermal_integration.
 
 Run::
 
-    ~/venv/bin/python -m unittest tests.test_zigbee_client_integration -v
-    GLOWUP_TEST_ZIGBEE_SERVICE=http://10.0.0.214:8422 \\
+    GLOWUP_TEST_ZIGBEE_SERVICE=http://broker-2.example.lan:8422 \\
         ~/venv/bin/python -m unittest tests.test_zigbee_client_integration -v
 """
 
@@ -50,10 +52,14 @@ from zigbee_service.device_types import (
 # Config
 # ---------------------------------------------------------------------------
 
-_DEFAULT_SERVICE_URL: str = "http://10.0.0.123:8422"
+# No in-repo default service URL — site-specific addresses must come
+# from the operator's environment via ``$GLOWUP_TEST_ZIGBEE_SERVICE``.
+# When the variable is unset the suite skips wholesale; this keeps the
+# public repo free of household network details.
+_SERVICE_URL_ENV: str = "GLOWUP_TEST_ZIGBEE_SERVICE"
 _DEFAULT_TEST_PLUG: str = "BYIR"
 
-_SERVICE_URL: str = os.environ.get("GLOWUP_TEST_ZIGBEE_SERVICE", _DEFAULT_SERVICE_URL)
+_SERVICE_URL: str = os.environ.get(_SERVICE_URL_ENV, "")
 _TEST_PLUG: str = os.environ.get("GLOWUP_TEST_ZIGBEE_PLUG", _DEFAULT_TEST_PLUG)
 
 # TCP reachability probe timeout.  1.5 s is plenty on the LAN and
@@ -71,8 +77,11 @@ def _reachable(url: str, timeout_s: float = _PROBE_TIMEOUT_S) -> bool:
 
     We don't actually hit /health here — a bare TCP connect is the
     cheapest possible reachability probe and matches the pattern in
-    test_pi_thermal_integration.
+    test_pi_thermal_integration.  An empty URL means no service was
+    configured for this run; treat as not reachable.
     """
+    if not url:
+        return False
     parsed = urlparse(url)
     host: str = parsed.hostname or ""
     port: int = parsed.port or 80
@@ -88,7 +97,11 @@ _SERVICE_REACHABLE: bool = _reachable(_SERVICE_URL)
 
 @unittest.skipUnless(
     _SERVICE_REACHABLE,
-    f"glowup-zigbee-service unreachable at {_SERVICE_URL}",
+    (
+        f"${_SERVICE_URL_ENV} not set — set it to the service URL to run this suite"
+        if not _SERVICE_URL
+        else f"glowup-zigbee-service unreachable at {_SERVICE_URL}"
+    ),
 )
 class ReadOnlyIntegrationTests(unittest.TestCase):
     """Every endpoint that doesn't change state — hammer freely."""
@@ -148,7 +161,11 @@ class ReadOnlyIntegrationTests(unittest.TestCase):
 
 @unittest.skipUnless(
     _SERVICE_REACHABLE,
-    f"glowup-zigbee-service unreachable at {_SERVICE_URL}",
+    (
+        f"${_SERVICE_URL_ENV} not set — set it to the service URL to run this suite"
+        if not _SERVICE_URL
+        else f"glowup-zigbee-service unreachable at {_SERVICE_URL}"
+    ),
 )
 class ByirToggleIntegrationTest(unittest.TestCase):
     """Single-plug round-trip with strict transition accounting."""

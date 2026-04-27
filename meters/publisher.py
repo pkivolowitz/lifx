@@ -1,6 +1,6 @@
 """rtl_433 → MQTT bridge for utility meter telemetry.
 
-Runs on the SDR host (today: ernie, 10.0.0.153) under a systemd unit.
+Runs on the configured SDR host under a systemd unit.
 Spawns ``rtl_433`` with the meter-protocol decoders enabled, reads
 its JSON-line stdout, validates each line at the boundary, and
 publishes parsed records to the hub's MQTT broker on the

@@ -178,7 +178,7 @@ def _read_arp_linux() -> dict[str, str]:
 
 
 #: Regex matching a single arp -a output line on macOS.
-#: Example: ? (10.0.0.2) at d0:73:d5:78:e5:c6 on en0 ifscope [ethernet]
+#: Example: ? (192.0.2.2) at d0:73:d5:78:e5:c6 on en0 ifscope [ethernet]
 _ARP_MAC_RE: re.Pattern[str] = re.compile(
     r"\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([\da-fA-F:]+)"
 )
@@ -416,7 +416,7 @@ class BulbKeepAlive(threading.Thread):
         # set this to the IP of the interface where LIFX bulbs live
         # (e.g., WiFi on lnet) so broadcasts go out the right NIC.
         self._bind_ip: Optional[str] = bind_ip
-        # Explicit sweep network (e.g., "10.0.0.0/24").  Overrides
+        # Explicit sweep network (e.g., "192.0.2.0/24").  Overrides
         # auto-detection which fails under launchd on macOS (ifconfig
         # not in restricted PATH).
         self._sweep_network: Optional[ipaddress.IPv4Network] = (

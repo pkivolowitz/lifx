@@ -191,12 +191,12 @@ unit on broker-2.  For ad-hoc testing on broker-2:
 python3 -m ble.sensor --config /etc/glowup/ble_pairing.json
 ```
 
-The default hub broker target is `10.0.0.214` (read from the
+The default hub broker target is `192.0.2.214` (read from the
 `GLB_HUB_BROKER` environment variable, set by the systemd unit).
 To point at a non-production hub, override it:
 
 ```bash
-GLB_HUB_BROKER=10.0.0.250 python3 -m ble.sensor \
+GLB_HUB_BROKER=192.0.2.250 python3 -m ble.sensor \
     --config /etc/glowup/ble_pairing.json
 ```
 
@@ -205,7 +205,7 @@ GLB_HUB_BROKER=10.0.0.250 python3 -m ble.sensor \
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--config` | `ble_pairing.json` | Path to the pairing configuration file |
-| `--hub-broker` | `$GLB_HUB_BROKER` or `10.0.0.214` | Hub mosquitto address — must point at the hub, NOT broker-2 localhost |
+| `--hub-broker` | `$GLB_HUB_BROKER` or `192.0.2.214` | Hub mosquitto address — must point at the hub, NOT broker-2 localhost |
 | `--hub-port` | `$GLB_HUB_PORT` or `1883` | Hub mosquitto port |
 | `--poll-interval` | `1.0` | Seconds between motion polls (temperature/humidity polled every 30s regardless) |
 | `--verbose`, `-v` | off | Enable debug logging |
@@ -317,7 +317,7 @@ The canonical unit file lives at
 Read its top-of-file comment block for the install commands and
 the rollback story.  The key bits:
 
-- `Environment=GLB_HUB_BROKER=10.0.0.214` — the unit owns the
+- `Environment=GLB_HUB_BROKER=192.0.2.214` — the unit owns the
   hub address (per the installer-owns-config rule).  Change
   here if the hub IP ever moves and re-install the unit.
 - `ExecStart=/usr/bin/python3 -m ble.sensor --config /etc/glowup/ble_pairing.json`
@@ -333,8 +333,8 @@ file itself):
 
 ```bash
 scp deploy/broker-2/glowup-ble-sensor.service \
-    a@10.0.0.123:/tmp/glowup-ble-sensor.service
-ssh a@10.0.0.123 \
+    mortimer.snerd@192.0.2.123:/tmp/glowup-ble-sensor.service
+ssh mortimer.snerd@192.0.2.123 \
   'sudo install -o root -g root -m 0644 \
      /tmp/glowup-ble-sensor.service \
      /etc/systemd/system/glowup-ble-sensor.service && \
@@ -431,16 +431,16 @@ cross-host directly to the hub mosquitto, so check those topics
 on the hub:
 
 ```bash
-mosquitto_sub -h 10.0.0.214 -t 'glowup/signals/onvis_motion:#' -W 90 -v
-mosquitto_sub -h 10.0.0.214 -t 'glowup/ble/status/#'           -W 90 -v
+mosquitto_sub -h 192.0.2.214 -t 'glowup/signals/onvis_motion:#' -W 90 -v
+mosquitto_sub -h 192.0.2.214 -t 'glowup/ble/status/#'           -W 90 -v
 ```
 
 If both are silent, walk the data path producer-side:
 
 1. Is `glowup-ble-sensor` running on broker-2?
    ```bash
-   ssh a@10.0.0.123 'systemctl is-active glowup-ble-sensor'
-   ssh a@10.0.0.123 'sudo journalctl -u glowup-ble-sensor -n 30 --no-pager'
+   ssh mortimer.snerd@192.0.2.123 'systemctl is-active glowup-ble-sensor'
+   ssh mortimer.snerd@192.0.2.123 'sudo journalctl -u glowup-ble-sensor -n 30 --no-pager'
    ```
 2. Is it publishing successfully?  Look for lines like
    `pub onvis_motion → motion=1.0 rc=0` (rc=0 means the publish
@@ -448,9 +448,9 @@ If both are silent, walk the data path producer-side:
    network-side failure visible in the log).
 3. Has the hub mosquitto rejected the connection?  Check
    `journalctl -u mosquitto` on the hub for connect attempts
-   from 10.0.0.123.
+   from 192.0.2.123.
 4. Is `GLB_HUB_BROKER` set correctly in the systemd unit?
-   `ssh a@10.0.0.123 'systemctl show -p Environment glowup-ble-sensor'`
+   `ssh mortimer.snerd@192.0.2.123 'systemctl show -p Environment glowup-ble-sensor'`
 
 Do not poke at any in-process `BleAdapter` on the hub — it
 no longer exists.  Adapter-side debugging is the wrong direction

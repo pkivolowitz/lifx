@@ -49,8 +49,8 @@ final class URLEncodingTests: XCTestCase {
 
     /// Bare IP addresses should pass through unchanged (dots are unreserved).
     func testEncoding_ipAddress() {
-        let encoded = urlEncodeDeviceId("10.0.0.45")
-        XCTAssertEqual(encoded, "10.0.0.45")
+        let encoded = urlEncodeDeviceId("192.0.2.45")
+        XCTAssertEqual(encoded, "192.0.2.45")
     }
 
     // MARK: - Group identifiers

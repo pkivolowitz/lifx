@@ -27,8 +27,8 @@
 # Install / update on the BLE host:
 #
 #   scp deploy/broker-2/glowup-ble-sensor.service \
-#       a@<host>:/tmp/glowup-ble-sensor.service
-#   ssh a@<host> \
+#       mortimer.snerd@<host>:/tmp/glowup-ble-sensor.service
+#   ssh mortimer.snerd@<host> \
 #     'sudo install -o root -g root -m 0644 \
 #        /tmp/glowup-ble-sensor.service \
 #        /etc/systemd/system/glowup-ble-sensor.service && \

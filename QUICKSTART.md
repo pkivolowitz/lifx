@@ -33,10 +33,10 @@ with its IP address, label, and capabilities.
 Pick a device IP from the discover output and run:
 
 ```bash
-python3 glowup.py play cylon --ip 10.0.0.42
+python3 glowup.py play cylon --ip 192.0.2.42
 ```
 
-Replace `10.0.0.42` with your bulb's IP.
+Replace `192.0.2.42` with your bulb's IP.
 
 Press **Ctrl+C** to stop.  The bulb fades to black gracefully.
 
@@ -49,11 +49,11 @@ python3 glowup.py effects
 There are 35 built-in effects.  Some favorites:
 
 ```bash
-python3 glowup.py play aurora --ip 10.0.0.42
-python3 glowup.py play breathe --ip 10.0.0.42
-python3 glowup.py play campfire --ip 10.0.0.42
-python3 glowup.py play rainbow --ip 10.0.0.42
-python3 glowup.py play fireworks2d --ip 10.0.0.42
+python3 glowup.py play aurora --ip 192.0.2.42
+python3 glowup.py play breathe --ip 192.0.2.42
+python3 glowup.py play campfire --ip 192.0.2.42
+python3 glowup.py play rainbow --ip 192.0.2.42
+python3 glowup.py play fireworks2d --ip 192.0.2.42
 ```
 
 ## Preview Without Hardware
@@ -75,7 +75,7 @@ Create a simple JSON config to group bulbs:
 cat > my_lights.json << 'EOF'
 {
   "groups": {
-    "living": ["10.0.0.42", "10.0.0.43", "10.0.0.44"]
+    "living": ["192.0.2.42", "192.0.2.43", "192.0.2.44"]
   }
 }
 EOF

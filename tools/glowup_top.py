@@ -11,8 +11,8 @@ broker.
 Usage::
 
     python tools/glowup_top.py
-    python tools/glowup_top.py --broker 10.0.0.214
-    python tools/glowup_top.py --broker 10.0.0.214 --port 1883
+    python tools/glowup_top.py --broker <hub-broker>
+    python tools/glowup_top.py --broker <hub-broker> --port 1883
 
 Keys:
     q / Ctrl-C  Quit

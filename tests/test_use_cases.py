@@ -91,7 +91,7 @@ class RecordingEmitter(Emitter):
 
     def __init__(
         self,
-        emitter_id: str = "10.0.0.99",
+        emitter_id: str = "192.0.2.99",
         zone_count: int = TEST_ZONE_COUNT,
         is_multizone: bool = True,
     ) -> None:
@@ -216,7 +216,7 @@ class UseCaseTest(unittest.TestCase):
 
     def _make_emitter(
         self,
-        emitter_id: str = "10.0.0.99",
+        emitter_id: str = "192.0.2.99",
         zone_count: int = TEST_ZONE_COUNT,
         is_multizone: bool = True,
     ) -> RecordingEmitter:
@@ -574,10 +574,10 @@ class TestMultiDeviceFanOut(UseCaseTest):
         from unittest.mock import patch
 
         multi: RecordingEmitter = self._make_emitter(
-            "10.0.0.1", zone_count=30, is_multizone=True,
+            "192.0.2.1", zone_count=30, is_multizone=True,
         )
         single: RecordingEmitter = self._make_emitter(
-            "10.0.0.2", zone_count=1, is_multizone=False,
+            "192.0.2.2", zone_count=1, is_multizone=False,
         )
 
         with patch("emitters.virtual.broadcast_wake"):

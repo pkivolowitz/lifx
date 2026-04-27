@@ -20,7 +20,7 @@ glowup play cylon --device "PORCH STRING LIGHTS"
 **Server routing (automatic for discover/identify):**
 ```bash
 glowup discover              # Routes via server if reachable; falls back to UDP
-glowup identify --ip 10.0.0.28  # Same: server if available, else direct UDP
+glowup identify --ip 192.0.2.28  # Same: server if available, else direct UDP
 ```
 
 **Emergency power-off:**
@@ -31,7 +31,7 @@ glowup off                   # Requires typing "off" to confirm
 **Force local (no server):**
 ```bash
 glowup --local discover      # Direct UDP only, never contacts server
-glowup --local identify --ip 10.0.0.28
+glowup --local identify --ip 192.0.2.28
 ```
 
 **Use non-default server:**
@@ -122,7 +122,7 @@ Non-responsive devices are omitted.
 {
   "devices": [
     {
-      "ip":      "10.0.0.41",
+      "ip":      "192.0.2.41",
       "mac":     "d0:73:d5:69:70:db",
       "label":   "Bedroom Neon",
       "product": "LIFX Neon",
@@ -136,8 +136,8 @@ Non-responsive devices are omitted.
 
 **Example:**
 ```bash
-curl -H "Authorization: Bearer TOKEN" http://10.0.0.214:8420/api/command/discover
-curl -H "Authorization: Bearer TOKEN" "http://10.0.0.214:8420/api/command/discover?ip=10.0.0.41"
+curl -H "Authorization: Bearer TOKEN" http://192.0.2.214:8420/api/command/discover
+curl -H "Authorization: Bearer TOKEN" "http://192.0.2.214:8420/api/command/discover?ip=192.0.2.41"
 ```
 
 #### POST /api/command/identify
@@ -149,7 +149,7 @@ thread; the HTTP response returns immediately.
 **Request body:**
 ```json
 {
-  "ip":       "10.0.0.41",
+  "ip":       "192.0.2.41",
   "duration": 10.0
 }
 ```
@@ -173,11 +173,11 @@ resolves it to a live IP via the device registry and ARP table.
 **Response:**
 ```json
 {
-  "ip":          "10.0.0.41",
+  "ip":          "192.0.2.41",
   "identifying": true,
   "duration":    10.0,
   "device": {
-    "ip":      "10.0.0.41",
+    "ip":      "192.0.2.41",
     "mac":     "d0:73:d5:69:70:db",
     "label":   "Bedroom Neon",
     "product": "LIFX Neon",
@@ -191,8 +191,8 @@ resolves it to a live IP via the device registry and ARP table.
 ```bash
 curl -X POST -H "Authorization: Bearer TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"ip":"10.0.0.41","duration":15}' \
-  http://10.0.0.214:8420/api/command/identify
+  -d '{"ip":"192.0.2.41","duration":15}' \
+  http://192.0.2.214:8420/api/command/identify
 ```
 
 #### DELETE /api/command/identify/{ip}
@@ -205,7 +205,7 @@ Cancel a running identify pulse early.
 **Response:**
 ```json
 {
-  "ip":        "10.0.0.41",
+  "ip":        "192.0.2.41",
   "cancelled": true
 }
 ```
@@ -213,14 +213,14 @@ Cancel a running identify pulse early.
 **Error (no pulse running):**
 ```json
 {
-  "error": "No active identify pulse for 10.0.0.41"
+  "error": "No active identify pulse for 192.0.2.41"
 }
 ```
 
 **Example:**
 ```bash
 curl -X DELETE -H "Authorization: Bearer TOKEN" \
-  http://10.0.0.214:8420/api/command/identify/10.0.0.41
+  http://192.0.2.214:8420/api/command/identify/192.0.2.41
 ```
 
 #### GET /api/command/identify/cancel-all
@@ -342,7 +342,7 @@ available for programmatic use (e.g., HomeKit shortcut, HA automation).
 curl -X POST -H "Authorization: Bearer TOKEN" \
   -H "Content-Type: application/json" \
   -d '{}' \
-  http://10.0.0.214:8420/api/server/power-off-all
+  http://192.0.2.214:8420/api/server/power-off-all
 ```
 
 ---
@@ -384,7 +384,7 @@ The server probe timed out or failed.  Possible causes:
 
 Check:
 ```bash
-curl -H "Authorization: Bearer $(cat ~/.glowup_token)" http://10.0.0.214:8420/api/status
+curl -H "Authorization: Bearer $(cat ~/.glowup_token)" http://192.0.2.214:8420/api/status
 ```
 
 If it fails, debug the network/server issue.  `glowup` will fall back to
@@ -419,7 +419,7 @@ If the server doesn't respond:
 1. Try manually:
    ```bash
    curl -X DELETE -H "Authorization: Bearer $(cat ~/.glowup_token)" \
-     http://10.0.0.214:8420/api/command/identify/10.0.0.28
+     http://192.0.2.214:8420/api/command/identify/192.0.2.28
    ```
 2. If that fails, use `glowup off` (nuclear option — powers off everything).
 
@@ -433,7 +433,7 @@ simultaneously on the same IP.
 Fix: Use the cancel endpoint:
 ```bash
 curl -X DELETE -H "Authorization: Bearer $(cat ~/.glowup_token)" \
-  http://10.0.0.214:8420/api/command/identify/10.0.0.28
+  http://192.0.2.214:8420/api/command/identify/192.0.2.28
 ```
 
 Or use `glowup off`.

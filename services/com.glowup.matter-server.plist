@@ -5,9 +5,8 @@
   GlowUp Matter server — LaunchDaemon for Daedalus (Mac Studio).
 
   Hosts the python-matter-server WebSocket API on port 5580, backed by
-  the CHIP/Matter fabric at /Users/perrykivolowitz/.matter_server.
-  The hub's glowup-adapter@matter (a Pi 5 at 10.0.0.214) connects to
-  this server to control the Linkind backyard plugs and any other
+  the CHIP/Matter fabric at ~/.matter_server.  The hub's
+  glowup-adapter@matter connects to this server to control the
   Matter-over-Wi-Fi devices commissioned to GlowUp's own fabric.
 
   Install:

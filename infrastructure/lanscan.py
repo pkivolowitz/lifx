@@ -231,7 +231,7 @@ def _get_network_linux() -> Optional[ipaddress.IPv4Network]:
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
 
-    # Match lines like: inet 10.0.0.214/24 brd 10.0.0.255 ...
+    # Match lines like: inet 192.0.2.10/24 brd 192.0.2.255 ...
     pattern = re.compile(r"inet (\d+\.\d+\.\d+\.\d+/\d+)")
     for match in pattern.finditer(result.stdout):
         cidr: str = match.group(1)

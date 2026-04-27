@@ -2,13 +2,13 @@
 """Network integration tests for contrib.sensors.pi_thermal_sensor.
 
 Exercises the daemon against a real MQTT broker reachable on the LAN.
-Default target is broker-2 (``10.0.0.123:1883``) since that host is
-guaranteed to have an open listener per the GlowUp fleet rebuild
-procedure.  Override with the ``GLOWUP_TEST_BROKER`` environment
-variable, e.g. ``GLOWUP_TEST_BROKER=10.0.0.214:1883``.
+The broker must be supplied via the ``GLOWUP_TEST_BROKER`` environment
+variable (e.g. ``GLOWUP_TEST_BROKER=hub.example.lan:1883``); no
+site-specific default lives in the repo.
 
-If no broker is reachable within the connection timeout these tests
-are skipped, so a headless CI run without fleet access still passes.
+If the env var is unset or no broker is reachable within the
+connection timeout these tests are skipped, so a headless CI run
+without fleet access still passes.
 
 Coverage:
 
@@ -28,8 +28,9 @@ publishing empty payloads with ``retain=True``.
 
 Run::
 
-    python3 -m unittest tests.test_pi_thermal_integration -v
-    GLOWUP_TEST_BROKER=10.0.0.214:1883 python3 -m pytest \\
+    GLOWUP_TEST_BROKER=hub.example.lan:1883 python3 -m unittest \\
+        tests.test_pi_thermal_integration -v
+    GLOWUP_TEST_BROKER=hub.example.lan:1883 python3 -m pytest \\
         tests/test_pi_thermal_integration.py -v
 
 Requires paho-mqtt.  Without paho the tests skip with a clear reason.
@@ -64,10 +65,11 @@ from contrib.sensors.pi_thermal_sensor import PiThermalSensor, ThermalReading
 # Constants
 # ---------------------------------------------------------------------------
 
-# Default broker — hub .214 is the canonical GlowUp MQTT broker per
-# reference_project_state.md.  Broker-2 (.123) is a dedicated Z2M
-# bridge broker and must NOT be used for unrelated telemetry traffic.
-_DEFAULT_TEST_BROKER: str = "10.0.0.214:1883"
+# No in-repo default broker — site-specific addresses must come from
+# the operator's environment via ``$GLOWUP_TEST_BROKER``.  When the
+# variable is unset the suite skips wholesale; this keeps the public
+# repo free of household network details.
+_BROKER_ENV: str = "GLOWUP_TEST_BROKER"
 
 # IMPORTANT: test topics use a dedicated prefix (glowup/test/thermal/)
 # that the production ThermalLogger does NOT subscribe to.  The logger
@@ -120,14 +122,23 @@ def _broker_reachable(host: str, port: int) -> bool:
         return False
 
 
-_BROKER_SPEC: str = os.environ.get("GLOWUP_TEST_BROKER", _DEFAULT_TEST_BROKER)
-try:
-    _TEST_HOST, _TEST_PORT = _parse_broker(_BROKER_SPEC)
-except ValueError:
-    _TEST_HOST = "127.0.0.1"
-    _TEST_PORT = 1883
+_BROKER_SPEC: str = os.environ.get(_BROKER_ENV, "")
+_TEST_HOST: str = ""
+_TEST_PORT: int = 0
+if _BROKER_SPEC:
+    try:
+        _TEST_HOST, _TEST_PORT = _parse_broker(_BROKER_SPEC)
+    except ValueError:
+        # Malformed override is treated as "not configured"; skip
+        # rather than silently probe an unrelated localhost.
+        _TEST_HOST = ""
+        _TEST_PORT = 0
 
-_BROKER_OK: bool = _HAS_PAHO and _broker_reachable(_TEST_HOST, _TEST_PORT)
+_BROKER_OK: bool = (
+    _HAS_PAHO
+    and bool(_TEST_HOST)
+    and _broker_reachable(_TEST_HOST, _TEST_PORT)
+)
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +275,11 @@ def _clear_retained(
 )
 @unittest.skipUnless(
     _BROKER_OK,
-    f"test broker {_BROKER_SPEC} is not reachable — skipping integration tests",
+    (
+        f"${_BROKER_ENV} not set — set it to host:port to run this suite"
+        if not _BROKER_SPEC
+        else f"test broker {_BROKER_SPEC} is not reachable — skipping integration tests"
+    ),
 )
 class PiThermalIntegrationTest(unittest.TestCase):
     """End-to-end tests against a real MQTT broker."""

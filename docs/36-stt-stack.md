@@ -87,7 +87,7 @@ not take STT offline:
 Both copies are populated by `tools/fetch_stt_models.py`:
 
 ```
-# On Daedalus, as perrykivolowitz, with the coordinator venv active:
+# On the coordinator host, as the operator user, with the coordinator venv active:
 ~/venv/bin/python ~/lifx/tools/fetch_stt_models.py
 ```
 
@@ -184,7 +184,7 @@ it as yellow "warn" rather than red "fail".
 **Verify current engine:**
 
 ```
-ssh perrykivolowitz@10.0.0.191 cat ~/.glowup/stt_state.json
+ssh mortimer.snerd@192.0.2.10 cat ~/.glowup/stt_state.json
 ```
 
 **Force a fallback for testing:**
@@ -193,10 +193,10 @@ Temporarily rename the MLX model directory so the primary fails to
 load, then kickstart the coordinator:
 
 ```
-ssh perrykivolowitz@10.0.0.191 mv \
+ssh mortimer.snerd@192.0.2.10 mv \
   /Volumes/Mini-Dock/glowup/models/mlx-whisper \
   /Volumes/Mini-Dock/glowup/models/mlx-whisper.off
-ssh perrykivolowitz@10.0.0.191 /usr/local/bin/restart_coordinator
+ssh mortimer.snerd@192.0.2.10 /usr/local/bin/restart_coordinator
 ```
 
 Morning report the next day (or the current state file immediately)

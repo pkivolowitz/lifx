@@ -218,7 +218,7 @@ real `genOnOff` relay attribute, not an inference from power draw.
 > hub.  The `POST /api/zigbee/set` endpoint and the JavaScript
 > toggle that called it have both been deleted.  Until plug
 > control returns, switch plugs from the broker-2 service's
-> own HTTP API (`POST http://10.0.0.123:8422/devices/{name}/state`)
+> own HTTP API (`POST http://192.0.2.123:8422/devices/{name}/state`)
 > or via `zigbee2mqtt/{device}/set` directly on broker-2's
 > local mosquitto.
 >

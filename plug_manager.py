@@ -16,7 +16,7 @@ it in one place avoids drift)::
 
     {
       "zigbee": {
-        "broker":    "10.0.0.123",
+        "broker":    "<broker-2 host or IP>",
         "http_port": 8422
       },
       "plugs": {

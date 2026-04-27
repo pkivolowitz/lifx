@@ -91,7 +91,7 @@ class TestConstruction(unittest.TestCase):
 
     def test_basic(self) -> None:
         """Construct with minimal config."""
-        dm = FakeDeviceManager(groups={"g": ["10.0.0.1"]})
+        dm = FakeDeviceManager(groups={"g": ["192.0.2.1"]})
         sched = SchedulerThread(_config(schedule=[_entry("X", "g")]), dm)
         self.assertTrue(sched.daemon)
         self.assertEqual(sched.name, "scheduler")
@@ -117,7 +117,7 @@ class TestNoDeadlock(unittest.TestCase):
         holding _dm._lock during the entire _tick, then calling
         _dm.play() which also acquires the lock.
         """
-        dm = FakeDeviceManager(groups={"porch": ["10.0.0.42"]})
+        dm = FakeDeviceManager(groups={"porch": ["192.0.2.42"]})
         sched = SchedulerThread(
             _config(schedule=[_entry("Night", "porch")]), dm,
         )
@@ -159,8 +159,8 @@ class TestDispatch(unittest.TestCase):
     def test_first_tick_starts_effects(self) -> None:
         """First tick starts active effects via DM.play()."""
         dm = FakeDeviceManager(groups={
-            "porch": ["10.0.0.42"],
-            "gen": ["10.0.0.164", "10.0.0.180"],
+            "porch": ["192.0.2.42"],
+            "gen": ["192.0.2.164", "192.0.2.180"],
         })
         sched = SchedulerThread(
             _config(schedule=[
@@ -180,7 +180,7 @@ class TestDispatch(unittest.TestCase):
 
     def test_params_arrive_at_dm(self) -> None:
         """brightness=30 reaches DM.play() exactly."""
-        dm = FakeDeviceManager(groups={"gen": ["10.0.0.164"]})
+        dm = FakeDeviceManager(groups={"gen": ["192.0.2.164"]})
         sched = SchedulerThread(
             _config(schedule=[
                 _entry("Gen", "gen", effect="on", params={"brightness": 30}),
@@ -196,8 +196,8 @@ class TestDispatch(unittest.TestCase):
 
     def test_clear_override_dispatched(self) -> None:
         """clear_override action calls DM.clear_override()."""
-        dm = FakeDeviceManager(groups={"porch": ["10.0.0.42"]})
-        dm._overrides = {"10.0.0.42": "Evening"}
+        dm = FakeDeviceManager(groups={"porch": ["192.0.2.42"]})
+        dm._overrides = {"192.0.2.42": "Evening"}
         sched = SchedulerThread(
             _config(schedule=[_entry("Overnight", "porch")]),
             dm,
@@ -207,13 +207,13 @@ class TestDispatch(unittest.TestCase):
 
         sched._tick()
 
-        self.assertIn("10.0.0.42", dm.clear_calls)
+        self.assertIn("192.0.2.42", dm.clear_calls)
 
     def test_dispatch_error_does_not_kill_tick(self) -> None:
         """play() exception is caught — other groups still process."""
         dm = FakeDeviceManager(groups={
-            "a": ["10.0.0.1"],
-            "b": ["10.0.0.2"],
+            "a": ["192.0.2.1"],
+            "b": ["192.0.2.2"],
         })
         sched = SchedulerThread(
             _config(schedule=[_entry("A", "a"), _entry("B", "b")]),
@@ -248,7 +248,7 @@ class TestRunLoop(unittest.TestCase):
 
     def test_empty_schedule_exits(self) -> None:
         """Empty schedule → run() returns immediately."""
-        dm = FakeDeviceManager(groups={"g": ["10.0.0.1"]})
+        dm = FakeDeviceManager(groups={"g": ["192.0.2.1"]})
         sched = SchedulerThread(_config(), dm)
         t = threading.Thread(target=sched.run)
         t.start()
@@ -257,7 +257,7 @@ class TestRunLoop(unittest.TestCase):
 
     def test_stop_event_exits(self) -> None:
         """Pre-set stop event → run() exits after one tick."""
-        dm = FakeDeviceManager(groups={"g": ["10.0.0.1"]})
+        dm = FakeDeviceManager(groups={"g": ["192.0.2.1"]})
         sched = SchedulerThread(
             _config(schedule=[_entry("X", "g")]), dm,
         )
@@ -270,7 +270,7 @@ class TestRunLoop(unittest.TestCase):
     @patch("scheduling.scheduler_thread.SCHEDULER_POLL_SECONDS", 0.1)
     def test_tick_exception_continues_loop(self) -> None:
         """Exception in _tick is caught — loop continues."""
-        dm = FakeDeviceManager(groups={"g": ["10.0.0.1"]})
+        dm = FakeDeviceManager(groups={"g": ["192.0.2.1"]})
         sched = SchedulerThread(
             _config(schedule=[_entry("X", "g")]), dm,
         )

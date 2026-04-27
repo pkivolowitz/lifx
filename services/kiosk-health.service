@@ -22,7 +22,7 @@
 #   mkdir -p ~/.config/systemd/user
 #   cp this-file ~/.config/systemd/user/kiosk-health.service
 #   systemctl --user daemon-reload && systemctl --user enable --now kiosk-health
-#   loginctl enable-linger <user>  # so the sensor runs even w/o login
+#   loginctl enable-linger mortimer.snerd  # so the sensor runs even w/o login
 Description=GlowUp kiosk health sensor
 Documentation=file:///opt/glowup-sensors/kiosk_health_sensor.py
 After=default.target

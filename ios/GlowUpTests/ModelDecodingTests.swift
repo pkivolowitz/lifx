@@ -23,7 +23,7 @@ final class ModelDecodingTests: XCTestCase {
     func testDecodeDevice_physical() throws {
         let json = """
         {
-            "ip": "10.0.0.45",
+            "ip": "192.0.2.45",
             "label": "PORCH STRING LIGHTS",
             "nickname": null,
             "product": "String Light US",
@@ -39,7 +39,7 @@ final class ModelDecodingTests: XCTestCase {
         """.data(using: .utf8)!
 
         let device = try decoder.decode(Device.self, from: json)
-        XCTAssertEqual(device.ip, "10.0.0.45")
+        XCTAssertEqual(device.ip, "192.0.2.45")
         XCTAssertEqual(device.label, "PORCH STRING LIGHTS")
         XCTAssertNil(device.nickname)
         XCTAssertEqual(device.product, "String Light US")
@@ -72,7 +72,7 @@ final class ModelDecodingTests: XCTestCase {
             "is_group": true,
             "mac": "",
             "group": "all",
-            "member_ips": ["10.0.0.45", "10.0.0.18"]
+            "member_ips": ["192.0.2.45", "192.0.2.18"]
         }
         """.data(using: .utf8)!
 
@@ -80,7 +80,7 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertEqual(device.ip, "group:all")
         XCTAssertTrue(device.isVirtualGroup)
         XCTAssertEqual(device.memberIps?.count, 2)
-        XCTAssertEqual(device.memberIps?.first, "10.0.0.45")
+        XCTAssertEqual(device.memberIps?.first, "192.0.2.45")
         // deviceId: label "all" wins over "group:all".
         XCTAssertEqual(device.deviceId, "all")
     }
@@ -89,7 +89,7 @@ final class ModelDecodingTests: XCTestCase {
     func testDecodeDevice_matrix() throws {
         let json = """
         {
-            "ip": "10.0.0.99",
+            "ip": "192.0.2.99",
             "mac": "d0:73:d5:aa:bb:cc",
             "label": "Luna",
             "nickname": null,
@@ -113,7 +113,7 @@ final class ModelDecodingTests: XCTestCase {
     func testDecodeDevice_bulb() throws {
         let json = """
         {
-            "ip": "10.0.0.5",
+            "ip": "192.0.2.5",
             "mac": "d0:73:d5:6a:88:79",
             "label": "Living Room Floor Lamp",
             "nickname": null,
@@ -136,8 +136,8 @@ final class ModelDecodingTests: XCTestCase {
     func testDecodeDevice_noLabel() throws {
         let json = """
         {
-            "ip": "10.0.0.11",
-            "label": "10.0.0.11",
+            "ip": "192.0.2.11",
+            "label": "192.0.2.11",
             "nickname": null,
             "product": "Mini White",
             "zones": 1,
@@ -153,14 +153,14 @@ final class ModelDecodingTests: XCTestCase {
         let device = try decoder.decode(Device.self, from: json)
         // The label is the IP itself — deviceId should still use it
         // (the label field is non-empty, even if it looks like an IP).
-        XCTAssertEqual(device.deviceId, "10.0.0.11")
+        XCTAssertEqual(device.deviceId, "192.0.2.11")
     }
 
     /// Unknown fields from the server (like "overridden") are silently ignored.
     func testDecodeDevice_extraFieldsIgnored() throws {
         let json = """
         {
-            "ip": "10.0.0.5",
+            "ip": "192.0.2.5",
             "mac": "d0:73:d5:6a:88:79",
             "label": "Living Room Floor Lamp",
             "nickname": null,
@@ -186,7 +186,7 @@ final class ModelDecodingTests: XCTestCase {
         {
             "devices": [
                 {
-                    "ip": "10.0.0.45",
+                    "ip": "192.0.2.45",
                     "mac": "d0:73:d5:d4:79:9c",
                     "label": "PORCH STRING LIGHTS",
                     "nickname": null,
@@ -222,7 +222,7 @@ final class ModelDecodingTests: XCTestCase {
             },
             "fps": 20,
             "overridden": false,
-            "devices": [{"id": "10.0.0.45"}]
+            "devices": [{"id": "192.0.2.45"}]
         }
         """.data(using: .utf8)!
 

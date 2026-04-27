@@ -103,9 +103,9 @@ def test_zone_map_expansion():
     """Multizone emitters contribute all zones; single emitters contribute 1."""
     from emitters.virtual import VirtualMultizoneEmitter
 
-    strip = MockEmitter("10.0.0.1", zone_count=6, is_multizone=True)
-    bulb_a = MockEmitter("10.0.0.2", zone_count=1, is_multizone=False)
-    bulb_b = MockEmitter("10.0.0.3", zone_count=1, is_multizone=False)
+    strip = MockEmitter("192.0.2.1", zone_count=6, is_multizone=True)
+    bulb_a = MockEmitter("192.0.2.2", zone_count=1, is_multizone=False)
+    bulb_b = MockEmitter("192.0.2.3", zone_count=1, is_multizone=False)
 
     vem = VirtualMultizoneEmitter([strip, bulb_a, bulb_b])
 
@@ -118,9 +118,9 @@ def test_send_zones_dispatch():
     """send_zones() batches multizone, dispatches singles correctly."""
     from emitters.virtual import VirtualMultizoneEmitter
 
-    strip = MockEmitter("10.0.0.1", zone_count=6, is_multizone=True)
-    bulb_a = MockEmitter("10.0.0.2", zone_count=1, is_multizone=False)
-    bulb_b = MockEmitter("10.0.0.3", zone_count=1, is_multizone=False)
+    strip = MockEmitter("192.0.2.1", zone_count=6, is_multizone=True)
+    bulb_a = MockEmitter("192.0.2.2", zone_count=1, is_multizone=False)
+    bulb_b = MockEmitter("192.0.2.3", zone_count=1, is_multizone=False)
 
     vem = VirtualMultizoneEmitter([strip, bulb_a, bulb_b])
 
@@ -159,7 +159,7 @@ def test_send_color_broadcast():
     from emitters.virtual import VirtualMultizoneEmitter
 
     emitters = [
-        MockEmitter(f"10.0.0.{i}", zone_count=(6 if i == 1 else 1),
+        MockEmitter(f"192.0.2.{i}", zone_count=(6 if i == 1 else 1),
                     is_multizone=(i == 1))
         for i in range(1, 4)
     ]
@@ -178,7 +178,7 @@ def test_power_broadcast():
     from emitters.virtual import VirtualMultizoneEmitter
 
     emitters = [
-        MockEmitter(f"10.0.0.{i}", zone_count=1, is_multizone=False)
+        MockEmitter(f"192.0.2.{i}", zone_count=1, is_multizone=False)
         for i in range(1, 6)
     ]
     vem = VirtualMultizoneEmitter(emitters)
@@ -200,8 +200,8 @@ def test_two_multizone_emitters():
     """Two multizone emitters in one group batch independently."""
     from emitters.virtual import VirtualMultizoneEmitter
 
-    strip_a = MockEmitter("10.0.0.1", zone_count=4, is_multizone=True)
-    strip_b = MockEmitter("10.0.0.2", zone_count=3, is_multizone=True)
+    strip_a = MockEmitter("192.0.2.1", zone_count=4, is_multizone=True)
+    strip_b = MockEmitter("192.0.2.2", zone_count=3, is_multizone=True)
 
     vem = VirtualMultizoneEmitter([strip_a, strip_b])
     assert vem.zone_count == 7, f"Expected 7, got {vem.zone_count}"
@@ -229,7 +229,7 @@ def test_all_singles():
     from emitters.virtual import VirtualMultizoneEmitter
 
     emitters = [
-        MockEmitter(f"10.0.0.{i}", zone_count=1, is_multizone=False)
+        MockEmitter(f"192.0.2.{i}", zone_count=1, is_multizone=False)
         for i in range(5)
     ]
     vem = VirtualMultizoneEmitter(emitters)
@@ -259,7 +259,7 @@ def test_prepare_for_rendering():
     from emitters.virtual import VirtualMultizoneEmitter
 
     emitters = [
-        MockEmitter(f"10.0.0.{i}", zone_count=1, is_multizone=False)
+        MockEmitter(f"192.0.2.{i}", zone_count=1, is_multizone=False)
         for i in range(3)
     ]
     vem = VirtualMultizoneEmitter(emitters)

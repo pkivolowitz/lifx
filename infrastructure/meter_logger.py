@@ -89,9 +89,17 @@ logger: logging.Logger = logging.getLogger("glowup.meter_logger")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Default PostgreSQL DSN.  Overridden by GLOWUP_DIAG_DSN in server.py
-# wiring (same env var the thermal/power loggers honor).
-DEFAULT_DSN: str = "postgresql://glowup:changeme@10.0.0.111:5432/glowup"
+# Default PostgreSQL DSN — same resolution order as
+# thermal_logger / power_logger: site.postgres_dsn (typically supplied
+# via /etc/glowup/secrets.json), then GLOWUP_DIAG_DSN env, else empty.
+# No hardcoded credentials or household IPs in source.
+import os as _os
+from glowup_site import site as _site
+DEFAULT_DSN: str = (
+    _site.get("postgres_dsn")
+    or _os.environ.get("GLOWUP_DIAG_DSN")
+    or ""
+)
 
 # 90-day retention.  Operator-blessed 2026-04-25 across both ours and
 # neighbor rows; civic-aggregate stats (if ever computed) get stored

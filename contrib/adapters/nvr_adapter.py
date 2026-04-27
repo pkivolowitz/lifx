@@ -22,7 +22,7 @@ events for doorbell channels.
 Configuration (in server.json)::
 
     "nvr": {
-        "host": "10.0.0.51",
+        "host": "<nvr host or IP>",
         "port": 80,
         "username": "admin",
         "password": "secret",
@@ -36,7 +36,7 @@ Configuration (in server.json)::
             "channels": [
                 {"id": 13, "name": "Front"}
             ],
-            "devices": ["10.0.0.124", "10.0.0.147"],
+            "devices": ["192.0.2.124", "192.0.2.147"],
             "effect": "on",
             "params": {"brightness": 100},
             "hold_seconds": 15,

@@ -14,7 +14,7 @@ Design principles:
 
 - **Cross-host subscribes are fragile.  Cross-host publishes are not.**
   The service pushes real-time signals to hub mosquitto at
-  ``10.0.0.214:1883`` using the existing ``glowup/signals/{device}:{prop}``
+  ``<hub-broker>:1883`` using the existing ``glowup/signals/{device}:{prop}``
   schema.  Publishers notice failed publishes immediately — no
   watchdog, no rebuild-client, no half-open zombie loop.
 
@@ -40,7 +40,7 @@ Ports:
 
 - HTTP:  :8422
 - Z2M MQTT: localhost:1883  (Z2M publishes zigbee2mqtt/#)
-- Hub MQTT: 10.0.0.214:1883  (service publishes glowup/signals/*)
+- Hub MQTT: <hub-broker>:1883  (service publishes glowup/signals/*)
 
 Config is via env vars (systemd unit sets them), not a config file —
 the service is so small that config-as-env is appropriate.

@@ -8,7 +8,7 @@
 #   ./setup_clock.sh <server_ip> [options]
 #
 # Required:
-#   server_ip           IP of the GlowUp server (e.g. 10.0.0.191)
+#   server_ip           IP of the GlowUp server (e.g. 192.0.2.10)
 #
 # Options:
 #   --hostname NAME     Set the Pi hostname (default: clock)
@@ -18,12 +18,12 @@
 #   --help              Show this message
 #
 # Examples:
-#   ./setup_clock.sh 10.0.0.191
-#   ./setup_clock.sh 10.0.0.191 --hostname bedroom --rotate 90 --ble
-#   ./setup_clock.sh 10.0.0.191 --reboot "Wed 03:00"
+#   ./setup_clock.sh 192.0.2.10
+#   ./setup_clock.sh 192.0.2.10 --hostname bedroom --rotate 90 --ble
+#   ./setup_clock.sh 192.0.2.10 --reboot "Wed 03:00"
 #
 # Run on the Pi itself, or pipe via SSH:
-#   ssh a@10.0.0.148 "bash -s" < tools/setup_clock.sh 10.0.0.191 --ble
+#   ssh mortimer.snerd@<clock-pi> "bash -s" < tools/setup_clock.sh 192.0.2.10 --ble
 #
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.

@@ -24,7 +24,7 @@ Usage::
                 self.publish_signal("my_sensor:temperature", 22.5)
                 self._stop_event.wait(10.0)
 
-    adapter = MyAdapter("my_adapter", broker="10.0.0.214")
+    adapter = MyAdapter("my_adapter", broker="<hub-broker>")
     adapter.start()
 """
 

@@ -2,7 +2,7 @@
 
 Captures broadcasts from neighborhood electric (ITRON ERT — SCM, SCM+,
 IDM, NetIDM) and water (Neptune R900) meters using rtl_433 on a host
-with an RTL-SDR dongle (today: ernie, 10.0.0.153).  Each parsed
+with an RTL-SDR dongle (the configured SDR host).  Each parsed
 reading is published cross-host to the hub's MQTT broker on the
 ``glowup/meters/<meter_id>`` topic where the corresponding
 :class:`infrastructure.meter_logger.MeterLogger` persists it to

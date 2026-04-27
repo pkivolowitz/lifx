@@ -156,10 +156,10 @@ class TestPatternMatching(unittest.TestCase):
         """A {param} placeholder must capture any segment value."""
         route: _Route = _Route("GET", ("api", "devices", "{id}", "status"),
                                "_handler")
-        parts: list[str] = ["api", "devices", "10.0.0.5", "status"]
+        parts: list[str] = ["api", "devices", "192.0.2.5", "status"]
         params: dict[str, str] = {}
         self.assertTrue(self._matches(route, parts, params))
-        self.assertEqual(params["id"], "10.0.0.5")
+        self.assertEqual(params["id"], "192.0.2.5")
 
     def test_two_params_captured_in_order(self) -> None:
         """Multiple {param} placeholders capture values in order."""
@@ -178,7 +178,7 @@ class TestPatternMatching(unittest.TestCase):
         """A parameterized pattern must reject wrong literal segments."""
         route: _Route = _Route("POST", ("api", "devices", "{id}", "play"),
                                "_handler")
-        parts: list[str] = ["api", "devices", "10.0.0.5", "stop"]
+        parts: list[str] = ["api", "devices", "192.0.2.5", "stop"]
         self.assertFalse(self._matches(route, parts))
 
     @staticmethod

@@ -54,8 +54,8 @@ class ConstructionTests(unittest.TestCase):
 
     def test_strips_trailing_slash(self) -> None:
         """Trailing slash on base_url must be tolerated (caller sloppy)."""
-        c = ZigbeeControlClient("http://10.0.0.123:8422/")
-        self.assertEqual(c._base, "http://10.0.0.123:8422")
+        c = ZigbeeControlClient("http://127.0.0.1:8422/")
+        self.assertEqual(c._base, "http://127.0.0.1:8422")
 
     def test_default_timeout_used(self) -> None:
         """Client picks up the module default when none is supplied."""
@@ -67,7 +67,7 @@ class SetStateTests(unittest.TestCase):
     """Set-state path — including the echoed/not-echoed distinction."""
 
     def _client(self) -> ZigbeeControlClient:
-        return ZigbeeControlClient("http://10.0.0.123:8422")
+        return ZigbeeControlClient("http://127.0.0.1:8422")
 
     def test_rejects_blank_name_without_network(self) -> None:
         """Empty name is a client-side validation error, no HTTP."""
@@ -127,7 +127,7 @@ class SetStateTests(unittest.TestCase):
         # A real service 504 arrives via HTTPError with the body above.
         fp = io.BytesIO(json.dumps(body).encode("utf-8"))
         err = urllib.error.HTTPError(
-            "http://10.0.0.123:8422/devices/LRTV/state", 504, "Gateway Timeout",
+            "http://127.0.0.1:8422/devices/LRTV/state", 504, "Gateway Timeout",
             {}, fp,  # type: ignore[arg-type]
         )
         with patch("urllib.request.urlopen", side_effect=err):
@@ -167,7 +167,7 @@ class ListDevicesTests(unittest.TestCase):
     """``list_devices`` and its optional type filter."""
 
     def _client(self) -> ZigbeeControlClient:
-        return ZigbeeControlClient("http://10.0.0.123:8422")
+        return ZigbeeControlClient("http://127.0.0.1:8422")
 
     def test_list_all(self) -> None:
         """No filter → request /devices, unwrap envelope to plain list."""
@@ -209,7 +209,7 @@ class GetDeviceTests(unittest.TestCase):
     """Single-device lookup."""
 
     def _client(self) -> ZigbeeControlClient:
-        return ZigbeeControlClient("http://10.0.0.123:8422")
+        return ZigbeeControlClient("http://127.0.0.1:8422")
 
     def test_returns_device_dict(self) -> None:
         """200 body flows through verbatim."""
@@ -226,7 +226,7 @@ class GetDeviceTests(unittest.TestCase):
             {"error": "unknown device: NOPE"},
         ).encode("utf-8"))
         err = urllib.error.HTTPError(
-            "http://10.0.0.123:8422/devices/NOPE", 404, "Not Found",
+            "http://127.0.0.1:8422/devices/NOPE", 404, "Not Found",
             {}, fp,  # type: ignore[arg-type]
         )
         with patch("urllib.request.urlopen", side_effect=err):

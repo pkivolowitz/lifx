@@ -18,26 +18,26 @@ final class DeviceIdentityTests: XCTestCase {
 
     /// Label present and non-empty — should be preferred.
     func testDeviceId_prefersLabel() throws {
-        let device = makeDevice(label: "PORCH STRING LIGHTS", mac: "d0:73:d5:d4:79:9c", ip: "10.0.0.45")
+        let device = makeDevice(label: "PORCH STRING LIGHTS", mac: "d0:73:d5:d4:79:9c", ip: "192.0.2.45")
         XCTAssertEqual(device.deviceId, "PORCH STRING LIGHTS")
     }
 
     /// Label nil — should fall back to MAC.
     func testDeviceId_fallsBackToMac_whenLabelNil() throws {
-        let device = makeDevice(label: nil, mac: "d0:73:d5:d4:79:9c", ip: "10.0.0.45")
+        let device = makeDevice(label: nil, mac: "d0:73:d5:d4:79:9c", ip: "192.0.2.45")
         XCTAssertEqual(device.deviceId, "d0:73:d5:d4:79:9c")
     }
 
     /// Label empty string — should fall back to MAC.
     func testDeviceId_fallsBackToMac_whenLabelEmpty() throws {
-        let device = makeDevice(label: "", mac: "d0:73:d5:d4:79:9c", ip: "10.0.0.45")
+        let device = makeDevice(label: "", mac: "d0:73:d5:d4:79:9c", ip: "192.0.2.45")
         XCTAssertEqual(device.deviceId, "d0:73:d5:d4:79:9c")
     }
 
     /// Label nil, MAC empty — should fall back to IP.
     func testDeviceId_fallsBackToIp_whenLabelNilMacEmpty() throws {
-        let device = makeDevice(label: nil, mac: "", ip: "10.0.0.45")
-        XCTAssertEqual(device.deviceId, "10.0.0.45")
+        let device = makeDevice(label: nil, mac: "", ip: "192.0.2.45")
+        XCTAssertEqual(device.deviceId, "192.0.2.45")
     }
 
     /// Virtual group device — MAC is "virtual", should skip to IP
@@ -56,7 +56,7 @@ final class DeviceIdentityTests: XCTestCase {
 
     /// All three present — label still wins.
     func testDeviceId_labelWinsOverAll() throws {
-        let device = makeDevice(label: "Dragon Fly 1B", mac: "d0:73:d5:6a:c9:af", ip: "10.0.0.18")
+        let device = makeDevice(label: "Dragon Fly 1B", mac: "d0:73:d5:6a:c9:af", ip: "192.0.2.18")
         XCTAssertEqual(device.deviceId, "Dragon Fly 1B")
     }
 
@@ -64,7 +64,7 @@ final class DeviceIdentityTests: XCTestCase {
 
     /// Device.id must equal deviceId (used for SwiftUI navigation and list identity).
     func testIdentifiableId_equalsDeviceId() throws {
-        let device = makeDevice(label: "Living Room Floor Lamp", mac: "d0:73:d5:6a:88:79", ip: "10.0.0.5")
+        let device = makeDevice(label: "Living Room Floor Lamp", mac: "d0:73:d5:6a:88:79", ip: "192.0.2.5")
         XCTAssertEqual(device.id, device.deviceId)
     }
 
@@ -72,20 +72,20 @@ final class DeviceIdentityTests: XCTestCase {
 
     /// Nickname takes priority over everything.
     func testDisplayName_prefersNickname() throws {
-        let device = makeDevice(label: "Dragon Fly 1B", mac: "aa:bb:cc:dd:ee:ff", ip: "10.0.0.18", nickname: "My Favorite Light")
+        let device = makeDevice(label: "Dragon Fly 1B", mac: "aa:bb:cc:dd:ee:ff", ip: "192.0.2.18", nickname: "My Favorite Light")
         XCTAssertEqual(device.displayName, "My Favorite Light")
     }
 
     /// No nickname — falls back to label.
     func testDisplayName_fallsBackToLabel() throws {
-        let device = makeDevice(label: "PORCH STRING LIGHTS", mac: "aa:bb:cc:dd:ee:ff", ip: "10.0.0.45")
+        let device = makeDevice(label: "PORCH STRING LIGHTS", mac: "aa:bb:cc:dd:ee:ff", ip: "192.0.2.45")
         XCTAssertEqual(device.displayName, "PORCH STRING LIGHTS")
     }
 
     /// No nickname, no label — falls back to IP.
     func testDisplayName_fallsBackToIp() throws {
-        let device = makeDevice(label: nil, mac: "aa:bb:cc:dd:ee:ff", ip: "10.0.0.45")
-        XCTAssertEqual(device.displayName, "10.0.0.45")
+        let device = makeDevice(label: nil, mac: "aa:bb:cc:dd:ee:ff", ip: "192.0.2.45")
+        XCTAssertEqual(device.displayName, "192.0.2.45")
     }
 
     /// Group device display name is prefixed.

@@ -231,7 +231,7 @@ class DeviceRegistry:
         lookup path for devices that are offline or query-silent.
 
         Args:
-            ip:        Device IP address (e.g. ``10.0.0.164``).
+            ip:        Device IP address (e.g. ``192.0.2.42``).
             keepalive: Optional keepalive daemon for IP → MAC resolution.
 
         Returns:

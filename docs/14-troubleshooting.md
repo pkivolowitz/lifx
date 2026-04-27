@@ -77,7 +77,7 @@ wireless machine and it will work.
 
 ```bash
 glowup discover              # Routes via server if reachable
-glowup discover --ip 10.0.0.28  # Also routes via server
+glowup discover --ip 192.0.2.28  # Also routes via server
 ```
 
 The server has direct Ethernet access to all bulbs, so it can query

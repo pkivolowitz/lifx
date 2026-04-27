@@ -2,7 +2,7 @@
 
 Usage::
 
-    python -m tools.remote_hid.client --host 10.0.0.123 --port 8429 \\
+    python -m tools.remote_hid.client --host <broker-2 host> --port 8429 \\
         --secret-file ~/.glowup/remote_hid.token
 
 Behavior

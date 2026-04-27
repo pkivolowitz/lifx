@@ -65,7 +65,7 @@ class TestCollectSttState(unittest.TestCase):
             morning_report, "_ssh",
             return_value=(True, json.dumps(payload)),
         ):
-            out = morning_report.collect_stt_state("10.0.0.191", "user")
+            out = morning_report.collect_stt_state("192.0.2.10", "user")
         self.assertTrue(out["reachable"])
         self.assertFalse(out["degraded"])
         self.assertEqual(out["engine"], "mlx-whisper")
@@ -81,7 +81,7 @@ class TestCollectSttState(unittest.TestCase):
             morning_report, "_ssh",
             return_value=(True, json.dumps(payload)),
         ):
-            out = morning_report.collect_stt_state("10.0.0.191", "user")
+            out = morning_report.collect_stt_state("192.0.2.10", "user")
         self.assertTrue(out["reachable"])
         self.assertTrue(out["degraded"])
         self.assertIn("out of memory", out["fallback_reason"])
@@ -98,7 +98,7 @@ class TestCollectSttState(unittest.TestCase):
             morning_report, "_ssh",
             return_value=(True, json.dumps(payload)),
         ):
-            out = morning_report.collect_stt_state("10.0.0.191", "user")
+            out = morning_report.collect_stt_state("192.0.2.10", "user")
         self.assertTrue(out["degraded"])
 
     def test_missing_file_is_warn_not_fail(self) -> None:
@@ -106,7 +106,7 @@ class TestCollectSttState(unittest.TestCase):
             morning_report, "_ssh",
             return_value=(True, ""),
         ):
-            out = morning_report.collect_stt_state("10.0.0.191", "user")
+            out = morning_report.collect_stt_state("192.0.2.10", "user")
         self.assertFalse(out["reachable"])
         self.assertIn("state file", out["error"])
 
@@ -115,7 +115,7 @@ class TestCollectSttState(unittest.TestCase):
             morning_report, "_ssh",
             return_value=(False, "connection refused"),
         ):
-            out = morning_report.collect_stt_state("10.0.0.191", "user")
+            out = morning_report.collect_stt_state("192.0.2.10", "user")
         self.assertFalse(out["reachable"])
 
     def test_malformed_json_is_handled(self) -> None:
@@ -123,7 +123,7 @@ class TestCollectSttState(unittest.TestCase):
             morning_report, "_ssh",
             return_value=(True, "this is not json"),
         ):
-            out = morning_report.collect_stt_state("10.0.0.191", "user")
+            out = morning_report.collect_stt_state("192.0.2.10", "user")
         self.assertFalse(out["reachable"])
         self.assertIn("not valid JSON", out["error"])
 

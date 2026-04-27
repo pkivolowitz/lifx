@@ -284,8 +284,8 @@ class TestMqttAdapterBaseConstruction(unittest.TestCase):
     """Construction and attribute storage for MqttAdapterBase."""
 
     def test_stores_broker(self) -> None:
-        adapter = StubMqttAdapter(broker="10.0.0.1")
-        self.assertEqual(adapter._broker, "10.0.0.1")
+        adapter = StubMqttAdapter(broker="192.0.2.1")
+        self.assertEqual(adapter._broker, "192.0.2.1")
 
     def test_stores_port(self) -> None:
         adapter = StubMqttAdapter(port=1884)
@@ -425,10 +425,10 @@ class TestMqttAdapterBaseStart(unittest.TestCase):
         mock_client = MagicMock()
         mock_mqtt.Client.return_value = mock_client
         with patch("adapters.adapter_base._PAHO_V2", False):
-            adapter = StubMqttAdapter(broker="10.0.0.5", port=1884)
+            adapter = StubMqttAdapter(broker="192.0.2.5", port=1884)
             adapter.start()
         mock_client.connect_async.assert_called_once_with(
-            "10.0.0.5", 1884, keepalive=MQTT_KEEPALIVE,
+            "192.0.2.5", 1884, keepalive=MQTT_KEEPALIVE,
         )
 
     @patch("adapters.adapter_base._HAS_PAHO", True)

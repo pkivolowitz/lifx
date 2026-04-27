@@ -159,7 +159,7 @@ sudo bash setup_clock.sh <server_ip> [options]
 
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `server_ip` | Yes | -- | GlowUp server IP (e.g., `10.0.0.214`) |
+| `server_ip` | Yes | -- | GlowUp server IP (e.g., `192.0.2.214`) |
 | `--hostname NAME` | No | `clock` | Set the Pi hostname |
 | `--rotate DEGREES` | No | `0` | Screen rotation: `0`, `90`, `180`, `270` |
 | `--ble` | No | -- | Deploy BLE sensor daemon (installs bleak, paho-mqtt) |
@@ -169,13 +169,13 @@ sudo bash setup_clock.sh <server_ip> [options]
 
 ```bash
 # Basic setup.
-sudo bash setup_clock.sh 10.0.0.214
+sudo bash setup_clock.sh 192.0.2.214
 
 # Bedroom clock: rotated display, BLE sensor daemon, custom hostname.
-sudo bash setup_clock.sh 10.0.0.214 --hostname bedroom --rotate 90 --ble
+sudo bash setup_clock.sh 192.0.2.214 --hostname bedroom --rotate 90 --ble
 
 # Remote setup via SSH.
-ssh a@10.0.0.148 "bash -s" < tools/setup_clock.sh 10.0.0.214 --ble
+ssh mortimer.snerd@192.0.2.148 "bash -s" < tools/setup_clock.sh 192.0.2.214 --ble
 ```
 
 ### Phases
@@ -218,7 +218,7 @@ sleep 5 && chromium --ozone-platform=wayland --password-store=basic \
     --noerrdialogs --disable-infobars \
     --disable-session-crashed-bubble \
     --disable-restore-session-state --kiosk \
-    'http://10.0.0.214:8420/home' &
+    'http://192.0.2.214:8420/home' &
 ```
 
 For **X11**, the script writes `.desktop` files to

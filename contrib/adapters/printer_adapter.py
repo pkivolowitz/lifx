@@ -10,7 +10,7 @@ common across Brother network printers (HL, MFC, DCP series).
 Configuration (in server.json)::
 
     "printer": {
-        "host": "10.0.0.59",
+        "host": "<printer host or IP>",
         "name": "Brother HL-5470DW",
         "poll_interval_seconds": 86400
     }

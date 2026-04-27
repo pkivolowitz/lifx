@@ -328,7 +328,7 @@ class TestLightBridgeNoteTracking(unittest.TestCase):
     def setUp(self) -> None:
         """Create a bridge with mock internals."""
         self.bridge: MidiLightBridge = MidiLightBridge(
-            device_ips=["10.0.0.1"],
+            device_ips=["192.0.2.1"],
             broker="localhost",
         )
         # Manually set zone count (skip device discovery).
@@ -485,7 +485,7 @@ class TestLightBridgeMultiDevice(unittest.TestCase):
     def test_multiple_ips_accepted(self) -> None:
         """Bridge accepts a list of IPs."""
         bridge: MidiLightBridge = MidiLightBridge(
-            device_ips=["10.0.0.1", "10.0.0.2", "10.0.0.3"],
+            device_ips=["192.0.2.1", "192.0.2.2", "192.0.2.3"],
             broker="localhost",
         )
         self.assertEqual(len(bridge._device_ips), 3)
@@ -493,7 +493,7 @@ class TestLightBridgeMultiDevice(unittest.TestCase):
     def test_single_ip_accepted(self) -> None:
         """Bridge works with a single IP."""
         bridge: MidiLightBridge = MidiLightBridge(
-            device_ips=["10.0.0.1"],
+            device_ips=["192.0.2.1"],
             broker="localhost",
         )
         self.assertEqual(len(bridge._device_ips), 1)
@@ -501,7 +501,7 @@ class TestLightBridgeMultiDevice(unittest.TestCase):
     def test_devices_list_starts_empty(self) -> None:
         """Discovered devices list is empty before discovery."""
         bridge: MidiLightBridge = MidiLightBridge(
-            device_ips=["10.0.0.1"],
+            device_ips=["192.0.2.1"],
             broker="localhost",
         )
         self.assertEqual(len(bridge._devices), 0)

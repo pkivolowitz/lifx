@@ -30,7 +30,7 @@ The fix was to invert the direction of the network coupling.
 - normalizes every property the same way the old adapter did
   (boolean → 0.0/1.0, battery ÷ 100, raw temp/humid, etc.);
 - opens **its own paho client** to the hub mosquitto at
-  `10.0.0.214:1883` and **publishes** each normalized property as
+  `192.0.2.214:1883` and **publishes** each normalized property as
   a discrete signal on `glowup/signals/{device}:{property}`.
 
 The hub no longer hosts a Zigbee adapter at all.  It already
@@ -84,8 +84,8 @@ reconstructing it from `_on_remote_signal` deltas.
 - Repo source: [`zigbee_service/service.py`](../zigbee_service/service.py)
 - Repo README (deployment, env vars, HTTP endpoints): [`zigbee_service/README.md`](../zigbee_service/README.md)
 - Systemd unit: [`zigbee_service/glowup-zigbee-service.service`](../zigbee_service/glowup-zigbee-service.service)
-- Restart on broker-2: `ssh a@10.0.0.123 sudo systemctl restart glowup-zigbee-service`
-- Logs: `ssh a@10.0.0.123 sudo journalctl -u glowup-zigbee-service -f`
+- Restart on broker-2: `ssh mortimer.snerd@192.0.2.123 sudo systemctl restart glowup-zigbee-service`
+- Logs: `ssh mortimer.snerd@192.0.2.123 sudo journalctl -u glowup-zigbee-service -f`
 
 ## How the hub sees Zigbee data
 

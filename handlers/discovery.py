@@ -198,7 +198,7 @@ class DiscoveryHandlerMixin:
     # user-facing name used in the REST API and voice commands.
     # Zigbee is not listed: it runs as glowup-zigbee-service on
     # broker-2 and cannot be restarted through this handler.  Use
-    # `ssh a@10.0.0.123 sudo systemctl restart glowup-zigbee-service`
+    # `ssh mortimer.snerd@<broker-2 host> sudo systemctl restart glowup-zigbee-service`
     # instead.
     _ADAPTER_ATTRS: dict[str, str] = {
         "vivint": "_vivint_adapter",
@@ -326,7 +326,7 @@ class DiscoveryHandlerMixin:
             {
                 "devices": [
                     {
-                        "ip":  "10.0.0.41",
+                        "ip":  "192.0.2.41",
                         "mac": "d0:73:d5:69:70:db"
                     },
                     ...
@@ -421,18 +421,18 @@ class DiscoveryHandlerMixin:
         Request body::
 
             {
-                "ip":       "10.0.0.41",
+                "ip":       "192.0.2.41",
                 "duration": 10.0        (optional, default IDENTIFY_DURATION_SECONDS)
             }
 
         Response::
 
             {
-                "ip":          "10.0.0.41",
+                "ip":          "192.0.2.41",
                 "identifying": true,
                 "duration":    10.0,
                 "device": {
-                    "ip":      "10.0.0.41",
+                    "ip":      "192.0.2.41",
                     "mac":     "d0:73:d5:69:70:db",
                     "label":   "Bedroom Neon",
                     "product": "LIFX Neon",

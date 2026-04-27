@@ -7,7 +7,7 @@ STT → intent → execute → TTS → response.
 Usage::
 
     # With real STT (requires faster-whisper + ffmpeg):
-    python -m voice.coordinator.daemon --broker 10.0.0.214
+    python -m voice.coordinator.daemon --broker <hub-broker>
 
     # Mock mode (type transcription manually):
     python -m voice.coordinator.daemon --mock-stt --mock-intent

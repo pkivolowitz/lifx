@@ -19,7 +19,7 @@ Two creation paths:
 **Config-based** (via EmitterManager / ``create_emitter()``)::
 
     emitter = create_emitter("zigbee_plug", "LRTV", {
-        "broker": "10.0.0.123",
+        "broker": "<broker-2 host>",
         "http_port": 8422,
         "device_name": "LRTV",
     })
@@ -27,7 +27,7 @@ Two creation paths:
 **Programmatic** (via factory classmethod)::
 
     emitter = ZigbeePlugEmitter.from_plug(
-        name="LRTV", broker_host="10.0.0.123",
+        name="LRTV", broker_host="<broker-2 host>",
     )
 """
 

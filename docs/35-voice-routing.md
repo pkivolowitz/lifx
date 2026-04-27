@@ -120,12 +120,12 @@ Excerpt showing per-room routing as deployed on Daedalus:
 
 ```json
 {
-    "mqtt": {"broker": "10.0.0.214", "port": 1883},
+    "mqtt": {"broker": "192.0.2.214", "port": 1883},
     "room_speakers": {
         "Dining Room": {"speaker": "satellite"},
         "Main Bedroom": {"speaker": "satellite"}
     },
-    "piper_model": "/Users/perrykivolowitz/models/en_US-ryan-low.onnx"
+    "piper_model": "/Users/mortimer.snerd/models/en_US-ryan-low.onnx"
 }
 ```
 

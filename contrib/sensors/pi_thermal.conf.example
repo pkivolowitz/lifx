@@ -9,8 +9,8 @@
 # boxes where the fan is 5V-always-on and invisible to sysfs.
 
 [mqtt]
-# GlowUp canonical broker — Pi 5 "glowup" hub.  See reference_project_state.md.
-broker = 10.0.0.214
+# GlowUp hub broker — replace with your hub's host or IP.
+broker = <hub-broker>
 port = 1883
 
 [sensor]

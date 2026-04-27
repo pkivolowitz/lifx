@@ -200,7 +200,7 @@ python3 glowup.py play cylon --device "PORCH STRING LIGHTS" --speed 1.0 --width 
 python3 glowup.py play cylon --device "PORCH STRING LIGHTS" --sim-only
 
 # Slow blue-to-green breathe (by IP, standalone or server)
-python3 glowup.py play breathe --ip 10.0.0.34 --speed 8.0 --hue1 240 --hue2 120
+python3 glowup.py play breathe --ip 192.0.2.34 --speed 8.0 --hue1 240 --hue2 120
 
 # Aurora borealis at low brightness
 python3 glowup.py play aurora --device "Living Room Floor Lamp" --brightness 40 --speed 15

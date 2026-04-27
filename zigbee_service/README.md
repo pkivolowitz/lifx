@@ -28,23 +28,24 @@ flip-flop fixes.
 ```
 
 **broker-2 owns the data.** The service stores history in the `glowup`
-PostgreSQL database on the NAS jail (.111), responds to dashboard queries
+PostgreSQL database on a separate DB host, responds to dashboard queries
 directly, and publishes real-time signals to hub mosquitto for
 operator/SOE consumption.
 
 ## Deployment
 
-Target: **broker-2** (Pi, `a@10.0.0.123`).
+Target: the **broker-2** host (`mortimer.snerd@<broker-2 host>`). Substitute your
+Zigbee gateway's user and address below.
 
 ```bash
 # Copy code
 sudo mkdir -p /opt/glowup-zigbee /var/lib/glowup-zigbee
-sudo chown a:a /opt/glowup-zigbee /var/lib/glowup-zigbee
-rsync -av service.py a@10.0.0.123:/opt/glowup-zigbee/
+sudo chown mortimer.snerd:mortimer.snerd /opt/glowup-zigbee /var/lib/glowup-zigbee
+rsync -av service.py mortimer.snerd@<broker-2 host>:/opt/glowup-zigbee/
 
 # Create venv
-ssh a@10.0.0.123 'python3 -m venv /opt/glowup-zigbee/venv'
-ssh a@10.0.0.123 '/opt/glowup-zigbee/venv/bin/pip install paho-mqtt psycopg2-binary'
+ssh mortimer.snerd@<broker-2 host> 'python3 -m venv /opt/glowup-zigbee/venv'
+ssh mortimer.snerd@<broker-2 host> '/opt/glowup-zigbee/venv/bin/pip install paho-mqtt psycopg2-binary'
 
 # Install systemd unit
 sudo cp glowup-zigbee-service.service /etc/systemd/system/
@@ -52,8 +53,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now glowup-zigbee-service
 
 # Verify
-curl -s http://10.0.0.123:8422/health
-curl -s http://10.0.0.123:8422/devices | jq
+curl -s http://<broker-2 host>:8422/health
+curl -s http://<broker-2 host>:8422/devices | jq
 ```
 
 ## HTTP endpoints
@@ -97,10 +98,10 @@ it stays classified even if a later heartbeat carries only
 | `GLZ_Z2M_BROKER` | `localhost` | Z2M's mosquitto host |
 | `GLZ_Z2M_PORT` | `1883` | Z2M's mosquitto port |
 | `GLZ_Z2M_PREFIX` | `zigbee2mqtt` | Z2M base topic |
-| `GLZ_HUB_BROKER` | `10.0.0.214` | Hub mosquitto host (empty to disable signal publish) |
+| `GLZ_HUB_BROKER` | `<hub-broker>` | Hub mosquitto host (empty to disable signal publish) |
 | `GLZ_HUB_PORT` | `1883` | Hub mosquitto port |
 | `GLZ_HUB_SIGNAL_PREFIX` | `glowup/signals` | Hub signal bus prefix |
-| `GLZ_DB_DSN` | `postgresql://glowup:...@10.0.0.111:5432/glowup` | PostgreSQL DSN for history |
+| `GLZ_DB_DSN` | `postgresql://glowup:...@<db-host>:5432/glowup` | PostgreSQL DSN for history |
 | `GLZ_RATE_USD_PER_KWH` | `0.13` | Default cost rate |
 | `GLZ_LOG_LEVEL` | `INFO` | Python log level |
 

@@ -2,9 +2,9 @@
 # telemetry (ITRON ERT + Neptune R900).  Runs on whichever host carries
 # the SDR + antenna positioned for meter reception.
 #
-# Today's deployment target: pi-sensor-01 (10.0.0.112), back of the
-# house, RTL-SDR moved over from ernie + improved antenna.  The
-# publisher is host-agnostic by design — installer-managed config
+# Runs on the operator's SDR host (whichever box carries the RTL-SDR
+# + antenna positioned for meter reception).  The publisher is
+# host-agnostic by design — installer-managed config
 # (/etc/glowup/site.json) supplies the hub broker host/port.
 #
 # Install

@@ -7,8 +7,8 @@
 # the module defaults.
 
 [mqtt]
-# GlowUp canonical broker — Pi 5 "glowup" hub.  See reference_project_state.md.
-broker = 10.0.0.214
+# GlowUp hub broker — replace with your hub's host or IP.
+broker = <hub-broker>
 port = 1883
 
 [sensor]
@@ -16,6 +16,6 @@ port = 1883
 interval = 30
 
 # Override the node identifier.  Blank = use short lowercase hostname.
-# For Daedalus we set this explicitly so the dashboard label matches the
-# fleet's canonical name regardless of macOS hostname drift.
-node_id = daedalus
+# Set this explicitly when the macOS hostname differs from the
+# canonical fleet label you want shown on the dashboard.
+node_id =

@@ -37,30 +37,30 @@ LAN-only is the intended deployment.
 ## Server (Pi) install
 
 ```
-scp tools/remote_hid/*.py a@pi:/tmp/remote_hid/
-ssh a@pi 'sudo mkdir -p /opt/glowup-remote-hid/remote_hid && \
+scp tools/remote_hid/*.py mortimer.snerd@pi:/tmp/remote_hid/
+ssh mortimer.snerd@pi 'sudo mkdir -p /opt/glowup-remote-hid/remote_hid && \
     sudo install -o root -g root -m 0644 /tmp/remote_hid/*.py \
         /opt/glowup-remote-hid/remote_hid/'
 ```
 
 ```
-scp tools/remote_hid/deploy/99-uinput.rules a@pi:/tmp/
-ssh a@pi 'sudo install -o root -g root -m 0644 /tmp/99-uinput.rules \
+scp tools/remote_hid/deploy/99-uinput.rules mortimer.snerd@pi:/tmp/
+ssh mortimer.snerd@pi 'sudo install -o root -g root -m 0644 /tmp/99-uinput.rules \
     /etc/udev/rules.d/ && sudo udevadm control --reload-rules && \
     sudo udevadm trigger'
 ```
 
 ```
-scp tools/remote_hid/remote_hid.json.example a@pi:/tmp/
-ssh a@pi 'sudo install -o a -g a -m 0600 /tmp/remote_hid.json.example \
+scp tools/remote_hid/remote_hid.json.example mortimer.snerd@pi:/tmp/
+ssh mortimer.snerd@pi 'sudo install -o mortimer.snerd -g mortimer.snerd -m 0600 /tmp/remote_hid.json.example \
     /etc/glowup/remote_hid.json'
 ```
 
 Venv + evdev:
 
 ```
-ssh a@pi 'sudo mkdir -p /opt/glowup-remote-hid && \
-    sudo chown a:a /opt/glowup-remote-hid && \
+ssh mortimer.snerd@pi 'sudo mkdir -p /opt/glowup-remote-hid && \
+    sudo chown mortimer.snerd:mortimer.snerd /opt/glowup-remote-hid && \
     python3 -m venv /opt/glowup-remote-hid/venv && \
     /opt/glowup-remote-hid/venv/bin/pip install evdev'
 ```
@@ -68,8 +68,8 @@ ssh a@pi 'sudo mkdir -p /opt/glowup-remote-hid && \
 Systemd unit:
 
 ```
-scp tools/remote_hid/deploy/glowup-remote-hid.service a@pi:/tmp/
-ssh a@pi 'sudo install -o root -g root -m 0644 \
+scp tools/remote_hid/deploy/glowup-remote-hid.service mortimer.snerd@pi:/tmp/
+ssh mortimer.snerd@pi 'sudo install -o root -g root -m 0644 \
     /tmp/glowup-remote-hid.service /etc/systemd/system/ && \
     sudo systemctl daemon-reload && \
     sudo systemctl enable --now glowup-remote-hid'
@@ -90,7 +90,7 @@ terminal (or IDE) running the client. System Settings -> Privacy & Security.
 Run:
 
 ```
-python -m tools.remote_hid.client --host 10.0.0.123 --port 8429 \
+python -m tools.remote_hid.client --host <broker-2 host> --port 8429 \
     --secret-file ~/.glowup/remote_hid.token
 ```
 

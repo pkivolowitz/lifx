@@ -1620,7 +1620,7 @@ class DashboardHandlerMixin:
                 "BYIR":     {"state": "ON",  "power_w": 2.3, "online": true,  "age_sec":  3.1},
                 "ML_Power": {"state": null,  "power_w": null, "online": false, "age_sec": 24838.9}
               },
-              "source": "http://10.0.0.123:8422/devices"
+              "source": "http://<broker-2 host>:8422/devices"
             }
 
         On proxy failure the endpoint still returns 200 with

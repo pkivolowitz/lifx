@@ -5,7 +5,7 @@
 nrfutil v7+ installed on the NUC (notapi.local):
 
 ```
-ssh a@notapi.local
+ssh mortimer.snerd@notapi.local
 curl -fsSL -o /tmp/nrfutil 'https://files.nordicsemi.com/artifactory/swtools/external/nrfutil/executables/x86_64-unknown-linux-gnu/nrfutil'
 chmod +x /tmp/nrfutil
 /tmp/nrfutil install nrf5sdk-tools
@@ -21,25 +21,25 @@ Pre-built RCP firmware at `tools/firmware/ot-rcp-USB.hex` in this repo.
 - Verify it appears:
 
 ```
-ssh a@notapi.local "ls /dev/ttyACM*"
+ssh mortimer.snerd@notapi.local "ls /dev/ttyACM*"
 ```
 
 - Copy firmware if not already there:
 
 ```
-scp ~/lifx/tools/firmware/ot-rcp-USB.hex a@notapi.local:/tmp/
+scp ~/lifx/tools/firmware/ot-rcp-USB.hex mortimer.snerd@notapi.local:/tmp/
 ```
 
 - Generate DFU package:
 
 ```
-ssh a@notapi.local "/tmp/nrfutil nrf5sdk-tools pkg generate --hw-version 52 --sd-req=0x00 --application /tmp/ot-rcp-USB.hex --application-version 1 /tmp/ot-rcp.zip"
+ssh mortimer.snerd@notapi.local "/tmp/nrfutil nrf5sdk-tools pkg generate --hw-version 52 --sd-req=0x00 --application /tmp/ot-rcp-USB.hex --application-version 1 /tmp/ot-rcp.zip"
 ```
 
 - Flash:
 
 ```
-ssh a@notapi.local "/tmp/nrfutil nrf5sdk-tools dfu usb-serial -pkg /tmp/ot-rcp.zip -p /dev/ttyACM0"
+ssh mortimer.snerd@notapi.local "/tmp/nrfutil nrf5sdk-tools dfu usb-serial -pkg /tmp/ot-rcp.zip -p /dev/ttyACM0"
 ```
 
 - Output should say: `Device programmed.`

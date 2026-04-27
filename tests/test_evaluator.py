@@ -70,7 +70,7 @@ class TestFirstTick(unittest.TestCase):
     def test_single_group_starts(self) -> None:
         """One group with one active entry → one start action."""
         actions, state = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[_entry("Night", "porch")],
             prev_state={"porch": None},
             overrides={},
@@ -79,7 +79,7 @@ class TestFirstTick(unittest.TestCase):
         )
         starts = _actions_by_type(actions, "start")
         self.assertEqual(len(starts), 1)
-        self.assertEqual(starts[0].device_id, "10.0.0.42")
+        self.assertEqual(starts[0].device_id, "192.0.2.42")
         self.assertEqual(starts[0].effect, "aurora")
         self.assertEqual(starts[0].entry_name, "Night")
 
@@ -87,9 +87,9 @@ class TestFirstTick(unittest.TestCase):
         """Multiple groups with active entries → all start."""
         actions, state = evaluate(
             groups={
-                "porch": ["10.0.0.42"],
-                "gen": ["10.0.0.164", "10.0.0.180"],
-                "landing": ["10.0.0.120"],
+                "porch": ["192.0.2.42"],
+                "gen": ["192.0.2.164", "192.0.2.180"],
+                "landing": ["192.0.2.120"],
             },
             schedule=[
                 _entry("Porch Night", "porch", effect="aurora"),
@@ -107,7 +107,7 @@ class TestFirstTick(unittest.TestCase):
     def test_new_group_auto_tracked(self) -> None:
         """Group not in prev_state gets added to new_state."""
         actions, state = evaluate(
-            groups={"new_group": ["10.0.0.99"]},
+            groups={"new_group": ["192.0.2.99"]},
             schedule=[_entry("Test", "new_group")],
             prev_state={},  # Empty — no prior state.
             overrides={},
@@ -129,7 +129,7 @@ class TestParamsPassthrough(unittest.TestCase):
     def test_brightness_30(self) -> None:
         """brightness=30 in schedule → brightness=30 in action."""
         actions, _ = evaluate(
-            groups={"gen": ["10.0.0.164", "10.0.0.180"]},
+            groups={"gen": ["192.0.2.164", "192.0.2.180"]},
             schedule=[_entry("Gen", "gen", effect="on", params={"brightness": 30})],
             prev_state={"gen": None},
             overrides={},
@@ -143,7 +143,7 @@ class TestParamsPassthrough(unittest.TestCase):
     def test_complex_params(self) -> None:
         """Multiple params preserved."""
         actions, _ = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[_entry("Evening", "porch", effect="fireworks",
                             params={"speed": 10, "brightness": 100})],
             prev_state={"porch": None},
@@ -158,7 +158,7 @@ class TestParamsPassthrough(unittest.TestCase):
     def test_empty_params(self) -> None:
         """No params → empty dict, not None."""
         actions, _ = evaluate(
-            groups={"x": ["10.0.0.1"]},
+            groups={"x": ["192.0.2.1"]},
             schedule=[_entry("X", "x", params=None)],
             prev_state={"x": None},
             overrides={},
@@ -191,7 +191,7 @@ class TestEmptyGroups(unittest.TestCase):
     def test_mixed_empty_and_populated(self) -> None:
         """Empty group skipped, populated group starts."""
         actions, _ = evaluate(
-            groups={"empty": [], "ok": ["10.0.0.1"]},
+            groups={"empty": [], "ok": ["192.0.2.1"]},
             schedule=[
                 _entry("A", "empty"),
                 _entry("B", "ok"),
@@ -216,19 +216,19 @@ class TestDeviceId(unittest.TestCase):
     def test_single_ip_uses_ip(self) -> None:
         """1-device group → device_id is the IP."""
         actions, _ = evaluate(
-            groups={"porch": ["10.0.0.213"]},
+            groups={"porch": ["192.0.2.213"]},
             schedule=[_entry("Night", "porch")],
             prev_state={"porch": None},
             overrides={},
             lat=_LAT, lon=_LON,
             now=_now_at(22),
         )
-        self.assertEqual(actions[0].device_id, "10.0.0.213")
+        self.assertEqual(actions[0].device_id, "192.0.2.213")
 
     def test_multi_ip_uses_group(self) -> None:
         """2+ device group → device_id is group:Name."""
         actions, _ = evaluate(
-            groups={"whites": ["10.0.0.124", "10.0.0.147"]},
+            groups={"whites": ["192.0.2.124", "192.0.2.147"]},
             schedule=[_entry("On", "whites")],
             prev_state={"whites": None},
             overrides={},
@@ -248,7 +248,7 @@ class TestSteadyState(unittest.TestCase):
     def test_no_retrigger(self) -> None:
         """Second tick with same entry → zero actions."""
         actions, _ = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[_entry("Night", "porch")],
             prev_state={"porch": "Night"},  # Already running.
             overrides={},
@@ -268,7 +268,7 @@ class TestTransitions(unittest.TestCase):
     def test_entry_to_entry(self) -> None:
         """Entry A → Entry B: stop A, start B."""
         actions, state = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[_entry("Overnight", "porch", effect="aurora")],
             prev_state={"porch": "Evening"},  # Different entry was active.
             overrides={},
@@ -286,7 +286,7 @@ class TestTransitions(unittest.TestCase):
     def test_entry_to_idle(self) -> None:
         """Entry A → no active entry: stop A."""
         actions, state = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[_entry("Night", "porch", start="20:00", stop="22:00")],
             prev_state={"porch": "Night"},
             overrides={},
@@ -302,7 +302,7 @@ class TestTransitions(unittest.TestCase):
     def test_idle_stays_idle(self) -> None:
         """No entry active, was idle → zero actions."""
         actions, _ = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[_entry("Day", "porch", start="08:00", stop="12:00")],
             prev_state={"porch": None},
             overrides={},
@@ -322,10 +322,10 @@ class TestOverrides(unittest.TestCase):
     def test_overridden_device_not_started(self) -> None:
         """Overridden device → no start action on transition."""
         actions, _ = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[_entry("Night", "porch")],
             prev_state={"porch": None},
-            overrides={"10.0.0.42": "some_entry"},
+            overrides={"192.0.2.42": "some_entry"},
             lat=_LAT, lon=_LON,
             now=_now_at(22),
         )
@@ -335,10 +335,10 @@ class TestOverrides(unittest.TestCase):
     def test_overridden_group_member_blocks_group(self) -> None:
         """Override on one group member → blocks entire group."""
         actions, _ = evaluate(
-            groups={"whites": ["10.0.0.124", "10.0.0.147"]},
+            groups={"whites": ["192.0.2.124", "192.0.2.147"]},
             schedule=[_entry("On", "whites")],
             prev_state={"whites": None},
-            overrides={"10.0.0.124": "something"},  # One member overridden.
+            overrides={"192.0.2.124": "something"},  # One member overridden.
             lat=_LAT, lon=_LON,
             now=_now_at(22),
         )
@@ -348,24 +348,24 @@ class TestOverrides(unittest.TestCase):
     def test_override_cleared_on_matching_transition(self) -> None:
         """Override matching outgoing entry → clear_override action."""
         actions, _ = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[],  # No active entry (transition to idle).
             prev_state={"porch": "Evening"},
-            overrides={"10.0.0.42": "Evening"},  # Matches outgoing.
+            overrides={"192.0.2.42": "Evening"},  # Matches outgoing.
             lat=_LAT, lon=_LON,
             now=_now_at(23),
         )
         clears = _actions_by_type(actions, "clear_override")
         self.assertEqual(len(clears), 1)
-        self.assertEqual(clears[0].device_id, "10.0.0.42")
+        self.assertEqual(clears[0].device_id, "192.0.2.42")
 
     def test_override_preserved_on_mismatched_transition(self) -> None:
         """Override for different entry → NOT cleared."""
         actions, _ = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[],
             prev_state={"porch": "Evening"},
-            overrides={"10.0.0.42": "OTHER_ENTRY"},  # Doesn't match.
+            overrides={"192.0.2.42": "OTHER_ENTRY"},  # Doesn't match.
             lat=_LAT, lon=_LON,
             now=_now_at(23),
         )
@@ -375,10 +375,10 @@ class TestOverrides(unittest.TestCase):
     def test_after_clear_override_effect_starts(self) -> None:
         """Clearing override on transition allows new entry to start."""
         actions, _ = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[_entry("Overnight", "porch", effect="aurora")],
             prev_state={"porch": "Evening"},
-            overrides={"10.0.0.42": "Evening"},  # Will be cleared.
+            overrides={"192.0.2.42": "Evening"},  # Will be cleared.
             lat=_LAT, lon=_LON,
             now=_now_at(23, 30),
         )
@@ -399,7 +399,7 @@ class TestDisabledEntries(unittest.TestCase):
     def test_disabled_not_started(self) -> None:
         """enabled=false → no start action."""
         actions, _ = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[_entry("Night", "porch", enabled=False)],
             prev_state={"porch": None},
             overrides={},
@@ -421,7 +421,7 @@ class TestDayFiltering(unittest.TestCase):
         """Entry for Monday only, tested on Wednesday → skip."""
         # 2026-04-02 is a Thursday (weekday=3 → R).
         actions, _ = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[_entry("Weekday", "porch", days="M")],
             prev_state={"porch": None},
             overrides={},
@@ -434,7 +434,7 @@ class TestDayFiltering(unittest.TestCase):
     def test_correct_day_starts(self) -> None:
         """Entry for Thursday (R), tested on Thursday → start."""
         actions, _ = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[_entry("Thursday", "porch", days="R")],
             prev_state={"porch": None},
             overrides={},
@@ -455,7 +455,7 @@ class TestUnmatchedGroups(unittest.TestCase):
     def test_no_entry_for_group(self) -> None:
         """Group exists but no schedule entry targets it → no action."""
         actions, _ = evaluate(
-            groups={"bedroom": ["10.0.0.1"]},
+            groups={"bedroom": ["192.0.2.1"]},
             schedule=[_entry("Kitchen", "kitchen")],  # Wrong group.
             prev_state={"bedroom": None},
             overrides={},
@@ -475,7 +475,7 @@ class TestStateCleanup(unittest.TestCase):
     def test_deleted_group_removed_from_state(self) -> None:
         """Group in prev_state but not in groups → removed."""
         _, state = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[],
             prev_state={"porch": None, "deleted_group": "old_entry"},
             overrides={},
@@ -496,10 +496,10 @@ class TestActionOrdering(unittest.TestCase):
     def test_clear_before_stop_before_start(self) -> None:
         """On transition: clear_override, then stop, then start."""
         actions, _ = evaluate(
-            groups={"porch": ["10.0.0.42"]},
+            groups={"porch": ["192.0.2.42"]},
             schedule=[_entry("Overnight", "porch", effect="aurora")],
             prev_state={"porch": "Evening"},
-            overrides={"10.0.0.42": "Evening"},
+            overrides={"192.0.2.42": "Evening"},
             lat=_LAT, lon=_LON,
             now=_now_at(23, 30),
         )

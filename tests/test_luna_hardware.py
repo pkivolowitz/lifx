@@ -23,6 +23,7 @@ from __future__ import annotations
 __version__: str = "1.0"
 
 import logging
+import os
 import socket
 import struct
 import sys
@@ -55,8 +56,15 @@ from transport import (
 # Constants
 # ---------------------------------------------------------------------------
 
-#: IP address of the Luna under test.
-LUNA_IP: str = "10.0.0.120"
+#: Environment variable naming the Luna under test.  Site-specific
+#: hardware fixtures must come from the operator's environment, never
+#: from a literal in the repo — every install has a different IP.
+LUNA_IP_ENV: str = "GLOWUP_LUNA_IP"
+
+#: IP address of the Luna under test, or empty when no Luna is exposed
+#: to this run.  When empty the suite skips wholesale via
+#: ``@unittest.skipUnless`` below.
+LUNA_IP: str = os.environ.get(LUNA_IP_ENV, "")
 
 #: UDP port for LIFX LAN protocol.
 LIFX_PORT: int = 56700
@@ -113,7 +121,12 @@ def _luna_reachable() -> bool:
 
     Sends a minimal GetService (2) broadcast-style packet and waits for
     any response.  This is lighter than a full discovery cycle.
+
+    Returns ``False`` immediately if no Luna IP was configured via
+    ``$GLOWUP_LUNA_IP`` — the suite is skipped wholesale in that case.
     """
+    if not LUNA_IP:
+        return False
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(PROBE_TIMEOUT_SECONDS)
@@ -143,7 +156,11 @@ def _luna_reachable() -> bool:
 
 
 _CAN_TEST: bool = _luna_reachable()
-_SKIP_REASON: str = f"Luna not reachable at {LUNA_IP}:{LIFX_PORT}"
+_SKIP_REASON: str = (
+    f"${LUNA_IP_ENV} not set — set it to the Luna's IP to run this suite"
+    if not LUNA_IP
+    else f"Luna not reachable at {LUNA_IP}:{LIFX_PORT}"
+)
 
 
 # ---------------------------------------------------------------------------

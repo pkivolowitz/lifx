@@ -23,7 +23,7 @@ Why a shared client:
 Usage::
 
     from zigbee_service.client import ZigbeeControlClient
-    client = ZigbeeControlClient("http://10.0.0.123:8422")
+    client = ZigbeeControlClient("http://<broker-2 host>:8422")
 
     result = client.set_state("MBTV", "ON")
     if result.ok and result.echoed:
@@ -109,7 +109,7 @@ class ZigbeeControlClient:
 
         Args:
             base_url:   Root URL of the service (e.g.
-                        ``http://10.0.0.123:8422``).  A trailing slash
+                        ``http://<broker-2 host>:8422``).  A trailing slash
                         is tolerated.
             timeout_s:  Per-request HTTP timeout in seconds.
         """

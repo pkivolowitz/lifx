@@ -370,7 +370,7 @@ Updated 2026-04-21 (Conway pause).
 | 2c    | per-feature requirements split             | not started  |            |
 | 3     | re-run handling (update/reconfigure/reinstall) | not started |          |
 
-**Verified on VM** `ubuntu-conway` (10.0.0.244, Parallels): end-to-end
+**Verified on VM** `ubuntu-conway` (192.0.2.244, Parallels): end-to-end
 install (Tier B feature picker with dashboard selected), `--nuke`,
 `--nuke --keep-state` all work.
 

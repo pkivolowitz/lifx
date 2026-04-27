@@ -175,7 +175,7 @@ EnvironmentFile=/etc/glowup/diag.env
 
 ```dotenv
 # /etc/glowup/diag.env  (mode 0600, owner a:a)
-GLOWUP_DIAG_DSN=postgresql://glowup:<password>@10.0.0.111:5432/glowup
+GLOWUP_DIAG_DSN=postgresql://glowup:<password>@192.0.2.111:5432/glowup
 ```
 
 The same file is read by `ThermalLogger`, `PowerLogger`,
@@ -239,7 +239,7 @@ Both suites auto-skip when `GLOWUP_DIAG_DSN` is unset or the DSN
 is unreachable.  Run against a live DB with:
 
 ```bash
-GLOWUP_DIAG_DSN='postgresql://glowup:<password>@10.0.0.111:5432/glowup' \
+GLOWUP_DIAG_DSN='postgresql://glowup:<password>@192.0.2.111:5432/glowup' \
   ~/venv/bin/python -m pytest tests/test_tpms_logger.py \
                               tests/test_ble_sniffer_logger.py -v
 ```

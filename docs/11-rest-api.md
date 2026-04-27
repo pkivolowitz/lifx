@@ -68,7 +68,7 @@ Group entries accept three formats:
   then via ARP to a live IP.  Most readable; recommended.
 - **MAC addresses** (e.g. `"d0:73:d5:69:59:41"`) — resolved directly
   via ARP.  Use for devices not yet registered in the registry.
-- **Raw IPs** (e.g. `"10.0.0.35"`) — passed through unchanged.
+- **Raw IPs** (e.g. `"192.0.2.35"`) — passed through unchanged.
   Backward compatible but fragile; breaks when DHCP reassigns.
 
 Generate a secure token:

@@ -32,7 +32,7 @@ Requires:
 
 Usage::
 
-    python3 macos_thermal_sensor.py --broker 10.0.0.214 --node daedalus
+    python3 macos_thermal_sensor.py --broker <hub-broker> --node <node-id>
     python3 macos_thermal_sensor.py --config ~/macos_thermal.conf
 """
 

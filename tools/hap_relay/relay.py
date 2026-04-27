@@ -10,7 +10,7 @@ automation can re-trigger on the next motion event.
 
 Usage::
 
-    python -m tools.hap_relay.relay --broker 10.0.0.214
+    python -m tools.hap_relay.relay --broker <hub-broker>
 
 Requires: HAP-python, paho-mqtt.
 """

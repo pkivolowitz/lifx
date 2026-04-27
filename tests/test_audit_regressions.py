@@ -1037,20 +1037,20 @@ class TestKeepAliveMacDedup(unittest.TestCase):
         """When a MAC appears at a new IP, the old IP is evicted."""
         daemon = self._make_daemon()
 
-        # First scan: device at 10.0.0.10.
-        mock_arp.return_value = {"10.0.0.10": "d0:73:d5:aa:bb:cc"}
+        # First scan: device at 192.0.2.10.
+        mock_arp.return_value = {"192.0.2.10": "d0:73:d5:aa:bb:cc"}
         daemon._scan_arp()
-        self.assertIn("10.0.0.10", daemon._known)
+        self.assertIn("192.0.2.10", daemon._known)
 
-        # Second scan: same MAC now at 10.0.0.20 (DHCP reassignment).
+        # Second scan: same MAC now at 192.0.2.20 (DHCP reassignment).
         # ARP may still have both, or just the new one.
-        mock_arp.return_value = {"10.0.0.20": "d0:73:d5:aa:bb:cc"}
+        mock_arp.return_value = {"192.0.2.20": "d0:73:d5:aa:bb:cc"}
         daemon._scan_arp()
 
         # Old IP must be gone, new IP present.
-        self.assertNotIn("10.0.0.10", daemon._known)
-        self.assertIn("10.0.0.20", daemon._known)
-        self.assertEqual(daemon._known["10.0.0.20"], "d0:73:d5:aa:bb:cc")
+        self.assertNotIn("192.0.2.10", daemon._known)
+        self.assertIn("192.0.2.20", daemon._known)
+        self.assertEqual(daemon._known["192.0.2.20"], "d0:73:d5:aa:bb:cc")
 
     @patch("infrastructure.bulb_keepalive._read_arp")
     def test_two_ips_same_mac_deduped(self, mock_arp: MagicMock) -> None:
@@ -1058,13 +1058,13 @@ class TestKeepAliveMacDedup(unittest.TestCase):
         daemon = self._make_daemon()
 
         # First scan: device at old IP.
-        mock_arp.return_value = {"10.0.0.10": "d0:73:d5:aa:bb:cc"}
+        mock_arp.return_value = {"192.0.2.10": "d0:73:d5:aa:bb:cc"}
         daemon._scan_arp()
 
         # Second scan: ARP has BOTH old and new IP for same MAC.
         mock_arp.return_value = {
-            "10.0.0.10": "d0:73:d5:aa:bb:cc",
-            "10.0.0.20": "d0:73:d5:aa:bb:cc",
+            "192.0.2.10": "d0:73:d5:aa:bb:cc",
+            "192.0.2.20": "d0:73:d5:aa:bb:cc",
         }
         daemon._scan_arp()
 
@@ -1083,8 +1083,8 @@ class TestKeepAliveMacDedup(unittest.TestCase):
         """Different MACs at different IPs are not deduped."""
         daemon = self._make_daemon()
         mock_arp.return_value = {
-            "10.0.0.10": "d0:73:d5:aa:bb:cc",
-            "10.0.0.20": "d0:73:d5:dd:ee:ff",
+            "192.0.2.10": "d0:73:d5:aa:bb:cc",
+            "192.0.2.20": "d0:73:d5:dd:ee:ff",
         }
         daemon._scan_arp()
 
@@ -1095,15 +1095,15 @@ class TestKeepAliveMacDedup(unittest.TestCase):
         """Evicting a stale IP also cleans its miss counter."""
         daemon = self._make_daemon()
 
-        mock_arp.return_value = {"10.0.0.10": "d0:73:d5:aa:bb:cc"}
+        mock_arp.return_value = {"192.0.2.10": "d0:73:d5:aa:bb:cc"}
         daemon._scan_arp()
         # Simulate some misses on the old IP.
-        daemon._misses["10.0.0.10"] = 5
+        daemon._misses["192.0.2.10"] = 5
 
-        mock_arp.return_value = {"10.0.0.20": "d0:73:d5:aa:bb:cc"}
+        mock_arp.return_value = {"192.0.2.20": "d0:73:d5:aa:bb:cc"}
         daemon._scan_arp()
 
-        self.assertNotIn("10.0.0.10", daemon._misses)
+        self.assertNotIn("192.0.2.10", daemon._misses)
 
 
 # ---------------------------------------------------------------------------

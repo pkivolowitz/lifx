@@ -19,13 +19,13 @@ Optional fields::
 
 Usage::
 
-    python -m voice.speaker.daemon --broker 10.0.0.214 --model ~/models/en_US-ryan-low.onnx
+    python -m voice.speaker.daemon --broker <hub-broker> --model ~/models/en_US-ryan-low.onnx
     python -m voice.speaker.daemon --config ~/speaker_config.json
 
 Config file::
 
     {
-        "broker": "10.0.0.214",
+        "broker": "<hub-broker>",
         "port": 1883,
         "piper_model": "~/models/en_US-ryan-low.onnx",
         "topic": "glowup/tts/speak"
@@ -58,8 +58,12 @@ logger: logging.Logger = logging.getLogger("glowup.voice.speaker")
 # Default MQTT topic for TTS requests.
 DEFAULT_TOPIC: str = "glowup/tts/speak"
 
-# Default MQTT broker.
-DEFAULT_BROKER: str = "10.0.0.214"
+# Default MQTT broker.  Resolved at import time from the same site
+# config every other GlowUp tool reads (no household IP in source);
+# empty string when neither site.json nor env supplies one — the
+# operator must then pass --broker explicitly.
+from glowup_site import site as _site
+DEFAULT_BROKER: str = _site.get("hub_broker") or ""
 
 # Default MQTT port.
 DEFAULT_PORT: int = 1883
