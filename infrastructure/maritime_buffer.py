@@ -62,6 +62,15 @@ logger: logging.Logger = logging.getLogger("glowup.maritime")
 # to AIS-catcher's -Q (see maritime/glowup-maritime.service).
 AIS_TOPIC: str = "glowup/maritime/ais"
 
+# Second topic for external-source AIS feeds (currently aisstream.io
+# via maritime/aisstream_bridge.py running on a non-hub host).
+# Translator on the bridge side emits AIS-catcher-shaped JSON with
+# an extra ``"source": "aisstream"`` field so the dashboard can
+# render external vessels with a distinct style.  Subscribing here
+# lets one MaritimeBuffer mix local-RX and internet-fed traffic on
+# a single map without the buffer caring which is which.
+AIS_TOPIC_EXTERNAL: str = "glowup/maritime/ais-external"
+
 # Maximum breadcrumb length per vessel.  At ~1 position report every
 # 2-10 s for an active Class A vessel, 60 points is roughly 2-10
 # minutes of history — enough for a visible track on the map without
@@ -88,6 +97,13 @@ _MERGED_FIELDS: tuple[str, ...] = (
     "to_bow", "to_stern", "to_port", "to_starboard",
     "speed", "course", "heading", "turn", "accuracy",
     "epfd", "epfd_text",
+    # Origin tag emitted by external-source bridges (e.g.
+    # maritime/aisstream_bridge.py adds "source": "aisstream").
+    # Local AIS-catcher messages don't carry this field, which the
+    # dashboard treats as "local-RX" by default.  Last-source-wins
+    # so a vessel we initially saw via aisstream and later picked
+    # up locally promotes from external to local.
+    "source",
 )
 
 
@@ -190,7 +206,11 @@ class MaritimeBuffer:
         """
         if rc == 0:
             client.subscribe(AIS_TOPIC, qos=0)
-            logger.info("maritime subscribed to %s", AIS_TOPIC)
+            client.subscribe(AIS_TOPIC_EXTERNAL, qos=0)
+            logger.info(
+                "maritime subscribed to %s and %s",
+                AIS_TOPIC, AIS_TOPIC_EXTERNAL,
+            )
         else:
             logger.error("maritime connect rc=%d", rc)
 

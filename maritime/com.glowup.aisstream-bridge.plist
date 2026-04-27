@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  GlowUp aisstream.io → MQTT bridge — LaunchAgent for Mac hosts.
+
+  Pulls live AIS data from aisstream.io's free WebSocket feed
+  (filtered by bounding box) and republishes onto the hub MQTT
+  broker on glowup/maritime/ais-external, where the hub-side
+  MaritimeBuffer subscribes alongside the local AIS-catcher
+  firehose.
+
+  Runs as a LaunchAgent (user-loaded) rather than a LaunchDaemon —
+  the bridge does no privileged work, only outbound HTTPS and
+  outbound MQTT.  Same shape as com.glowup.macos-thermal.plist.
+
+  Install:
+    cp com.glowup.aisstream-bridge.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.glowup.aisstream-bridge.plist
+
+  Reload after edit:
+    launchctl bootout  gui/$(id -u) ~/Library/LaunchAgents/com.glowup.aisstream-bridge.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.glowup.aisstream-bridge.plist
+
+  Logs:
+    tail -f /var/log/glowup-aisstream.log
+    tail -f /var/log/glowup-aisstream.err
+
+  Requires:
+    /etc/glowup/aisstream.conf containing AISSTREAM_API_KEY=<key>
+       (host-managed, NOT in this repo; 0640 root:root or
+       0600 user-readable — bridge runs as the user, so user-
+       readable mode is also valid)
+    /etc/glowup/site.json with hub_broker / hub_broker_port
+       (shipped by deploy.sh)
+    ~/venv with paho-mqtt and websockets installed:
+       ~/venv/bin/pip install websockets
+    ~/lifx/ synced from staging via deploy.sh
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.glowup.aisstream-bridge</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/perrykivolowitz/lifx</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/perrykivolowitz/venv/bin/python</string>
+        <string>-m</string>
+        <string>maritime.aisstream_bridge</string>
+        <string>--log-level</string>
+        <string>INFO</string>
+    </array>
+
+    <!-- Run continuously; respawn on exit.  KeepAlive's
+         SuccessfulExit=false flavour means launchd will only
+         respawn if the process exited non-zero, but we want
+         continuous restart on any exit (the bridge is supposed
+         to run forever).  KeepAlive=true is the right shape. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Throttle respawns.  Without this, a config-error crash
+         loop would hammer the system.  Default is 10 s; bump to
+         15 to give us a little more headroom against the
+         exponential-backoff inside the bridge itself. -->
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+
+    <!-- macOS hides system /usr/sbin from LaunchAgent processes
+         by default.  paho doesn't need it, but pinning the PATH
+         explicitly avoids the kind of silent ENOENT that bit
+         macos-thermal in Apr 2026 (feedback_macos_launchagent_path). -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/glowup-aisstream.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/glowup-aisstream.err</string>
+</dict>
+</plist>

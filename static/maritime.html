@@ -173,6 +173,17 @@ header.bar .nav a:hover { opacity: 1; }
     stroke-width: 2;
     stroke-linejoin: round;
 }
+/* External-source (aisstream.io etc) vessels — hollow + dashed
+   stroke so it's obvious at a glance that the data came from the
+   internet rather than our own RX.  Fill is muted, stroke uses the
+   type colour. */
+.vessel-glyph.external svg path {
+    fill: var(--fill, #ff00ff);
+    fill-opacity: 0.18;
+    stroke: var(--fill, #ff00ff);
+    stroke-width: 2;
+    stroke-dasharray: 3 2;
+}
 
 /* Vessel name label — permanent tooltip for named vessels only.
    Compact, monospaced, dark with thin border so it stays readable
@@ -417,6 +428,7 @@ function popupHtml(v) {
       `</div>` +
       flagBlock +
       `<div class="row"><span class="lbl">Type</span><span class="val">${escapeHtml(v.shiptype_text || "—")}</span></div>` +
+      (v.source ? `<div class="row"><span class="lbl">Source</span><span class="val">${escapeHtml(v.source)}</span></div>` : "") +
       (v.status_text ? `<div class="row"><span class="lbl">Status</span><span class="val">${escapeHtml(v.status_text)}</span></div>` : "") +
       `<div class="row"><span class="lbl">Position</span><span class="val">${(v.lat||0).toFixed(5)}, ${(v.lon||0).toFixed(5)}</span></div>` +
       (speed != null ? `<div class="row"><span class="lbl">Speed</span><span class="val">${speed.toFixed(1)} kt</span></div>` : "") +
@@ -438,10 +450,11 @@ function popupHtml(v) {
    stale-state opacity. */
 const BOAT_PATH = "M12 2 L20 22 L20 28 L13 26 L11 26 L4 28 L4 22 Z";
 
-function makeVesselIcon(colour, heading, alpha, size) {
+function makeVesselIcon(colour, heading, alpha, size, external) {
     const sz = size || 22;
+    const cls = "vessel-glyph" + (external ? " external" : "");
     const html =
-      `<div class="vessel-glyph" style="--rot:${heading || 0}deg;--fill:${colour};--alpha:${alpha}">` +
+      `<div class="${cls}" style="--rot:${heading || 0}deg;--fill:${colour};--alpha:${alpha}">` +
         `<svg viewBox="0 0 24 32" preserveAspectRatio="xMidYMid meet">` +
           `<path d="${BOAT_PATH}"></path>` +
         `</svg>` +
@@ -461,6 +474,12 @@ function upsertVessel(v) {
     const speed = realSpeed(v.speed);
     const isMoving = speed != null && speed > 0.5;
     const alpha = v.stale ? 0.45 : 0.95;
+    /* External-source vessels (aisstream.io etc) render hollow +
+       dashed so it's obvious at a glance which decodes are from our
+       own RX vs the internet.  v.source is set on the buffer side
+       from the ``"source"`` field in the producer's MQTT payload;
+       absent / null means local AIS-catcher. */
+    const external = v.source && v.source !== "local";
     /* Marker size — sized for trackpad click-targets and to read at
        the typical port-area zoom.  Boat-icon glyphs use a square box
        and the SVG renders inside; circle markers use the same value
@@ -486,16 +505,17 @@ function upsertVessel(v) {
         let m;
         if (wantBoat) {
             m = L.marker(pos, {
-                icon: makeVesselIcon(colour, heading, alpha, sz),
+                icon: makeVesselIcon(colour, heading, alpha, sz, external),
                 riseOnHover: true,
             }).addTo(map);
         } else {
             m = L.circleMarker(pos, {
                 radius:      sz / 2,
-                color:       MARKER_STROKE,
-                weight:      3,
+                color:       external ? colour : MARKER_STROKE,
+                weight:      external ? 2 : 3,
                 fillColor:   colour,
-                fillOpacity: alpha,
+                fillOpacity: external ? 0.18 : alpha,
+                dashArray:   external ? "3 2" : null,
             }).addTo(map);
         }
         m.bindPopup(popupHtml(v));
@@ -504,12 +524,15 @@ function upsertVessel(v) {
     } else {
         entry.marker.setLatLng(pos);
         if (wantBoat) {
-            entry.marker.setIcon(makeVesselIcon(colour, heading, alpha, sz));
+            entry.marker.setIcon(makeVesselIcon(colour, heading, alpha, sz, external));
         } else {
             entry.marker.setStyle({
-                color: MARKER_STROKE, weight: 3,
-                fillColor: colour, fillOpacity: alpha,
-                radius: sz / 2,
+                color:       external ? colour : MARKER_STROKE,
+                weight:      external ? 2 : 3,
+                fillColor:   colour,
+                fillOpacity: external ? 0.18 : alpha,
+                radius:      sz / 2,
+                dashArray:   external ? "3 2" : null,
             });
         }
         entry.marker.setPopupContent(popupHtml(v));
