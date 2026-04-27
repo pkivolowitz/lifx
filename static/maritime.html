@@ -325,16 +325,24 @@ function upsertVessel(v) {
     const heading = realHeading(v.heading);
     const speed = realSpeed(v.speed);
     const isMoving = speed != null && speed > 0.5;
-    const radius = v.stale ? 4 : (isMoving ? 7 : 5);
+    /* Sized for trackpad click-targets: small circles at zoom <14
+       are nearly impossible to hit precisely with a trackpad.  These
+       give an underway vessel a ~26 px diameter (radius 13 + 3 px
+       stroke each side), an idle vessel ~22 px, a stale vessel ~18 px
+       — readable at the typical port-area zoom and still tappable
+       on touch.  Tradeoff is more overlap when vessels cluster at
+       the dock; that's acceptable since clustering is itself useful
+       information. */
+    const radius = v.stale ? 8 : (isMoving ? 13 : 10);
     const pos = [v.lat, v.lon];
 
     let entry = markers.get(v.mmsi);
     if (!entry) {
         const circle = L.circleMarker(pos, {
             radius:      radius,
-            color:       MARKER_STROKE,   /* dark outline */
-            weight:      2.5,
-            fillColor:   colour,           /* type colour as fill */
+            color:       MARKER_STROKE,
+            weight:      3,
+            fillColor:   colour,
             fillOpacity: v.stale ? 0.45 : 0.95,
         }).addTo(map);
         circle.bindPopup(popupHtml(v));
@@ -344,6 +352,7 @@ function upsertVessel(v) {
         entry.circle.setLatLng(pos);
         entry.circle.setStyle({
             color:       MARKER_STROKE,
+            weight:      3,
             fillColor:   colour,
             fillOpacity: v.stale ? 0.45 : 0.95,
             radius:      radius,
@@ -351,34 +360,49 @@ function upsertVessel(v) {
         entry.circle.setPopupContent(popupHtml(v));
     }
 
-    /* Heading indicator: short polyline from the marker in the
-       reported heading direction.  Length scales with zoom so it
-       remains visible at city / harbour scales but doesn't dominate
-       at ocean scales.  Skip if heading is unknown. */
+    /* Heading indicator: a thick polyline from the marker in the
+       reported heading direction with a small dark backing line
+       underneath for visibility against any basemap colour.  Length
+       scales with zoom so it stays visible at port-area scales
+       without dominating at ocean scales, and is multiplied by
+       (1 + speed/8) so faster vessels get a longer "trail" — an
+       at-a-glance speed cue.  Skip if heading is unknown. */
     if (entry.heading) {
         map.removeLayer(entry.heading);
+        if (entry.headingBacking) map.removeLayer(entry.headingBacking);
         entry.heading = null;
+        entry.headingBacking = null;
     }
     if (heading != null) {
-        const lengthDeg = 0.003 * Math.pow(2, 13 - map.getZoom());  /* ~300 m at z=13 */
-        const rad = (heading - 90) * Math.PI / 180;       /* 0° = north */
+        const speedFactor = Math.max(1.0, 1.0 + (speed || 0) / 8.0);
+        const lengthDeg = 0.0055 * speedFactor *
+                          Math.pow(2, 13 - map.getZoom());
         const headEnd = [
             v.lat + Math.sin((90 - heading) * Math.PI / 180) * lengthDeg,
             v.lon + Math.cos((90 - heading) * Math.PI / 180) * lengthDeg,
         ];
+        /* Dark backing line goes down first, slightly thicker, so the
+           coloured top line reads as a stroked indicator regardless
+           of basemap colour underneath. */
+        entry.headingBacking = L.polyline([pos, headEnd], {
+            color: MARKER_STROKE, weight: 5, opacity: 0.6,
+        }).addTo(map);
         entry.heading = L.polyline([pos, headEnd], {
-            color: colour, weight: 2, opacity: 0.7,
+            color: colour, weight: 3, opacity: 0.95,
         }).addTo(map);
     }
 
-    /* Breadcrumb track — light polyline through recent positions.
-       Replace whole-cloth on each update so we don't need to dedup. */
+    /* Breadcrumb track — polyline through recent positions.  Replace
+       whole-cloth on each update so we don't need to dedup.  Weight
+       and opacity tuned to be readable against busy port-area OSM
+       tiles (roads, building outlines, dock features) without
+       overwhelming the marker itself. */
     if (Array.isArray(v.track) && v.track.length >= 2) {
         const pts = v.track.map(p => [p.lat, p.lon]);
         const old = trackLines.get(v.mmsi);
         if (old) map.removeLayer(old);
         const line = L.polyline(pts, {
-            color: colour, weight: 1.5, opacity: 0.4,
+            color: colour, weight: 2.5, opacity: 0.7,
         }).addTo(map);
         trackLines.set(v.mmsi, line);
     }
@@ -389,6 +413,7 @@ function removeMissingVessels(currentMmsis) {
         if (!currentMmsis.has(mmsi)) {
             map.removeLayer(entry.circle);
             if (entry.heading) map.removeLayer(entry.heading);
+            if (entry.headingBacking) map.removeLayer(entry.headingBacking);
             markers.delete(mmsi);
             const tl = trackLines.get(mmsi);
             if (tl) { map.removeLayer(tl); trackLines.delete(mmsi); }
