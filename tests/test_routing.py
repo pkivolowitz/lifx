@@ -325,30 +325,17 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "satellites", "health"),
             ("api", "satellites", "{room}", "health", "check"),
             # SDR / ADS-B dashboard pages — same pattern as /power, /thermal.
-            ("sdr",),
-            ("adsb",),
-            # Ernie far-side dashboard — intentionally public, no secrets.
-            ("ernie",),
-            ("api", "ernie", "ble"),
-            ("api", "ernie", "ble", "events"),
-            ("api", "ernie", "tpms"),
-            ("api", "ernie", "thermal"),
-            # Meters dashboard — intentionally public for at-a-glance
-            # access from any phone in the kitchen; meter readings
-            # are billing-grade evidence, not secrets.
-            ("meters",),
-            ("api", "meters", "latest"),
-            # /airwaves — same rationale: a curiosity surface that
-            # surfaces every rtl_433-decoded sub-GHz packet.  Public
-            # read-only; no operator credentials, no actuation.
-            ("airwaves",),
-            ("api", "airwaves", "feed"),
-            ("api", "airwaves", "protocols"),
-            ("api", "airwaves", "transmitters"),
-            ("api", "airwaves", "tuner"),
-            # /maritime — live AIS vessel map.  Public read-only;
-            # curiosity surface, no actuation.
+            # /maritime + /air + /traffic — same unified map; each URL
+            # is a saved layer-preset view.  Public read-only;
+            # curiosity surface, no actuation.  /sdr, /adsb, /ernie,
+            # /meters dashboards retired 2026-04-27 alongside the
+            # pi-sensor-01 mission swap to ADS-B and the unified
+            # sea+air map; their auth-free patterns are gone with
+            # them.  /airwaves is disabled (route commented out in
+            # server.py) — still public-read-only when re-enabled.
             ("maritime",),
+            ("air",),
+            ("traffic",),
             ("api", "maritime", "vessels"),
             ("api", "maritime", "vessel", "{mmsi}"),
             ("api", "maritime", "config"),

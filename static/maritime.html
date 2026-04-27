@@ -266,6 +266,69 @@ table.vtable {
     border-color: var(--accent);
 }
 
+/* Aircraft markers — rotated plane glyph in saturated yellow,
+   distinct from both vessel (deep types) and buoy (teal) palettes.
+   Sized for trackpad clicks; dark stroke ensures contrast against
+   any OSM tile.  Stale (no fresh decode in >60 s) markers fade —
+   ADS-B drops aircraft from the feed quickly when reception is
+   lost, so a stale marker either reflects a recent loss-of-signal
+   or a non-broadcasting aircraft. */
+.aircraft-icon { background: transparent !important; border: none !important; }
+.aircraft-glyph {
+    transform: rotate(var(--rot, 0deg));
+    transform-origin: 50% 50%;
+    width: 100%; height: 100%;
+}
+.aircraft-glyph svg {
+    width: 100%; height: 100%; display: block;
+}
+.aircraft-glyph svg path {
+    fill: var(--alpha-fill, rgba(255, 217, 102, 0.95));
+    stroke: #0a1018;
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+}
+.aircraft-label {
+    background: rgba(22, 26, 33, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+    pointer-events: auto;
+    cursor: pointer;
+}
+.aircraft-label::before { display: none !important; }
+.aircraft-label.stale { opacity: 0.55; }
+.aircraft-label .alt {
+    color: var(--accent-2);
+    margin-left: 6px;
+    font-weight: 400;
+}
+body.no-aircraft-labels .aircraft-label,
+body.no-aircraft-labels .leaflet-tooltip.aircraft-label { display: none !important; }
+.aircraft-popup .callsign {
+    color: var(--accent-2);
+    font-weight: 500;
+    font-size: 0.95rem;
+}
+.aircraft-popup .icao {
+    color: var(--label);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+}
+.aircraft-popup .row {
+    display: flex; gap: 10px; margin-top: 4px;
+}
+.aircraft-popup .row .lbl {
+    color: var(--label); text-transform: uppercase;
+    letter-spacing: 0.04em; font-size: 0.7rem; min-width: 6em;
+}
+.aircraft-popup .row .val { font-family: var(--mono); }
+
 /* Buoy markers — diamond glyphs in a teal that's distinct from the
    vessel palette.  Sized for trackpad clicks; dark stroke for
    contrast against any OSM tile.  Stale (no fresh obs in >30 min)
@@ -476,8 +539,9 @@ body.no-vessel-labels .leaflet-tooltip.vessel-label { display: none !important; 
     <div class="stat">total <span class="v" id="msg-total">0</span></div>
     <div class="nav">
         <a href="/home">home</a>
-        <a href="/airwaves">airwaves</a>
-        <a href="/meters">meters</a>
+        <a href="/maritime">maritime</a>
+        <a href="/air">air</a>
+        <a href="/traffic">traffic</a>
     </div>
 </header>
 
@@ -595,6 +659,7 @@ const externalVesselLayer = L.featureGroup().addTo(map);
 const trackLayer          = L.featureGroup().addTo(map);
 const headingLayer        = L.featureGroup().addTo(map);
 const buoyLayer           = L.featureGroup().addTo(map);
+const aircraftLayer       = L.featureGroup().addTo(map);
 
 /* Labels are bound directly to markers as Leaflet tooltips, so they
    can't be added to a LayerGroup the same way.  Workaround: a
@@ -738,6 +803,7 @@ const layerControl = L.control.layers(
         "Heading indicators":          headingLayer,
         "Vessel name labels":          labelsToggle,
         "Buoys (NDBC)":                buoyLayer,
+        "Aircraft (ADS-B)":            aircraftLayer,
         "Vessel table":                tableMasterToggle,
         "  ↳ col: Distance":           colToggles.distance,
         "  ↳ col: Name":               colToggles.name,
@@ -753,6 +819,58 @@ const layerControl = L.control.layers(
    block below — after COLUMNS / renderTable / etc. are
    initialized.  Doing it here would temporal-dead-zone on the
    first toggle's onAdd → renderTable → COLUMNS access. */
+
+/* ----- URL-driven layer presets -----
+   Same maritime.html serves three URLs.  Each is a saved view:
+     /maritime   vessels + tracks + headings + labels + buoys ON,
+                 aircraft OFF
+     /air        aircraft ON, everything else OFF
+     /traffic    everything ON
+   Layer visibility comes from the URL on every load (overrides any
+   prior session state).  Other UI chrome — panel width, columns,
+   sort, range — still persists in localStorage because those are
+   orthogonal to "what map is this".
+   Bookmarking: each URL is the bookmark you save for that view. */
+const PATHNAME_PRESET = (() => {
+    const path = location.pathname.replace(/\/+$/, "");
+    if (path === "/air") return {
+        vessels: false, tracks: false, headings: false, labels: false,
+        buoys:   false, aircraft: true,
+        title:   "Air Traffic",
+    };
+    if (path === "/traffic") return {
+        vessels: true, tracks: true, headings: true, labels: true,
+        buoys:   true, aircraft: true,
+        title:   "Traffic",
+    };
+    /* Default + explicit /maritime */
+    return {
+        vessels: true, tracks: true, headings: true, labels: true,
+        buoys:   true, aircraft: false,
+        title:   "Maritime",
+    };
+})();
+
+/* Update the page header + tab title to match the current view. */
+document.title = `GlowUp ${PATHNAME_PRESET.title}`;
+const _h1 = document.querySelector("header.bar h1");
+if (_h1) _h1.innerHTML = `GlowUp <span class="accent">${PATHNAME_PRESET.title}</span>`;
+
+/* Apply the preset.  Layers that were addTo'd at construction get
+   removed if the preset says off; the layer-control checkbox state
+   syncs automatically because L.control.layers listens for
+   map.layeradd / layerremove. */
+function _setLayer(layer, on) {
+    if (on && !map.hasLayer(layer)) layer.addTo(map);
+    if (!on && map.hasLayer(layer)) map.removeLayer(layer);
+}
+_setLayer(localVesselLayer,    PATHNAME_PRESET.vessels);
+_setLayer(externalVesselLayer, PATHNAME_PRESET.vessels);
+_setLayer(trackLayer,          PATHNAME_PRESET.tracks);
+_setLayer(headingLayer,        PATHNAME_PRESET.headings);
+_setLayer(labelsToggle,        PATHNAME_PRESET.labels);
+_setLayer(buoyLayer,           PATHNAME_PRESET.buoys);
+_setLayer(aircraftLayer,       PATHNAME_PRESET.aircraft);
 
 /* ----- Vessel-table column definitions, rendering, sort, range -----
 
@@ -1661,6 +1779,173 @@ async function pollBuoys() {
 }
 pollBuoys();
 setInterval(pollBuoys, BUOY_POLL_MS);
+
+/* ---------- Aircraft layer (ADS-B) ----------------------------------------
+   Source: GET /api/sdr/adsb/aircraft, fed by readsb on pi-sensor-01 →
+   sdr/adsb.py → glowup/sdr/adsb/aircraft on the hub broker.
+   Polled every 5 s — readsb writes aircraft.json every 1 s but the
+   marker layer doesn't need that resolution; 5 s is more than fast
+   enough for visual tracking and saves a lot of paint cycles when
+   the map is dense.
+
+   Aircraft data shape per the dump1090 / readsb contract:
+     hex          ICAO 24-bit hex (lowercase)
+     flight       callsign (often a few trailing spaces — trim it)
+     lat / lon    position (may be absent; aircraft heard but not
+                  yet position-decoded)
+     alt_baro     barometric altitude (ft)
+     alt_geom     GPS altitude (ft)
+     gs           ground speed (kt)
+     track        true heading (degrees)
+     seen         seconds since last decode (we mark stale > 60 s)
+     squawk       4-digit transponder code (rendered in popup;
+                  7500 / 7600 / 7700 are emergency codes)
+   Aircraft without position are dropped from the layer (no marker
+   without a fix); they still appear in the upstream JSON for the
+   future aircraft-table panel. */
+
+const ADSB_POLL_MS = 5000;
+const ADSB_STALE_AFTER_S = 60;
+const aircraftMarkers = new Map();      /* icao → Leaflet marker */
+
+/* Plane SVG path — bow tip up at heading 0°, swept-back wings,
+   tailfin notch.  Drawn in a 28×28 viewBox; CSS rotates the whole
+   glyph to point in the reported track direction. */
+const PLANE_PATH =
+    "M14 1 L17 11 L26 16 L26 19 L17 17 L17 22 L20 25 L20 27 " +
+    "L14 25 L8 27 L8 25 L11 22 L11 17 L2 19 L2 16 L11 11 Z";
+
+function makeAircraftIcon(track, alpha) {
+    const sz = 22;
+    const fill = `rgba(255, 217, 102, ${alpha})`;
+    const html =
+      `<div class="aircraft-glyph" style="--rot:${track || 0}deg;--alpha-fill:${fill}">` +
+        `<svg viewBox="0 0 28 28" preserveAspectRatio="xMidYMid meet">` +
+          `<path d="${PLANE_PATH}"></path>` +
+        `</svg>` +
+      `</div>`;
+    return L.divIcon({
+        className: "aircraft-icon",
+        html: html,
+        iconSize: [sz, sz],
+        iconAnchor: [sz / 2, sz / 2],
+    });
+}
+
+/* Real-value getters — drop ADS-B / dump1090 nulls cleanly. */
+function realAltitude(a) {
+    /* alt_baro can be the string "ground" for taxiing aircraft.
+       Treat as 0 so the popup reads "0 ft" rather than "—". */
+    const v = a.alt_baro ?? a.alt_geom;
+    if (v === "ground") return 0;
+    if (typeof v === "number" && isFinite(v)) return v;
+    return null;
+}
+
+function aircraftPopupHtml(a) {
+    const cs = (a.flight || "").trim() || "—";
+    const alt = realAltitude(a);
+    const track = (typeof a.track === "number") ? Math.round(a.track) : null;
+    const gs = (typeof a.gs === "number") ? a.gs : null;
+    const seen = (typeof a.seen === "number") ? a.seen : null;
+    const sq = a.squawk;
+    /* Transponder emergency codes — 7500 hijack, 7600 lost-comms,
+       7700 general emergency.  Surface these prominently. */
+    const sqEmerg = (sq === "7500" || sq === "7600" || sq === "7700");
+    return (
+      `<div class="aircraft-popup">` +
+        `<div class="callsign">${escapeHtml(cs)}</div>` +
+        `<div class="icao">ICAO ${escapeHtml((a.hex || "").toUpperCase())}` +
+          (sq ? ` · sq <span class="val"${sqEmerg ? ' style="color:#ff5040"' : ""}>${escapeHtml(sq)}</span>` : "") +
+        `</div>` +
+        (alt != null ? `<div class="row"><span class="lbl">Altitude</span><span class="val">${alt.toLocaleString()} ft</span></div>` : "") +
+        (gs != null ? `<div class="row"><span class="lbl">Speed</span><span class="val">${gs.toFixed(0)} kt</span></div>` : "") +
+        (track != null ? `<div class="row"><span class="lbl">Track</span><span class="val">${String(track).padStart(3, "0")}°</span></div>` : "") +
+        (a.lat != null ? `<div class="row"><span class="lbl">Position</span><span class="val">${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}</span></div>` : "") +
+        (seen != null ? `<div class="row"><span class="lbl">Last heard</span><span class="val">${fmtAge(seen)} ago</span></div>` : "") +
+      `</div>`
+    );
+}
+
+function renderAircraft(aircraft) {
+    const seen = new Set();
+    for (const a of aircraft) {
+        if (a.lat == null || a.lon == null) continue;
+        const icao = (a.hex || "").toLowerCase();
+        if (!icao) continue;
+        seen.add(icao);
+        const stale = (typeof a.seen === "number" && a.seen > ADSB_STALE_AFTER_S);
+        const alpha = stale ? 0.45 : 0.95;
+        const track = (typeof a.track === "number") ? a.track : null;
+        let m = aircraftMarkers.get(icao);
+        if (!m) {
+            m = L.marker([a.lat, a.lon], {
+                icon:        makeAircraftIcon(track, alpha),
+                riseOnHover: true,
+            }).addTo(aircraftLayer);
+            m.bindPopup(aircraftPopupHtml(a));
+            aircraftMarkers.set(icao, m);
+        } else {
+            m.setLatLng([a.lat, a.lon]);
+            m.setIcon(makeAircraftIcon(track, alpha));
+            m.setPopupContent(aircraftPopupHtml(a));
+        }
+        /* Permanent label: callsign + altitude.  Skip when there's
+           no callsign yet (aircraft heard but no Mode-S identity
+           decoded — clutters the map with anonymous markers). */
+        const cs = (a.flight || "").trim();
+        if (cs) {
+            const altStr = (() => {
+                const alt = realAltitude(a);
+                if (alt == null) return "";
+                if (alt === 0) return "<span class=\"alt\">GND</span>";
+                return `<span class="alt">${Math.round(alt / 100)}</span>`;
+            })();
+            const labelHtml = escapeHtml(cs) + altStr;
+            const labelClass = "aircraft-label" + (stale ? " stale" : "");
+            if (m.getTooltip()) {
+                m.setTooltipContent(labelHtml);
+                m.getTooltip().options.className = labelClass;
+            } else {
+                m.bindTooltip(labelHtml, {
+                    permanent: true,
+                    direction: "right",
+                    offset: [12, 0],
+                    className: labelClass,
+                    opacity:   1.0,
+                    interactive: true,
+                });
+            }
+        } else if (m.getTooltip()) {
+            m.unbindTooltip();
+        }
+    }
+    /* Drop markers for aircraft no longer in the feed (dump1090
+       drops them after ~60 s of no decode; we follow). */
+    for (const [icao, m] of aircraftMarkers) {
+        if (!seen.has(icao)) {
+            aircraftLayer.removeLayer(m);
+            aircraftMarkers.delete(icao);
+        }
+    }
+}
+
+async function pollAircraft() {
+    /* Skip when the layer is hidden — saves a HTTP round-trip and
+       a render pass on /maritime where aircraft is off by default. */
+    if (!map.hasLayer(aircraftLayer)) return;
+    let json;
+    try {
+        const r = await fetch("/api/sdr/adsb/aircraft");
+        json = await r.json();
+    } catch (e) {
+        console.error("aircraft poll failed", e);
+        return;
+    }
+    renderAircraft(json.aircraft || []);
+}
+pollAircraft();
+setInterval(pollAircraft, ADSB_POLL_MS);
 </script>
 </body>
 </html>

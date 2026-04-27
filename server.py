@@ -347,33 +347,45 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_thermal_hosts", requires_auth=False),
     _Route("GET", ("api", "thermal", "readings"),
            "_handle_get_thermal_readings", requires_auth=False),
-    # Meters dashboard — utility-meter telemetry from rtl_433 on the
-    # SDR host (today: pi-sensor-01).  Public read-only; no auth so a
-    # phone in the kitchen can glance at the irrigation meter without
-    # token plumbing.  See handlers/meters.py and infrastructure/
-    # meter_logger.py for the data path.
-    _Route("GET", ("meters",),
-           "_handle_get_meters_page", requires_auth=False),
-    _Route("GET", ("api", "meters", "latest"),
-           "_handle_get_meters_latest", requires_auth=False),
-    # Airwaves dashboard — broader-than-meters live feed of every
-    # rtl_433-decoded packet (garage doors, blinds, weather stations,
-    # neighbour meters).  In-memory ring buffer; not persisted.
-    # Public read-only — same rationale as /meters.
-    _Route("GET", ("airwaves",),
-           "_handle_get_airwaves_page", requires_auth=False),
-    _Route("GET", ("api", "airwaves", "feed"),
-           "_handle_get_airwaves_feed", requires_auth=False),
-    _Route("GET", ("api", "airwaves", "protocols"),
-           "_handle_get_airwaves_protocols", requires_auth=False),
-    _Route("GET", ("api", "airwaves", "transmitters"),
-           "_handle_get_airwaves_transmitters", requires_auth=False),
-    _Route("GET", ("api", "airwaves", "tuner"),
-           "_handle_get_airwaves_tuner", requires_auth=False),
-    # Maritime dashboard — live AIS vessel positions on a map.
-    # Public read-only — same rationale as /airwaves and /meters
+    # /meters dashboard retired 2026-04-27 alongside the pi-sensor-01
+    # mission swap to ADS-B (sub-GHz capture stopped; no fresh
+    # telemetry).  handlers/meters.py + static/meters.html removed
+    # in the same change.  Postgres meter_observations history kept;
+    # query directly if the data ever matters.
+    #
+    # /airwaves dashboard disabled (not deleted) for the same reason
+    # — pi-sensor-01 was its only sub-GHz scoop source.  The route
+    # registrations and handler imports are commented out so /airwaves
+    # 404s, but handlers/airwaves.py + infrastructure/airwaves_buffer.py
+    # + static/airwaves.html are preserved in tree.  Re-enable by
+    # uncommenting these lines + the handlers/airwaves import + the
+    # AirwavesHandlerMixin entry on GlowUpRequestHandler when a sub-GHz
+    # producer comes back online.
+    #
+    # _Route("GET", ("airwaves",),
+    #        "_handle_get_airwaves_page", requires_auth=False),
+    # _Route("GET", ("api", "airwaves", "feed"),
+    #        "_handle_get_airwaves_feed", requires_auth=False),
+    # _Route("GET", ("api", "airwaves", "protocols"),
+    #        "_handle_get_airwaves_protocols", requires_auth=False),
+    # _Route("GET", ("api", "airwaves", "transmitters"),
+    #        "_handle_get_airwaves_transmitters", requires_auth=False),
+    # _Route("GET", ("api", "airwaves", "tuner"),
+    #        "_handle_get_airwaves_tuner", requires_auth=False),
+    # Maritime dashboard — live AIS vessel positions, NDBC buoys,
+    # and ADS-B aircraft on a single map.  Three URLs serve the
+    # same page; each is a saved layer-preset view.  Page reads
+    # location.pathname client-side and applies the matching preset:
+    #     /maritime  vessels + buoys ON, aircraft OFF
+    #     /air       aircraft ON, everything else OFF
+    #     /traffic   all ON
+    # Public read-only — same rationale as the rest of /api/maritime/*
     # (curiosity surface, no actuation, no operator credentials).
     _Route("GET", ("maritime",),
+           "_handle_get_maritime_page", requires_auth=False),
+    _Route("GET", ("air",),
+           "_handle_get_maritime_page", requires_auth=False),
+    _Route("GET", ("traffic",),
            "_handle_get_maritime_page", requires_auth=False),
     _Route("GET", ("api", "maritime", "vessels"),
            "_handle_get_maritime_vessels", requires_auth=False),
@@ -435,32 +447,30 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_delete_shopping_checked", requires_auth=False),
 
     # -- SDR (software-defined radio) -----------------------------------------
-    _Route("GET", ("sdr",),
-           "_handle_get_sdr_page", requires_auth=False),
+    # The /sdr generic-overview page was retired 2026-04-27 — pi-sensor-01
+    # is now ADS-B-dedicated, so the cross-protocol "what's the SDR
+    # doing" view has nothing left to show.  /api/sdr/status and
+    # /api/sdr/frequency endpoints kept for any callers that still
+    # poll them; they degrade to no-ops cleanly.
     _Route("GET", ("api", "sdr", "status"),
            "_handle_get_sdr_status"),
     _Route("POST", ("api", "sdr", "frequency"),
            "_handle_post_sdr_frequency"),
 
     # -- ADS-B (aircraft tracking) ------------------------------------------
-    _Route("GET", ("adsb",),
-           "_handle_get_adsb_page", requires_auth=False),
+    # The standalone /adsb page was retired 2026-04-27 in favour of
+    # the unified /maritime + /air + /traffic map.  The aircraft data
+    # endpoint stays — it's what the maritime page's aircraft layer
+    # polls.
     _Route("GET", ("api", "sdr", "adsb", "aircraft"),
            "_handle_get_adsb_aircraft"),
 
-    # -- Ernie (.153) sniffer dashboard -------------------------------------
-    # Public (LAN-only deployment — no reason to gate read-only sniffer
-    # data behind auth, matches the intent of /ernie being public).
-    _Route("GET", ("ernie",),
-           "_handle_get_ernie_page", requires_auth=False),
-    _Route("GET", ("api", "ernie", "ble"),
-           "_handle_get_ernie_ble", requires_auth=False),
-    _Route("GET", ("api", "ernie", "ble", "events"),
-           "_handle_get_ernie_ble_events", requires_auth=False),
-    _Route("GET", ("api", "ernie", "tpms"),
-           "_handle_get_ernie_tpms", requires_auth=False),
-    _Route("GET", ("api", "ernie", "thermal"),
-           "_handle_get_ernie_thermal", requires_auth=False),
+    # -- Ernie (.153) sniffer dashboard retired 2026-04-27 -----------------
+    # /ernie page + every /api/ernie/* endpoint removed.  The Ernie
+    # host itself is still alive running AIS-catcher (see
+    # maritime/glowup-maritime.service deployment) — its data flows
+    # into the unified /maritime page rather than a per-host sniffer
+    # dashboard.  handlers/ernie.py + static/ernie.html removed.
 
     _Route("GET", ("photos", "{filename}"),
            "_handle_get_photo", requires_auth=False),
@@ -695,9 +705,14 @@ from handlers import (
 )
 from handlers.shopping import ShoppingHandlerMixin, ShoppingStore
 from handlers.sdr import SdrHandlerMixin
-from handlers.ernie import ErnieHandlerMixin
-from handlers.meters import MetersHandlerMixin
-from handlers.airwaves import AirwavesHandlerMixin
+# Ernie + Meters dashboards retired 2026-04-27; handler files removed
+# from the tree.  Airwaves dashboard disabled (not deleted) for the
+# same change — handlers/airwaves.py + the AirwavesHandlerMixin still
+# exist but the routes are commented out and the mixin is unhooked
+# from GlowUpRequestHandler below.  Re-enable by uncommenting the
+# import + the mixin entry in the MRO + the route registrations
+# above.
+# from handlers.airwaves import AirwavesHandlerMixin
 from handlers.maritime import MaritimeHandlerMixin
 from handlers.buoys import BuoysHandlerMixin
 
@@ -718,9 +733,9 @@ class GlowUpRequestHandler(
     StaticHandlerMixin,
     ShoppingHandlerMixin,
     SdrHandlerMixin,
-    ErnieHandlerMixin,
-    MetersHandlerMixin,
-    AirwavesHandlerMixin,
+    # ErnieHandlerMixin + MetersHandlerMixin retired 2026-04-27.
+    # AirwavesHandlerMixin disabled (see import block above).
+    # AirwavesHandlerMixin,
     MaritimeHandlerMixin,
     BuoysHandlerMixin,
     http.server.BaseHTTPRequestHandler,

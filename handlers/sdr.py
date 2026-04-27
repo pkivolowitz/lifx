@@ -55,43 +55,15 @@ class SdrHandlerMixin:
             "timestamp": time.time(),
         })
 
-    def _handle_get_adsb_page(self) -> None:
-        """GET /adsb — serve the ADS-B radar dashboard page."""
-        page_path: str = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "static", "adsb.html",
-        )
-        try:
-            with open(page_path, "r") as f:
-                html: str = f.read()
-            body: bytes = html.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        except FileNotFoundError:
-            self._send_json(404, {"error": "ADS-B page not found"})
+    # _handle_get_adsb_page and _handle_get_sdr_page were retired
+    # 2026-04-27 — the standalone /adsb and /sdr dashboards are gone;
+    # the unified /maritime + /air + /traffic page is the new home
+    # for aircraft data.  The /api/sdr/adsb/aircraft and
+    # /api/sdr/status + /api/sdr/frequency endpoints below are kept
+    # (the maritime aircraft layer polls the first; the others are
+    # inert when the SDR is ADS-B-only but cheap to leave wired).
 
     # -- SDR endpoints -----------------------------------------------------
-
-    def _handle_get_sdr_page(self) -> None:
-        """GET /sdr — serve the SDR scanner dashboard page."""
-        page_path: str = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "static", "sdr.html",
-        )
-        try:
-            with open(page_path, "r") as f:
-                html: str = f.read()
-            body: bytes = html.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        except FileNotFoundError:
-            self._send_json(404, {"error": "SDR page not found"})
 
     def _handle_get_sdr_status(self) -> None:
         """GET /api/sdr/status — SDR service state.
