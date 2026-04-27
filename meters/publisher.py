@@ -134,29 +134,30 @@ _DEFAULT_RTL433: str = "rtl_433"
 # Python layer, where we control the model→type table directly.
 _PROTOCOL_IDS: tuple[int, ...] = ()
 
-# US ISM-band coverage + a peek at the European 868 MHz band.
-# ITRON ERT (electric/gas) and Neptune R900 (water) frequency-hop
-# across the full 902-928 MHz US band; the RTL-SDR only sees ~2 MHz
-# at a time (the sample rate window), so to catch every meter we
-# have to make rtl_433 hop too.
+# Mixed-band coverage: US ISM meters + European ISM + 433.92 MHz
+# consumer-electronics chatter (weather stations, garage doors,
+# blinds, doorbells, fans, european TPMS).
 #
-# Five hops at 911/916/921/926 + 868 MHz, 5 MHz spacing across the
-# US slot, plus one slot dedicated to Europe's 868 MHz ISM band so
-# we surface anything broadcasting there too.  Recipe (US-only)
-# confirmed working 2026-04-26 on pi-sensor-01 (decoded SCMplus
-# id=101903449 first try after dropping the broken -Y level=-30).
-# 906 MHz dropped from the rotation 2026-04-26 to make room for
-# 868 MHz — the 906 slot covered 905-907 MHz which is the lowest
-# edge of the US ISM band; 911-926 still covers 910-927 MHz which
-# is where the meaty meter traffic lives.  30-second hop dwell is
-# the proven value — half the worst-case time-to-hear vs. 60s,
-# ITRON broadcasts every 30-60s so we get at least one transmission
-# window per hop.
+# Five hops, 30-second dwell each:
+#   433.92 MHz  Acurite/LaCrosse/OS weather stations, Chamberlain/
+#               Genie garage doors, Markisol blinds, Regency fans,
+#               Honeywell ActivLink doorbells, european TPMS
+#   868 MHz     European ISM (meters, weather stations) — peek for
+#               anything broadcasting there in a US deployment
+#   911 MHz     US ISM mid — proven hot spot for ITRON SCM+ gas
+#               meters (id=101903449 decoded here repeatedly)
+#   916 MHz     US ISM mid
+#   921 MHz     US ISM mid
+#
+# Band-edge slots (906 MHz, 926 MHz) dropped to make room for 868
+# and 433.92.  ITRON broadcasts every 30-60s so each US slot gets
+# ~30s of every 150s = roughly 50% catch probability per cycle for
+# any given meter.
 #
 # Override via --rtl433-freqs / --rtl433-hop-interval for other
 # regions (Japan is 426M, etc.).
 _DEFAULT_FREQUENCIES: tuple[str, ...] = (
-    "868M", "911M", "916M", "921M", "926M",
+    "433.92M", "868M", "911M", "916M", "921M",
 )
 _DEFAULT_HOP_INTERVAL_S: int = 30
 
