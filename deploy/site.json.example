@@ -19,5 +19,8 @@
 
   "postgres_dsn": "<postgresql://user:pass@host:5432/db — for zigbee_service history>",
 
-  "printer": "<printer host or IP — for the printer adapter>"
+  "printer": "<printer host or IP — for the printer adapter>",
+
+  "_comment_contact": "Operator contact email used for any external API that requires a callback — currently NWS (api.weather.gov) for the voice coordinator's weather source. NWS rate-limits or blocks opaque User-Agents; supplying a real email lets them reach you before pulling the plug. Optional: omit and the User-Agent will be name-only, accepting NWS's possibly-degraded service.",
+  "contact_email": "<operator contact email, e.g. ops@example.com>"
 }

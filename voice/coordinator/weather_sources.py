@@ -49,7 +49,22 @@ logger: logging.Logger = logging.getLogger("glowup.voice.weather")
 # NWS requires a distinguishable User-Agent — opaque UAs are rate-limited
 # or blocked outright.  Form is a free-text identifier; contact info is
 # conventional so NWS can reach out before blocking misbehaving clients.
-_NWS_USER_AGENT: str = "(glowup-voice, perry@kivolowitz.com)"
+# The contact half is sourced from site.json so the public repo carries
+# no operator email; the application name half stays generic in source.
+# If site.contact_email is unset the UA degrades to name-only — NWS may
+# rate-limit but will still answer; we log a warning at module import
+# so the operator sees the missing key.
+from glowup_site import site as _site
+_NWS_APP_NAME: str = "glowup-voice"
+_NWS_CONTACT: str = _site.get("contact_email") or ""
+if _NWS_CONTACT:
+    _NWS_USER_AGENT: str = f"({_NWS_APP_NAME}, {_NWS_CONTACT})"
+else:
+    _NWS_USER_AGENT = f"({_NWS_APP_NAME})"
+    logger.warning(
+        "site.contact_email not set — NWS User-Agent is name-only; "
+        "set 'contact_email' in site.json to avoid possible NWS rate-limiting"
+    )
 
 # Per-request HTTP timeout for both sources.  Kept aggressive so that a
 # primary failure cascades to the fallback inside a single voice
