@@ -135,10 +135,12 @@ _DEFAULT_RTL433: str = "rtl_433"
 _PROTOCOL_IDS: tuple[int, ...] = ()
 
 # Mixed-band coverage: US ISM meters + European ISM + 433.92 MHz
-# consumer-electronics chatter (weather stations, garage doors,
-# blinds, doorbells, fans, european TPMS).
+# consumer-electronics chatter + 345 MHz US security sensors.
 #
 # Five hops, 30-second dwell each:
+#   345 MHz     Honeywell / 2GIG / Vivint security sensors — door,
+#               window, motion, glass-break.  Event-driven, not
+#               periodic; expect long quiet stretches.
 #   433.92 MHz  Acurite/LaCrosse/OS weather stations, Chamberlain/
 #               Genie garage doors, Markisol blinds, Regency fans,
 #               Honeywell ActivLink doorbells, european TPMS
@@ -146,18 +148,19 @@ _PROTOCOL_IDS: tuple[int, ...] = ()
 #               anything broadcasting there in a US deployment
 #   911 MHz     US ISM mid — proven hot spot for ITRON SCM+ gas
 #               meters (id=101903449 decoded here repeatedly)
-#   916 MHz     US ISM mid
 #   921 MHz     US ISM mid
 #
-# Band-edge slots (906 MHz, 926 MHz) dropped to make room for 868
-# and 433.92.  ITRON broadcasts every 30-60s so each US slot gets
-# ~30s of every 150s = roughly 50% catch probability per cycle for
-# any given meter.
+# 916 MHz dropped after a full session of zero decodes there; 345
+# took the slot to surface the household alarm-system traffic.  Band-
+# edge slots (906 MHz, 926 MHz) were dropped earlier to make room for
+# 868 and 433.92.  ITRON broadcasts every 30-60s so each remaining US
+# slot gets ~30s of every 150s = roughly 50% catch probability per
+# cycle for any given meter.
 #
 # Override via --rtl433-freqs / --rtl433-hop-interval for other
 # regions (Japan is 426M, etc.).
 _DEFAULT_FREQUENCIES: tuple[str, ...] = (
-    "433.92M", "868M", "911M", "916M", "921M",
+    "345M", "433.92M", "868M", "911M", "921M",
 )
 _DEFAULT_HOP_INTERVAL_S: int = 30
 
