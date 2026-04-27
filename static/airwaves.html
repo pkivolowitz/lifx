@@ -224,6 +224,12 @@ section.panel > h2 {
     color: var(--accent);
     margin-left: 8px;
 }
+.feed-row .body .rep {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--accent-2);   /* warm amber — same accent as freq highlight */
+    margin-left: 6px;
+}
 .feed-row .body .detail {
     font-family: var(--mono);
     font-size: 0.78rem;
@@ -511,6 +517,14 @@ async function poll() {
                 ? (typeof p.rssi === "number" ? p.rssi.toFixed(0) + " dB" : String(p.rssi))
                 : "";
             const detail = escapeHtml(detailLine(p.raw));
+            // Burst suffix: cheap one-way RF sensors (Honeywell 5800,
+            // inFactory weather, etc.) transmit each event 3-6 times
+            // for reliability.  Hub-side AirwavesBuffer collapses them
+            // into one entry tagged with repeat_count; show "(×N)"
+            // when > 1 so the operator can tell at a glance how many
+            // copies arrived.
+            const rep = p.repeat_count || 1;
+            const repText = rep > 1 ? ` <span class="rep">(×${rep})</span>` : "";
             return (
               `<div class="feed-row${isNew ? " new" : ""}">` +
                 `<div class="age">${ago(nowS() - p.received_ts)}</div>` +
@@ -518,6 +532,7 @@ async function poll() {
                 `<div class="rssi">${escapeHtml(rssiText)}</div>` +
                 `<div class="body">` +
                   `<span class="friendly">${escapeHtml(p.friendly)}</span>` +
+                  repText +
                   `<span class="model">${escapeHtml(p.model)}</span>` +
                   `<span class="id">${escapeHtml(p.transmitter_id)}</span>` +
                   (detail ? `<span class="detail">${detail}</span>` : "") +

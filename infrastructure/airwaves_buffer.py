@@ -61,6 +61,32 @@ TUNER_TOPIC: str = "glowup/sub_ghz/tuner"
 # is trivial (<1 MB).  Tunable via the AirwavesBuffer constructor.
 DEFAULT_RING_SIZE: int = 500
 
+# Burst-collapse window for the feed display.  Cheap one-way RF
+# sensors (Honeywell 5800 door/window, inFactory weather, most
+# 433-MHz consumer remotes) transmit the same payload 3-6 times
+# back-to-back at ~140-160 ms intervals to combat RF loss — there
+# is no ACK so they spam.  The /airwaves *feed* collapses
+# consecutive identical (model, transmitter_id, payload) packets
+# within this window into one row tagged with repeat_count, so a
+# single physical event reads as one entry instead of six.
+# The per-protocol and per-transmitter aggregates still increment
+# once per packet — those views answer "how chatty is this device
+# physically" and must not lie about the true packet rate.
+# 2 s comfortably covers observed Honeywell (709 ms) and inFactory
+# (795 ms) burst spans with margin for slower future devices.
+_BURST_WINDOW_S: float = 2.0
+
+# Fields that vary per-packet within a single sensor burst and so
+# must NOT be part of the burst-equality signature.  ``time`` is the
+# rtl_433 timestamp (always different), ``freq``/``rssi``/``snr``/
+# ``noise`` are demod-measured per packet, ``mod`` is the modulation
+# label (occasionally varies on multi-protocol freqs), ``received_ts``
+# is our hub-side arrival stamp.  Everything else is sensor-payload
+# proper and goes into the burst signature.
+_BURST_SIG_HOUSEKEEPING: frozenset[str] = frozenset({
+    "time", "freq", "rssi", "snr", "noise", "mod", "received_ts",
+})
+
 # paho keepalive (seconds).  Same value the meter logger uses.
 _MQTT_KEEPALIVE_S: int = 60
 
@@ -104,6 +130,21 @@ FRIENDLY_NAMES: dict[str, str] = {
 def friendly_name(model: str) -> str:
     """Return a human description for a rtl_433 model, or the model itself."""
     return FRIENDLY_NAMES.get(model, model)
+
+
+def _payload_signature(packet: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """Stable equality key for burst-collapse, excluding housekeeping.
+
+    Two packets share a signature iff their non-housekeeping fields
+    are byte-identical (after ``repr``).  ``repr`` rather than ``str``
+    so that the int 0 and the str "0" don't collapse together — a
+    sensor that switches from numeric to string representation of the
+    same value is reporting different state, not a duplicate.
+    """
+    return tuple(sorted(
+        (k, repr(v)) for k, v in packet.items()
+        if k not in _BURST_SIG_HOUSEKEEPING
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +311,7 @@ class AirwavesBuffer:
             packet.get("received_ts") or time.time(),
         )
 
+        sig: tuple[tuple[str, str], ...] = _payload_signature(packet)
         entry: dict[str, Any] = {
             "received_ts":     received_ts,
             "model":           model,
@@ -279,10 +321,38 @@ class AirwavesBuffer:
             "rssi":            packet.get("rssi"),
             "snr":             packet.get("snr"),
             "raw":             packet,
+            # Burst-collapse bookkeeping.  ``repeat_count`` is exposed
+            # to clients (the feed renders "(×N)" when > 1).
+            # ``_payload_sig`` and ``_first_ts`` are private — leading
+            # underscore so :meth:`recent` can strip them before the
+            # API copy.
+            "repeat_count":    1,
+            "_payload_sig":    sig,
+            "_first_ts":       received_ts,
         }
 
         with self._lock:
-            self._ring.append(entry)
+            # Burst collapse: if the most-recent ring entry has the
+            # same (model, transmitter_id, payload-sig) AND its
+            # *first* packet was within _BURST_WINDOW_S of this one,
+            # bump that entry's count and refresh its received_ts
+            # rather than append.  Compare against _first_ts (not the
+            # rolling received_ts) so a sensor that legitimately
+            # transmits steady-state every ~1 s stops collapsing
+            # forever after the first match.
+            collapsed: bool = False
+            if self._ring:
+                last: dict[str, Any] = self._ring[-1]
+                if (last.get("model") == model
+                        and last.get("transmitter_id") == transmitter_id
+                        and last.get("_payload_sig") == sig
+                        and (received_ts - last.get("_first_ts", 0.0))
+                            <= _BURST_WINDOW_S):
+                    last["repeat_count"] = last.get("repeat_count", 1) + 1
+                    last["received_ts"] = received_ts
+                    collapsed = True
+            if not collapsed:
+                self._ring.append(entry)
             # Per-protocol aggregate.
             p: dict[str, Any] = self._by_protocol.setdefault(
                 model,
@@ -328,9 +398,13 @@ class AirwavesBuffer:
             n: int = min(limit, len(self._ring))
             tail: list[dict[str, Any]] = list(self._ring)[-n:]
         tail.reverse()
-        # Shallow copies so a caller mutating the returned list cannot
-        # smear the ring's internal entries.
-        return [dict(e) for e in tail]
+        # Shallow copies, with leading-underscore bookkeeping fields
+        # stripped — those are burst-collapse internals (_payload_sig,
+        # _first_ts) the API consumer has no business with.
+        return [
+            {k: v for k, v in e.items() if not k.startswith("_")}
+            for e in tail
+        ]
 
     def by_protocol(self) -> list[dict[str, Any]]:
         """Return per-protocol aggregates, newest-active first."""
