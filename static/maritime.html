@@ -847,16 +847,47 @@ function renderTable() {
     });
 }
 
-/* Focus a vessel by MMSI: pan the map + open the popup.  Used by
-   both the table-row click handler and the on-map name-label
-   click handler.  No-op if the vessel isn't in the marker map
-   (e.g. it just dropped out of the viewport-cull window). */
+/* Focus a vessel by MMSI: centre the map on it + open its popup.
+
+   Three landmines avoided here, all hit during 2026-04-27 testing
+   when this used the obvious panTo-then-openPopup pair:
+
+   (1) The clicked vessel may not currently have a marker.  Viewport
+       culling in renderVessels removes off-screen markers from the
+       map, so a row in the side-panel table for a vessel outside
+       the current viewport has no entry in `markers`.  We always
+       have its lat/lon in lastVesselsById though, so route through
+       the cache to drive the view change.
+
+   (2) panTo + openPopup interleave badly.  panTo schedules an
+       animation; openPopup triggers its own autoPan because mid-
+       animation Leaflet still reads the marker at its pre-pan
+       screen position.  Two moveend events fire across the pair,
+       and the existing moveend -> renderVessels handler may
+       re-cull the very marker we just opened a popup on.  The
+       observed failure mode was a hard tab crash on click — Safari
+       killed the renderer process, presumably tripping over an
+       internal invariant in the popup-while-animating path.
+
+   (3) setIcon during a moveend can destroy the marker's DOM while
+       the popup is anchored to it.  By using setView (instant, no
+       animation) we collapse the two-pan sequence to one and let
+       the next-frame openPopup land on a settled marker. */
 function focusVessel(mmsi) {
-    const entry = markers.get(mmsi);
-    if (!entry) return;
-    const ll = entry.marker.getLatLng();
-    map.panTo(ll);
-    entry.marker.openPopup();
+    const v = lastVesselsById.get(mmsi);
+    if (!v || v.lat == null || v.lon == null) return;
+    /* setView with no animate option is instant — fires one
+       moveend synchronously, the existing handler re-renders the
+       viewport markers (which now includes our target since the
+       view is centred on it), and we can openPopup on the next
+       frame against a fresh, settled marker. */
+    map.setView([v.lat, v.lon], Math.max(map.getZoom(), 12), {
+        animate: false,
+    });
+    requestAnimationFrame(() => {
+        const entry = markers.get(mmsi);
+        if (entry && entry.marker) entry.marker.openPopup();
+    });
 }
 
 /* Range segmented control wiring.  One button per N option; click
