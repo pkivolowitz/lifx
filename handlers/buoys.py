@@ -26,7 +26,7 @@ import logging
 import os
 import re
 from typing import Any
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 
 logger: logging.Logger = logging.getLogger("glowup.handlers.buoys")
@@ -47,13 +47,21 @@ class BuoysHandlerMixin:
 
     # -- /buoys/<station_id> -------------------------------------------------
 
-    def _handle_get_buoys_page(self) -> None:
+    def _handle_get_buoys_page(self, station_id: str) -> None:
         """GET /buoys/<station_id> — serve the history dashboard HTML.
 
         The same static HTML is used for every station — the page
         reads the trailing path segment in JS at load time and
-        queries the appropriate /api/buoys/history endpoint.
+        queries the appropriate /api/buoys/history endpoint.  The
+        ``station_id`` arg is captured by the route dispatcher; we
+        validate it here purely as defense-in-depth, but the static
+        HTML reads the URL itself for the JS-side query so this
+        handler only needs to refuse blatantly bogus ids before
+        serving the file.
         """
+        if not _STATION_ID_RE.match(unquote(station_id)):
+            self._send_json(400, {"error": "invalid station id"})
+            return
         static_dir: str = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "..", "static",
         )
@@ -88,7 +96,7 @@ class BuoysHandlerMixin:
 
     # -- /api/buoys/history/<station_id> ------------------------------------
 
-    def _handle_get_api_buoys_history(self) -> None:
+    def _handle_get_api_buoys_history(self, station_id: str) -> None:
         """GET /api/buoys/history/<station_id>?hours=N&resolution=S
 
         Query parameters
@@ -103,17 +111,11 @@ class BuoysHandlerMixin:
                     longer windows).
         """
         bl: Any = getattr(self, "buoy_logger", None)
-        parsed: Any = urlparse(self.path)
-        path_parts: list[str] = [p for p in parsed.path.split("/") if p]
-        # Routed as ("api", "buoys", "history", "*") — path_parts[3] is
-        # the station-id capture.
-        if len(path_parts) < 4:
-            self._send_json(400, {"error": "missing station id"})
-            return
-        sid: str = path_parts[3]
+        sid: str = unquote(station_id)
         if not _STATION_ID_RE.match(sid):
             self._send_json(400, {"error": "invalid station id"})
             return
+        parsed: Any = urlparse(self.path)
         if bl is None:
             self._send_json(200, {"station_id": sid,
                                   "hours": 0,
