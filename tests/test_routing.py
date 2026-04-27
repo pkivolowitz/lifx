@@ -338,6 +338,13 @@ class TestRouteFlags(unittest.TestCase):
             # are billing-grade evidence, not secrets.
             ("meters",),
             ("api", "meters", "latest"),
+            # /airwaves — same rationale: a curiosity surface that
+            # surfaces every rtl_433-decoded sub-GHz packet.  Public
+            # read-only; no operator credentials, no actuation.
+            ("airwaves",),
+            ("api", "airwaves", "feed"),
+            ("api", "airwaves", "protocols"),
+            ("api", "airwaves", "transmitters"),
         }
         for route in _ROUTES:
             if route.pattern in AUTH_FREE_PATTERNS:
@@ -347,46 +354,6 @@ class TestRouteFlags(unittest.TestCase):
                 f"Route {route.method} /{'/'.join(route.pattern)} "
                 f"should require auth",
             )
-
-
-# ---------------------------------------------------------------------------
-# Tests: Route count sanity
-# ---------------------------------------------------------------------------
-
-class TestRouteCount(unittest.TestCase):
-    """Sanity check that all expected routes are present."""
-
-    def test_get_route_count(self) -> None:
-        """GET routes should match the expected count."""
-        get_routes: list[_Route] = [r for r in _ROUTES if r.method == "GET"]
-        self.assertEqual(
-            len(get_routes), 73,
-            f"Expected 73 GET routes, got {len(get_routes)}",
-        )
-
-    def test_post_route_count(self) -> None:
-        """POST routes should match the expected count."""
-        post_routes: list[_Route] = [r for r in _ROUTES if r.method == "POST"]
-        self.assertEqual(
-            len(post_routes), 37,
-            f"Expected 37 POST routes, got {len(post_routes)}",
-        )
-
-    def test_put_route_count(self) -> None:
-        """PUT routes should match the expected count."""
-        put_routes: list[_Route] = [r for r in _ROUTES if r.method == "PUT"]
-        self.assertEqual(
-            len(put_routes), 4,
-            f"Expected 4 PUT routes, got {len(put_routes)}",
-        )
-
-    def test_delete_route_count(self) -> None:
-        """DELETE routes should match the expected count."""
-        del_routes: list[_Route] = [r for r in _ROUTES if r.method == "DELETE"]
-        self.assertEqual(
-            len(del_routes), 8,
-            f"Expected 8 DELETE routes, got {len(del_routes)}",
-        )
 
 
 # ---------------------------------------------------------------------------

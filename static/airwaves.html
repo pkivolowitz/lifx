@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlowUp Airwaves</title>
+<style>
+/* -------------------------------------------------------------------
+   Airwaves dashboard — dark "scanner-at-night" palette, deliberately
+   distinct from the civic /meters page.  This is the fun surface:
+   every rtl_433-decoded sub-GHz packet around the house, in real
+   time.  Garage doors, blinds, weather stations, neighbour meters.
+   ------------------------------------------------------------------- */
+:root {
+    --bg:        #0c0e12;   /* near-black, slight blue */
+    --panel:     #161a21;
+    --panel-2:   #1d2229;
+    --text:      #d8dde6;
+    --label:     #6f7a8a;
+    --accent:    #6dd9c8;   /* mint — RF teal */
+    --accent-2:  #ffb347;   /* warm amber — highlight */
+    --new:       #ffd966;   /* new-entry flash */
+    --border:    rgba(255,255,255,0.06);
+    --mono:      "SF Mono", "Menlo", "Consolas", monospace;
+    --font:      -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 "Helvetica Neue", sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    padding: 24px 20px;
+    max-width: 1280px;
+    margin: 0 auto;
+    line-height: 1.5;
+}
+
+header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+header h1 {
+    font-weight: 300;
+    font-size: 1.7rem;
+    letter-spacing: -0.01em;
+}
+header h1 .accent { color: var(--accent); }
+header .live {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--label);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+header .live .dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-right: 6px;
+    vertical-align: middle;
+    animation: blink 1.6s ease-in-out infinite;
+}
+@keyframes blink { 50% { opacity: 0.3; } }
+
+.nav { margin-bottom: 20px; font-size: 0.88rem; }
+.nav a {
+    color: var(--accent);
+    text-decoration: none;
+    margin-right: 16px;
+    opacity: 0.8;
+}
+.nav a:hover { opacity: 1; }
+
+.stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+}
+.stat {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+}
+.stat .label {
+    font-size: 0.72rem;
+    color: var(--label);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 4px;
+}
+.stat .value {
+    font-family: var(--mono);
+    font-size: 1.25rem;
+    color: var(--text);
+}
+.stat .value .accent { color: var(--accent); }
+
+.layout {
+    display: grid;
+    grid-template-columns: 1.6fr 1fr;
+    gap: 20px;
+}
+@media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+}
+
+section.panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+section.panel > h2 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--label);
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel-2);
+    font-weight: 500;
+}
+
+/* ---- Feed (left column) ---- */
+.feed {
+    max-height: 70vh;
+    overflow-y: auto;
+}
+.feed-row {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 70px 1fr auto;
+    gap: 12px;
+    align-items: center;
+    font-size: 0.88rem;
+}
+.feed-row:last-child { border-bottom: none; }
+.feed-row .age {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--label);
+    text-align: right;
+}
+.feed-row .body {
+    overflow: hidden;
+}
+.feed-row .body .friendly {
+    color: var(--text);
+}
+.feed-row .body .model {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--label);
+    margin-left: 8px;
+}
+.feed-row .body .id {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--accent);
+    margin-left: 8px;
+}
+.feed-row .body .detail {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--label);
+    display: block;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.feed-row .badge {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--accent-2);
+    background: rgba(255,179,71,0.08);
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+.feed-row.new {
+    animation: flash 1.6s ease-out;
+}
+@keyframes flash {
+    0%   { background: rgba(255,217,102,0.12); }
+    100% { background: transparent; }
+}
+
+/* ---- Right column ---- */
+.right-col {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.86rem;
+}
+th, td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+th {
+    font-size: 0.72rem;
+    color: var(--label);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 500;
+}
+td.num {
+    font-family: var(--mono);
+    text-align: right;
+    color: var(--accent);
+}
+td.last {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--label);
+}
+.empty {
+    padding: 24px 14px;
+    color: var(--label);
+    font-size: 0.9rem;
+    text-align: center;
+}
+</style>
+</head>
+<body>
+
+<header>
+    <h1>GlowUp <span class="accent">Airwaves</span></h1>
+    <div class="live"><span class="dot"></span>live · sub-GHz</div>
+</header>
+<div class="nav">
+    <a href="/home">home</a>
+    <a href="/meters">meters</a>
+    <a href="/thermal">thermal</a>
+    <a href="/power">power</a>
+</div>
+
+<div class="stats" id="stats">
+    <div class="stat"><div class="label">packets in ring</div>
+        <div class="value"><span id="ring-len" class="accent">–</span> / <span id="ring-size">–</span></div></div>
+    <div class="stat"><div class="label">distinct protocols</div>
+        <div class="value" id="proto-count">–</div></div>
+    <div class="stat"><div class="label">distinct transmitters</div>
+        <div class="value" id="tx-count">–</div></div>
+    <div class="stat"><div class="label">last packet</div>
+        <div class="value" id="last-age">–</div></div>
+</div>
+
+<div class="layout">
+    <section class="panel">
+        <h2>Live feed</h2>
+        <div class="feed" id="feed"><div class="empty">Waiting for first packet…</div></div>
+    </section>
+    <div class="right-col">
+        <section class="panel">
+            <h2>By protocol</h2>
+            <table id="protocols">
+                <thead><tr><th>Protocol</th><th>Friendly</th><th class="num">Count</th><th class="last">Last</th></tr></thead>
+                <tbody><tr><td colspan="4" class="empty">no packets yet</td></tr></tbody>
+            </table>
+        </section>
+        <section class="panel">
+            <h2>Top transmitters</h2>
+            <table id="transmitters">
+                <thead><tr><th>ID</th><th>Friendly</th><th class="num">Count</th><th class="last">Last</th></tr></thead>
+                <tbody><tr><td colspan="4" class="empty">no packets yet</td></tr></tbody>
+            </table>
+        </section>
+    </div>
+</div>
+
+<script>
+"use strict";
+const POLL_MS = 3000;
+const FEED_LIMIT = 80;
+const TX_LIMIT = 20;
+
+// Track received_ts of entries already rendered so we can flash only the new ones.
+const seenTs = new Set();
+
+function ago(secsFromNow) {
+    if (secsFromNow == null || isNaN(secsFromNow)) return "–";
+    if (secsFromNow < 0) secsFromNow = 0;
+    if (secsFromNow < 60)   return Math.floor(secsFromNow) + "s ago";
+    if (secsFromNow < 3600) return Math.floor(secsFromNow / 60) + "m ago";
+    if (secsFromNow < 86400) return Math.floor(secsFromNow / 3600) + "h ago";
+    return Math.floor(secsFromNow / 86400) + "d ago";
+}
+function nowS() { return Date.now() / 1000; }
+
+function escapeHtml(s) {
+    if (s == null) return "";
+    return String(s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function detailLine(raw) {
+    /* Pick the most interesting non-housekeeping fields per packet for the
+       sub-line.  Houskeeping (time/model/id/freq/rssi/snr/received_ts/mod
+       /protocol) is shown elsewhere; everything else is fair game.  Cap
+       length to keep one row per packet on narrow screens. */
+    if (!raw || typeof raw !== "object") return "";
+    const skip = new Set([
+        "time","model","id","EndpointID","endpoint_id","freq","freq_MHz",
+        "rssi","snr","mod","modulation","protocol","received_ts","mic",
+        "address","device","channel"
+    ]);
+    const parts = [];
+    for (const [k, v] of Object.entries(raw)) {
+        if (skip.has(k)) continue;
+        if (v === null || v === undefined) continue;
+        if (typeof v === "object") continue;
+        parts.push(k + "=" + v);
+        if (parts.length >= 4) break;
+    }
+    return parts.join("  ");
+}
+
+async function poll() {
+    let feedJson, protoJson, txJson;
+    try {
+        const [a, b, c] = await Promise.all([
+            fetch("/api/airwaves/feed?limit=" + FEED_LIMIT),
+            fetch("/api/airwaves/protocols"),
+            fetch("/api/airwaves/transmitters?limit=" + TX_LIMIT),
+        ]);
+        feedJson  = await a.json();
+        protoJson = await b.json();
+        txJson    = await c.json();
+    } catch (e) {
+        console.error("poll failed", e);
+        return;
+    }
+
+    /* ---- stats ---- */
+    const s = feedJson.stats || {};
+    document.getElementById("ring-len").textContent  = s.ring_len ?? 0;
+    document.getElementById("ring-size").textContent = s.ring_size ?? "–";
+    document.getElementById("proto-count").textContent = s.protocols ?? 0;
+    document.getElementById("tx-count").textContent    = s.transmitters ?? 0;
+    document.getElementById("last-age").textContent =
+        s.last_packet_ts ? ago(nowS() - s.last_packet_ts) : "–";
+
+    /* ---- feed ---- */
+    const feed = feedJson.feed || [];
+    const feedEl = document.getElementById("feed");
+    if (feed.length === 0) {
+        if (!feedEl.querySelector(".empty"))
+            feedEl.innerHTML = '<div class="empty">Waiting for first packet…</div>';
+    } else {
+        const html = feed.map(p => {
+            const tsKey = String(p.received_ts) + "|" + p.transmitter_id;
+            const isNew = !seenTs.has(tsKey);
+            seenTs.add(tsKey);
+            const freq = p.freq_MHz ? `<span class="badge">${escapeHtml(p.freq_MHz)} MHz</span>` : "";
+            const detail = escapeHtml(detailLine(p.raw));
+            return (
+              `<div class="feed-row${isNew ? " new" : ""}">` +
+                `<div class="age">${ago(nowS() - p.received_ts)}</div>` +
+                `<div class="body">` +
+                  `<span class="friendly">${escapeHtml(p.friendly)}</span>` +
+                  `<span class="model">${escapeHtml(p.model)}</span>` +
+                  `<span class="id">${escapeHtml(p.transmitter_id)}</span>` +
+                  (detail ? `<span class="detail">${detail}</span>` : "") +
+                `</div>` +
+                freq +
+              `</div>`
+            );
+        }).join("");
+        feedEl.innerHTML = html;
+    }
+    // Cap seenTs growth — only ever need keys for currently-displayed entries.
+    if (seenTs.size > 1000) {
+        seenTs.clear();
+        feed.forEach(p => seenTs.add(String(p.received_ts) + "|" + p.transmitter_id));
+    }
+
+    /* ---- by protocol ---- */
+    const proto = protoJson.protocols || [];
+    const ptbl = document.querySelector("#protocols tbody");
+    ptbl.innerHTML = proto.length
+        ? proto.map(r => (
+            `<tr>` +
+              `<td>${escapeHtml(r.model)}</td>` +
+              `<td>${escapeHtml(r.friendly)}</td>` +
+              `<td class="num">${r.count}</td>` +
+              `<td class="last">${ago(nowS() - r.last_seen)}</td>` +
+            `</tr>`
+        )).join("")
+        : `<tr><td colspan="4" class="empty">no packets yet</td></tr>`;
+
+    /* ---- by transmitter ---- */
+    const tx = txJson.transmitters || [];
+    const ttbl = document.querySelector("#transmitters tbody");
+    ttbl.innerHTML = tx.length
+        ? tx.map(r => (
+            `<tr>` +
+              `<td>${escapeHtml(r.transmitter_id)}</td>` +
+              `<td>${escapeHtml(r.friendly)}</td>` +
+              `<td class="num">${r.count}</td>` +
+              `<td class="last">${ago(nowS() - r.last_seen)}</td>` +
+            `</tr>`
+        )).join("")
+        : `<tr><td colspan="4" class="empty">no packets yet</td></tr>`;
+}
+
+poll();
+setInterval(poll, POLL_MS);
+</script>
+
+</body>
+</html>

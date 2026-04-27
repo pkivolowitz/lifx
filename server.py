@@ -356,6 +356,18 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_meters_page", requires_auth=False),
     _Route("GET", ("api", "meters", "latest"),
            "_handle_get_meters_latest", requires_auth=False),
+    # Airwaves dashboard — broader-than-meters live feed of every
+    # rtl_433-decoded packet (garage doors, blinds, weather stations,
+    # neighbour meters).  In-memory ring buffer; not persisted.
+    # Public read-only — same rationale as /meters.
+    _Route("GET", ("airwaves",),
+           "_handle_get_airwaves_page", requires_auth=False),
+    _Route("GET", ("api", "airwaves", "feed"),
+           "_handle_get_airwaves_feed", requires_auth=False),
+    _Route("GET", ("api", "airwaves", "protocols"),
+           "_handle_get_airwaves_protocols", requires_auth=False),
+    _Route("GET", ("api", "airwaves", "transmitters"),
+           "_handle_get_airwaves_transmitters", requires_auth=False),
     # POST /api/zigbee/set was removed in 2026-04-15 along with
     # the in-process Zigbee adapter.  Its successor lives under
     # /api/plugs — see handlers/plug.py and docs/29-zigbee-service.md.
@@ -663,6 +675,7 @@ from handlers.shopping import ShoppingHandlerMixin, ShoppingStore
 from handlers.sdr import SdrHandlerMixin
 from handlers.ernie import ErnieHandlerMixin
 from handlers.meters import MetersHandlerMixin
+from handlers.airwaves import AirwavesHandlerMixin
 
 
 class GlowUpRequestHandler(
@@ -683,6 +696,7 @@ class GlowUpRequestHandler(
     SdrHandlerMixin,
     ErnieHandlerMixin,
     MetersHandlerMixin,
+    AirwavesHandlerMixin,
     http.server.BaseHTTPRequestHandler,
 ):
     """HTTP request handler for the GlowUp REST API.
@@ -3101,6 +3115,22 @@ def main() -> None:
             except Exception as exc:
                 logging.warning("Meter logger unavailable: %s", exc)
                 meter_log = None
+
+            # Airwaves buffer — in-memory ring of every rtl_433-decoded
+            # packet from the SDR host.  Backs the /airwaves dashboard;
+            # explicitly NOT persisted (durable measurement path is the
+            # MeterLogger above).  Same guarded-import pattern.
+            try:
+                from infrastructure.airwaves_buffer import AirwavesBuffer
+                airwaves_buf = AirwavesBuffer()
+                airwaves_buf.start_subscriber(
+                    broker_host=broker_addr,
+                    broker_port=broker_port,
+                )
+                GlowUpRequestHandler.airwaves_buffer = airwaves_buf
+            except Exception as exc:
+                logging.warning("Airwaves buffer unavailable: %s", exc)
+                airwaves_buf = None
 
             # Auto-migrate automations[] → trigger operators in operators[].
             config["_config_path"] = GlowUpRequestHandler.config_path

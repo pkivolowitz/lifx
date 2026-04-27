@@ -217,6 +217,20 @@ _CONSUMPTION_FIELDS: tuple[str, ...] = (
 # identifier.  The hub-side logger subscribes to ``<prefix>/+``.
 _TOPIC_PREFIX: str = "glowup/meters"
 
+# Side-channel topic for the raw rtl_433 firehose.  Every decoded
+# packet — meters, garage doors, weather stations, window blinds,
+# every random ISM-band thing rtl_433 recognises — is published here
+# as the unmodified rtl_433 JSON object (plus a ``received_ts``
+# field).  Consumed by a hub-side in-memory ring buffer that backs
+# the /airwaves dashboard.  No persistence, no schema, fire-and-
+# forget — the meter pipeline above is the durable path.
+_RAW_TOPIC: str = "glowup/sub_ghz/raw"
+
+# QoS for the raw firehose.  0 = fire-and-forget; we don't care if a
+# duplicate or two slips through and we don't care if one is lost.
+# This is a UI nicety, not a measurement record.
+_RAW_QOS: int = 0
+
 # QoS for publishes.  1 = at-least-once.  Meters transmit every
 # 30-60s so a duplicate from a redelivery is harmless (logger
 # rate-limits anyway), but we want at-least-once so a paho hiccup
@@ -514,6 +528,36 @@ class MeterPublisher:
                 logger.debug("non-JSON line from rtl_433: %s (%s)",
                              line[:80], exc)
                 continue
+
+            # ---- Raw firehose to the /airwaves dashboard ----
+            # Every JSON-shaped packet rtl_433 emits gets shipped to
+            # the side-channel raw topic, regardless of whether it
+            # passes the meter-schema filter below.  This is what
+            # lights up the live RF activity feed: garage door
+            # remotes, window blind clickers, weather stations,
+            # neighbours' meters, anything the band carries.  The
+            # hub-side ring buffer subscriber owns shape decisions
+            # downstream — keep this side as dumb as possible.
+            if isinstance(packet, dict):
+                raw_envelope: dict[str, Any] = dict(packet)
+                raw_envelope["received_ts"] = time.time()
+                try:
+                    raw_payload: str = json.dumps(raw_envelope)
+                    self._client.publish(
+                        _RAW_TOPIC, raw_payload,
+                        qos=_RAW_QOS, retain=False,
+                    )
+                except (TypeError, ValueError) as exc:
+                    logger.debug(
+                        "raw firehose serialize failed (model=%r): %s",
+                        packet.get("model"), exc,
+                    )
+                except Exception as exc:
+                    # MQTT layer hiccups — don't block the meter path
+                    # on a side-channel failure.
+                    logger.debug(
+                        "raw firehose publish failed: %s", exc,
+                    )
 
             parsed: Optional[dict[str, Any]] = parse_packet(packet)
             if parsed is None:
