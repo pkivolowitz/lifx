@@ -30,5 +30,10 @@
     "country":     "<ISO-2 country code, e.g. US>",
     "lat":         "<reference latitude in WGS-84 decimal degrees>",
     "lon":         "<reference longitude in WGS-84 decimal degrees>"
-  }
+  },
+
+  "_comment_maritime_buoys": "NDBC stations to scrape every 5 minutes via maritime/buoy_scraper.py (publishes to glowup/maritime/buoy/<id>; consumed by BuoyBuffer for the live map layer and BuoyLogger for postgres history backing /buoys/<station>). Each entry needs at minimum 'id'; lat/lon are required for a marker on the /maritime map; name is a friendly display label. Find station ids and lat/lons on each station's NDBC page (https://www.ndbc.noaa.gov/station_page.php?station=<id>). Stations without a realtime2 file (CMAN-only or decommissioned) are skipped silently after one warning — safe to leave configured.",
+  "maritime_buoys": [
+    {"id": "<NDBC station id, e.g. 42012>", "name": "<friendly name>", "lat": "<lat>", "lon": "<lon>"}
+  ]
 }

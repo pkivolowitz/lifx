@@ -381,6 +381,15 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_maritime_vessel", requires_auth=False),
     _Route("GET", ("api", "maritime", "config"),
            "_handle_get_maritime_config", requires_auth=False),
+    # Buoy dashboards — NDBC realtime2 observations.  Same public
+    # read-only stance as the rest of /api/maritime/* and the other
+    # diagnostic surfaces (curiosity data, no actuation, no creds).
+    _Route("GET", ("buoys", "{station_id}"),
+           "_handle_get_buoys_page", requires_auth=False),
+    _Route("GET", ("api", "buoys", "current"),
+           "_handle_get_api_buoys_current", requires_auth=False),
+    _Route("GET", ("api", "buoys", "history", "{station_id}"),
+           "_handle_get_api_buoys_history", requires_auth=False),
     # POST /api/zigbee/set was removed in 2026-04-15 along with
     # the in-process Zigbee adapter.  Its successor lives under
     # /api/plugs — see handlers/plug.py and docs/29-zigbee-service.md.
@@ -690,6 +699,7 @@ from handlers.ernie import ErnieHandlerMixin
 from handlers.meters import MetersHandlerMixin
 from handlers.airwaves import AirwavesHandlerMixin
 from handlers.maritime import MaritimeHandlerMixin
+from handlers.buoys import BuoysHandlerMixin
 
 
 class GlowUpRequestHandler(
@@ -712,6 +722,7 @@ class GlowUpRequestHandler(
     MetersHandlerMixin,
     AirwavesHandlerMixin,
     MaritimeHandlerMixin,
+    BuoysHandlerMixin,
     http.server.BaseHTTPRequestHandler,
 ):
     """HTTP request handler for the GlowUp REST API.
@@ -3170,6 +3181,41 @@ def main() -> None:
             except Exception as exc:
                 logging.warning("Maritime buffer unavailable: %s", exc)
                 maritime_buf = None
+
+            # Buoy buffer — current-state cache fed by
+            # ``glowup/maritime/buoy/+`` (the topic the
+            # maritime/buoy_scraper.py service publishes onto).  Drives
+            # the /maritime map's buoy layer + the popup's "now"
+            # readings.  History (the chart cards on
+            # /buoys/<station>) is served by BuoyLogger below, NOT
+            # this buffer.
+            try:
+                from infrastructure.buoy_buffer import BuoyBuffer
+                buoy_buf = BuoyBuffer()
+                buoy_buf.start_subscriber(
+                    broker_host=broker_addr,
+                    broker_port=broker_port,
+                )
+                GlowUpRequestHandler.buoy_buffer = buoy_buf
+            except Exception as exc:
+                logging.warning("Buoy buffer unavailable: %s", exc)
+                buoy_buf = None
+
+            # Buoy logger — postgres persistence.  Same DSN
+            # resolution path as ThermalLogger / MeterLogger; absent
+            # DSN reduces it to a no-op (current-state buffer above
+            # still works, history endpoint returns []).
+            try:
+                from infrastructure.buoy_logger import BuoyLogger
+                buoy_log = BuoyLogger()
+                buoy_log.start_subscriber(
+                    broker_host=broker_addr,
+                    broker_port=broker_port,
+                )
+                GlowUpRequestHandler.buoy_logger = buoy_log
+            except Exception as exc:
+                logging.warning("Buoy logger unavailable: %s", exc)
+                buoy_log = None
 
             # Auto-migrate automations[] → trigger operators in operators[].
             config["_config_path"] = GlowUpRequestHandler.config_path

@@ -352,6 +352,11 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "maritime", "vessels"),
             ("api", "maritime", "vessel", "{mmsi}"),
             ("api", "maritime", "config"),
+            # /buoys/<station> + history endpoints — NDBC observation
+            # data, public read-only.  Same rationale as /maritime.
+            ("buoys", "{station_id}"),
+            ("api", "buoys", "current"),
+            ("api", "buoys", "history", "{station_id}"),
         }
         for route in _ROUTES:
             if route.pattern in AUTH_FREE_PATTERNS:

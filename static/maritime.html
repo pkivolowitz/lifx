@@ -266,6 +266,58 @@ table.vtable {
     border-color: var(--accent);
 }
 
+/* Buoy markers — diamond glyphs in a teal that's distinct from the
+   vessel palette.  Sized for trackpad clicks; dark stroke for
+   contrast against any OSM tile.  Stale (no fresh obs in >30 min)
+   markers fade — the buoy isn't moving, but the data stream may
+   have stalled. */
+.buoy-icon { background: transparent !important; border: none !important; }
+.buoy-glyph {
+    width: 100%; height: 100%;
+}
+.buoy-glyph svg {
+    width: 100%; height: 100%; display: block;
+    transform: rotate(45deg);
+    transform-origin: 50% 50%;
+}
+.buoy-glyph svg rect {
+    fill: var(--buoy, #2bd4c8);
+    fill-opacity: var(--alpha, 0.95);
+    stroke: #0a1018;
+    stroke-width: 2;
+}
+/* Buoy popup — slightly different layout from the vessel popup
+   (no MMSI, primary identifier is the station id + operator-
+   supplied name).  Keep monospace for the readings so the
+   columns line up. */
+.buoy-popup .station {
+    color: var(--accent);
+    font-weight: 500;
+    font-size: 0.95rem;
+}
+.buoy-popup .obs-age {
+    color: var(--label);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    margin-top: 2px;
+}
+.buoy-popup .obs-age.stale { color: var(--accent-2); }
+.buoy-popup .row {
+    display: flex; gap: 10px; margin-top: 4px;
+}
+.buoy-popup .row .lbl {
+    color: var(--label); text-transform: uppercase;
+    letter-spacing: 0.04em; font-size: 0.7rem; min-width: 6em;
+}
+.buoy-popup .row .val { font-family: var(--mono); }
+.buoy-popup .history-link {
+    display: inline-block; margin-top: 10px;
+    color: var(--accent); text-decoration: none;
+    font-family: var(--mono); font-size: 0.8rem;
+    border-bottom: 1px dashed var(--accent);
+}
+.buoy-popup .history-link:hover { color: var(--text); }
+
 /* Leaflet popup theming.  Default popup is light-on-light; override
    to match the dark dashboard palette. */
 .leaflet-popup-content-wrapper {
@@ -542,6 +594,7 @@ const localVesselLayer    = L.featureGroup().addTo(map);
 const externalVesselLayer = L.featureGroup().addTo(map);
 const trackLayer          = L.featureGroup().addTo(map);
 const headingLayer        = L.featureGroup().addTo(map);
+const buoyLayer           = L.featureGroup().addTo(map);
 
 /* Labels are bound directly to markers as Leaflet tooltips, so they
    can't be added to a LayerGroup the same way.  Workaround: a
@@ -684,6 +737,7 @@ const layerControl = L.control.layers(
         "Breadcrumb tracks":           trackLayer,
         "Heading indicators":          headingLayer,
         "Vessel name labels":          labelsToggle,
+        "Buoys (NDBC)":                buoyLayer,
         "Vessel table":                tableMasterToggle,
         "  ↳ col: Distance":           colToggles.distance,
         "  ↳ col: Name":               colToggles.name,
@@ -1456,6 +1510,157 @@ async function poll() {
 
 poll();
 setInterval(poll, POLL_MS);
+
+/* ---------- Buoy layer -----------------------------------------------------
+   NDBC observations from the operator-configured stations
+   (site.json maritime_buoys).  Backed by the hub's BuoyBuffer
+   which subscribes to glowup/maritime/buoy/+ from
+   maritime/buoy_scraper.py.
+
+   Cadence: 30 s.  Buoy obs update upstream every 10 min, so 30 s
+   is well over-sampled — but the cost is one tiny JSON fetch and
+   it keeps the popup-open user from staring at stale data after
+   a fresh observation lands. */
+
+const BUOY_POLL_MS = 30000;
+const BUOY_STALE_AFTER_S = 1800;   /* 3× NDBC's 10-min update cadence */
+const buoyMarkers = new Map();      /* station_id -> Leaflet marker */
+
+/* Diamond-shaped buoy glyph in a divIcon.  Drawn as a square
+   rotated 45° via CSS so the SVG path stays simple (rect 0..24,
+   0..24).  Distinct shape + colour from the vessel symbology so
+   buoys never compete with the AIS-derived data visually. */
+function makeBuoyIcon(stale) {
+    const sz = 18;
+    const alpha = stale ? 0.45 : 0.95;
+    const html =
+      `<div class="buoy-glyph" style="--alpha:${alpha}">` +
+        `<svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet">` +
+          `<rect x="3" y="3" width="18" height="18" rx="1.5"/>` +
+        `</svg>` +
+      `</div>`;
+    return L.divIcon({
+        className: "buoy-icon",
+        html: html,
+        iconSize: [sz, sz],
+        iconAnchor: [sz / 2, sz / 2],
+    });
+}
+
+function fmtNum(v, digits) {
+    if (v == null || isNaN(v)) return "—";
+    return v.toFixed(digits == null ? 1 : digits);
+}
+
+/* Compass-point label for a degree heading — adds a useful at-a-
+   glance cue alongside the numeric reading.  16-point rose. */
+const _COMPASS_POINTS = [
+    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+];
+function compass(deg) {
+    if (deg == null || isNaN(deg)) return "";
+    const idx = Math.round(((deg % 360) / 22.5)) % 16;
+    return _COMPASS_POINTS[idx];
+}
+
+function buoyPopupHtml(s) {
+    const obsAgeS = s.obs_ts
+        ? (Date.now()/1000) - new Date(s.obs_ts).getTime()/1000
+        : null;
+    const stale = obsAgeS != null && obsAgeS > BUOY_STALE_AFTER_S;
+    const ageStr = obsAgeS == null ? "—"
+                 : obsAgeS < 60   ? Math.floor(obsAgeS) + "s ago"
+                 : obsAgeS < 3600 ? Math.floor(obsAgeS / 60) + "m ago"
+                 : Math.floor(obsAgeS / 3600) + "h ago";
+    /* Wind row combines speed/gust/direction in one line (the way
+       NWS marine forecasts present it) — operator's eye fast-scans
+       a single pattern instead of three separate rows. */
+    const windDirStr = (s.wind_dir_deg != null)
+        ? `${Math.round(s.wind_dir_deg)}° ${compass(s.wind_dir_deg)}`
+        : "—";
+    const windRow = (s.wind_speed_kt != null || s.wind_gust_kt != null)
+        ? `<div class="row"><span class="lbl">Wind</span><span class="val">${windDirStr} · ${fmtNum(s.wind_speed_kt)} kt` +
+          (s.wind_gust_kt != null ? ` (gust ${fmtNum(s.wind_gust_kt)})` : "") +
+          `</span></div>`
+        : "";
+    /* Pressure row includes the 3-hour tendency (PTDY) — falling
+       pressure is the single best storm signal a buoy gives. */
+    const presRow = (s.pressure_mb != null)
+        ? `<div class="row"><span class="lbl">Pressure</span><span class="val">${fmtNum(s.pressure_mb)} mb` +
+          (s.pressure_tendency_mb != null
+            ? ` (3h ${s.pressure_tendency_mb >= 0 ? "+" : ""}${fmtNum(s.pressure_tendency_mb)})` : "") +
+          `</span></div>`
+        : "";
+    const tempRow = (s.air_temp_c != null || s.water_temp_c != null)
+        ? `<div class="row"><span class="lbl">Temp</span><span class="val">air ${fmtNum(s.air_temp_c)}°C · water ${fmtNum(s.water_temp_c)}°C</span></div>`
+        : "";
+    const waveRow = (s.wave_height_m != null)
+        ? `<div class="row"><span class="lbl">Waves</span><span class="val">${fmtNum(s.wave_height_m)} m` +
+          (s.wave_period_s != null ? ` @ ${fmtNum(s.wave_period_s, 0)}s` : "") +
+          (s.wave_dir_deg != null ? ` from ${compass(s.wave_dir_deg)}` : "") +
+          `</span></div>`
+        : "";
+    const tideRow = (s.tide_ft != null)
+        ? `<div class="row"><span class="lbl">Tide</span><span class="val">${fmtNum(s.tide_ft, 2)} ft</span></div>`
+        : "";
+    return (
+      `<div class="buoy-popup">` +
+        `<div class="station">${escapeHtml(s.name || s.station_id)}</div>` +
+        `<div class="obs-age${stale ? " stale" : ""}">${escapeHtml(s.station_id)} · ${ageStr}` +
+            (stale ? " · stale" : "") + `</div>` +
+        windRow + presRow + tempRow + waveRow + tideRow +
+        `<a class="history-link" href="/buoys/${encodeURIComponent(s.station_id)}">history →</a>` +
+      `</div>`
+    );
+}
+
+function renderBuoys(stations) {
+    const seen = new Set();
+    for (const s of stations) {
+        if (s.lat == null || s.lon == null) continue;     /* operator omitted lat/lon — list-only */
+        seen.add(s.station_id);
+        const obsAgeS = s.obs_ts
+            ? (Date.now()/1000) - new Date(s.obs_ts).getTime()/1000
+            : null;
+        const stale = obsAgeS != null && obsAgeS > BUOY_STALE_AFTER_S;
+        let m = buoyMarkers.get(s.station_id);
+        if (!m) {
+            m = L.marker([s.lat, s.lon], {
+                icon: makeBuoyIcon(stale),
+                riseOnHover: true,
+            }).addTo(buoyLayer);
+            m.bindPopup(buoyPopupHtml(s), { className: "" });
+            buoyMarkers.set(s.station_id, m);
+        } else {
+            m.setLatLng([s.lat, s.lon]);
+            m.setIcon(makeBuoyIcon(stale));
+            m.setPopupContent(buoyPopupHtml(s));
+        }
+    }
+    /* Drop markers for stations that vanished (operator removed
+       from site.json + restart). */
+    for (const [sid, m] of buoyMarkers) {
+        if (!seen.has(sid)) {
+            buoyLayer.removeLayer(m);
+            buoyMarkers.delete(sid);
+        }
+    }
+}
+
+async function pollBuoys() {
+    let json;
+    try {
+        const r = await fetch("/api/buoys/current");
+        json = await r.json();
+    } catch (e) {
+        console.error("buoy poll failed", e);
+        return;
+    }
+    renderBuoys(json.stations || []);
+}
+pollBuoys();
+setInterval(pollBuoys, BUOY_POLL_MS);
 </script>
 </body>
 </html>

@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlowUp Buoy History</title>
+
+<!-- Chart.js 4.4 (MIT) plus the bundled date-fns adapter (also MIT,
+     bundles date-fns 2.x).  Both from unpkg, no API key.  Order
+     matters: chart.js must load before the adapter.  The adapter
+     is what powers ``type: "time"`` axes — Chart.js 4 deliberately
+     ships without one so users pick their own.  date-fns has the
+     smallest footprint of the supported choices and matches our
+     ``MMM d, HH:mm`` format strings 1:1. -->
+<script src="https://unpkg.com/chart.js@4.4.0/dist/chart.umd.js"></script>
+<script src="https://unpkg.com/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+
+<style>
+:root {
+    --bg:        #0c0e12;
+    --panel:     #161a21;
+    --text:      #d8dde6;
+    --label:     #6f7a8a;
+    --accent:    #6dd9c8;
+    --accent-2:  #ffb347;
+    --warn:      #ff7a00;
+    --border:    rgba(255,255,255,0.08);
+    --grid:      rgba(255,255,255,0.06);
+    --mono:      "SF Mono", "Menlo", "Consolas", monospace;
+    --font:      -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 "Helvetica Neue", sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    line-height: 1.4;
+}
+header.bar {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 10px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+}
+header.bar h1 {
+    font-weight: 400;
+    font-size: 1.1rem;
+    letter-spacing: -0.01em;
+}
+header.bar h1 .accent { color: var(--accent); }
+header.bar .station-id {
+    font-family: var(--mono);
+    color: var(--label);
+    font-size: 0.85rem;
+}
+header.bar .nav { margin-left: auto; }
+header.bar .nav a {
+    color: var(--accent);
+    text-decoration: none;
+    margin-left: 14px;
+    opacity: 0.85;
+    font-size: 0.9rem;
+}
+header.bar .nav a:hover { opacity: 1; }
+
+/* Range selector — same segmented-control look as /maritime's
+   panel range filter so the dashboards feel consistent. */
+.range-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+}
+.range-bar .label {
+    font-family: var(--mono);
+    color: var(--label);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.range-control {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.range-control button {
+    background: transparent;
+    color: var(--label);
+    border: 0;
+    padding: 5px 12px;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    cursor: pointer;
+    border-right: 1px solid var(--border);
+}
+.range-control button:last-child { border-right: 0; }
+.range-control button:hover { color: var(--text); }
+.range-control button.active {
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 600;
+}
+.range-bar .meta {
+    font-family: var(--mono);
+    color: var(--label);
+    font-size: 0.78rem;
+    margin-left: auto;
+}
+.range-bar .meta .v { color: var(--text); }
+
+/* Chart grid — flex of cards, two-up on wide windows, one-up on
+   narrow.  Each card carries its own canvas + label. */
+.charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 16px;
+    padding: 16px 20px;
+}
+.card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    min-height: 240px;
+}
+.card h2 {
+    font-size: 0.92rem;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 6px;
+}
+.card h2 .unit {
+    color: var(--label);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    margin-left: 6px;
+}
+.card .canvas-wrap {
+    flex: 1 1 auto;
+    position: relative;
+    min-height: 200px;
+}
+.card .empty {
+    color: var(--label);
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    margin-top: 6px;
+}
+</style>
+</head>
+<body>
+
+<header class="bar">
+    <h1>GlowUp <span class="accent">Buoy History</span></h1>
+    <span class="station-id" id="station-id">–</span>
+    <div class="nav">
+        <a href="/home">home</a>
+        <a href="/maritime">maritime</a>
+    </div>
+</header>
+
+<div class="range-bar">
+    <span class="label">Range</span>
+    <div class="range-control" id="range-control" role="tablist" aria-label="Range">
+        <button data-h="24"  class="active" type="button">24h</button>
+        <button data-h="168" type="button">7d</button>
+        <button data-h="720" type="button">30d</button>
+    </div>
+    <span class="meta">last: <span class="v" id="last-obs">–</span> · rows <span class="v" id="row-count">0</span></span>
+</div>
+
+<div class="charts" id="charts"></div>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------
+   /buoys/<station_id> — historical observation charts.
+
+   Source of truth: GET /api/buoys/history/<station_id> backed by
+   the hub's BuoyLogger postgres table.  The page reads its station
+   from the URL path tail.  Chart cards render whichever fields
+   the buffer / logger have data for; missing series are dropped
+   without an empty-card placeholder.
+
+   Range vs resolution:
+     24h  → raw rows (~144 points at NDBC's 10-min cadence)
+     7d   → 1h buckets (~168 points)
+     30d  → 4h buckets (~180 points)
+   These keep cardinality consistent across windows so Chart.js
+   doesn't have to thrash an SVG with 4000+ line segments at the
+   30-day end.
+   ------------------------------------------------------------------ */
+
+const STATION_ID = (() => {
+    const parts = location.pathname.split("/").filter(Boolean);
+    return parts[parts.length - 1] || "";
+})();
+document.getElementById("station-id").textContent = STATION_ID;
+document.title = `Buoy ${STATION_ID} History`;
+
+/* Range options + their bucket sizes.  Resolution=0 means "raw
+   rows" (no averaging) which is what we want for tight windows
+   where each row is already 10 minutes apart. */
+const RANGES = {
+    "24":  { hours: 24,  resolution_s: 0    },
+    "168": { hours: 168, resolution_s: 3600 },
+    "720": { hours: 720, resolution_s: 4 * 3600 },
+};
+const RANGE_DEFAULT = "24";
+
+/* Chart card definitions.  ``key`` → response field name(s); a
+   single chart may render multiple series (wind speed + gust on
+   one chart, air + water temp on another) so we declare datasets
+   inline rather than trying to factor it more cleverly. */
+const CHART_DEFS = [
+    {
+        id: "wind",
+        title: "Wind",
+        unit: "kt / deg",
+        series: [
+            { field: "wind_speed_kt", label: "speed",    color: "#6dd9c8", yID: "y" },
+            { field: "wind_gust_kt",  label: "gust",     color: "#ffb347", yID: "y" },
+            { field: "wind_dir_deg",  label: "dir (°)",  color: "#9aa3b2", yID: "y2", border: { dash: [4, 4] } },
+        ],
+        yAxes: {
+            y:  { label: "kt",  min: 0 },
+            y2: { label: "°",   min: 0, max: 360, position: "right" },
+        },
+    },
+    {
+        id: "pressure",
+        title: "Barometric Pressure",
+        unit: "mb",
+        series: [
+            { field: "pressure_mb", label: "MSL", color: "#ffd966", yID: "y" },
+        ],
+        yAxes: { y: { label: "mb" } },
+    },
+    {
+        id: "temp",
+        title: "Temperature",
+        unit: "°C",
+        series: [
+            { field: "air_temp_c",   label: "air",    color: "#ff7a00", yID: "y" },
+            { field: "water_temp_c", label: "water",  color: "#1f4eff", yID: "y" },
+            { field: "dewpoint_c",   label: "dewpt",  color: "#9aa3b2", yID: "y", border: { dash: [4, 4] } },
+        ],
+        yAxes: { y: { label: "°C" } },
+    },
+    {
+        id: "waves",
+        title: "Waves",
+        unit: "m / s",
+        series: [
+            { field: "wave_height_m",  label: "height",      color: "#2bd4c8", yID: "y"  },
+            { field: "wave_period_s",  label: "period (s)",  color: "#ffb347", yID: "y2" },
+        ],
+        yAxes: {
+            y:  { label: "m",  min: 0 },
+            y2: { label: "s",  min: 0, position: "right" },
+        },
+    },
+    {
+        id: "tide",
+        title: "Tide",
+        unit: "ft",
+        series: [
+            { field: "tide_ft", label: "level", color: "#6dd9c8", yID: "y" },
+        ],
+        yAxes: { y: { label: "ft" } },
+    },
+];
+
+/* Build the card DOM.  One card per chart def; the canvas inside
+   is what Chart.js binds to.  Cards with no data after the first
+   fetch get a small "no data" line and an empty plot. */
+const charts_root = document.getElementById("charts");
+const chartInstances = {};
+for (const def of CHART_DEFS) {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML =
+        `<h2>${def.title}<span class="unit">${def.unit}</span></h2>` +
+        `<div class="canvas-wrap"><canvas id="canvas-${def.id}"></canvas></div>` +
+        `<div class="empty" id="empty-${def.id}" style="display:none">no data in this window</div>`;
+    charts_root.appendChild(card);
+}
+
+/* Common Chart.js options across every card.  Dark theme
+   matched to the dashboard palette; legend on top; no animation
+   (the data updates on a 30s+ cadence and animation steals the
+   first frame's view of fresh data). */
+function commonOptions(yAxes) {
+    const scales = {
+        x: {
+            type: "time",
+            time: { tooltipFormat: "MMM d, HH:mm" },
+            ticks: { color: "#6f7a8a", maxRotation: 0 },
+            grid:  { color: "rgba(255,255,255,0.06)" },
+        },
+    };
+    for (const [id, cfg] of Object.entries(yAxes || {})) {
+        scales[id] = {
+            position: cfg.position || "left",
+            min:      cfg.min,
+            max:      cfg.max,
+            ticks: { color: "#6f7a8a" },
+            grid:  { color: "rgba(255,255,255,0.06)", drawOnChartArea: id === "y" },
+            title: { display: true, text: cfg.label, color: "#6f7a8a" },
+        };
+    }
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        spanGaps: false,           /* don't bridge missing samples */
+        parsing: false,
+        normalized: true,
+        plugins: {
+            legend: {
+                position: "top",
+                labels: { color: "#d8dde6", boxWidth: 14, font: { size: 11 } },
+            },
+            tooltip: {
+                backgroundColor: "rgba(22,26,33,0.95)",
+                borderColor: "rgba(255,255,255,0.12)",
+                borderWidth: 1,
+                titleColor: "#d8dde6",
+                bodyColor:  "#d8dde6",
+            },
+        },
+        scales: scales,
+    };
+}
+
+/* Build Chart.js datasets from a row set.  Chart.js 4.x with
+   parsing:false expects {x, y} pairs (Date or millis for x).
+   Drops null-y points so gaps in the data render as gaps, not
+   straight lines. */
+function buildDatasets(def, rows) {
+    return def.series.map(s => ({
+        label:           s.label,
+        data:            rows
+            .filter(r => r[s.field] != null)
+            .map(r => ({ x: r.obs_ts * 1000, y: r[s.field] })),
+        borderColor:     s.color,
+        backgroundColor: s.color + "33",
+        borderWidth:     1.6,
+        pointRadius:     0,
+        pointHoverRadius: 4,
+        tension:         0.15,
+        yAxisID:         s.yID,
+        borderDash:      (s.border && s.border.dash) || [],
+        spanGaps:        false,
+    }));
+}
+
+/* Render or update a single chart card.  Lazily creates the
+   Chart.js instance on first render; subsequent renders mutate
+   datasets in place to avoid the destroy/recreate flicker. */
+function renderChart(def, rows) {
+    const datasets = buildDatasets(def, rows);
+    const empty = datasets.every(d => d.data.length === 0);
+    document.getElementById("empty-" + def.id).style.display = empty ? "" : "none";
+    const canvas = document.getElementById("canvas-" + def.id);
+    let ch = chartInstances[def.id];
+    if (!ch) {
+        ch = new Chart(canvas, {
+            type: "line",
+            data: { datasets: datasets },
+            options: commonOptions(def.yAxes),
+        });
+        chartInstances[def.id] = ch;
+    } else {
+        ch.data.datasets = datasets;
+        ch.update("none");
+    }
+}
+
+/* Range selector wiring + persisted selection.  localStorage key
+   is per-station so different buoys remember their last range
+   independently. */
+const RANGE_STORAGE_KEY = "buoys.range." + STATION_ID;
+let currentRange = (() => {
+    const stored = localStorage.getItem(RANGE_STORAGE_KEY);
+    return RANGES[stored] ? stored : RANGE_DEFAULT;
+})();
+
+function refreshRangeButtons() {
+    document.querySelectorAll("#range-control button").forEach(b => {
+        b.classList.toggle("active", b.getAttribute("data-h") === currentRange);
+    });
+}
+document.querySelectorAll("#range-control button").forEach(b => {
+    b.addEventListener("click", () => {
+        currentRange = b.getAttribute("data-h");
+        localStorage.setItem(RANGE_STORAGE_KEY, currentRange);
+        refreshRangeButtons();
+        fetchAndRender();
+    });
+});
+refreshRangeButtons();
+
+/* Fetch + render.  Builds the URL from currentRange and rebuilds
+   every chart card.  The /api/buoys/history endpoint clamps
+   query params; an out-of-range request returns a clean 400 the
+   user-facing JS should never trigger because RANGES is a
+   curated set, but defensive in any case. */
+async function fetchAndRender() {
+    const r = RANGES[currentRange];
+    const url = `/api/buoys/history/${encodeURIComponent(STATION_ID)}` +
+                `?hours=${r.hours}&resolution=${r.resolution_s}`;
+    let json;
+    try {
+        const res = await fetch(url);
+        json = await res.json();
+    } catch (e) {
+        console.error("history fetch failed", e);
+        return;
+    }
+    const rows = json.rows || [];
+    document.getElementById("row-count").textContent = rows.length;
+    if (rows.length > 0) {
+        const last = rows[rows.length - 1].obs_ts;
+        document.getElementById("last-obs").textContent =
+            new Date(last * 1000).toLocaleString();
+    } else {
+        document.getElementById("last-obs").textContent = "–";
+    }
+    for (const def of CHART_DEFS) {
+        renderChart(def, rows);
+    }
+}
+
+/* The date-fns adapter loaded above is what powers Chart.js's
+   time scale; no inline registration needed. */
+
+fetchAndRender();
+/* Refresh on the same cadence as buoy obs land — every 5 minutes
+   matches the scraper's poll interval and keeps the page useful
+   to leave open. */
+setInterval(fetchAndRender, 5 * 60 * 1000);
+</script>
+</body>
+</html>

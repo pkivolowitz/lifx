@@ -1,0 +1,66 @@
+# GlowUp NDBC buoy scraper
+#
+# Polls the operator-configured set of NDBC stations every 5 minutes
+# (matching the 10-min realtime2 update cadence with one half-cycle
+# headroom for slipped-publish recovery), parses each station's
+# realtime2 file, and publishes one JSON observation per fresh row
+# onto glowup/maritime/buoy/<station_id>.
+#
+# Runs on whatever host has reliable internet — typically the hub,
+# since it already hosts the canonical mosquitto broker.  The
+# publisher's MQTT target resolves from /etc/glowup/site.json
+# (hub_broker / hub_port keys) by default; --broker / --port on
+# ExecStart override for ad-hoc dev runs.
+#
+# Station list lives in /etc/glowup/site.json under maritime_buoys
+# as a list of {id, name, lat, lon} objects (lat/lon used for the
+# /maritime map's buoy-layer markers).
+#
+# Install:
+#   sudo install -m 644 maritime/glowup-buoys.service \
+#       /etc/systemd/system/glowup-buoys.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now glowup-buoys.service
+#
+# Verify:
+#   journalctl -u glowup-buoys -f
+#   mosquitto_sub -h <hub> -t 'glowup/maritime/buoy/#'
+
+[Unit]
+Description=GlowUp NDBC buoy scraper (realtime2 → MQTT)
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=a
+Group=a
+WorkingDirectory=/home/a/lifx
+# Module form so glowup_site imports cleanly (matches every other
+# service in this tree per feedback_run_lifx_scripts_as_modules).
+ExecStart=/usr/bin/python3 -m maritime.buoy_scraper
+Restart=on-failure
+RestartSec=10
+# Start-rate limit: if we crash 5 times in 60 s, give up — usually
+# means a config / dependency problem that won't fix itself.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Sandboxing — read-only filesystem with a few targeted writes.
+# Network access is required (NDBC HTTPS + hub MQTT).
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+PrivateDevices=true
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# Log to journal (default for Type=simple) — use journalctl -u
+# glowup-buoys to read.
+
+[Install]
+WantedBy=multi-user.target
