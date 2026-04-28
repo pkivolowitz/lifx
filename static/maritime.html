@@ -691,6 +691,21 @@ const headingLayer        = L.featureGroup().addTo(map);
 const buoyLayer           = L.featureGroup().addTo(map);
 const aircraftLayer       = L.featureGroup().addTo(map);
 
+/* Roads — TomTom flow-tile raster overlay (color-coded current
+   speed vs. free-flow speed) plus a feature-group of incident
+   pins.  Both fed from the hub-side caching proxy
+   (/api/traffic/flow/{z}/{x}/{y}.png and /api/traffic/incidents);
+   the API key never reaches the browser.  Tile attribution
+   "© TomTom" is required per their ToS — set on the tileLayer
+   options below. */
+const roadsFlowLayer = L.tileLayer(
+    "/api/traffic/flow/{z}/{x}/{y}.png", {
+    attribution: '&copy; <a href="https://www.tomtom.com/">TomTom</a>',
+    maxZoom: 22,
+    opacity: 0.85,
+});
+const roadsIncidentLayer = L.featureGroup();
+
 /* Labels are bound directly to markers as Leaflet tooltips, so they
    can't be added to a LayerGroup the same way.  Workaround: a
    no-render custom layer whose add/remove flips a body-class that
@@ -834,6 +849,8 @@ const layerControl = L.control.layers(
         "Vessel name labels":          labelsToggle,
         "Buoys (NDBC)":                buoyLayer,
         "Aircraft (ADS-B)":            aircraftLayer,
+        "Road flow (TomTom)":          roadsFlowLayer,
+        "Road incidents (TomTom)":     roadsIncidentLayer,
         "Vessel table":                tableMasterToggle,
         "  ↳ col: Distance":           colToggles.distance,
         "  ↳ col: Name":               colToggles.name,
@@ -851,11 +868,12 @@ const layerControl = L.control.layers(
    first toggle's onAdd → renderTable → COLUMNS access. */
 
 /* ----- URL-driven layer presets -----
-   Same maritime.html serves three URLs.  Each is a saved view:
+   Same maritime.html serves four URLs.  Each is a saved view:
      /maritime   vessels + tracks + headings + labels + buoys ON,
-                 aircraft OFF
+                 aircraft + roads OFF
      /air        aircraft ON, everything else OFF
-     /traffic    everything ON
+     /roads      road flow + road incidents ON, everything else OFF
+     /traffic    sea + air + roads — everything ON
    Layer visibility comes from the URL on every load (overrides any
    prior session state).  Other UI chrome — panel width, columns,
    sort, range — still persists in localStorage because those are
@@ -866,17 +884,26 @@ const PATHNAME_PRESET = (() => {
     if (path === "/air") return {
         vessels: false, tracks: false, headings: false, labels: false,
         buoys:   false, aircraft: true,
+        roadsFlow: false, roadsIncidents: false,
         title:   "Air Traffic",
+    };
+    if (path === "/roads") return {
+        vessels: false, tracks: false, headings: false, labels: false,
+        buoys:   false, aircraft: false,
+        roadsFlow: true, roadsIncidents: true,
+        title:   "Roads",
     };
     if (path === "/traffic") return {
         vessels: true, tracks: true, headings: true, labels: true,
         buoys:   true, aircraft: true,
+        roadsFlow: true, roadsIncidents: true,
         title:   "Traffic",
     };
     /* Default + explicit /maritime */
     return {
         vessels: true, tracks: true, headings: true, labels: true,
         buoys:   true, aircraft: false,
+        roadsFlow: false, roadsIncidents: false,
         title:   "Maritime",
     };
 })();
@@ -901,6 +928,8 @@ _setLayer(headingLayer,        PATHNAME_PRESET.headings);
 _setLayer(labelsToggle,        PATHNAME_PRESET.labels);
 _setLayer(buoyLayer,           PATHNAME_PRESET.buoys);
 _setLayer(aircraftLayer,       PATHNAME_PRESET.aircraft);
+_setLayer(roadsFlowLayer,      PATHNAME_PRESET.roadsFlow);
+_setLayer(roadsIncidentLayer,  PATHNAME_PRESET.roadsIncidents);
 
 /* ----- Vessel-table column definitions, rendering, sort, range -----
 
@@ -2041,6 +2070,153 @@ async function pollAircraft() {
 }
 pollAircraft();
 setInterval(pollAircraft, ADSB_POLL_MS);
+
+/* ---------- Road incidents (TomTom) -------------------------------------
+   Source: GET /api/traffic/incidents, fed by the hub's TrafficBuffer
+   (caching proxy in front of TomTom's incidentDetails API).  Cached
+   server-side at INCIDENTS_TTL_S so a long-lived /roads session stays
+   inside the free-tier 2,500/day budget regardless of poll cadence
+   here.  The client polls every 60 s — well above the cache TTL,
+   so most polls return the same payload without burning a TomTom
+   call.  Skipped entirely when the incidents layer is off.
+
+   Pin color by iconCategory (TomTom Traffic API documentation):
+     1  Accident             red
+     6  Jam / slow traffic   amber
+     7  Lane Closed          orange
+     8  Road Closed          deep red
+     9  Road Works           orange
+     others                  grey (default)
+
+   Marker shape: small circle, fill by category, dark stroke for
+   contrast against the OSM basemap (same outline rationale as the
+   vessel markers above).  Popup carries the event description
+   and category so the operator can see what TomTom thinks is
+   happening without having to follow up to a third-party site. */
+
+const TRAFFIC_POLL_MS = 60000;
+
+const INCIDENT_COLORS = {
+    1: "#cc0033",   /* Accident — deep red */
+    6: "#ffaa00",   /* Jam — amber */
+    7: "#ff7a00",   /* Lane Closed — orange */
+    8: "#a50026",   /* Road Closed — burgundy red */
+    9: "#ff7a00",   /* Road Works — orange */
+};
+const INCIDENT_DEFAULT_COLOR = "#888";
+
+const INCIDENT_CATEGORY_NAMES = {
+    0: "Unknown", 1: "Accident", 2: "Fog", 3: "Dangerous conditions",
+    4: "Rain", 5: "Ice", 6: "Jam", 7: "Lane closed", 8: "Road closed",
+    9: "Road works", 10: "Wind", 11: "Flooding", 14: "Broken-down vehicle",
+};
+
+/* Track active incident markers by a stable key so each poll can
+   add new pins, update positions, and drop stale ones — same
+   pattern as the vessel/aircraft layers.  TomTom doesn't expose
+   a stable per-incident id field, so we synthesise one from the
+   first coordinate pair + the icon category — collisions are
+   harmless (they just keep the existing marker in place). */
+const incidentMarkers = new Map();
+
+function incidentPopupHtml(props, when) {
+    const cat = (typeof props.iconCategory === "number") ? props.iconCategory : 0;
+    const catName = INCIDENT_CATEGORY_NAMES[cat] || "Incident";
+    const evtList = Array.isArray(props.events) ? props.events : [];
+    const evtDesc = evtList.length > 0 ? (evtList[0].description || "") : "";
+    const roads = Array.isArray(props.roadNumbers) ? props.roadNumbers.join(", ") : "";
+    const delaySec = (typeof props.delay === "number") ? props.delay : null;
+    const delayStr = (delaySec != null && delaySec > 0)
+        ? `${Math.round(delaySec / 60)} min`
+        : null;
+    const lengthM = (typeof props.length === "number") ? props.length : null;
+    return (
+      `<div class="aircraft-popup">` +
+        `<div class="callsign">${escapeHtml(catName)}</div>` +
+        (evtDesc ? `<div class="row"><span class="lbl">Event</span><span class="val">${escapeHtml(evtDesc)}</span></div>` : "") +
+        (roads ? `<div class="row"><span class="lbl">Road</span><span class="val">${escapeHtml(roads)}</span></div>` : "") +
+        (delayStr ? `<div class="row"><span class="lbl">Delay</span><span class="val">${delayStr}</span></div>` : "") +
+        (lengthM != null ? `<div class="row"><span class="lbl">Length</span><span class="val">${lengthM.toLocaleString()} m</span></div>` : "") +
+        (when ? `<div class="row"><span class="lbl">Fetched</span><span class="val">${when}</span></div>` : "") +
+      `</div>`
+    );
+}
+
+function incidentKey(geom, props) {
+    /* TomTom returns either Point (single coord) or LineString
+       (route segment).  Use the first coord pair as the spatial
+       half of the key; the iconCategory disambiguates two
+       incidents at the same intersection. */
+    const c = (geom && Array.isArray(geom.coordinates)) ? geom.coordinates : [];
+    const first = (Array.isArray(c[0]) && typeof c[0][0] === "number") ? c[0]
+                : (typeof c[0] === "number" ? c : [0, 0]);
+    const cat = (typeof props.iconCategory === "number") ? props.iconCategory : 0;
+    return `${first[0].toFixed(4)},${first[1].toFixed(4)}|${cat}`;
+}
+
+function renderIncidents(incidents, fetchedAt) {
+    const seen = new Set();
+    for (const inc of incidents) {
+        const props = inc.properties || {};
+        const geom  = inc.geometry || {};
+        const coords = geom.coordinates;
+        if (!coords) continue;
+        /* Pin position: first coord for Point; midpoint of the
+           coord array for LineString.  Either way TomTom uses
+           [lon, lat] order. */
+        let lon, lat;
+        if (geom.type === "LineString" && Array.isArray(coords[0])) {
+            const mid = coords[Math.floor(coords.length / 2)];
+            [lon, lat] = mid;
+        } else if (Array.isArray(coords[0])) {
+            [lon, lat] = coords[0];
+        } else {
+            [lon, lat] = coords;
+        }
+        if (typeof lat !== "number" || typeof lon !== "number") continue;
+        const key = incidentKey(geom, props);
+        seen.add(key);
+        const cat = (typeof props.iconCategory === "number") ? props.iconCategory : 0;
+        const color = INCIDENT_COLORS[cat] || INCIDENT_DEFAULT_COLOR;
+        let m = incidentMarkers.get(key);
+        if (!m) {
+            m = L.circleMarker([lat, lon], {
+                radius: 7,
+                color: MARKER_STROKE,
+                weight: 2,
+                fillColor: color,
+                fillOpacity: 0.9,
+            }).addTo(roadsIncidentLayer);
+            incidentMarkers.set(key, m);
+        } else {
+            m.setLatLng([lat, lon]);
+            m.setStyle({ fillColor: color });
+        }
+        m.bindPopup(incidentPopupHtml(props, fetchedAt));
+    }
+    /* Drop pins for incidents no longer in the feed. */
+    for (const [key, m] of incidentMarkers) {
+        if (!seen.has(key)) {
+            roadsIncidentLayer.removeLayer(m);
+            incidentMarkers.delete(key);
+        }
+    }
+}
+
+async function pollIncidents() {
+    if (!map.hasLayer(roadsIncidentLayer)) return;
+    let json;
+    try {
+        const r = await fetch("/api/traffic/incidents");
+        json = await r.json();
+    } catch (e) {
+        console.error("incidents poll failed", e);
+        return;
+    }
+    renderIncidents(json.incidents || [], json.fetched_at || "");
+}
+pollIncidents();
+setInterval(pollIncidents, TRAFFIC_POLL_MS);
 </script>
 </body>
 </html>

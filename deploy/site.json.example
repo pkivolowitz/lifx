@@ -35,5 +35,8 @@
   "_comment_maritime_buoys": "NDBC stations to scrape every 5 minutes via maritime/buoy_scraper.py (publishes to glowup/maritime/buoy/<id>; consumed by BuoyBuffer for the live map layer and BuoyLogger for postgres history backing /buoys/<station>). Each entry needs at minimum 'id'; lat/lon are required for a marker on the /maritime map; name is a friendly display label. Find station ids and lat/lons on each station's NDBC page (https://www.ndbc.noaa.gov/station_page.php?station=<id>). Stations without a realtime2 file (CMAN-only or decommissioned) are skipped silently after one warning — safe to leave configured.",
   "maritime_buoys": [
     {"id": "<NDBC station id, e.g. 42012>", "name": "<friendly name>", "lat": "<lat>", "lon": "<lon>"}
-  ]
+  ],
+
+  "_comment_traffic_radius_km": "Half-side of the bounding box used by the /roads page's TomTom incidents query, centered on maritime_reference. 50 km covers a metro-sized area; raise for a wider region or lower to stay tighter on the immediate viewport. Cache hit rate is highest when this matches actual viewing — operators rarely pan far from home, so a fixed bbox + caching beats per-viewport queries on a free-tier budget.",
+  "traffic_radius_km": 50
 }
