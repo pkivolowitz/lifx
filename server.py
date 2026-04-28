@@ -347,14 +347,14 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_thermal_hosts", requires_auth=False),
     _Route("GET", ("api", "thermal", "readings"),
            "_handle_get_thermal_readings", requires_auth=False),
-    # /meters dashboard retired 2026-04-27 alongside the pi-sensor-01
+    # /meters dashboard retired 2026-04-27 alongside the bert
     # mission swap to ADS-B (sub-GHz capture stopped; no fresh
     # telemetry).  handlers/meters.py + static/meters.html removed
     # in the same change.  Postgres meter_observations history kept;
     # query directly if the data ever matters.
     #
     # /airwaves dashboard disabled (not deleted) for the same reason
-    # — pi-sensor-01 was its only sub-GHz scoop source.  The route
+    # — bert was its only sub-GHz scoop source.  The route
     # registrations and handler imports are commented out so /airwaves
     # 404s, but handlers/airwaves.py + infrastructure/airwaves_buffer.py
     # + static/airwaves.html are preserved in tree.  Re-enable by
@@ -447,7 +447,7 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_delete_shopping_checked", requires_auth=False),
 
     # -- SDR (software-defined radio) -----------------------------------------
-    # The /sdr generic-overview page was retired 2026-04-27 — pi-sensor-01
+    # The /sdr generic-overview page was retired 2026-04-27 — bert
     # is now ADS-B-dedicated, so the cross-protocol "what's the SDR
     # doing" view has nothing left to show.  /api/sdr/status and
     # /api/sdr/frequency endpoints kept for any callers that still
@@ -3138,7 +3138,7 @@ def main() -> None:
 
             # Meter logger — PG storage for utility-meter telemetry
             # (ITRON ERT + Neptune R900) decoded by rtl_433 on the SDR
-            # host (today: pi-sensor-01) and published over MQTT on
+            # host (today: bert) and published over MQTT on
             # glowup/meters/+ by meters/publisher.py.  Same guarded-
             # import pattern as the other loggers; ours-vs-neighbor
             # flagging is driven by /etc/glowup/meters_owned.json,

@@ -1851,7 +1851,7 @@ pollBuoys();
 setInterval(pollBuoys, BUOY_POLL_MS);
 
 /* ---------- Aircraft layer (ADS-B) ----------------------------------------
-   Source: GET /api/sdr/adsb/aircraft, fed by readsb on pi-sensor-01 →
+   Source: GET /api/sdr/adsb/aircraft, fed by readsb on bert →
    sdr/adsb.py → glowup/sdr/adsb/aircraft on the hub broker.
    Polled every 5 s — readsb writes aircraft.json every 1 s but the
    marker layer doesn't need that resolution; 5 s is more than fast

@@ -209,7 +209,7 @@ _DEFAULT_SAMPLE_RATE: str = "2048k"
 #
 # rtl_433 25.02 changed the bare names (was "ERT-SCM+", now
 # "SCMplus" — confirmed empirically from emitted JSON 2026-04-26 on
-# pi-sensor-01).  Keep the legacy strings in the table so a
+# bert).  Keep the legacy strings in the table so a
 # downgrade/upgrade of rtl_433 doesn't silently break parsing.
 _MODEL_TO_TYPE: dict[str, str] = {
     # rtl_433 25.02+ bare names
@@ -792,7 +792,7 @@ class MeterPublisher:
         :data:`_TUNE_LINE_RE`.  Payload format::
 
             {
-                "host":          "pi-sensor-01",
+                "host":          "bert",
                 "freq_MHz":      911.0,
                 "tuned_at":      1714187654.123,
                 "rotation_MHz":  [345.0, 433.92, 868.0, 911.0, 921.0],

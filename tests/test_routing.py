@@ -329,7 +329,7 @@ class TestRouteFlags(unittest.TestCase):
             # is a saved layer-preset view.  Public read-only;
             # curiosity surface, no actuation.  /sdr, /adsb, /ernie,
             # /meters dashboards retired 2026-04-27 alongside the
-            # pi-sensor-01 mission swap to ADS-B and the unified
+            # bert mission swap to ADS-B and the unified
             # sea+air map; their auth-free patterns are gone with
             # them.  /airwaves is disabled (route commented out in
             # server.py) — still public-read-only when re-enabled.
