@@ -622,11 +622,16 @@ compute_auto_start_units() {
     fi
 
     # Feature-conditional Tier A additions.
-    case " $SELECTED_FEATURES " in
-        *" kiosk "*)
-            AUTO_START_UNITS+=("kiosk-health.service" "clock-server.service")
-            ;;
-    esac
+    #
+    # NOTE: ``kiosk`` is intentionally NOT here.  The kiosk-related
+    # units (kiosk, kiosk-health, clock-server, clock-display)
+    # depend on filesystem layouts that only exist on a dedicated
+    # kiosk display host (``~/clock``, ``/opt/glowup-sensors``).
+    # Auto-starting them when the operator picks ``kiosk`` on a
+    # non-display host (e.g., the dashboard server) crashes
+    # them in a Restart=on-failure flapping loop.  They live in
+    # Tier B; the kiosk block in write_post_install_todo carries
+    # the concrete enable lines for an actual kiosk Pi.
     case " $SELECTED_FEATURES " in
         *" maritime "*)
             AUTO_START_UNITS+=("glowup-buoys.service")
@@ -785,12 +790,26 @@ EOF
 
 ### kiosk — wallclock display
 
-clock-server + kiosk-health auto-started already.  The on-screen
-wallclock itself (clock-display) needs an attached HDMI display
-and an X session.  After plugging in the monitor and confirming
-the desktop comes up:
+The kiosk units (kiosk, kiosk-health, clock-server, clock-display)
+all assume the host IS a dedicated kiosk display Pi — they expect
+``~/clock`` to exist (clock-server's WorkingDirectory) and
+``/opt/glowup-sensors/kiosk_health_sensor.py`` to be installed
+(kiosk-health's ExecStart).  None auto-start, because the
+``kiosk`` picker entry is a feature flag, not a host-role
+assertion.
 
-    sudo systemctl enable --now clock-display
+If THIS host is a kiosk display, attach the HDMI monitor first,
+make sure the X session comes up at boot, then on the kiosk-host:
+
+    # Persistent user-mode systemd (so kiosk + kiosk-health can run
+    # under the SERVICE_USER without a login session):
+    sudo loginctl enable-linger ${SERVICE_USER}
+
+    # System units for the clock backend + the on-screen display:
+    sudo systemctl enable --now clock-server clock-display
+
+    # User-mode units for the kiosk app + its watchdog:
+    systemctl --user enable --now kiosk kiosk-health
 EOF
             ;;
         power)
