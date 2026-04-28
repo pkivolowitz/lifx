@@ -1877,6 +1877,18 @@ function renderAircraft(aircraft) {
         const stale = (typeof a.seen === "number" && a.seen > ADSB_STALE_AFTER_S);
         const alpha = stale ? 0.45 : 0.95;
         const track = (typeof a.track === "number") ? a.track : null;
+        /* Visual cache key — only re-issue setIcon when the rendered
+           glyph would actually change.  Leaflet's setIcon is destructive
+           (it removes and recreates the marker DOM element), so calling
+           it on every 5 s poll for every aircraft caused a one-frame
+           DOM swap per tick that read as flicker, and as "missing" when
+           paint backpressure stretched the gap.  Track is rounded to
+           the nearest degree (CSS rotation finer than that is invisible)
+           and combined with the stale flag; setLatLng and
+           setPopupContent stay every-poll because neither touches the
+           icon DOM. */
+        const trackKey = (track == null) ? -1 : Math.round(track);
+        const visKey   = `${trackKey}|${stale ? 1 : 0}`;
         let m = aircraftMarkers.get(icao);
         if (!m) {
             m = L.marker([a.lat, a.lon], {
@@ -1884,10 +1896,14 @@ function renderAircraft(aircraft) {
                 riseOnHover: true,
             }).addTo(aircraftLayer);
             m.bindPopup(aircraftPopupHtml(a));
+            m._visKey = visKey;
             aircraftMarkers.set(icao, m);
         } else {
             m.setLatLng([a.lat, a.lon]);
-            m.setIcon(makeAircraftIcon(track, alpha));
+            if (m._visKey !== visKey) {
+                m.setIcon(makeAircraftIcon(track, alpha));
+                m._visKey = visKey;
+            }
             m.setPopupContent(aircraftPopupHtml(a));
         }
         /* Permanent label: callsign + altitude.  Skip when there's
@@ -1905,7 +1921,17 @@ function renderAircraft(aircraft) {
             const labelClass = "aircraft-label" + (stale ? " stale" : "");
             if (m.getTooltip()) {
                 m.setTooltipContent(labelHtml);
-                m.getTooltip().options.className = labelClass;
+                /* Mutating tooltip.options.className alone does NOT
+                   propagate to the rendered tooltip DOM — Leaflet only
+                   reads className at bind time.  Toggle the class on
+                   the live element directly so the .stale fade
+                   actually applies after the first bind.  Keep the
+                   options field in sync for any future re-render
+                   (e.g. layer toggle off/on). */
+                const tt = m.getTooltip();
+                tt.options.className = labelClass;
+                const ttEl = tt.getElement();
+                if (ttEl) ttEl.classList.toggle("stale", stale);
             } else {
                 m.bindTooltip(labelHtml, {
                     permanent: true,
