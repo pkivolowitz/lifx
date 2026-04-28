@@ -7,7 +7,13 @@ PyYAML>=6.0,<7.0
 # fails on Python 3.13 (its build deps' pkgutil.ImpImporter use is
 # gone in 3.12+).  Audio I/O goes through sounddevice (PortAudio
 # binding that builds clean on 3.13) below.
-openwakeword>=0.6,<1.0
+# openwakeword pinned to 0.4.x: 0.6+ depends on tflite-runtime,
+# which has NO Python 3.13 wheel upstream (all published versions
+# cap at Requires-Python<3.13).  0.4.x works clean on 3.13 via the
+# ONNX backend and matches what's actually running on the fleet
+# (hub's /home/a/venv carries 0.4.0).  Bump only when upstream
+# tflite-runtime ships a 3.13 wheel or openwakeword drops the dep.
+openwakeword>=0.4,<0.6
 faster-whisper>=1.0,<2.0
 piper-tts>=1.2,<2.0
 sounddevice>=0.4,<1.0
