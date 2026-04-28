@@ -505,7 +505,6 @@ write_secrets_file() {
 # manually after wiring the radio.
 CORE_AUTO_START_UNITS=(
     "glowup-server.service"
-    "glowup-scheduler.service"
     "glowup-keepalive.service"
 )
 
@@ -573,7 +572,6 @@ self_check() {
 
 SYSTEMD_TEMPLATES=(
     "glowup-server.service"
-    "glowup-scheduler.service"
     "glowup-keepalive.service"
     "glowup-agent.service"
     "glowup-adapter@.service"
