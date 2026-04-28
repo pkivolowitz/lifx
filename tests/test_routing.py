@@ -344,12 +344,6 @@ class TestRouteFlags(unittest.TestCase):
             # /traffic JS for the aircraft layer.  Same public
             # read-only stance as the other map data feeds.
             ("api", "sdr", "adsb", "aircraft"),
-            # Road incidents + flow-tile proxy — drives the /roads
-            # page (and the roads layer on /traffic).  Same public
-            # read-only stance; the TomTom API key never reaches
-            # the browser, and incidents/tiles carry no PII.
-            ("api", "traffic", "incidents"),
-            ("api", "traffic", "flow", "{z}", "{x}", "{y}"),
             # /buoys/<station> + history endpoints — NDBC observation
             # data, public read-only.  Same rationale as /maritime.
             ("buoys", "{station_id}"),

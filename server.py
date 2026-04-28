@@ -378,21 +378,15 @@ _ROUTES: tuple[_Route, ...] = (
     # location.pathname client-side and applies the matching preset:
     #     /maritime  vessels + buoys ON, aircraft OFF
     #     /air       aircraft ON, everything else OFF
-    #     /traffic   all ON
+    #     /traffic   maritime + air (vessels + buoys + aircraft) ON
     # Public read-only — same rationale as the rest of /api/maritime/*
     # (curiosity surface, no actuation, no operator credentials).
     _Route("GET", ("maritime",),
            "_handle_get_maritime_page", requires_auth=False),
     _Route("GET", ("air",),
            "_handle_get_maritime_page", requires_auth=False),
-    _Route("GET", ("roads",),
-           "_handle_get_maritime_page", requires_auth=False),
     _Route("GET", ("traffic",),
            "_handle_get_maritime_page", requires_auth=False),
-    _Route("GET", ("api", "traffic", "incidents"),
-           "_handle_get_traffic_incidents", requires_auth=False),
-    _Route("GET", ("api", "traffic", "flow", "{z}", "{x}", "{y}"),
-           "_handle_get_traffic_flow_tile", requires_auth=False),
     _Route("GET", ("api", "maritime", "vessels"),
            "_handle_get_maritime_vessels", requires_auth=False),
     _Route("GET", ("api", "maritime", "vessel", "{mmsi}"),
@@ -721,7 +715,9 @@ from handlers.sdr import SdrHandlerMixin
 # from handlers.airwaves import AirwavesHandlerMixin
 from handlers.maritime import MaritimeHandlerMixin
 from handlers.buoys import BuoysHandlerMixin
-from handlers.traffic import TrafficHandlerMixin
+# TrafficHandlerMixin (TomTom roads/incidents) retired 2026-04-28 —
+# integration was broken, removed entirely.  /traffic URL stayed but
+# now means "maritime + air" rather than "everything including roads".
 
 
 class GlowUpRequestHandler(
@@ -745,7 +741,6 @@ class GlowUpRequestHandler(
     # AirwavesHandlerMixin,
     MaritimeHandlerMixin,
     BuoysHandlerMixin,
-    TrafficHandlerMixin,
     http.server.BaseHTTPRequestHandler,
 ):
     """HTTP request handler for the GlowUp REST API.
@@ -3204,37 +3199,6 @@ def main() -> None:
             except Exception as exc:
                 logging.warning("Maritime buffer unavailable: %s", exc)
                 maritime_buf = None
-
-            # Traffic buffer — on-demand caching proxy for TomTom
-            # incidents + flow tiles.  Drives the /roads map (and
-            # the roads layer on /traffic).  Disabled cleanly when
-            # ``tomtom_api_key`` is absent from secrets.json — the
-            # /roads page renders, the layer just shows nothing.
-            # Center is reused from maritime_reference (one home
-            # location for the whole dashboard).  Radius is
-            # configurable via the optional site key
-            # ``traffic_radius_km`` (default 50 km).
-            try:
-                from infrastructure.traffic_buffer import (
-                    TrafficBuffer, DEFAULT_RADIUS_KM as _TT_DEFAULT_RADIUS,
-                )
-                tt_key: Any = _site.get("tomtom_api_key")
-                _ref: Any = maritime_ref if isinstance(maritime_ref, dict) else {}
-                tt_lat: Any = _ref.get("lat")
-                tt_lon: Any = _ref.get("lon")
-                tt_radius: float = float(
-                    _site.get("traffic_radius_km") or _TT_DEFAULT_RADIUS,
-                )
-                traffic_buf = TrafficBuffer(
-                    api_key=tt_key,
-                    center_lat=(float(tt_lat) if tt_lat is not None else None),
-                    center_lon=(float(tt_lon) if tt_lon is not None else None),
-                    radius_km=tt_radius,
-                )
-                GlowUpRequestHandler.traffic_buffer = traffic_buf
-            except Exception as exc:
-                logging.warning("Traffic buffer unavailable: %s", exc)
-                traffic_buf = None
 
             # Buoy buffer — current-state cache fed by
             # ``glowup/maritime/buoy/+`` (the topic the
