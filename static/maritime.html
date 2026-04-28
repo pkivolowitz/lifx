@@ -527,10 +527,16 @@ body.no-vessel-labels .leaflet-tooltip.vessel-label { display: none !important; 
     text-align: center;
     text-decoration: none;
     display: block;
-    font-size: 16px;
+    /* Unicode "⌂" (HOUSE) glyph — bigger than 16 px to match the
+       visual weight of the adjacent zoom and fullscreen buttons.
+       Switched from inline SVG 2026-04-28 because the SVG path was
+       not rendering reliably across browsers; the Unicode glyph
+       sidesteps every SVG/flex edge case and centers naturally on
+       the 30 px line-height. */
+    font-size: 22px;
+    font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
 }
 .leaflet-control-home a:hover { background-color: var(--panel-2) !important; }
-.leaflet-control-home a svg { display: block; margin: 7px auto; }
 body.no-home .leaflet-control-home { display: none !important; }
 
 /* Leaflet attribution / controls — keep them but mute the colors so
@@ -1254,15 +1260,12 @@ const HomeControl = L.Control.extend({
         a.title = "Recenter on home";
         a.setAttribute("role", "button");
         a.setAttribute("aria-label", "Recenter on home");
-        /* Inline SVG house glyph — no external asset, no font-icon
-           dependency, scales with the 16-px line baseline. */
-        a.innerHTML =
-            '<svg width="16" height="16" viewBox="0 0 16 16" ' +
-            'fill="none" stroke="currentColor" stroke-width="1.5" ' +
-            'stroke-linejoin="round" aria-hidden="true">' +
-              '<path d="M2 7.5 L8 2 L14 7.5 L14 13.5 L10 13.5 ' +
-              'L10 9.5 L6 9.5 L6 13.5 L2 13.5 Z"></path>' +
-            '</svg>';
+        /* Unicode "⌂" (HOUSE, U+2302) — single character, auto-centered
+           by line-height + text-align in the .leaflet-control-home a
+           CSS rule.  Replaced the inline SVG path on 2026-04-28 because
+           the SVG version was not rendering reliably (Safari + the
+           flex-layout history that followed the original commit). */
+        a.textContent = "⌂";
         L.DomEvent.disableClickPropagation(c);
         L.DomEvent.on(a, "click", L.DomEvent.preventDefault);
         L.DomEvent.on(a, "click", () => {
@@ -1878,20 +1881,44 @@ const ADSB_POLL_MS = 5000;
 const ADSB_STALE_AFTER_S = 60;
 const aircraftMarkers = new Map();      /* icao → Leaflet marker */
 
-/* Plane SVG path — bow tip up at heading 0°, swept-back wings,
-   tailfin notch.  Drawn in a 28×28 viewBox; CSS rotates the whole
-   glyph to point in the reported track direction. */
+/* Plane SVG paths — bow tip up at heading 0°.  Drawn in a 28×28
+   viewBox; CSS rotates the whole glyph to point in the reported
+   track direction.
+
+   PLANE_PATH        swept-back wings + tailfin notch — commercial
+                     airliner silhouette.  Default for any aircraft
+                     whose callsign doesn't match a more specific
+                     class (and for aircraft with no callsign yet).
+   SMALL_PLANE_PATH  straight wings + simple tail — single-engine
+                     prop / Cessna-ish silhouette.  Used for US
+                     general aviation (callsign /^N\d/, the FAA
+                     "November" tail-number prefix).  Rendered the
+                     same size as PLANE_PATH so they read as siblings
+                     on the map; the wing shape carries the type
+                     distinction. */
 const PLANE_PATH =
     "M14 1 L17 11 L26 16 L26 19 L17 17 L17 22 L20 25 L20 27 " +
     "L14 25 L8 27 L8 25 L11 22 L11 17 L2 19 L2 16 L11 11 Z";
+const SMALL_PLANE_PATH =
+    "M14 2 L15 11 L26 14 L26 16 L15 14 L15 21 L18 24 L18 26 " +
+    "L14 24 L10 26 L10 24 L13 21 L13 14 L2 16 L2 14 L13 11 Z";
 
-function makeAircraftIcon(track, alpha) {
+/* Detect a US general-aviation callsign: leading "N" followed by
+   one or more digits (FAA tail-number convention; the rest of the
+   tail number is letters or digits, doesn't matter for the test). */
+function isUSPrivate(flight) {
+    if (typeof flight !== "string") return false;
+    return /^N\d/.test(flight.trim());
+}
+
+function makeAircraftIcon(track, alpha, kind) {
     const sz = 22;
     const fill = `rgba(255, 217, 102, ${alpha})`;
+    const path = (kind === "small") ? SMALL_PLANE_PATH : PLANE_PATH;
     const html =
       `<div class="aircraft-glyph" style="--rot:${track || 0}deg;--alpha-fill:${fill}">` +
         `<svg viewBox="0 0 28 28" preserveAspectRatio="xMidYMid meet">` +
-          `<path d="${PLANE_PATH}"></path>` +
+          `<path d="${path}"></path>` +
         `</svg>` +
       `</div>`;
     return L.divIcon({
@@ -1965,11 +1992,17 @@ function renderAircraft(aircraft) {
            setPopupContent stay every-poll because neither touches the
            icon DOM. */
         const trackKey = (track == null) ? -1 : Math.round(track);
-        const visKey   = `${trackKey}|${stale ? 1 : 0}`;
+        /* Aircraft kind for icon selection.  US private (callsign
+           /^N\d/) gets the small-plane silhouette; everything else
+           the swept-wing default.  Kind is part of the visKey so a
+           re-render fires on the rare transition (e.g., a callsign
+           appearing for the first time after Mode-S identity decode). */
+        const kind = isUSPrivate(a.flight) ? "small" : "default";
+        const visKey  = `${trackKey}|${stale ? 1 : 0}|${kind}`;
         let m = aircraftMarkers.get(icao);
         if (!m) {
             m = L.marker([a.lat, a.lon], {
-                icon:        makeAircraftIcon(track, alpha),
+                icon:        makeAircraftIcon(track, alpha, kind),
                 riseOnHover: true,
             }).addTo(aircraftLayer);
             m.bindPopup(aircraftPopupHtml(a));
@@ -1978,7 +2011,7 @@ function renderAircraft(aircraft) {
         } else {
             m.setLatLng([a.lat, a.lon]);
             if (m._visKey !== visKey) {
-                m.setIcon(makeAircraftIcon(track, alpha));
+                m.setIcon(makeAircraftIcon(track, alpha, kind));
                 m._visKey = visKey;
             }
             m.setPopupContent(aircraftPopupHtml(a));
