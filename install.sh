@@ -328,16 +328,42 @@ install_deps() {
         warn "requirements.txt missing; skipping pip install."
         return 0
     fi
-    info "pip install -r requirements.txt …"
-    if ! "$VENV/bin/pip" install --quiet -r "$req" 2>/tmp/pip-err.$$; then
-        err "pip install failed. Last 20 lines:"
-        tail -20 /tmp/pip-err.$$ >&2
-        rm -f /tmp/pip-err.$$
-        info "fix: activate the venv and re-run the failing install by hand to see the full error."
-        exit 1
-    fi
+
+    # All installations are the same — install base + every
+    # per-feature requirements file unconditionally so the venv
+    # carries everything, regardless of which features the picker
+    # selected.  The picker only flips which services run; it does
+    # NOT prune what's available to import.  If the operator picks
+    # only "core" and later wants to enable "voice" without
+    # re-running install.sh, the imports already work.
+    #
+    # requirements-dev.txt is intentionally skipped — those are
+    # test/lint tools, not runtime imports.
+    local reqs=("$req")
+    local f
+    for f in "$REPO_ROOT"/requirements-*.txt; do
+        [ -f "$f" ] || continue
+        case "$f" in
+            *requirements-dev.txt) continue ;;
+        esac
+        reqs+=("$f")
+    done
+
+    local rfile name
+    for rfile in "${reqs[@]}"; do
+        name="${rfile##*/}"
+        info "pip install -r $name …"
+        if ! "$VENV/bin/pip" install --quiet -r "$rfile" 2>/tmp/pip-err.$$; then
+            err "pip install of $name failed. Last 20 lines:"
+            tail -20 /tmp/pip-err.$$ >&2
+            rm -f /tmp/pip-err.$$
+            info "fix: activate the venv and re-run the failing install by hand to see the full error."
+            exit 1
+        fi
+        ok "$name"
+    done
     rm -f /tmp/pip-err.$$
-    ok "base deps installed"
+    ok "all deps installed"
 }
 
 # ---------------------------------------------------------------------------
