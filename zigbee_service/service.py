@@ -845,13 +845,24 @@ def serve() -> None:
     ZigbeeHTTPHandler.z2m = z2m  # type: ignore
 
     def _shutdown(signum: int, frame: Any) -> None:
+        # Signal handlers run on the main thread, which is blocked inside
+        # server.serve_forever().  ThreadingHTTPServer.shutdown() is documented
+        # to require a *different* thread — it sets a stop flag and then waits
+        # on an event that only fires when serve_forever() returns.  Calling
+        # it from the signal handler deadlocks the main thread for 90s until
+        # systemd's DefaultTimeoutStopSec fires SIGKILL.  Spawn a daemon
+        # thread so the main thread can observe the stop flag and return.
         logger.info("Shutting down (signal %d)", signum)
-        try:
-            z2m.stop()
-            hub_publisher.stop()
-            history.close()
-        finally:
-            server.shutdown()
+
+        def _do_stop() -> None:
+            try:
+                z2m.stop()
+                hub_publisher.stop()
+                history.close()
+            finally:
+                server.shutdown()
+
+        threading.Thread(target=_do_stop, name="shutdown", daemon=True).start()
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
