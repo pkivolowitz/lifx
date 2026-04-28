@@ -445,9 +445,17 @@ write_server_config() {
         return 0
     fi
     AUTH_TOKEN="$(generate_auth_token)"
+    # The server refuses to start with an empty 'groups' section, so we
+    # ship a placeholder pointing at RFC 5737 TEST-NET-1.  The bulb is
+    # never reachable; the operator edits this section after install
+    # to list real devices.  See deploy/server.json.example for shape.
     write_etc_json "$GLOWUP_ETC/server.json" "{
   \"port\": 8420,
-  \"auth_token\": \"$AUTH_TOKEN\"
+  \"auth_token\": \"$AUTH_TOKEN\",
+  \"groups\": {
+    \"_comment\": \"PLACEHOLDER — edit to list real LIFX devices by IP, MAC, or label\",
+    \"placeholder\": [\"192.0.2.1\"]
+  }
 }" 0640 "$SERVICE_GROUP"
     ok "wrote $GLOWUP_ETC/server.json (auth_token generated)"
 }
