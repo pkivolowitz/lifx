@@ -372,6 +372,168 @@ write_features_file() {
 }
 
 # ---------------------------------------------------------------------------
+# Step 8b (Phase 2b) — write minimum /etc/glowup/ config files
+#
+# Three files land in /etc/glowup/:
+#   site.json    — hub broker, contact email, etc.  Read by glowup_site.py.
+#   server.json  — port, auth_token.  Read by server.py.
+#   secrets.json — auth_token + per-feature secret stubs.  Mode 0600.
+#
+# Values written here are operator-overridable post-install — the
+# installer never re-edits these files on a re-run unless explicitly
+# asked, so hand edits survive.  Existence-check first so we don't
+# clobber a real deployment's hand-curated config.
+# ---------------------------------------------------------------------------
+
+GLOWUP_ETC="${GLOWUP_ETC:-/etc/glowup}"
+
+# Generate a fresh URL-safe token once; reused by server.json + secrets.json.
+generate_auth_token() {
+    "$VENV/bin/python" -c \
+        'import secrets; print(secrets.token_urlsafe(32))'
+}
+
+# Write JSON via a tmp+mv so a half-write can never leave the program
+# loading partial config.  sudo + tee for /etc/glowup/ writes — the
+# directory is root-owned by convention.
+write_etc_json() {
+    local target="$1" content="$2" mode="${3:-0644}"
+    local tmp
+    tmp="$(mktemp)"
+    printf '%s\n' "$content" > "$tmp"
+    sudo install -o root -g root -m "$mode" "$tmp" "$target"
+    rm -f -- "$tmp"
+}
+
+write_site_config() {
+    hdr "Site config"
+    sudo mkdir -p "$GLOWUP_ETC"
+    if [ -f "$GLOWUP_ETC/site.json" ]; then
+        info "${C_DIM}$GLOWUP_ETC/site.json exists — leaving alone${C_RESET}"
+        return 0
+    fi
+    # Minimum viable site.json — single-host install where mosquitto and
+    # glowup-server live on the same box.  Operators with a multi-host
+    # layout edit hub_broker post-install.
+    write_etc_json "$GLOWUP_ETC/site.json" '{
+  "schema_version": 1,
+  "hub_broker": "localhost",
+  "hub_port": 1883,
+  "contact_email": "operator@example.invalid"
+}'
+    ok "wrote $GLOWUP_ETC/site.json"
+}
+
+write_server_config() {
+    if [ -f "$GLOWUP_ETC/server.json" ]; then
+        info "${C_DIM}$GLOWUP_ETC/server.json exists — leaving alone${C_RESET}"
+        # Pull existing token so secrets.json (also leave-alone-if-exists)
+        # would match if it had to be regenerated.
+        AUTH_TOKEN="$(sudo "$VENV/bin/python" -c \
+            'import json,sys; print(json.load(open("'"$GLOWUP_ETC/server.json"'"))["auth_token"])' 2>/dev/null || echo)"
+        return 0
+    fi
+    AUTH_TOKEN="$(generate_auth_token)"
+    write_etc_json "$GLOWUP_ETC/server.json" "{
+  \"port\": 8420,
+  \"auth_token\": \"$AUTH_TOKEN\"
+}"
+    ok "wrote $GLOWUP_ETC/server.json (auth_token generated)"
+}
+
+write_secrets_file() {
+    if [ -f "$GLOWUP_ETC/secrets.json" ]; then
+        info "${C_DIM}$GLOWUP_ETC/secrets.json exists — leaving alone${C_RESET}"
+        return 0
+    fi
+    # Per-feature stubs only when the feature is selected.  Real prompts
+    # for vivint / nvr / matter creds land in step 9 proper; for now we
+    # write empty strings so glowup-adapter@<feature> can at least load
+    # the file.  Operators must populate before adapters do useful work.
+    local stubs=""
+    case " $SELECTED_FEATURES " in
+        *" vivint "*) stubs="$stubs,
+  \"vivint\": {\"username\": \"\", \"password\": \"\"}" ;;
+    esac
+    case " $SELECTED_FEATURES " in
+        *" nvr "*)    stubs="$stubs,
+  \"nvr\":    {\"username\": \"\", \"password\": \"\"}" ;;
+    esac
+    case " $SELECTED_FEATURES " in
+        *" matter "*) stubs="$stubs,
+  \"matter\": {\"fabric_id\": \"\", \"setup_code\": \"\"}" ;;
+    esac
+    write_etc_json "$GLOWUP_ETC/secrets.json" "{
+  \"glowup_auth_token\": \"$AUTH_TOKEN\"$stubs
+}" 0600
+    ok "wrote $GLOWUP_ETC/secrets.json (mode 0600)"
+}
+
+# ---------------------------------------------------------------------------
+# Step 11 (Phase 2b) — enable + start units, then self-check
+#
+# Tries to enable + start every rendered unit.  Failures are EXPECTED on
+# a VM with no hardware (BLE / SDR / Zigbee services have no radios to
+# attach to) — captured as ok/fail rather than aborting.  A summary
+# table prints at the end so the operator sees exactly which features
+# came up and which need attention.
+# ---------------------------------------------------------------------------
+
+# Units the installer attempts to enable+start.  Subset of
+# SYSTEMD_TEMPLATES — leaves out templates that intrinsically need
+# hardware that wouldn't be present on a generic Linux box.  Operators
+# adding a satellite, SDR, or Zigbee host enable the relevant unit
+# manually after wiring the radio.
+CORE_AUTO_START_UNITS=(
+    "glowup-server.service"
+    "glowup-scheduler.service"
+    "glowup-keepalive.service"
+)
+
+enable_and_start_units() {
+    [ "$PLATFORM" = "linux" ] || return 0
+    hdr "Starting services"
+    local unit ok_units="" fail_units=""
+    for unit in "${CORE_AUTO_START_UNITS[@]}"; do
+        if [ ! -f "/etc/systemd/system/$unit" ]; then
+            continue
+        fi
+        if sudo systemctl enable --now "$unit" >/dev/null 2>&1; then
+            ok "$unit"
+            ok_units="$ok_units $unit"
+        else
+            warn "$unit — see: sudo journalctl -u $unit"
+            fail_units="$fail_units $unit"
+        fi
+    done
+    AUTO_STARTED_OK="$ok_units"
+    AUTO_STARTED_FAIL="$fail_units"
+}
+
+self_check() {
+    [ "$PLATFORM" = "linux" ] || return 0
+    [ -n "${AUTH_TOKEN:-}" ] || return 0
+    case " $AUTO_STARTED_OK " in *" glowup-server.service "*) ;; *) return 0 ;; esac
+    hdr "Self-check"
+    local code
+    # Five-second wait for the server's HTTP listener to bind — a fresh
+    # process needs a moment between systemctl-start and accept().
+    local i=0
+    while [ "$i" -lt 5 ]; do
+        code="$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "X-Auth-Token: $AUTH_TOKEN" \
+            "http://127.0.0.1:8420/api/home/health" 2>/dev/null || echo)"
+        if [ "$code" = "200" ]; then
+            ok "/api/home/health → 200"
+            return 0
+        fi
+        sleep 1
+        i=$((i+1))
+    done
+    warn "/api/home/health → ${code:-unreachable} after 5s"
+}
+
+# ---------------------------------------------------------------------------
 # Step 10 (Phase 2b) — render systemd unit templates
 #
 # Each .service file we install starts as installer/systemd/<unit>.template
@@ -515,8 +677,30 @@ install_systemd_units() {
     done
 
     info ""
-    info "${C_DIM}Staged at $stage_dir.  sudo install + daemon-reload + enable"
-    info "lands once all .service files have .template companions.${C_RESET}"
+    info "${C_DIM}Staged at $stage_dir.${C_RESET}"
+
+    # Step 10b — sudo install rendered units into /etc/systemd/system/.
+    # Skipped if the staging directory ended up empty (every template
+    # missing) or if there's nothing for sudo to do.
+    if [ -z "$(ls -A "$stage_dir" 2>/dev/null)" ]; then
+        warn "no rendered units to install"
+        return 0
+    fi
+    info ""
+    info "Installing units to /etc/systemd/system/ (sudo)"
+    if ! sudo install -o root -g root -m 0644 \
+            "$stage_dir"/*.service /etc/systemd/system/; then
+        die "failed to install rendered units to /etc/systemd/system/"
+    fi
+    ok "units installed"
+    if ! sudo systemctl daemon-reload; then
+        die "systemctl daemon-reload failed"
+    fi
+    ok "daemon-reload done"
+    info ""
+    info "${C_DIM}Units are present but not enabled.  Step 9 (secrets) +"
+    info "step 11 (enable + start the selected feature units + self-check)"
+    info "land in follow-up commits.${C_RESET}"
 }
 
 # ---------------------------------------------------------------------------
@@ -772,7 +956,12 @@ main() {
     create_venv
     install_deps
     write_features_file
+    write_site_config
+    write_server_config
+    write_secrets_file
     install_systemd_units
+    enable_and_start_units
+    self_check
     summary
 }
 
