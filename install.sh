@@ -392,6 +392,34 @@ write_features_file() {
 
 SYSTEMD_TEMPLATES=(
     "glowup-server.service"
+    "glowup-scheduler.service"
+    "glowup-keepalive.service"
+    "glowup-agent.service"
+    "glowup-adapter@.service"
+
+    "glowup-ble-sensor.service"
+    "broker-2-glowup-ble-sensor.service"
+    "ble-sniffer.service"
+
+    "glowup-buoys.service"
+    "glowup-maritime.service"
+    "glowup-meters.service"
+
+    "glowup-adsb.service"
+    "glowup-sdr.service"
+    "glowup-x86-thermal.service"
+
+    "pi-thermal.service"
+    "legacy-pi-thermal.service"
+    "kiosk-health.service"
+
+    "zigbee2mqtt.service"
+    "glowup-zigbee-service.service"
+
+    "clock-display.service"
+    "clock-server.service"
+
+    "glowup-remote-hid.service"
 )
 
 # Render one template file by substituting ${VAR} occurrences against the
@@ -428,10 +456,28 @@ install_systemd_units() {
     [ "$PLATFORM" = "linux" ] || return 0
     hdr "Rendering systemd units"
 
+    # Core placeholders — every template references one or more of these.
     : "${SERVICE_USER:=$(id -un)}"
+    : "${SERVICE_GROUP:=$(id -gn)}"
     : "${INSTALL_ROOT:=$REPO_ROOT}"
     : "${SITE_CONFIG_DIR:=/etc/glowup}"
-    export SERVICE_USER INSTALL_ROOT VENV SITE_CONFIG_DIR
+
+    # Subsystem-specific roots — sensible fleet defaults.  Operators on
+    # non-standard layouts can override by exporting these before
+    # invoking install.sh.  See installer/systemd/README.md for the
+    # full table.
+    : "${AGENT_VENV:=$HOME/aeye_env}"
+    : "${CLOCK_ROOT:=$HOME/clock}"
+    : "${SDR_ROOT:=/opt/glowup-sdr}"
+    : "${SENSORS_ROOT:=/opt/glowup-sensors}"
+    : "${REMOTE_HID_ROOT:=/opt/glowup-remote-hid}"
+    : "${ZIGBEE_ROOT:=/opt/glowup-zigbee}"
+    : "${ZIGBEE2MQTT_ROOT:=/opt/zigbee2mqtt}"
+    : "${ERNIE_ROOT:=/opt/ernie}"
+
+    export SERVICE_USER SERVICE_GROUP INSTALL_ROOT VENV SITE_CONFIG_DIR \
+           AGENT_VENV CLOCK_ROOT SDR_ROOT SENSORS_ROOT REMOTE_HID_ROOT \
+           ZIGBEE_ROOT ZIGBEE2MQTT_ROOT ERNIE_ROOT
 
     local tpl_dir="$INSTALLER_DIR/systemd"
     local stage_dir="$REPO_ROOT/site-settings/rendered-units"

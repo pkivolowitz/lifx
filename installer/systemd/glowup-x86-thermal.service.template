@@ -1,0 +1,41 @@
+# GlowUp x86 Thermal Sensor — publishes CPU/NVMe temps to hub MQTT
+#
+# Runs on any x86 host (Intel NUC, AMD server, etc.) and publishes
+# the same ThermalReading schema as the Pi thermal sensor.  The hub's
+# thermal logger and dashboard consume both identically.
+#
+# Requires: lm-sensors, python3-paho-mqtt
+#   sudo apt install -y lm-sensors python3-paho-mqtt
+#   sudo sensors-detect --auto
+#
+# Install:
+#   sudo install -o root -g root -m 0644 \
+#       glowup-x86-thermal.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable glowup-x86-thermal
+#   sudo systemctl start glowup-x86-thermal
+
+[Unit]
+Description=GlowUp x86 Thermal Sensor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+WorkingDirectory=${SENSORS_ROOT}
+
+# Site-specific values (hub broker, port) are read at startup by the
+# program itself from ${SITE_CONFIG_DIR}/site.json (see lifx/glowup_site.py).
+# x86_thermal_sensor.py fails fast if no broker is resolved from any
+# of {site.json hub_broker, --broker, --config}.
+
+ExecStart=/usr/bin/python3 x86_thermal_sensor.py --interval 30
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glowup-x86-thermal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+[Unit]
+Description=GlowUp Worker Agent
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+WorkingDirectory=${INSTALL_ROOT}
+ExecStart=${AGENT_VENV}/bin/python3 -m distributed.worker_agent ${SITE_CONFIG_DIR}/agent.json
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glowup-agent
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

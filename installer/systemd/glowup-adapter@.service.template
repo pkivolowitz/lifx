@@ -1,0 +1,54 @@
+# Systemd template unit for GlowUp adapter processes.
+#
+# One instance per adapter type.  The %i specifier is the adapter name
+# (zigbee, vivint, nvr, printer, matter, ble).
+#
+# Install:
+#   sudo cp services/glowup-adapter@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable glowup-adapter@zigbee
+#   sudo systemctl enable glowup-adapter@vivint
+#   sudo systemctl enable glowup-adapter@nvr
+#   sudo systemctl enable glowup-adapter@printer
+#   sudo systemctl enable glowup-adapter@matter
+#   sudo systemctl enable glowup-adapter@ble
+#   sudo systemctl start glowup-adapter@zigbee
+#
+# Logs:
+#   journalctl -u glowup-adapter@zigbee -f
+#
+# All instances use the same Python module (adapters.run_adapter)
+# with --adapter set to the instance name.
+
+[Unit]
+Description=GlowUp %i Adapter
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+WorkingDirectory=${INSTALL_ROOT}
+ExecStart=${VENV}/bin/python -m adapters.run_adapter --adapter %i --config ${SITE_CONFIG_DIR}/server.json
+Restart=on-failure
+RestartSec=5
+# Adapter processes are isolated — let systemd restart them
+# independently of the main server.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glowup-%i
+
+# Hardening — adapters need network, config reads, and repo access.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=${SITE_CONFIG_DIR} ${INSTALL_ROOT}
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,49 @@
+# GlowUp BLE Sensor Daemon
+#
+# Monitors paired HomeKit BLE accessories (motion sensors, contact
+# sensors, etc.) and publishes events to MQTT for the GlowUp server
+# to act on.
+#
+# Install:
+#   sudo cp glowup-ble-sensor.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable glowup-ble-sensor
+#   sudo systemctl start glowup-ble-sensor
+#
+# Requires:
+#   - Bluetooth powered on (sudo rfkill unblock bluetooth)
+#   - ble_pairing.json with paired device(s)
+#   - MQTT broker running (mosquitto on the Pi)
+#   - bleak, cryptography, paho-mqtt pip packages
+
+[Unit]
+Description=GlowUp BLE Sensor Daemon
+After=bluetooth.target mosquitto.service network-online.target
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+WorkingDirectory=${INSTALL_ROOT}
+ExecStartPre=-/usr/sbin/rfkill unblock bluetooth
+ExecStart=/usr/bin/python3 -m ble.sensor --config ${INSTALL_ROOT}/ble_pairing.json --broker localhost
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Hardening — BLE scanner needs CAP_NET_RAW/CAP_NET_ADMIN instead of root.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=${SITE_CONFIG_DIR}
+
+[Install]
+WantedBy=multi-user.target

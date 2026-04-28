@@ -6,21 +6,34 @@ environment.
 
 ## Placeholder vocabulary (Phase 2b)
 
-| Placeholder         | Meaning                                  | Example          |
-| ------------------- | ---------------------------------------- | ---------------- |
-| `${SERVICE_USER}`   | User the unit runs as                    | `a`, `pi`        |
-| `${INSTALL_ROOT}`   | Repo checkout root                       | `/home/a/lifx`   |
-| `${VENV}`           | Python venv root                         | `/home/a/venv`   |
-| `${SITE_CONFIG_DIR}`| Site config dir                          | `/etc/glowup`    |
+| Placeholder          | Meaning                                  | Default          |
+| -------------------- | ---------------------------------------- | ---------------- |
+| `${SERVICE_USER}`    | User the unit runs as                    | `id -un`         |
+| `${SERVICE_GROUP}`   | Group the unit runs as                   | `id -gn`         |
+| `${INSTALL_ROOT}`    | Repo checkout root                       | `$REPO_ROOT`     |
+| `${VENV}`            | Python venv root                         | `${INSTALL_ROOT}/venv` |
+| `${SITE_CONFIG_DIR}` | Site config dir                          | `/etc/glowup`    |
 
-Subsystem-specific roots (added as their templates land):
+Subsystem-specific roots:
 
 | Placeholder           | Subsystem                | Default                  |
 | --------------------- | ------------------------ | ------------------------ |
-| `${ZIGBEE_ROOT}`      | `zigbee_service/`        | `/opt/glowup-zigbee`     |
+| `${AGENT_VENV}`       | `distributed/`           | `$HOME/aeye_env`         |
+| `${CLOCK_ROOT}`       | `tools/clock/`           | `$HOME/clock`            |
 | `${SDR_ROOT}`         | `sdr/`                   | `/opt/glowup-sdr`        |
 | `${SENSORS_ROOT}`     | `contrib/sensors/`       | `/opt/glowup-sensors`    |
 | `${REMOTE_HID_ROOT}`  | `tools/remote_hid/`      | `/opt/glowup-remote-hid` |
+| `${ZIGBEE_ROOT}`      | `zigbee_service/`        | `/opt/glowup-zigbee`     |
+| `${ZIGBEE2MQTT_ROOT}` | Z2M (npm)                | `/opt/zigbee2mqtt`       |
+| `${ERNIE_ROOT}`       | `services/ble-sniffer`   | `/opt/ernie`             |
+
+Subsystem venvs are referenced as `${SUBSYSTEM_ROOT}/venv/bin/python` —
+no separate placeholders, the venv lives under the root by convention.
+
+`User=root` is left literal in templates whose service intrinsically
+needs root for hardware capabilities (`glowup-maritime` for SDR access,
+`ble-sniffer` for HCI raw sockets).  Templates that can run as the
+install user use `${SERVICE_USER}`.
 
 ## Adding a template
 

@@ -1,0 +1,50 @@
+[Unit]
+# GlowUp Pi hardware thermal sensor.
+#
+# Publishes normalized thermal readings (SoC temp, fan RPM, throttle
+# flags, load, uptime) to the hub MQTT broker every 30 seconds on:
+#
+#     glowup/hardware/thermal/<node_id>
+#
+# Online/offline presence via LWT on:
+#
+#     glowup/node/<node_id>/status
+#
+# Source: contrib/sensors/pi_thermal_sensor.py in the lifx repo.
+# Deploy location on each Pi: ${SENSORS_ROOT}/pi_thermal_sensor.py
+# Config: ${SITE_CONFIG_DIR}/pi_thermal.conf (see pi_thermal.conf.example)
+#
+# Runtime dependency: python3-paho-mqtt (apt).
+#
+# Recreate: copy this file to /etc/systemd/system/pi-thermal.service,
+# then run:  sudo systemctl daemon-reload && sudo systemctl enable --now pi-thermal
+Description=GlowUp Pi hardware thermal sensor
+Documentation=file://${SENSORS_ROOT}/pi_thermal_sensor.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_GROUP}
+ExecStart=/usr/bin/python3 ${SENSORS_ROOT}/pi_thermal_sensor.py --config ${SITE_CONFIG_DIR}/pi_thermal.conf
+Restart=always
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+
+# Hardening — the sensor only reads sysfs, runs vcgencmd, and talks
+# to MQTT.  Lock the process surface down.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/sys /proc
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

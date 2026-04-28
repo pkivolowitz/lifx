@@ -1,0 +1,28 @@
+# Zigbee2MQTT systemd service for GlowUp.
+#
+# Install: sudo cp zigbee2mqtt.service /etc/systemd/system/
+#          sudo systemctl daemon-reload
+#          sudo systemctl enable --now zigbee2mqtt
+#
+# Requires: Zigbee2MQTT installed at ${ZIGBEE2MQTT_ROOT}
+#           SONOFF Zigbee 3.0 USB Dongle Plus (EFR32MG24) at /dev/ttyZigbee
+#           Mosquitto running on localhost:1883
+
+[Unit]
+Description=Zigbee2MQTT — Zigbee to MQTT bridge for GlowUp
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+ExecStart=/usr/bin/npm start --prefix ${ZIGBEE2MQTT_ROOT}
+WorkingDirectory=${ZIGBEE2MQTT_ROOT}
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zigbee2mqtt
+
+[Install]
+WantedBy=multi-user.target
