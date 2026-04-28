@@ -523,14 +523,13 @@ body.no-vessel-labels .leaflet-tooltip.vessel-label { display: none !important; 
     border-color: var(--border) !important;
     width: 30px;
     height: 30px;
-    line-height: 30px;
-    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     text-decoration: none;
-    display: block;
-    font-size: 16px;
 }
 .leaflet-control-home a:hover { background-color: var(--panel-2) !important; }
-.leaflet-control-home a svg { display: block; margin: 7px auto; }
+.leaflet-control-home a svg { display: block; }
 body.no-home .leaflet-control-home { display: none !important; }
 
 /* Leaflet attribution / controls — keep them but mute the colors so
