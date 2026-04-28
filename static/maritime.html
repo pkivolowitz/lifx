@@ -1378,7 +1378,7 @@ function popupHtml(v) {
       (v.source ? `<div class="row"><span class="lbl">Source</span><span class="val">${escapeHtml(v.source)}</span></div>` : "") +
       (v.status_text ? `<div class="row"><span class="lbl">Status</span><span class="val">${escapeHtml(v.status_text)}</span></div>` : "") +
       `<div class="row"><span class="lbl">Position</span><span class="val">${(v.lat||0).toFixed(5)}, ${(v.lon||0).toFixed(5)}</span></div>` +
-      (speed != null ? `<div class="row"><span class="lbl">Speed</span><span class="val">${speed.toFixed(1)} kt</span></div>` : "") +
+      (speed != null ? `<div class="row"><span class="lbl">Speed</span><span class="val">${speed.toFixed(1)} kt · ${(speed * 1.15078).toFixed(1)} mph</span></div>` : "") +
       (heading != null ? `<div class="row"><span class="lbl">Heading</span><span class="val">${heading}°</span></div>` : "") +
       (course != null && course !== heading ? `<div class="row"><span class="lbl">Course</span><span class="val">${course}°</span></div>` : "") +
       (len != null ? `<div class="row"><span class="lbl">Dimensions</span><span class="val">${len} m × ${beam != null ? beam + " m" : "—"}</span></div>` : "") +
@@ -1918,18 +1918,25 @@ function aircraftPopupHtml(a) {
     const track = (typeof a.track === "number") ? Math.round(a.track) : null;
     const gs = (typeof a.gs === "number") ? a.gs : null;
     const seen = (typeof a.seen === "number") ? a.seen : null;
+    const dist = (typeof a.distance_nmi === "number") ? a.distance_nmi : null;
     const sq = a.squawk;
     /* Transponder emergency codes — 7500 hijack, 7600 lost-comms,
        7700 general emergency.  Surface these prominently. */
     const sqEmerg = (sq === "7500" || sq === "7600" || sq === "7700");
+    /* Knots ↔ mph and nmi ↔ statute-mile share the 1.15078 factor
+       (a knot is 1 nmi/h; a nmi is 1.15078 statute miles).  Show
+       both forms in the popup so the user doesn't context-switch
+       between aviation/marine and everyday units. */
+    const KT_TO_MPH = 1.15078;
     return (
       `<div class="aircraft-popup">` +
         `<div class="callsign">${escapeHtml(cs)}</div>` +
         `<div class="icao">ICAO ${escapeHtml((a.hex || "").toUpperCase())}` +
           (sq ? ` · sq <span class="val"${sqEmerg ? ' style="color:#ff5040"' : ""}>${escapeHtml(sq)}</span>` : "") +
         `</div>` +
+        (dist != null ? `<div class="row"><span class="lbl">Distance</span><span class="val">${dist.toFixed(1)} nmi · ${(dist * KT_TO_MPH).toFixed(1)} mi</span></div>` : "") +
         (alt != null ? `<div class="row"><span class="lbl">Altitude</span><span class="val">${alt.toLocaleString()} ft</span></div>` : "") +
-        (gs != null ? `<div class="row"><span class="lbl">Speed</span><span class="val">${gs.toFixed(0)} kt</span></div>` : "") +
+        (gs != null ? `<div class="row"><span class="lbl">Speed</span><span class="val">${gs.toFixed(0)} kt · ${(gs * KT_TO_MPH).toFixed(0)} mph</span></div>` : "") +
         (track != null ? `<div class="row"><span class="lbl">Track</span><span class="val">${String(track).padStart(3, "0")}°</span></div>` : "") +
         (a.lat != null ? `<div class="row"><span class="lbl">Position</span><span class="val">${a.lat.toFixed(4)}, ${a.lon.toFixed(4)}</span></div>` : "") +
         (seen != null ? `<div class="row"><span class="lbl">Last heard</span><span class="val">${fmtAge(seen)} ago</span></div>` : "") +

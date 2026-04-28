@@ -46,14 +46,56 @@ class SdrHandlerMixin:
         """GET /api/sdr/adsb/aircraft — current aircraft from dump1090.
 
         Returns the latest aircraft list received via MQTT from the
-        ADS-B service.
+        ADS-B service, enriched with ``distance_nmi`` from the
+        site's ``maritime_reference`` lat/lon (which doubles as
+        the dashboard's home center).  Per-aircraft distance is
+        what the popup's "Distance" row reads, parallels the
+        per-vessel ``distance_nmi`` enrichment done in
+        :class:`MaritimeBuffer`.  Reference unset ⇒ field falls
+        through as null and the popup omits the row.
         """
         adsb_data: dict = getattr(self, "_adsb_aircraft", {})
-        self._send_json(200, adsb_data if adsb_data else {
-            "aircraft": [],
-            "count": 0,
-            "timestamp": time.time(),
-        })
+        if not adsb_data:
+            self._send_json(200, {
+                "aircraft": [],
+                "count": 0,
+                "timestamp": time.time(),
+            })
+            return
+
+        # Enrich with distance_nmi against the maritime reference.
+        # We copy each aircraft dict so the upstream cache remains
+        # untouched (the on-message callback re-uses the parsed
+        # JSON across many requests).  Lifted via the maritime
+        # buffer's reference + static haversine helper to avoid
+        # duplicating either piece of state.
+        ref: Any = None
+        mbuf: Any = getattr(self, "maritime_buffer", None)
+        if mbuf is not None:
+            ref = getattr(mbuf, "reference", None)
+        ref_lat: Any = ref.get("lat") if isinstance(ref, dict) else None
+        ref_lon: Any = ref.get("lon") if isinstance(ref, dict) else None
+        if ref_lat is None or ref_lon is None:
+            self._send_json(200, adsb_data)
+            return
+
+        from infrastructure.maritime_buffer import MaritimeBuffer
+        out: dict = dict(adsb_data)
+        enriched: list[dict] = []
+        for ac in adsb_data.get("aircraft", []):
+            ac2: dict = dict(ac)
+            lat: Any = ac.get("lat")
+            lon: Any = ac.get("lon")
+            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                ac2["distance_nmi"] = MaritimeBuffer._haversine_nmi(
+                    float(ref_lat), float(ref_lon),
+                    float(lat), float(lon),
+                )
+            else:
+                ac2["distance_nmi"] = None
+            enriched.append(ac2)
+        out["aircraft"] = enriched
+        self._send_json(200, out)
 
     # _handle_get_adsb_page and _handle_get_sdr_page were retired
     # 2026-04-27 — the standalone /adsb and /sdr dashboards are gone;
