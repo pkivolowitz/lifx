@@ -513,6 +513,26 @@ body.no-vessel-labels .leaflet-tooltip.vessel-label { display: none !important; 
     background-color: var(--panel-2) !important;
 }
 
+/* Recenter-on-home button — same 30×30 styling as the fullscreen and
+   zoom controls so the top-left control stack reads as one widget.
+   Hidden when the operator hasn't configured maritime_reference;
+   there is nowhere meaningful to recenter to in that case. */
+.leaflet-control-home a {
+    background-color: var(--panel) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+    width: 30px;
+    height: 30px;
+    line-height: 30px;
+    text-align: center;
+    text-decoration: none;
+    display: block;
+    font-size: 16px;
+}
+.leaflet-control-home a:hover { background-color: var(--panel-2) !important; }
+.leaflet-control-home a svg { display: block; margin: 7px auto; }
+body.no-home .leaflet-control-home { display: none !important; }
+
 /* Leaflet attribution / controls — keep them but mute the colors so
    they don't clash with the dashboard palette. */
 .leaflet-control-attribution {
@@ -588,8 +608,18 @@ body.no-vessel-labels .leaflet-tooltip.vessel-label { display: none !important; 
    ------------------------------------------------------------------ */
 
 const POLL_MS = 3000;
-const DEFAULT_CENTER = [30.69, -88.04];   /* fallback if no vessels yet */
-const DEFAULT_ZOOM = 11;
+/* Home/center for every view comes from the operator's site config
+   (/etc/glowup/site.json :: maritime_reference), stamped into the
+   page by handlers/maritime.py before </head> as window.__GLOWUP_HOME__.
+   No coords ever live in this file — the public repo is generic.
+   When the operator hasn't configured maritime_reference (or the
+   page is opened straight from disk for dev), we fall back to a
+   neutral CONUS view at zoom 4: shows the whole country, doesn't
+   privilege any specific city. */
+const HOME = (typeof window.__GLOWUP_HOME__ === "object" && window.__GLOWUP_HOME__)
+    ? window.__GLOWUP_HOME__
+    : { lat: 39.5, lon: -98.5, zoom: 4 };
+const HAVE_HOME = (typeof window.__GLOWUP_HOME__ === "object" && window.__GLOWUP_HOME__);
 
 /* Ship-type colour map.  AIS shiptype is a 0-99 integer; the
    "shiptype_text" string from AIS-catcher already groups it into
@@ -624,7 +654,7 @@ const MARKER_STROKE = "#0a1018";      /* near-black outline on every marker */
 const map = L.map("map", {
     zoomControl: true,
     attributionControl: true,
-}).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+}).setView([HOME.lat, HOME.lon], HOME.zoom);
 
 /* Base layer: OpenStreetMap, the standard reference basemap.
    Free, no key.  Polling tiles only on user pan/zoom keeps us well
@@ -1203,6 +1233,45 @@ const FullscreenControl = L.Control.extend({
     },
 });
 map.addControl(new FullscreenControl());
+
+/* Recenter-on-home control — Leaflet custom control matching the
+   built-in zoom/fullscreen buttons.  Click flies the map back to
+   the operator's home location (window.__GLOWUP_HOME__, injected
+   server-side from /etc/glowup/site.json :: maritime_reference).
+   flyTo (rather than instant setView) keeps spatial context when
+   the user has wandered far from home — they see the camera move,
+   not a teleport.  Hidden via CSS when no home is configured. */
+const HomeControl = L.Control.extend({
+    options: { position: "topleft" },
+    onAdd: function() {
+        const c = L.DomUtil.create(
+            "div",
+            "leaflet-bar leaflet-control leaflet-control-home",
+        );
+        const a = L.DomUtil.create("a", "", c);
+        a.href = "#";
+        a.title = "Recenter on home";
+        a.setAttribute("role", "button");
+        a.setAttribute("aria-label", "Recenter on home");
+        /* Inline SVG house glyph — no external asset, no font-icon
+           dependency, scales with the 16-px line baseline. */
+        a.innerHTML =
+            '<svg width="16" height="16" viewBox="0 0 16 16" ' +
+            'fill="none" stroke="currentColor" stroke-width="1.5" ' +
+            'stroke-linejoin="round" aria-hidden="true">' +
+              '<path d="M2 7.5 L8 2 L14 7.5 L14 13.5 L10 13.5 ' +
+              'L10 9.5 L6 9.5 L6 13.5 L2 13.5 Z"></path>' +
+            '</svg>';
+        L.DomEvent.disableClickPropagation(c);
+        L.DomEvent.on(a, "click", L.DomEvent.preventDefault);
+        L.DomEvent.on(a, "click", () => {
+            map.flyTo([HOME.lat, HOME.lon], HOME.zoom, { duration: 0.8 });
+        });
+        return c;
+    },
+});
+map.addControl(new HomeControl());
+if (!HAVE_HOME) document.body.classList.add("no-home");
 
 /* Recompute Leaflet's internal sizing on any layout change.  Three
    triggers:  initial rAF (defeats flex-layout race), window resize,
