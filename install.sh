@@ -35,6 +35,8 @@ FEATURE_KEYS=(
     "matter"
     "zigbee"
     "multi"
+    "maritime"
+    "adsb"
 )
 FEATURE_LABELS=(
     "LIFX light control (core)"
@@ -49,6 +51,8 @@ FEATURE_LABELS=(
     "Matter adapter"
     "Zigbee adapter (Z2M — requires USB Zigbee coordinator dongle)"
     "Multi-computer mode (split roles across additional hosts)"
+    "Maritime (NDBC buoys + AIS vessel tracking — AIS needs RTL-SDR or aisstream API key)"
+    "ADS-B aircraft tracking (requires RTL-SDR dongle at 1090 MHz)"
 )
 
 # Feature dependencies — parallel arrays of (child, parent). When child is
@@ -578,21 +582,64 @@ write_secrets_file() {
 # came up and which need attention.
 # ---------------------------------------------------------------------------
 
-# Units the installer attempts to enable+start.  Subset of
-# SYSTEMD_TEMPLATES — leaves out templates that intrinsically need
-# hardware that wouldn't be present on a generic Linux box.  Operators
-# adding a satellite, SDR, or Zigbee host enable the relevant unit
-# manually after wiring the radio.
-CORE_AUTO_START_UNITS=(
-    "glowup-server.service"
-    "glowup-keepalive.service"
-)
+# Auto-start tier policy:
+#   Tier A (this list, computed at install time)  — services that are
+#   safe to start on a fresh box because they are config-driven and have
+#   no external prerequisite (no hardware dongle, no operator-supplied
+#   secret, no paired peer).  Composition:
+#     - unconditional core: server + keepalive
+#     - platform-detected:  pi-thermal (Raspberry Pi) or glowup-x86-thermal
+#                           (other Linux) — picks one by hardware
+#     - feature-conditional:
+#         kiosk   → kiosk-health + clock-server
+#         maritime → glowup-buoys (NDBC HTTPS scraper, no radio needed)
+#
+#   Tier B (every other template the operator picked — handled by
+#   write_post_install_todo) — services that crash-loop without a
+#   paired Matter device, an SDR dongle, an aisstream API key, or
+#   similar.  Operator gets a per-feature checklist with the concrete
+#   ``systemctl enable --now <unit>`` line and an example config snippet.
+
+is_raspberry_pi() {
+    grep -qi "raspberry pi" /proc/device-tree/model 2>/dev/null && return 0
+    grep -qi "raspberry pi" /proc/cpuinfo 2>/dev/null
+}
+
+# Populates the AUTO_START_UNITS array based on PLATFORM and
+# SELECTED_FEATURES.  Must run after feature_picker, before
+# enable_and_start_units.
+compute_auto_start_units() {
+    AUTO_START_UNITS=(
+        "glowup-server.service"
+        "glowup-keepalive.service"
+    )
+
+    # Platform thermal — both templates ship; only one auto-starts.
+    if is_raspberry_pi; then
+        AUTO_START_UNITS+=("pi-thermal.service")
+    else
+        AUTO_START_UNITS+=("glowup-x86-thermal.service")
+    fi
+
+    # Feature-conditional Tier A additions.
+    case " $SELECTED_FEATURES " in
+        *" kiosk "*)
+            AUTO_START_UNITS+=("kiosk-health.service" "clock-server.service")
+            ;;
+    esac
+    case " $SELECTED_FEATURES " in
+        *" maritime "*)
+            AUTO_START_UNITS+=("glowup-buoys.service")
+            ;;
+    esac
+}
 
 enable_and_start_units() {
     [ "$PLATFORM" = "linux" ] || return 0
+    compute_auto_start_units
     hdr "Starting services"
     local unit ok_units="" fail_units=""
-    for unit in "${CORE_AUTO_START_UNITS[@]}"; do
+    for unit in "${AUTO_START_UNITS[@]}"; do
         if [ ! -f "/etc/systemd/system/$unit" ]; then
             continue
         fi
@@ -629,6 +676,322 @@ self_check() {
         i=$((i+1))
     done
     warn "/api/home/health → ${code:-unreachable} after 5s"
+}
+
+# ---------------------------------------------------------------------------
+# Step 11b — post-install TODO file
+#
+# Tier B services (anything that needs an SDR dongle, a paired Matter
+# device, an aisstream API key, a TOTP secret, etc.) deliberately did
+# not auto-start.  Build a per-feature checklist with concrete config
+# examples + the exact ``systemctl enable --now`` line, print it to
+# the terminal at install end, AND persist it to /etc/glowup/
+# POST_INSTALL_TODO.md so the operator can come back to it.
+#
+# Each block is one or more services that share a gating constraint;
+# the block lists what's needed (with example values) and the start
+# command.  Keep each block tight — five to ten lines each.
+# ---------------------------------------------------------------------------
+
+# Append a Tier B block for a feature when it's selected.  All output
+# goes to stdout; caller redirects to file + tee for terminal echo.
+_emit_todo_block_if_selected() {
+    local feature="$1"
+    case " $SELECTED_FEATURES " in
+        *" $feature "*) ;;
+        *) return 0 ;;
+    esac
+
+    case "$feature" in
+        vivint)
+            cat <<'EOF'
+
+### vivint — Vivint security (locks, alarm, sensors)
+
+Username + password are already in /etc/glowup/secrets.json (you
+entered them during install).  The adapter also needs a TOTP secret
+because Vivint requires MFA.  Pull the base32 secret off your TOTP
+authenticator app's QR code and add it:
+
+    "vivint": {
+        "username": "you@example.com",
+        "password": "<set-during-install>",
+        "totp_secret": "JBSWY3DPEHPK3PXP"
+    }
+
+Then:
+
+    sudo systemctl enable --now glowup-adapter@vivint
+    sudo systemctl status glowup-adapter@vivint
+EOF
+            ;;
+        nvr)
+            cat <<'EOF'
+
+### nvr — Reolink NVR camera feeds
+
+Username + password are already in /etc/glowup/secrets.json.  The
+adapter also needs the NVR's host/IP — add the field:
+
+    "nvr": {
+        "host": "10.0.0.50",
+        "username": "<set-during-install>",
+        "password": "<set-during-install>"
+    }
+
+Then:
+
+    sudo systemctl enable --now glowup-adapter@nvr
+EOF
+            ;;
+        voice)
+            cat <<'EOF'
+
+### voice — wake word + STT + TTS coordinator
+
+The coordinator reads /etc/glowup/satellite_config.json on start.
+Minimal example for one room (Living Room) with the openWakeWord
+"hey_glowup" model and Piper TTS:
+
+    {
+        "rooms": ["Living Room"],
+        "stt": {"engine": "faster-whisper", "model": "small.en"},
+        "wake_word": "hey_glowup",
+        "tts": {"engine": "piper", "voice": "en_US-amy-medium"},
+        "audio": {
+            "alsa_capture_device": "plughw:CARD=Mic,DEV=0",
+            "alsa_playback_device": "plughw:CARD=Speaker,DEV=0"
+        }
+    }
+
+Then:
+
+    sudo systemctl enable --now glowup-coordinator
+EOF
+            ;;
+        kiosk)
+            cat <<'EOF'
+
+### kiosk — wallclock display
+
+clock-server + kiosk-health auto-started already.  The on-screen
+wallclock itself (clock-display) needs an attached HDMI display
+and an X session.  After plugging in the monitor and confirming
+the desktop comes up:
+
+    sudo systemctl enable --now clock-display
+EOF
+            ;;
+        power)
+            cat <<'EOF'
+
+### power — Zigbee smart-plug power monitoring
+
+Needs a USB Zigbee coordinator dongle (SONOFF Zigbee 3.0 USB
+Dongle Plus is the tested one).  Plug it in, confirm it
+enumerates as /dev/ttyACM0 or /dev/serial/by-id/usb-Itead*,
+edit /opt/zigbee2mqtt/data/configuration.yaml so the serial.port
+matches, then pair your plugs through the zigbee2mqtt frontend.
+
+    sudo systemctl enable --now zigbee2mqtt
+    sudo systemctl enable --now glowup-zigbee-service
+EOF
+            ;;
+        ble)
+            cat <<'EOF'
+
+### ble — BLE temperature/humidity/motion sensors
+
+Needs a usable Bluetooth adapter (the Pi's built-in radio works;
+a USB BT500 adapter works better at distance).  Pair your ONVIS
+or compatible sensors first via:
+
+    sudo systemctl enable --now ble-sniffer
+    sudo systemctl enable --now glowup-ble-sensor
+
+The sniffer surfaces nearby BLE advertisements on
+glowup/ble/advert; pair sensors get a friendly name in
+/etc/glowup/secrets.json under the "ble_pairings" key (the
+sensor service writes them in as it observes them).
+EOF
+            ;;
+        matter)
+            cat <<'EOF'
+
+### matter — Matter adapter
+
+You need to pair Matter devices through python-matter-server
+before the matter adapter has anything to talk to.  Start the
+matter-server itself first, pair via the matter-server CLI, then
+enable the adapter:
+
+    sudo systemctl enable --now glowup-matter-server
+    # ... pair your devices using python-matter-server's CLI ...
+    sudo systemctl enable --now glowup-adapter@matter
+
+The fabric_id + setup_code in /etc/glowup/secrets.json fill in
+once pairing succeeds — leave them blank during install if you
+haven't paired anything yet.
+EOF
+            ;;
+        zigbee)
+            cat <<'EOF'
+
+### zigbee — Zigbee adapter (Z2M)
+
+Same hardware setup as the "power" feature: SONOFF Zigbee 3.0
+USB Dongle Plus.  After it enumerates and configuration.yaml's
+serial.port matches:
+
+    sudo systemctl enable --now zigbee2mqtt
+    sudo systemctl enable --now glowup-zigbee-service
+EOF
+            ;;
+        multi)
+            cat <<'EOF'
+
+### multi — distributed-compute worker mode
+
+Multi-host mode requires worker-side credentials and a coordinator
+URL.  Edit /etc/glowup/agent.json to point at the primary host:
+
+    {
+        "coordinator_url": "http://10.0.0.214:8420",
+        "agent_id": "this-host-short-name",
+        "auth_token": "<paste from primary's /etc/glowup/server.json>"
+    }
+
+Then:
+
+    sudo systemctl enable --now glowup-agent
+EOF
+            ;;
+        maritime)
+            cat <<'EOF'
+
+### maritime — NDBC buoys + AIS vessel tracking
+
+NDBC buoy scraping (glowup-buoys) is auto-started — buoy data
+should appear at /maritime within five minutes.
+
+For live AIS vessel tracking, you have two paths (use either or
+both):
+
+  (a) Local RTL-SDR via AIS-catcher (best fidelity, requires
+      hardware).  Install AIS-catcher (see lifx/maritime/README),
+      drop the station UUID into /etc/glowup/maritime.conf:
+
+          AISCATCHER_UUID=00000000-0000-0000-0000-000000000000
+
+      Then:
+
+          sudo systemctl enable --now glowup-maritime
+
+  (b) aisstream.io WebSocket bridge (no hardware, free tier
+      available at https://aisstream.io).  Drop the API key into
+      /etc/glowup/aisstream.conf:
+
+          AISSTREAM_API_KEY=<your-key>
+
+      Then:
+
+          sudo systemctl enable --now glowup-aisstream-bridge
+EOF
+            ;;
+        adsb)
+            cat <<'EOF'
+
+### adsb — ADS-B aircraft tracking
+
+Needs a 1090 MHz RTL-SDR dongle (an R820T2-based generic dongle
+works; FlightAware Pro Stick is the upgrade path).  The wiedehopf
+fork of readsb is built from source as part of this install and
+serves /run/readsb/aircraft.json; the glowup-adsb publisher
+forwards it onto MQTT for the /air dashboard.
+
+After the dongle is plugged in:
+
+    sudo systemctl enable --now readsb
+    sudo systemctl enable --now glowup-adsb
+
+Aircraft should appear at /air within ~30 s.
+EOF
+            ;;
+    esac
+}
+
+write_post_install_todo() {
+    [ "$PLATFORM" = "linux" ] || return 0
+
+    local todo_path="$GLOWUP_ETC/POST_INSTALL_TODO.md"
+    local now
+    now="$(date '+%Y-%m-%d %H:%M %Z')"
+
+    # Build the file in /tmp first, then sudo install — keeps the
+    # write atomic and avoids a partial file on interrupt.
+    local tmp
+    tmp="$(mktemp -t glowup-post-install.XXXXXX)"
+
+    {
+        cat <<EOF
+# GlowUp post-install TODO
+
+Generated by install.sh at $now.
+Selected features: $SELECTED_FEATURES
+
+## What's running already
+
+These services started automatically — they have no external
+prerequisite (no hardware dongle, no operator-supplied secret):
+
+EOF
+        local u
+        for u in "${AUTO_START_UNITS[@]}"; do
+            printf "  - %s\n" "$u"
+        done
+
+        cat <<'EOF'
+
+## Tier B services — start when ready
+
+Each block below covers one selected feature whose service did
+NOT auto-start because it needs hardware, a paired peer, or a
+secret you'll add yourself.  Configs are concrete examples —
+adjust the values, not the shape.
+EOF
+
+        # Order mirrors FEATURE_KEYS so the file's per-feature
+        # sections appear in the same order as the picker menu.
+        _emit_todo_block_if_selected "vivint"
+        _emit_todo_block_if_selected "nvr"
+        _emit_todo_block_if_selected "voice"
+        _emit_todo_block_if_selected "kiosk"
+        _emit_todo_block_if_selected "power"
+        _emit_todo_block_if_selected "ble"
+        _emit_todo_block_if_selected "matter"
+        _emit_todo_block_if_selected "zigbee"
+        _emit_todo_block_if_selected "multi"
+        _emit_todo_block_if_selected "maritime"
+        _emit_todo_block_if_selected "adsb"
+
+        cat <<EOF
+
+---
+
+This file lives at $todo_path.  Re-run install.sh to regenerate
+it (the installer overwrites it each run); manual edits will be
+lost.  For the per-service classification rationale (why these
+are Tier B and not auto-started) see installer/DESIGN.md.
+EOF
+    } > "$tmp"
+
+    sudo install -o root -g "$SERVICE_GROUP" -m 0644 "$tmp" "$todo_path"
+    rm -f "$tmp"
+
+    hdr "Post-install TODO"
+    info "Wrote $todo_path"
+    info ""
+    cat "$todo_path"
 }
 
 # ---------------------------------------------------------------------------
@@ -1060,6 +1423,7 @@ main() {
     install_systemd_units
     enable_and_start_units
     self_check
+    write_post_install_todo
     summary
 }
 
