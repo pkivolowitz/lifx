@@ -36,6 +36,13 @@ Description=GlowUp Pi hardware thermal sensor
 Documentation=file://${INSTALL_ROOT}/contrib/sensors/pi_thermal_sensor.py
 After=network-online.target
 Wants=network-online.target
+# Order after the local mosquitto broker if it is installed on this host.
+# After= is a no-op when the named unit does not exist, so this stays
+# safe on hosts whose pi-thermal connects to a remote broker (mbclock,
+# pi-sensor-01, ernie). On hub/broker-2, where mosquitto IS local, this
+# eliminates the first-boot "Connection refused" race that Restart=always
+# previously masked at +10s.
+After=mosquitto.service
 
 [Service]
 Type=simple
