@@ -1,9 +1,14 @@
 [Unit]
 Description=GlowUp Zigbee Service — HTTP + MQTT bridge to Z2M
 Documentation=https://github.com/perrykivolowitz/lifx
-# Depends on the local mosquitto that Z2M publishes to.
-Wants=mosquitto.service
-After=mosquitto.service network-online.target
+# Z2M publishes to the hub broker directly (post-2026-04-28
+# broker-2-mosquitto retirement), so this service has no
+# co-located mosquitto dependency.  Operator-supplied
+# GLZ_Z2M_BROKER environment variable (defaults to localhost in
+# this template; override via drop-in at /etc/systemd/system/
+# glowup-zigbee-service.service.d/*.conf for the hub-broker
+# topology used on broker-2) controls the target.
+After=network-online.target
 Wants=network-online.target
 
 [Service]
