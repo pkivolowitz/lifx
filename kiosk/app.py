@@ -60,8 +60,13 @@ logger: logging.Logger = logging.getLogger("glowup.kiosk")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Target frame rate — 10 FPS is plenty for a dashboard.
-FPS: int = 10
+# Target frame rate.  A wall clock's slowest tile updates once per
+# minute and the fastest (the time string) once per second, so 1 FPS
+# is the right floor — full-screen Pygame software blits at 10×/s
+# were burning ~50% of a Pi 4 core for visually identical output.
+# Bump this up only if a future tile actually animates sub-second
+# (smooth-sweep second hand, fade transitions, etc.).
+FPS: int = 1
 
 # Night mode hours (inclusive).  22:00–06:00.
 NIGHT_START: int = 22
