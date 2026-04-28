@@ -372,6 +372,89 @@ write_features_file() {
 }
 
 # ---------------------------------------------------------------------------
+# Step 10 (Phase 2b) — render systemd unit templates
+#
+# Each .service file we install starts as installer/systemd/<unit>.template
+# with ${VAR} placeholders.  render_template substitutes from the current
+# environment using a tiny Python heredoc (Python is already a hard
+# dependency, sed gets ugly with values that contain its delimiters).
+#
+# Variable map for Phase 2b:
+#   ${SERVICE_USER}     — user the unit runs as
+#   ${INSTALL_ROOT}     — repo checkout (e.g., /home/a/lifx)
+#   ${VENV}             — Python venv (e.g., /home/a/venv)
+#   ${SITE_CONFIG_DIR}  — site config root (default /etc/glowup)
+#
+# Currently scoped to one proven template (glowup-server.service); the
+# remaining .service files in the repo will get .template companions in
+# follow-up commits before Phase 2b is complete.
+# ---------------------------------------------------------------------------
+
+SYSTEMD_TEMPLATES=(
+    "glowup-server.service"
+)
+
+# Render one template file by substituting ${VAR} occurrences against the
+# current environment.  Fails loud (exit 1) on any unset variable rather
+# than emitting a unit file with literal ${FOO} text — that would only
+# surface as a confusing systemd ExecStart error later.
+render_template() {
+    local tpl="$1" out="$2"
+    python3 - "$tpl" "$out" <<'PY'
+import os, re, sys
+src, dst = sys.argv[1], sys.argv[2]
+with open(src) as f:
+    content = f.read()
+def sub(m):
+    var = m.group(1)
+    val = os.environ.get(var)
+    if val is None:
+        sys.stderr.write(
+            "render_template: required variable ${%s} not set\n" % var
+        )
+        sys.exit(1)
+    return val
+content = re.sub(r'\$\{([A-Z_][A-Z0-9_]*)\}', sub, content)
+with open(dst, 'w') as f:
+    f.write(content)
+PY
+}
+
+# Render every template in SYSTEMD_TEMPLATES into site-settings/rendered-units/.
+# Linux only (macOS uses launchd plists, handled separately).  Does not yet
+# copy into /etc/systemd/system/ or daemon-reload — that lands once the full
+# template set is converted.
+install_systemd_units() {
+    [ "$PLATFORM" = "linux" ] || return 0
+    hdr "Rendering systemd units"
+
+    : "${SERVICE_USER:=$(id -un)}"
+    : "${INSTALL_ROOT:=$REPO_ROOT}"
+    : "${SITE_CONFIG_DIR:=/etc/glowup}"
+    export SERVICE_USER INSTALL_ROOT VENV SITE_CONFIG_DIR
+
+    local tpl_dir="$INSTALLER_DIR/systemd"
+    local stage_dir="$REPO_ROOT/site-settings/rendered-units"
+    mkdir -p "$stage_dir"
+
+    local unit src dst
+    for unit in "${SYSTEMD_TEMPLATES[@]}"; do
+        src="$tpl_dir/$unit.template"
+        dst="$stage_dir/$unit"
+        if [ ! -f "$src" ]; then
+            warn "missing template: $src — skipping"
+            continue
+        fi
+        render_template "$src" "$dst"
+        ok "rendered $unit"
+    done
+
+    info ""
+    info "${C_DIM}Staged at $stage_dir.  sudo install + daemon-reload + enable"
+    info "lands once all .service files have .template companions.${C_RESET}"
+}
+
+# ---------------------------------------------------------------------------
 # Step 8 — selection summary
 # ---------------------------------------------------------------------------
 
@@ -624,6 +707,7 @@ main() {
     create_venv
     install_deps
     write_features_file
+    install_systemd_units
     summary
 }
 

@@ -1,0 +1,36 @@
+# Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+# Licensed under the MIT License. See LICENSE file in the project root.
+#
+# Rendered by install.sh — do not edit the copy in /etc/systemd/system/.
+# See installer/systemd/README.md for the placeholder vocabulary.
+
+[Unit]
+Description=GlowUp REST API Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+ExecStart=${VENV}/bin/python ${INSTALL_ROOT}/server.py ${SITE_CONFIG_DIR}/server.json
+WorkingDirectory=${INSTALL_ROOT}
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glowup-server
+
+# Hardening — server needs write access to state.db and the repo tree.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=${SITE_CONFIG_DIR} ${INSTALL_ROOT}
+
+[Install]
+WantedBy=multi-user.target
