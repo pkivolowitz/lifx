@@ -422,19 +422,38 @@ SYSTEMD_TEMPLATES=(
     "glowup-remote-hid.service"
 )
 
-# Render one template file by substituting ${VAR} occurrences against the
-# current environment.  Fails loud (exit 1) on any unset variable rather
-# than emitting a unit file with literal ${FOO} text — that would only
-# surface as a confusing systemd ExecStart error later.
+# Closed whitelist of placeholder names recognised by render_template.
+# Any other ${VAR} occurrence in a template is left literal — that's how
+# systemd EnvironmentFile-resolved variables (${AISCATCHER_UUID}) and
+# shell-expanded variables in /bin/sh -c invocations (${CHROMIUM_BIN})
+# pass through to the rendered unit unchanged.
+TEMPLATE_VARS=(
+    "SERVICE_USER" "SERVICE_GROUP"
+    "INSTALL_ROOT" "VENV" "SITE_CONFIG_DIR"
+    "AGENT_VENV" "CLOCK_ROOT"
+    "SDR_ROOT" "SENSORS_ROOT" "REMOTE_HID_ROOT"
+    "ZIGBEE_ROOT" "ZIGBEE2MQTT_ROOT" "ERNIE_ROOT"
+)
+
+# Render one template file by substituting only whitelisted ${VAR}
+# occurrences against the current environment.  Fails loud (exit 1) on
+# any *whitelisted* placeholder that isn't set — emitting a unit file
+# with literal ${FOO} text for our own placeholders would only surface
+# as a confusing systemd ExecStart error later.  Non-whitelisted ${VAR}
+# tokens pass through unchanged for systemd / shell to resolve.
 render_template() {
     local tpl="$1" out="$2"
+    TEMPLATE_VARS_CSV="$(IFS=,; echo "${TEMPLATE_VARS[*]}")" \
     python3 - "$tpl" "$out" <<'PY'
 import os, re, sys
 src, dst = sys.argv[1], sys.argv[2]
+allowed = set(os.environ["TEMPLATE_VARS_CSV"].split(","))
 with open(src) as f:
     content = f.read()
 def sub(m):
     var = m.group(1)
+    if var not in allowed:
+        return m.group(0)  # leave non-whitelisted tokens literal
     val = os.environ.get(var)
     if val is None:
         sys.stderr.write(
