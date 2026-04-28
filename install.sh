@@ -393,16 +393,27 @@ generate_auth_token() {
         'import secrets; print(secrets.token_urlsafe(32))'
 }
 
-# Write JSON via a tmp+mv so a half-write can never leave the program
-# loading partial config.  sudo + tee for /etc/glowup/ writes — the
-# directory is root-owned by convention.
+# Write JSON via a tmp+install so a half-write can never leave the
+# program loading partial config.  Files in /etc/glowup/ are root-owned
+# by convention; the service group gets read on secret-bearing files
+# (server.json, secrets.json) so the unit running as ${SERVICE_USER}
+# can read them.  Defaults: root:root 0644 (no secrets).
 write_etc_json() {
-    local target="$1" content="$2" mode="${3:-0644}"
+    local target="$1" content="$2" mode="${3:-0644}" group="${4:-root}"
     local tmp
     tmp="$(mktemp)"
     printf '%s\n' "$content" > "$tmp"
-    sudo install -o root -g root -m "$mode" "$tmp" "$target"
+    sudo install -o root -g "$group" -m "$mode" "$tmp" "$target"
     rm -f -- "$tmp"
+}
+
+# Compute the install user / group up front so /etc/glowup/ files can
+# be written with correct group ownership before systemd-unit rendering
+# (which also depends on these).  Idempotent.
+compute_service_identity() {
+    : "${SERVICE_USER:=$(id -un)}"
+    : "${SERVICE_GROUP:=$(id -gn)}"
+    export SERVICE_USER SERVICE_GROUP
 }
 
 write_site_config() {
@@ -437,7 +448,7 @@ write_server_config() {
     write_etc_json "$GLOWUP_ETC/server.json" "{
   \"port\": 8420,
   \"auth_token\": \"$AUTH_TOKEN\"
-}"
+}" 0640 "$SERVICE_GROUP"
     ok "wrote $GLOWUP_ETC/server.json (auth_token generated)"
 }
 
@@ -465,8 +476,8 @@ write_secrets_file() {
     esac
     write_etc_json "$GLOWUP_ETC/secrets.json" "{
   \"glowup_auth_token\": \"$AUTH_TOKEN\"$stubs
-}" 0600
-    ok "wrote $GLOWUP_ETC/secrets.json (mode 0600)"
+}" 0640 "$SERVICE_GROUP"
+    ok "wrote $GLOWUP_ETC/secrets.json (root:$SERVICE_GROUP, 0640)"
 }
 
 # ---------------------------------------------------------------------------
@@ -637,9 +648,7 @@ install_systemd_units() {
     [ "$PLATFORM" = "linux" ] || return 0
     hdr "Rendering systemd units"
 
-    # Core placeholders — every template references one or more of these.
-    : "${SERVICE_USER:=$(id -un)}"
-    : "${SERVICE_GROUP:=$(id -gn)}"
+    # SERVICE_USER / SERVICE_GROUP set earlier by compute_service_identity().
     : "${INSTALL_ROOT:=$REPO_ROOT}"
     : "${SITE_CONFIG_DIR:=/etc/glowup}"
 
@@ -697,10 +706,6 @@ install_systemd_units() {
         die "systemctl daemon-reload failed"
     fi
     ok "daemon-reload done"
-    info ""
-    info "${C_DIM}Units are present but not enabled.  Step 9 (secrets) +"
-    info "step 11 (enable + start the selected feature units + self-check)"
-    info "land in follow-up commits.${C_RESET}"
 }
 
 # ---------------------------------------------------------------------------
@@ -725,9 +730,12 @@ summary() {
     info ""
     info "venv: $VENV"
     info "config: $SITE_SETTINGS/features.json"
-    if [ "$PLATFORM" = "linux" ]; then
+    if [ "$PLATFORM" = "linux" ] && [ -n "${AUTO_STARTED_OK:-}" ]; then
         info ""
-        info "${C_DIM}Phase 2b will add secrets.json, systemd units, self-check.${C_RESET}"
+        info "Started: $AUTO_STARTED_OK"
+        if [ -n "${AUTO_STARTED_FAIL:-}" ]; then
+            info "Failed:  $AUTO_STARTED_FAIL"
+        fi
     fi
 }
 
@@ -956,6 +964,7 @@ main() {
     create_venv
     install_deps
     write_features_file
+    compute_service_identity
     write_site_config
     write_server_config
     write_secrets_file
