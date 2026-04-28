@@ -1,0 +1,29 @@
+# GlowUp Voice Satellite — per-host wake-word listener + utterance
+# capture.  Talks to the coordinator (hub-side) over MQTT.  One
+# satellite instance per room; per-host configuration (room name,
+# wake-word model, mic device, broker host) lives in the operator-
+# managed satellite_config.json (NOT in this unit file — the unit
+# is identical across rooms, only the config differs).
+#
+# Logs:
+#   sudo journalctl -u glowup-satellite -f
+
+[Unit]
+Description=GlowUp Voice Satellite
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+WorkingDirectory=${INSTALL_ROOT}
+Environment=PYTHONPATH=${INSTALL_ROOT}
+ExecStart=${VENV}/bin/python3 -m voice.satellite.daemon --config /home/${SERVICE_USER}/satellite_config.json
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glowup-satellite
+
+[Install]
+WantedBy=multi-user.target

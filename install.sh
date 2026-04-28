@@ -747,26 +747,37 @@ EOF
         voice)
             cat <<'EOF'
 
-### voice — wake word + STT + TTS coordinator
+### voice — wake word + STT + TTS
 
-The coordinator reads /etc/glowup/satellite_config.json on start.
-Minimal example for one room (Living Room) with the openWakeWord
-"hey_glowup" model and Piper TTS:
+Voice has two roles, often on different hosts:
+
+  glowup-coordinator   Central STT+TTS+intent dispatch.  ONE per
+                       household; typically lives on a beefy Linux
+                       host or a Mac (on macOS this is a launchd
+                       daemon, not a systemd unit — see
+                       glowup-infra/services/launchd/).
+  glowup-satellite     Per-room wake-word listener + utterance
+                       capture.  ONE per room.  Reads
+                       ~/satellite_config.json.
+
+Both share configuration shape; the satellite's config goes at
+~/satellite_config.json (NOT /etc/glowup/) for the SERVICE_USER:
 
     {
-        "rooms": ["Living Room"],
-        "stt": {"engine": "faster-whisper", "model": "small.en"},
+        "room": "Living Room",
         "wake_word": "hey_glowup",
-        "tts": {"engine": "piper", "voice": "en_US-amy-medium"},
+        "wake_word_model": "/home/a/models/hey_glowup.onnx",
+        "broker": {"host": "10.0.0.214", "port": 1883},
         "audio": {
             "alsa_capture_device": "plughw:CARD=Mic,DEV=0",
             "alsa_playback_device": "plughw:CARD=Speaker,DEV=0"
         }
     }
 
-Then:
+Then, depending on which role this host plays:
 
-    sudo systemctl enable --now glowup-coordinator
+    sudo systemctl enable --now glowup-coordinator   # central role
+    sudo systemctl enable --now glowup-satellite     # per-room role
 EOF
             ;;
         kiosk)
@@ -1045,6 +1056,8 @@ SYSTEMD_TEMPLATES=(
     "clock-server.service"
 
     "glowup-remote-hid.service"
+
+    "glowup-satellite.service"
 )
 
 # Closed whitelist of placeholder names recognised by render_template.
@@ -1066,13 +1079,22 @@ TEMPLATE_VARS=(
 # with literal ${FOO} text for our own placeholders would only surface
 # as a confusing systemd ExecStart error later.  Non-whitelisted ${VAR}
 # tokens pass through unchanged for systemd / shell to resolve.
+# Marker installed at the top of every unit install.sh renders.  The
+# stale-unit cleanup uses this to decide what it owns: any unit file
+# carrying this marker is fair game for cleanup; any unit lacking it
+# (operator-installed, glowup-infra-deployed, OS-shipped, etc.) is
+# left strictly alone, even if its name matches the glowup-* family.
+LIFX_INSTALLER_MARKER="# X-Managed-By: lifx-installer"
+
 render_template() {
     local tpl="$1" out="$2"
+    LIFX_INSTALLER_MARKER="$LIFX_INSTALLER_MARKER" \
     TEMPLATE_VARS_CSV="$(IFS=,; echo "${TEMPLATE_VARS[*]}")" \
     python3 - "$tpl" "$out" <<'PY'
 import os, re, sys
 src, dst = sys.argv[1], sys.argv[2]
 allowed = set(os.environ["TEMPLATE_VARS_CSV"].split(","))
+marker = os.environ["LIFX_INSTALLER_MARKER"]
 with open(src) as f:
     content = f.read()
 def sub(m):
@@ -1087,6 +1109,11 @@ def sub(m):
         sys.exit(1)
     return val
 content = re.sub(r'\$\{([A-Z_][A-Z0-9_]*)\}', sub, content)
+# Prepend the ownership marker as the first line so the cleanup pass
+# can identify install.sh-rendered units with a single grep.  The
+# marker is a systemd comment (lines starting with # are ignored), so
+# it has zero effect on unit semantics.
+content = marker + "\n" + content
 with open(dst, 'w') as f:
     f.write(content)
 PY
@@ -1096,6 +1123,76 @@ PY
 # Linux only (macOS uses launchd plists, handled separately).  Does not yet
 # copy into /etc/systemd/system/ or daemon-reload — that lands once the full
 # template set is converted.
+# Remove install.sh-marked units on disk whose template no longer
+# exists.  Runs AFTER install_systemd_units (so the new templates are
+# landed first and a failed render can't accidentally take down
+# working units) and BEFORE enable_and_start_units (so a stale one
+# we're about to remove isn't first kicked into running state).
+#
+# Authority is via the LIFX_INSTALLER_MARKER comment that
+# render_template prepends to every unit install.sh produces.  A unit
+# carrying the marker is install.sh's to manage; one without the
+# marker (operator-installed, glowup-infra-deployed, OS-shipped,
+# etc.) is left strictly alone — even if its name matches the
+# glowup-* pattern.  This lets glowup-infra cohabit /etc/systemd/
+# system/ with services like glowup-morning-report.service without
+# install.sh ever taking authority over them.
+#
+# Template-instance handling: a marked unit named
+# ``glowup-adapter@vivint.service`` legitimately matches the
+# ``glowup-adapter@.service`` template in SYSTEMD_TEMPLATES, so it is
+# NOT stale.  We collapse the instance argument before checking.
+cleanup_stale_units() {
+    [ "$PLATFORM" = "linux" ] || return 0
+
+    local owned_set="" tpl
+    for tpl in "${SYSTEMD_TEMPLATES[@]}"; do
+        owned_set="$owned_set $tpl"
+    done
+
+    local stale=() found base instance_template
+    for found in /etc/systemd/system/*.service; do
+        [ -e "$found" ] || continue
+
+        # Honor the ownership marker.  Anything without it is not
+        # ours; never touch.
+        if ! head -1 "$found" 2>/dev/null | grep -qF "$LIFX_INSTALLER_MARKER"; then
+            continue
+        fi
+
+        base="${found##*/}"
+
+        case " $owned_set " in
+            *" $base "*) continue ;;
+        esac
+
+        instance_template="$(printf '%s' "$base" \
+            | sed -E 's/^(.*@)[^.]+(\.service)$/\1\2/')"
+        if [ "$instance_template" != "$base" ]; then
+            case " $owned_set " in
+                *" $instance_template "*) continue ;;
+            esac
+        fi
+
+        stale+=("$base")
+    done
+
+    if [ "${#stale[@]}" -eq 0 ]; then
+        return 0
+    fi
+
+    hdr "Stale unit cleanup"
+    info "Marked units below have no template in this install — removing:"
+    local unit
+    for unit in "${stale[@]}"; do
+        info "  - $unit"
+        sudo systemctl disable --now "$unit" >/dev/null 2>&1 || true
+        sudo rm -f "/etc/systemd/system/$unit"
+    done
+    sudo systemctl daemon-reload >/dev/null 2>&1 || true
+    ok "removed ${#stale[@]} stale unit(s)"
+}
+
 install_systemd_units() {
     [ "$PLATFORM" = "linux" ] || return 0
     hdr "Rendering systemd units"
@@ -1421,6 +1518,7 @@ main() {
     write_server_config
     write_secrets_file
     install_systemd_units
+    cleanup_stale_units
     enable_and_start_units
     self_check
     write_post_install_todo
