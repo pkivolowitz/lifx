@@ -460,28 +460,108 @@ write_server_config() {
     ok "wrote $GLOWUP_ETC/server.json (auth_token generated)"
 }
 
+# Read a value from stdin with a labelled prompt and an optional
+# explanation hint.  Hidden mode (no echo) for passwords.  Pressing
+# enter on a blank line accepts the empty string — operators who want
+# to skip a credential and edit secrets.json by hand later can do so.
+prompt_secret() {
+    local label="$1" hint="$2" hidden="${3:-no}" var
+    info "  ${C_DIM}$hint${C_RESET}"
+    if [ "$hidden" = "yes" ]; then
+        printf "  %s: " "$label"
+        # -s suppresses echo; explicit newline after for readability.
+        read -rs var
+        printf "\n"
+    else
+        printf "  %s: " "$label"
+        read -r var
+    fi
+    printf '%s' "$var"
+}
+
+# JSON-escape a string value for direct embedding in a JSON literal.
+# Handles \, ", and control characters; passes UTF-8 through.
+json_escape() {
+    "$VENV/bin/python" -c \
+        'import json, sys; sys.stdout.write(json.dumps(sys.stdin.read()))' \
+        <<< "$1"
+}
+
 write_secrets_file() {
     if [ -f "$GLOWUP_ETC/secrets.json" ]; then
         info "${C_DIM}$GLOWUP_ETC/secrets.json exists — leaving alone${C_RESET}"
         return 0
     fi
-    # Per-feature stubs only when the feature is selected.  Real prompts
-    # for vivint / nvr / matter creds land in step 9 proper; for now we
-    # write empty strings so glowup-adapter@<feature> can at least load
-    # the file.  Operators must populate before adapters do useful work.
-    local stubs=""
-    case " $SELECTED_FEATURES " in
-        *" vivint "*) stubs="$stubs,
+    hdr "Secrets"
+    # Non-interactive (piped, CI, automated VM test) — skip the prompts
+    # and write stub creds so the file exists with the right schema.
+    # Operator edits secrets.json after install or re-runs interactively.
+    if [ ! -t 0 ]; then
+        info "${C_DIM}stdin is not a tty — writing stubs.  Edit $GLOWUP_ETC/secrets.json after install.${C_RESET}"
+        local stubs=""
+        case " $SELECTED_FEATURES " in
+            *" vivint "*) stubs="$stubs,
   \"vivint\": {\"username\": \"\", \"password\": \"\"}" ;;
-    esac
-    case " $SELECTED_FEATURES " in
-        *" nvr "*)    stubs="$stubs,
-  \"nvr\":    {\"username\": \"\", \"password\": \"\"}" ;;
-    esac
-    case " $SELECTED_FEATURES " in
-        *" matter "*) stubs="$stubs,
+        esac
+        case " $SELECTED_FEATURES " in
+            *" nvr "*) stubs="$stubs,
+  \"nvr\": {\"username\": \"\", \"password\": \"\"}" ;;
+        esac
+        case " $SELECTED_FEATURES " in
+            *" matter "*) stubs="$stubs,
   \"matter\": {\"fabric_id\": \"\", \"setup_code\": \"\"}" ;;
+        esac
+        write_etc_json "$GLOWUP_ETC/secrets.json" "{
+  \"glowup_auth_token\": \"$AUTH_TOKEN\"$stubs
+}" 0640 "$SERVICE_GROUP"
+        ok "wrote $GLOWUP_ETC/secrets.json (stubs; root:$SERVICE_GROUP, 0640)"
+        return 0
+    fi
+    info "Enter credentials for each enabled feature.  Press Enter to leave blank;"
+    info "you can edit $GLOWUP_ETC/secrets.json post-install (mode 0640) at any time."
+    info ""
+
+    local stubs=""
+
+    case " $SELECTED_FEATURES " in
+        *" vivint "*)
+            info "${C_BOLD}Vivint${C_RESET}"
+            local v_user v_pass
+            v_user="$(prompt_secret "username" "your Vivint SkyControl panel login" no)"
+            v_pass="$(prompt_secret "password" "Vivint password (no-echo)" yes)"
+            stubs="$stubs,
+  \"vivint\": {\"username\": $(json_escape "$v_user"), \"password\": $(json_escape "$v_pass")}"
+            info ""
+            ;;
     esac
+
+    case " $SELECTED_FEATURES " in
+        *" nvr "*)
+            info "${C_BOLD}NVR${C_RESET}"
+            local n_user n_pass
+            n_user="$(prompt_secret "username" "admin user you set when configuring the NVR" no)"
+            n_pass="$(prompt_secret "password" "NVR admin password (no-echo)" yes)"
+            stubs="$stubs,
+  \"nvr\": {\"username\": $(json_escape "$n_user"), \"password\": $(json_escape "$n_pass")}"
+            info ""
+            ;;
+    esac
+
+    case " $SELECTED_FEATURES " in
+        *" matter "*)
+            info "${C_BOLD}Matter${C_RESET}"
+            info "  ${C_DIM}fabric_id and setup_code are produced by python-matter-server"
+            info "  on first device pairing — leave blank now and edit later, or paste"
+            info "  values you already have.${C_RESET}"
+            local m_fabric m_setup
+            m_fabric="$(prompt_secret "fabric_id" "Matter fabric identifier (or blank)" no)"
+            m_setup="$(prompt_secret "setup_code" "Matter pairing setup code (or blank)" yes)"
+            stubs="$stubs,
+  \"matter\": {\"fabric_id\": $(json_escape "$m_fabric"), \"setup_code\": $(json_escape "$m_setup")}"
+            info ""
+            ;;
+    esac
+
     write_etc_json "$GLOWUP_ETC/secrets.json" "{
   \"glowup_auth_token\": \"$AUTH_TOKEN\"$stubs
 }" 0640 "$SERVICE_GROUP"
@@ -575,6 +655,9 @@ SYSTEMD_TEMPLATES=(
     "glowup-keepalive.service"
     "glowup-agent.service"
     "glowup-adapter@.service"
+    "glowup-coordinator.service"
+    "glowup-matter-server.service"
+    "glowup-aisstream-bridge.service"
 
     "glowup-ble-sensor.service"
     "broker-2-glowup-ble-sensor.service"

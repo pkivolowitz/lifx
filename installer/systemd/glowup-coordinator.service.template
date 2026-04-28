@@ -1,0 +1,44 @@
+# Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+# Licensed under the MIT License. See LICENSE file in the project root.
+#
+# Rendered by install.sh — do not edit the copy in /etc/systemd/system/.
+# See installer/systemd/README.md for the placeholder vocabulary.
+#
+# Voice coordinator daemon — listens on MQTT for satellite wake-ups and
+# transcripts, runs the intent matcher, and dispatches commands.  On a
+# single-host Pi install this lives on the same box as glowup-server;
+# multi-box installs put it on whichever node has the audio hardware.
+
+[Unit]
+Description=GlowUp Voice Coordinator
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_GROUP}
+WorkingDirectory=${INSTALL_ROOT}
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=${VENV}/bin/python -m voice.coordinator.daemon --config ${SITE_CONFIG_DIR}/coordinator_config.json
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glowup-coordinator
+
+# Hardening — coordinator reads config + secrets, talks to MQTT, and
+# spawns no child processes.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=${SITE_CONFIG_DIR} ${INSTALL_ROOT}
+
+[Install]
+WantedBy=multi-user.target

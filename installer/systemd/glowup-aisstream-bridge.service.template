@@ -1,0 +1,45 @@
+# Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+# Licensed under the MIT License. See LICENSE file in the project root.
+#
+# Rendered by install.sh — do not edit the copy in /etc/systemd/system/.
+# See installer/systemd/README.md for the placeholder vocabulary.
+#
+# AISstream.io WebSocket bridge — pulls a global AIS feed from
+# aisstream.io and republishes selected messages to the local
+# mosquitto.  Optional companion to glowup-maritime (which decodes
+# local RTL-SDR AIS); the bridge fills in coverage for vessels outside
+# our antenna range.  API token lives in ${SITE_CONFIG_DIR}/secrets.json
+# under the maritime / aisstream key.
+
+[Unit]
+Description=GlowUp aisstream.io WebSocket bridge
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_GROUP}
+WorkingDirectory=${INSTALL_ROOT}
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=${VENV}/bin/python -m maritime.aisstream_bridge --log-level INFO
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glowup-aisstream-bridge
+
+# Hardening — bridge does HTTPS + MQTT, no local writes outside config.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=${SITE_CONFIG_DIR}
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,42 @@
+# Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
+# Licensed under the MIT License. See LICENSE file in the project root.
+#
+# Rendered by install.sh — do not edit the copy in /etc/systemd/system/.
+# See installer/systemd/README.md for the placeholder vocabulary.
+#
+# Matter server — runs python-matter-server, the CHIP/Matter fabric
+# daemon used by glowup-adapter@matter.  Installed via pip
+# (python-matter-server) into ${VENV}; binary is ${VENV}/bin/matter-server.
+# Storage path holds the fabric credentials and is created on first run.
+
+[Unit]
+Description=GlowUp Matter Server (python-matter-server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_GROUP}
+WorkingDirectory=${INSTALL_ROOT}
+ExecStart=${VENV}/bin/matter-server --storage-path ${SITE_CONFIG_DIR}/matter --port 5580
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=glowup-matter-server
+
+# Hardening — matter-server needs writable storage for fabric state.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=${SITE_CONFIG_DIR}
+
+[Install]
+WantedBy=multi-user.target
