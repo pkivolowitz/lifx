@@ -51,8 +51,7 @@ The repo includes service files for the most common components:
 
 | File | Component | Command |
 |------|-----------|---------|
-| `glowup-server.service` | REST API server | `server.py server.json` |
-| `glowup-scheduler.service` | Standalone scheduler | `scheduler.py /etc/glowup/schedule.json` |
+| `glowup-server.service` | REST API server (also hosts the in-process scheduler) | `server.py server.json` |
 | `glowup-agent.service` | Distributed worker agent | `distributed/worker_agent.py agent.json` |
 | `glowup-ble-sensor.service` | BLE sensor daemon (runs on broker-2, publishes to MQTT) | `ble/__main__.py` |
 | `zigbee2mqtt.service` | Zigbee2MQTT coordinator service | managed by Z2M |
@@ -273,5 +272,9 @@ bus connects them — if one goes down, the others keep running.
 
 ## Do Not Run Simultaneously
 
-- `server.py` and `scheduler.py` — they conflict over device control.
-  Use `server.py` (it includes the scheduler).
+- Two `server.py` instances against the same device set — they
+  conflict over device control.  Run one server per device set.
+  (The legacy `scheduler.py` daemon was retired in 2026-04 and
+  the scheduler now runs in-process under `server.py`, so the
+  pre-2026-04 "don't run server.py + scheduler.py together"
+  warning no longer applies.)

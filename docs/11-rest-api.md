@@ -6,8 +6,10 @@
 The REST API server (`server.py`) is GlowUp's coordinator and API host.
 It exposes control and introspection over HTTP, anchors the local SOE
 runtime, and provides the integration point used by the iOS app and
-other HTTP clients.  It replaces `scheduler.py` by managing effects
-directly through the `Controller` API instead of spawning subprocesses.
+other HTTP clients.  Effect lifecycle is driven directly through the
+`Controller` API; the scheduling logic that used to live in a separate
+out-of-process daemon now runs in-process under this server (see
+[05-scheduler.md](05-scheduler.md) for the schedule configuration).
 
 ```bash
 python3 server.py server.json              # start the server
@@ -413,13 +415,6 @@ sudo cp server.json /etc/glowup/server.json
 sudo systemctl daemon-reload
 sudo systemctl enable glowup-server
 sudo systemctl start glowup-server
-```
-
-If migrating from `scheduler.py`, disable the old service first:
-
-```bash
-sudo systemctl stop glowup-scheduler
-sudo systemctl disable glowup-scheduler
 ```
 
 ### Installing the Server as a macOS launchd Service

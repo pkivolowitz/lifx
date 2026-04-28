@@ -1,26 +1,46 @@
-# Scheduler (Daemon)
+# Schedule Configuration
 
 > Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 > Licensed under the [MIT License](../LICENSE).
 
-The scheduler (`scheduler.py`) runs effects on a timed schedule, with
-sunrise/sunset awareness. It manages multiple independent device groups,
-each running its own effect on its own schedule. Designed to run as a
-systemd service on a Raspberry Pi (or any Linux box).
+The scheduler runs **in-process under `glowup-server`** — there is no
+separate scheduler binary or service.  This document covers the
+schedule configuration JSON shape (the `schedule:` block inside
+`server.json`); for the server itself see
+[11-rest-api.md](11-rest-api.md), and for the live REST endpoints
+that read and mutate schedule entries
+(`GET`/`POST`/`PUT`/`DELETE` `/api/schedule`) see the `Scheduling`
+section of that document.
 
-```bash
-python3 scheduler.py /etc/glowup/schedule.json
-```
+The in-process scheduler polls every 30 seconds to determine which
+schedule entry should be active for each group.  When the active
+entry changes, it gracefully stops the old effect (SIGTERM → fade
+to black) and starts the new one.  Crashed effect threads are
+automatically restarted.
 
-The scheduler polls every 30 seconds to determine which schedule entry
-should be active for each group. When the active entry changes, it
-gracefully stops the old effect (SIGTERM → fade to black) and starts
-the new one. Crashed subprocesses are automatically restarted.
+> **Historical note:** A standalone `scheduler.py` + companion
+> `glowup-scheduler.service` shipped through 2026-04.  Both were
+> retired during the Phase 2b installer cleanup once the
+> `scheduling/` package was integrated into `glowup-server`.
+> Existing fleet hosts that still have `/etc/systemd/system/
+> glowup-scheduler.service` from a pre-Phase-2b install can
+> safely `systemctl disable --now glowup-scheduler` and remove
+> the unit file; the next `install.sh` run will not put it back.
 
-### Configuration File
+### Where the schedule lives
 
-The config file is JSON with three sections: `location`, `groups`, and
-`schedule`.
+The schedule is part of `server.json` (typically
+`/etc/glowup/server.json` once installed) and is loaded when
+`glowup-server` starts.  Three top-level sections drive scheduling:
+`location`, `groups`, and `schedule`.  Live edits go through the
+REST endpoints — `POST /api/schedule` to add, `PUT
+/api/schedule/{index}` to modify, `DELETE /api/schedule/{index}`
+to remove — see [11-rest-api.md](11-rest-api.md) for the full
+endpoint reference.
+
+The example below shows the relevant slice of `server.json`; in a
+real config these keys sit alongside `auth_token`, `adapters`,
+`emitters`, etc.
 
 ```json
 {
@@ -155,80 +175,33 @@ and are recalculated daily.
 Preview the resolved schedule without running any effects:
 
 ```bash
-python3 scheduler.py --dry-run schedule.json.example
+python3 server.py --dry-run server.json
 ```
 
-This prints solar event times for your location, all device groups, and
-the resolved schedule with concrete times. Active entries are flagged.
-Use this to verify your config before deploying.
+This prints solar event times for your location, all device groups,
+and the resolved schedule with concrete times.  Active entries are
+flagged.  Use this to verify your config before starting
+`glowup-server` against it.
 
-### Installing as a systemd Service
+### Where the running scheduler logs
 
-1. **Clone the repository** to the target machine:
+The in-process scheduler logs to `glowup-server`'s systemd journal
+alongside the rest of the server's output:
 
 ```bash
-git clone https://github.com/pkivolowitz/lifx.git /home/a/lifx
+sudo journalctl -u glowup-server -f                          # follow live
+sudo journalctl -u glowup-server --since today | grep -i sched
 ```
 
-2. **Create the config file** at `/etc/glowup/schedule.json`:
+After editing the schedule entries via REST or by hand-editing
+`server.json`, the in-process scheduler picks up changes
+automatically — no `systemctl restart` needed for REST-driven
+edits, and a server restart for hand edits:
 
 ```bash
-sudo mkdir -p /etc/glowup
-sudo cp /home/a/lifx/schedule.json.example /etc/glowup/schedule.json
-sudo nano /etc/glowup/schedule.json   # edit for your location, devices, schedule
+sudo systemctl restart glowup-server
 ```
 
-3. **Test with dry run** to verify times resolve correctly:
-
-```bash
-python3 /home/a/lifx/scheduler.py --dry-run /etc/glowup/schedule.json
-```
-
-4. **Test live** before installing the service:
-
-```bash
-python3 /home/a/lifx/scheduler.py /etc/glowup/schedule.json
-# Watch the logs, Ctrl+C to stop
-```
-
-5. **Install the systemd service**:
-
-```bash
-sudo cp /home/a/lifx/deploy/glowup-scheduler.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable glowup-scheduler
-sudo systemctl start glowup-scheduler
-```
-
-If your install path is not `/home/a/lifx`, edit the service file first:
-
-```bash
-sudo nano /etc/systemd/system/glowup-scheduler.service
-# Update ExecStart and WorkingDirectory to match your paths
-```
-
-### Controlling the Service
-
-```bash
-# Check status and recent logs
-sudo systemctl status glowup-scheduler
-
-# View full logs
-sudo journalctl -u glowup-scheduler -f          # follow live
-sudo journalctl -u glowup-scheduler --since today
-
-# Stop / start / restart
-sudo systemctl stop glowup-scheduler
-sudo systemctl start glowup-scheduler
-sudo systemctl restart glowup-scheduler
-
-# Disable (won't start on boot)
-sudo systemctl disable glowup-scheduler
-
-# After editing the config file, restart to pick up changes
-sudo systemctl restart glowup-scheduler
-```
-
-The scheduler logs to the systemd journal, including solar event times
-(recalculated daily), schedule transitions, subprocess starts/stops,
-and any errors.
+For the full `glowup-server` install/control reference (which
+also covers the scheduler since the two share a process now)
+see [24-persistent-services.md](24-persistent-services.md).
