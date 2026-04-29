@@ -26,15 +26,23 @@ misconfigured), run the script manually:
 ### Post-discovery actions (Claude's responsibility)
 
 - **Trust the bootstrap blob.** The SessionStart hook already inlines
-  `identity.md`, `rules.md`, `MEMORY.md`, and any `_precompact.md` or
-  handoff content between `--- begin ---` / `--- end ---` markers.
+  `identity.md`, `rules.md`, `MEMORY.md`, every `_precompact_*.md`, and
+  any handoff content between `--- begin ---` / `--- end ---` markers.
   Do NOT re-Read files whose content is already in the blob — that
   doubles per-turn token cost for zero benefit.
 - If the bootstrap block says **handoff PRESENT**: its body is embedded
   inline — internalize it, then archive to
   `~/NAS/.claude/handoff/archive/<from>_to_<machine>_<YYYY-MM-DD>.md`
-- If the bootstrap block says **precompact PRESENT**: content is inlined —
-  internalize it, then DELETE the file (Compaction Protocol in rules.md)
+- The `## precompact` section may contain MULTIPLE entries — one per
+  machine that has compacted recently. Each entry is tagged with its
+  owner. Internalize **every** entry; **delete only the entries marked
+  `(own machine: <short-host>)`** (matching this machine), since the
+  bootstrap has now folded their content back into the live session.
+  Peer machines' entries are tagged `(peer machine: …)` — leave those
+  files alone; the originating machine deletes its own on its next
+  session start. Legacy unsuffixed `_precompact.md` is treated as
+  belonging to this machine and deleted the same way (Compaction
+  Protocol in rules.md).
 - Pull latest branch state from `staging` before code changes — for
   **every repo the bootstrap reports**, not just `~/lifx`. The
   bootstrap inlines `## git` for the project repo and `## git_twin: …`
@@ -85,9 +93,24 @@ on the scientific method.
 `precompact` means: write a short ephemeral reload file capturing only
 expensive-to-rediscover context for the next session.
 
-Write:
+Write to a **per-machine filename** so concurrent sessions on different
+machines do not silently overwrite each other:
 
-- `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/_precompact.md`
+- `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/_precompact_<short-host>.md`
+
+`<short-host>` is the value reported in the SESSION BOOTSTRAP `## machine`
+line (e.g. `Conway`, `Bed`, `Daedalus`).  The bootstrap inlines every
+`_precompact_*.md` it finds at session start so cross-machine hive-mind
+handoff still works — Bed sees Conway's tail-context and vice versa.
+
+Lifecycle:
+
+- A machine writes its **own** precompact at compact / shutdown time.
+- On its **own** next session start, that machine internalizes the
+  inlined precompact (now folded back into the live transcript) and
+  **deletes its own file**.
+- Peer machines' precompacts are inlined for context but **not deleted**;
+  the originating machine cleans up on its own next session.
 
 Content must be concise facts, not narrative:
 
@@ -104,5 +127,7 @@ Rules:
 - Tag memory writes with machine name and date
 - Do not copy large logs
 - Do not duplicate stable knowledge already in project memory
-- Do not add `_precompact.md` to `MEMORY.md`
+- Do not add any `_precompact_*.md` to `MEMORY.md`
+- Legacy unsuffixed `_precompact.md` is still read by the bootstrap for
+  back-compat; never *write* to that filename.
 
