@@ -9,6 +9,37 @@ code integration are performed by Perry Kivolowitz, the sole Human Author.
 
 ---
 
+## Basic Release Scope
+
+This manual describes the supported Basic release surface.
+
+Included:
+
+- LIFX discovery
+- naming bulbs
+- groups
+- effects
+- simulator
+- standalone install
+- Linux server install
+- dashboard
+- schedules
+
+Not included in Basic support:
+
+- voice
+- sensors
+- Matter
+- Zigbee
+- BLE
+- NVR
+- Vivint
+- distributed workers
+- MIDI
+- kiosk
+
+---
+
 ## What GlowUp Basic Does
 
 GlowUp Basic (hereafter GlowUp) drives LIFX lights. It runs animated effects (a Larson scanner,
