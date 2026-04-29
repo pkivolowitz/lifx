@@ -576,17 +576,130 @@ async def cmd_pair_verify(args: argparse.Namespace) -> int:
             f"opcode 0x09 OK — status=0, body_len={len(body)}B",
             flush=True,
         )
-        # M1 deliverable: dump the body hex and a brief decode of the
-        # outer TLV.  Full structured decode lives in accessory_db.py
-        # in M3; for M1 we just confirm we got a well-formed body.
-        print(f"body hex (first 256B): {body[:256].hex()}", flush=True)
-        try:
-            outer: dict[int, bytes] = _tlv.decode_dict(body)
-            print(f"top-level TLV tags: {sorted(outer.keys())}", flush=True)
-        except Exception as exc:
-            print(f"top-level TLV decode failed: {exc}", flush=True)
+        Path("/tmp/foyer3_db.bin").write_bytes(body)
+        _walk_accessory_db(body)
 
     return 0
+
+
+# HAP accessory-database TLV tags (per docs/40-hap-coap-wire-format.md
+# §4 + the HAP spec).  Inner-vs-outer naming matches aiohomekit's
+# Pdu09Database structure for cross-reference.
+_TAG_ACCESSORY_RECORD: int = 0x18
+_TAG_SERVICE_RECORD: int = 0x19
+_TAG_CHARACTERISTIC_RECORD: int = 0x14
+_TAG_AID: int = 0x01
+_TAG_SERVICES: int = 0x02
+_TAG_SERVICE_IID: int = 0x06
+_TAG_SERVICE_TYPE: int = 0x07
+_TAG_CHARACTERISTICS: int = 0x15
+_TAG_CHAR_IID: int = 0x04
+_TAG_CHAR_TYPE: int = 0x14
+_TAG_CHAR_PERMS: int = 0x0A
+_TAG_CHAR_FORMAT: int = 0x0C
+
+
+def _split_records(blob: bytes, record_tag: int) -> list[bytes]:
+    """Split a list-of-records blob into one bytes object per record.
+
+    The list TLV's body is a sequence of ``record_tag``-prefixed entries
+    concatenated back-to-back.  Each entry may itself span multiple
+    255-byte chunks (HAP TLV continuation).  This function walks the
+    blob byte-by-byte and emits one bytes-per-record, with continuation
+    chunks pre-merged.
+    """
+    records: list[bytes] = []
+    cur: bytearray = bytearray()
+    i: int = 0
+    while i < len(blob):
+        tag: int = blob[i]
+        length: int = blob[i + 1]
+        chunk: bytes = blob[i + 2:i + 2 + length]
+        i += 2 + length
+        if tag == record_tag:
+            if cur:
+                records.append(bytes(cur))
+                cur = bytearray()
+            cur.extend(chunk)
+            # If length == 255 the next entry of the same tag is a
+            # continuation of THIS record; keep accumulating until we
+            # see a length < 255.
+            if length < 0xFF:
+                records.append(bytes(cur))
+                cur = bytearray()
+        # Stray non-record-tag bytes (shouldn't happen but tolerate).
+    if cur:
+        records.append(bytes(cur))
+    return records
+
+
+def _decode_uuid(b: bytes) -> str:
+    """Decode a HAP UUID (1, 2, 4, or 16 bytes little-endian)."""
+    if len(b) == 16:
+        # 128-bit UUID stored little-endian; render canonical form.
+        u: int = int.from_bytes(b, "little")
+        h: str = f"{u:032x}"
+        return f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
+    if len(b) in (1, 2, 4):
+        return f"short:0x{int.from_bytes(b, 'little'):0{len(b) * 2}x}"
+    return f"len{len(b)}:{b.hex()}"
+
+
+def _walk_accessory_db(body: bytes) -> None:
+    """Pretty-print the accessory database opcode-0x09 response."""
+    outer: dict[int, bytes] = _tlv.decode_dict(body)
+    accessories_blob: bytes = outer.get(_TAG_ACCESSORY_RECORD, b"")
+    if not accessories_blob:
+        # Some accessories return the inner content directly without
+        # the 0x18 outer envelope — fall back to treating *body* as
+        # one accessory record.
+        accessories: list[bytes] = [body]
+    else:
+        accessories = _split_records(accessories_blob, _TAG_ACCESSORY_RECORD)
+        # _split_records returns one record when the outer tag was
+        # already extracted by decode_dict, so for the typical
+        # single-accessory case this is a 1-element list.
+        if not accessories:
+            accessories = [accessories_blob]
+
+    for acc_blob in accessories:
+        acc: dict[int, bytes] = _tlv.decode_dict(acc_blob)
+        aid: int = int.from_bytes(acc.get(_TAG_AID, b"\x00"), "little")
+        services_blob: bytes = acc.get(_TAG_SERVICES, b"")
+        services: list[bytes] = _split_records(
+            services_blob, _TAG_SERVICE_RECORD
+        )
+        print(f"AID {aid} — {len(services)} service(s)", flush=True)
+        for svc_blob in services:
+            svc: dict[int, bytes] = _tlv.decode_dict(svc_blob)
+            sid: int = int.from_bytes(
+                svc.get(_TAG_SERVICE_IID, b"\x00"), "little"
+            )
+            svc_type: str = _decode_uuid(svc.get(_TAG_SERVICE_TYPE, b""))
+            chars_blob: bytes = svc.get(_TAG_CHARACTERISTICS, b"")
+            chars: list[bytes] = _split_records(
+                chars_blob, _TAG_CHARACTERISTIC_RECORD
+            )
+            print(
+                f"  svc iid={sid:>4} type={svc_type} "
+                f"chars={len(chars)}",
+                flush=True,
+            )
+            for ch_blob in chars:
+                ch: dict[int, bytes] = _tlv.decode_dict(ch_blob)
+                ciid: int = int.from_bytes(
+                    ch.get(_TAG_CHAR_IID, b"\x00"), "little"
+                )
+                ch_type: str = _decode_uuid(ch.get(_TAG_CHAR_TYPE, b""))
+                perms_b: bytes = ch.get(_TAG_CHAR_PERMS, b"\x00")
+                perms: int = int.from_bytes(perms_b, "little")
+                fmt_b: bytes = ch.get(_TAG_CHAR_FORMAT, b"")
+                fmt_byte: int = fmt_b[0] if fmt_b else 0
+                print(
+                    f"    chr iid={ciid:>4} type={ch_type} "
+                    f"perms=0x{perms:04x} fmt=0x{fmt_byte:02x}",
+                    flush=True,
+                )
 
 
 def main() -> None:
