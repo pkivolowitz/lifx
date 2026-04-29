@@ -51,7 +51,7 @@ just copy the files. Start standalone, switch when you're ready.
 
 ### What You Need
 
-A computer running macOS, Linux, or Windows with Python 3.10 or
+A computer running macOS, Linux, or Windows with Python 3.11 or
 later. Any LIFX bulb on the same Wi-Fi network. That's it.
 
 The optional simulator (a preview window that shows what an effect
@@ -69,26 +69,49 @@ cd glowup
 ./install.sh
 ```
 
-On macOS, the installer creates a Python virtual environment in
-`venv/` and installs the small set of packages GlowUp needs. No
-`sudo`, no system services, no files outside the cloned directory.
-When it finishes, you have a working `glowup` you can run from the
-clone.
+The installer creates a Python virtual environment at
+`~/.glowup/venv/` (per-user, no `sudo` for standalone), installs the
+small set of packages GlowUp needs, and drops a small launcher
+script at `~/.local/bin/glowup` that knows how to find the venv.
+The installer asks permission before adding `~/.local/bin` to your
+shell's PATH — if you say yes, it backs up your shell rc file
+(`.zshrc`, `.bashrc`, etc.) and appends one line. If you say no, you
+can run GlowUp by its full path and add it to PATH yourself later.
 
-On Linux, the installer offers the server flavor by default. If you
-want standalone Linux, run `./install.sh --standalone` and you'll
-get the same lightweight setup as macOS.
+When the installer finishes, open a new terminal (or `source` your
+shell rc) and `glowup discover` should work from anywhere.
 
-On Windows there is no installer yet. Three commands set you up:
+The clone itself is just source code — the venv lives outside it,
+so you can `git pull` and re-run `./install.sh` to upgrade without
+rebuilding the venv from scratch. Running `./install.sh` a second
+time is the upgrade path: it re-syncs the venv against the new
+`requirements.txt`, leaves your data in `~/.glowup/` alone, and
+reports what changed.
 
-```bash
+On macOS, that's the whole story.
+
+On Linux, `./install.sh` defaults to the server flavor (see below)
+because the typical Linux box running GlowUp is a Pi or a small
+server. If you're on a Linux laptop and want standalone, the
+installer asks once at the top of the run — answer "standalone" or
+press `s`. If you're scripting the install (Ansible, cloud-init,
+etc.) and need to skip the prompt, pass `--standalone` or
+`--server` on the command line.
+
+On Windows there is a small PowerShell installer:
+
+```powershell
 git clone https://github.com/pkivolowitz/glowup.git
 cd glowup
-python -m venv venv
-venv\Scripts\pip install -r requirements.txt
+.\install.ps1
 ```
 
-Run GlowUp as `venv\Scripts\python glowup.py <command>`.
+`install.ps1` does the same thing the macOS/Linux standalone
+installer does — creates `%USERPROFILE%\.glowup\venv\`, installs
+GlowUp's packages into it, and drops a `glowup.cmd` shim into
+`%USERPROFILE%\bin\` (asking permission before adding that
+directory to your user PATH via the registry). No Administrator
+rights, no Windows service, no files outside your user profile.
 
 ### Finding Your Lights
 
@@ -138,6 +161,13 @@ glowup name --ip 192.168.1.41 "Kitchen Bulb"
 ```
 
 The IP, MAC, and label are stored in `~/.glowup/devices.json`.
+The schema for that file (and for `groups.json` once you start
+making groups) is documented in `~/.glowup/README.md`, dropped
+there by the installer alongside the JSON files. The runtime
+preserves keys starting with `_` on read but never writes new
+ones, so you can drop hand-written notes into the JSON files
+and the dashboard or CLI won't strip them.
+
 From now on you can address that bulb by name instead of by IP:
 
 ```bash
@@ -250,12 +280,18 @@ running even when your laptop is closed and on a plane.
 ### What It Costs
 
 You need an always-on Linux box. A Raspberry Pi 4 is plenty; a
-retired desktop with Ubuntu works just as well. The installer asks
-for `sudo` because it writes `systemd` unit files and creates
-`/etc/glowup/`. The server runs as a long-lived service — you
-won't see it in your terminal, you'll see it in `systemctl status
-glowup-server`. If you've never used `systemctl`, the install will
-walk you through the few commands you need.
+retired desktop with Ubuntu works just as well. Debian and
+Ubuntu derivatives are supported in this release; other
+distributions (Fedora, Arch, etc.) may work but aren't tested.
+
+The installer asks for `sudo` because it writes `systemd` unit
+files, creates `/etc/glowup/` for read-only config, creates
+`/var/lib/glowup/` for the dashboard's writable data, and creates
+a dedicated `glowup` system user that owns the service. The
+server runs as that `glowup` user — you won't see it in your
+terminal, you'll see it in `systemctl status glowup-server`. If
+you've never used `systemctl`, the install will walk you through
+the few commands you need.
 
 There is no Windows or macOS server flavor. The server is Linux only.
 
@@ -269,23 +305,39 @@ cd glowup
 ./install.sh
 ```
 
-The installer creates a virtual environment, writes site config to
-`/etc/glowup/site.json` and `/etc/glowup/server.json`, drops a
-`systemd` unit, and starts the server. When it finishes, it prints a
-URL — point your browser at it.
+The installer creates a virtual environment, writes read-only
+site config to `/etc/glowup/site.json` and `/etc/glowup/server.json`,
+seeds writable state files at `/var/lib/glowup/devices.json` and
+`/var/lib/glowup/groups.json` (both empty `{}` to start), drops a
+matching `~/.glowup/README.md`-style schema doc into
+`/var/lib/glowup/`, drops a `systemd` unit, and starts the server.
+When it finishes, it prints a URL — point your browser at it.
+
+Re-running `./install.sh` after a `git pull` is the upgrade path.
+It re-syncs the venv against the new `requirements.txt`, re-renders
+the systemd unit, and leaves `/etc/glowup/server.json` and
+everything in `/var/lib/glowup/` alone unless the schema has
+changed.
 
 If you used GlowUp standalone first, copy your bulb registry and
-groups across before the server starts:
+groups across before the server starts. The server reads them from
+`/var/lib/glowup/`, not `/etc/glowup/`, because they're data the
+service writes to (schedules edited in the dashboard, new bulbs
+named via the CLI):
 
 ```bash
-sudo cp ~/.glowup/devices.json /etc/glowup/devices.json
-sudo cp ~/.glowup/groups.json  /etc/glowup/groups.json
+sudo install -o glowup -g glowup -m 0640 \
+    ~/.glowup/devices.json /var/lib/glowup/devices.json
+sudo install -o glowup -g glowup -m 0640 \
+    ~/.glowup/groups.json  /var/lib/glowup/groups.json
 sudo systemctl restart glowup-server
 ```
 
-The server reads the same file shape standalone wrote, fills in the
-extra fields it cares about with defaults, and your names and groups
-appear in the dashboard.
+`install` (rather than `cp`) sets ownership and permissions in one
+shot so the `glowup` service user can read and write the migrated
+files. The server reads the same file shape standalone wrote, fills
+in the extra fields it cares about with defaults, and your names
+and groups appear in the dashboard.
 
 ### Using The Dashboard
 
@@ -322,8 +374,10 @@ group G with parameters P."* Times can be wall-clock (`07:00`,
 your latitude and longitude — entered during install — to compute
 sunrise and sunset for the day.
 
-Add an entry from the dashboard, or edit `/etc/glowup/server.json`
-directly. A typical entry looks like:
+Add an entry from the dashboard, or edit
+`/var/lib/glowup/schedules.json` directly (the dashboard writes
+back to that file, so hand-edits and dashboard edits live in the
+same place). A typical entry looks like:
 
 ```json
 {
@@ -378,10 +432,12 @@ reservation in your router so the bulb's IP stops changing in the
 first place — most home routers can pin an IP to a MAC address with
 a few clicks.
 
-**The server starts but no bulbs respond.** The server's `groups`
-section in `/etc/glowup/server.json` may still contain the install-
-time placeholder. Edit it to list your real bulbs (by label, MAC,
-or IP) and restart the server.
+**The server starts but no bulbs respond.** `/var/lib/glowup/groups.json`
+may still be empty (or only contain a placeholder entry pointing at
+the unreachable `192.0.2.1`). Use the dashboard, or `glowup name`
+and `glowup group add` from the CLI on the server, to populate
+real bulbs and groups. Restart the server if you edited the file
+by hand instead of via dashboard or CLI.
 
 ---
 
