@@ -114,5 +114,5 @@ logic.
   (error) to a **debug** node or a **catch** node to log failures.
 - **Untested:** This integration has not yet been tested against a
   live Node-RED instance.  If you try it, please open an issue
-  at the [GitHub repo](https://github.com/pkivolowitz/lifx/issues)
+  at the [GitHub repo](https://github.com/pkivolowitz/glowup/issues)
   with any corrections or suggestions.

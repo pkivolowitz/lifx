@@ -454,9 +454,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=${LOGIN_USER}
-WorkingDirectory=${LOGIN_HOME}/lifx
+WorkingDirectory=${LOGIN_HOME}/glowup
 ExecStartPre=/usr/sbin/rfkill unblock bluetooth
-ExecStart=${VENV_DIR}/bin/python3 -m ble.sensor --config ${LOGIN_HOME}/lifx/ble_pairing.json --broker localhost
+ExecStart=${VENV_DIR}/bin/python3 -m ble.sensor --config ${LOGIN_HOME}/glowup/ble_pairing.json --broker localhost
 Restart=always
 RestartSec=10
 

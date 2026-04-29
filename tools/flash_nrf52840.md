@@ -27,7 +27,7 @@ ssh mortimer.snerd@notapi.local "ls /dev/ttyACM*"
 - Copy firmware if not already there:
 
 ```
-scp ~/lifx/tools/firmware/ot-rcp-USB.hex mortimer.snerd@notapi.local:/tmp/
+scp ~/glowup/tools/firmware/ot-rcp-USB.hex mortimer.snerd@notapi.local:/tmp/
 ```
 
 - Generate DFU package:

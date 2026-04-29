@@ -45,7 +45,7 @@ python3 glowup.py play aurora --ip <device-ip>      # run an effect
 python3 glowup.py play cylon --sim-only --zones 36  # preview without hardware
 ```
 
-See the **[Effect Gallery](https://pkivolowitz.github.io/lifx/)**
+See the **[Effect Gallery](https://pkivolowitz.github.io/glowup/)**
 for animated previews of all 33 effects.
 
 ### Build a distributed home-control system

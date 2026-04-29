@@ -325,7 +325,7 @@ the rollback story.  The key bits:
   hub broker resolved from `GLB_HUB_BROKER`.
 - `User=a` / `WorkingDirectory=/opt/glowup-sensors` — broker-2
   hosts the BLE service in `/opt/glowup-sensors/ble/` (NOT the
-  dev `~/lifx` checkout — broker-2 is a non-dev host with files
+  dev `~/glowup` checkout — broker-2 is a non-dev host with files
   only, no repo).
 
 Install / update from a dev machine (per the comments in the unit

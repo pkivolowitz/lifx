@@ -178,7 +178,7 @@ The reducer collapses the source set to a scalar. Supported reducers: `max`, `mi
 
 ### 3.4 Implementation status
 
-The Param-as-Signal layer was built and tested in glowup as of 2026-04-12, with 51 tests covering registration, scaling, reduction, cycle detection, late sources, and restart survival. The relevant project memory is [project_param_as_signal.md](~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/project_param_as_signal.md).
+The Param-as-Signal layer was built and tested in glowup as of 2026-04-12, with 51 tests covering registration, scaling, reduction, cycle detection, late sources, and restart survival. The relevant project memory is [project_param_as_signal.md](~/NAS/.claude/projects/-Users-perrykivolowitz-glowup/memory/project_param_as_signal.md).
 
 ---
 

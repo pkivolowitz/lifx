@@ -7,7 +7,7 @@ An online gallery showcasing animated previews of every effect is
 available at the project's GitHub Pages site.  Each preview was rendered
 headlessly using the `record` subcommand — no physical hardware needed.
 
-**View the gallery:** [https://pkivolowitz.github.io/lifx/](https://pkivolowitz.github.io/lifx/)
+**View the gallery:** [https://pkivolowitz.github.io/glowup/](https://pkivolowitz.github.io/glowup/)
 
 Gallery features:
 

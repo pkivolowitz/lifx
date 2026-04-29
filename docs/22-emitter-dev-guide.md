@@ -517,7 +517,7 @@ tearing down the audio stream.  The MQTT test harness
 ~/venv/bin/python3 -m emitters.audio_out
 
 # MQTT integration (requires Pi + theremin effect)
-cd ~/lifx && ~/venv/bin/python3 -m distributed.test_audio_emitter
+cd ~/glowup && ~/venv/bin/python3 -m distributed.test_audio_emitter
 ```
 
 ### Agent Configuration

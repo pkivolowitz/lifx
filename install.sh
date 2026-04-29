@@ -1060,7 +1060,7 @@ EOF
 #
 # Variable map for Phase 2b:
 #   ${SERVICE_USER}     — user the unit runs as
-#   ${INSTALL_ROOT}     — repo checkout (e.g., /home/a/lifx)
+#   ${INSTALL_ROOT}     — repo checkout (e.g., /home/a/glowup)
 #   ${VENV}             — Python venv (e.g., /home/a/venv)
 #   ${SITE_CONFIG_DIR}  — site config root (default /etc/glowup)
 #

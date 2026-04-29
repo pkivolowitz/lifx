@@ -14,7 +14,7 @@
 #   1. Open VSCode Settings (Cmd+,)
 #   2. Search: claudeProcessWrapper
 #   3. Set to the absolute path of this script, e.g.:
-#      /Users/mortimer.snerd/lifx/tools/token_shim.sh
+#      /Users/mortimer.snerd/glowup/tools/token_shim.sh
 #   4. Reload VSCode window (Cmd+Shift+P → Reload Window)
 #
 # Then in a separate terminal:

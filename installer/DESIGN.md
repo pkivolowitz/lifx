@@ -37,7 +37,7 @@ See `feedback_installer_owns_config.md`.
 Users arrive at the repo by cloning:
 
 ```
-git clone https://github.com/pkivolowitz/lifx.git glowup
+git clone https://github.com/pkivolowitz/glowup.git glowup
 cd glowup
 ./install.sh
 ```

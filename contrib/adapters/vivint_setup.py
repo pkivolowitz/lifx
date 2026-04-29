@@ -6,7 +6,7 @@ a refresh token so the daemon can connect without future 2FA prompts.
 
 Usage (on the Pi)::
 
-    cd ~/lifx
+    cd ~/glowup
     python3 vivint_setup.py
 
 The script reads username/password from server.json's ``vivint`` section,

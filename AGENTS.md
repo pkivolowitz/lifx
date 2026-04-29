@@ -44,10 +44,10 @@ misconfigured), run the script manually:
   belonging to this machine and deleted the same way (Compaction
   Protocol in rules.md).
 - Pull latest branch state from `staging` before code changes — for
-  **every repo the bootstrap reports**, not just `~/lifx`. The
+  **every repo the bootstrap reports**, not just `~/glowup`. The
   bootstrap inlines `## git` for the project repo and `## git_twin: …`
   for each path listed in
-  `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/_twin_repos.txt`
+  `~/NAS/.claude/projects/-Users-perrykivolowitz-glowup/memory/_twin_repos.txt`
   (today: `~/glowup-infra`). Twins are pulled in lock step with the
   project repo; if any twin shows uncommitted edits, surface them to
   Perry **before** pulling, never silently stash. The 2026-04-29
@@ -58,7 +58,7 @@ misconfigured), run the script manually:
   Files commonly inlined by the bootstrap script:
   - `~/NAS/.claude/global/identity.md`
   - `~/NAS/.claude/global/rules.md`
-  - `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/MEMORY.md`
+  - `~/NAS/.claude/projects/-Users-perrykivolowitz-glowup/memory/MEMORY.md`
   If these appear in the blob, skip them. Only Read files the task
   actually requires (e.g., a specific project or reference memory).
 - Inspect repo state (the bootstrap script does not touch git):
@@ -79,7 +79,7 @@ Do not give a generic repo tour unless the user asks for one.
 
 ## On-demand: debugging lecture
 
-`/Users/perrykivolowitz/lifx/docs/Discourses and Dialogs on Debugging.pdf`
+`/Users/perrykivolowitz/glowup/docs/Discourses and Dialogs on Debugging.pdf`
 is **not** part of the onboard sequence. It is ~37 image-rendered slides
 and costs ~55K tokens to read. The core principles are already captured
 in `feedback_debugging_methodology.md` (read at every onboard).
@@ -96,7 +96,7 @@ expensive-to-rediscover context for the next session.
 Write to a **per-machine filename** so concurrent sessions on different
 machines do not silently overwrite each other:
 
-- `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/_precompact_<short-host>.md`
+- `~/NAS/.claude/projects/-Users-perrykivolowitz-glowup/memory/_precompact_<short-host>.md`
 
 `<short-host>` is the value reported in the SESSION BOOTSTRAP `## machine`
 line (e.g. `Conway`, `Bed`, `Daedalus`).  The bootstrap inlines every

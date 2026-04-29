@@ -149,7 +149,7 @@ this topic to detect when GlowUp is unreachable.
   seconds).  All subscriptions are re-established on reconnect.
 - **Untested:** This integration has not yet been tested against a
   live MQTT broker.  If you try it, please open an issue at the
-  [GitHub repo](https://github.com/pkivolowitz/lifx/issues) with
+  [GitHub repo](https://github.com/pkivolowitz/glowup/issues) with
   any corrections or suggestions.
 
 ### Adapter and Signal Topics

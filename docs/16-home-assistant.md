@@ -121,5 +121,5 @@ tap_action:
   play, stop, resume, and power control with no additional code.
 - **Untested:** This integration has not yet been tested against a
   live Home Assistant instance.  If you try it, please open an issue
-  at the [GitHub repo](https://github.com/pkivolowitz/lifx/issues)
+  at the [GitHub repo](https://github.com/pkivolowitz/glowup/issues)
   with any corrections or suggestions.

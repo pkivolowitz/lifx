@@ -88,7 +88,7 @@ Both copies are populated by `tools/fetch_stt_models.py`:
 
 ```
 # On the coordinator host, as the operator user, with the coordinator venv active:
-~/venv/bin/python ~/lifx/tools/fetch_stt_models.py
+~/venv/bin/python ~/glowup/tools/fetch_stt_models.py
 ```
 
 Default behaviour: both engines, `large-v3-turbo`, Mini-Dock target.

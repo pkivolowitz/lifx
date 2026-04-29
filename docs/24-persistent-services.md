@@ -28,7 +28,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/a/lifx
+WorkingDirectory=/home/a/glowup
 ExecStart=/usr/bin/python3 <command>
 Restart=on-failure
 RestartSec=5

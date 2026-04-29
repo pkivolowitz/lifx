@@ -12,7 +12,7 @@ one laptop, one LIFX device, no server required.
 ## Install
 
 ```bash
-git clone https://github.com/perrykivolowitz/lifx.git
+git clone https://github.com/perrykivolowitz/glowup.git
 cd lifx
 python3 -m venv venv
 source venv/bin/activate
