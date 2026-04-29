@@ -180,13 +180,23 @@ class VivintAdapter(AsyncPollingAdapterBase):
         self._sensor_states: dict[str, dict[str, Any]] = {}
 
     def _check_prerequisites(self) -> bool:
-        """Check vivintpy, credentials, and lock config."""
+        """Check vivintpy, credentials, and lock config.
+
+        Hard-fails (raises RuntimeError) when an enabled adapter is
+        missing its Python dependency. Quiet-disabling on missing
+        deps was the cause of a 6-hour stale-data outage on
+        2026-04-28: the adapter logged a WARNING once at startup and
+        then ran the polling loop forever without ever connecting,
+        so systemd reported the unit as `active` and the dashboard
+        tile reported `connected: false`. Failing loud at startup
+        flips the unit to `failed` and surfaces the gap.
+        """
         if not _HAS_VIVINTPY:
-            logger.warning(
-                "vivintpy not installed — Vivint adapter disabled. "
-                "Install with: pip install vivintpy"
+            raise RuntimeError(
+                "Vivint adapter cannot start — vivintpy is not installed. "
+                "Run install.sh (it walks requirements-vivint.txt) or "
+                "`pip install vivintpy` in the lifx venv."
             )
-            return False
 
         if not self._username or not self._password:
             logger.error(

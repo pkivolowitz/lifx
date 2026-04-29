@@ -1,0 +1,9 @@
+# Vivint cloud adapter — Python wrapper around Vivint's PubNub-backed
+# real-time API. Required by contrib/adapters/vivint_adapter.py.
+#
+# Without this package the Vivint adapter previously ran "disabled" and
+# silently never published — the symptom was a stale dashboard tile with
+# `connected: false` and no log noise. install.sh's install_deps walks
+# every requirements-*.txt so this file alone is enough to bring it back
+# on a fresh install.
+vivintpy>=2026.0.0
