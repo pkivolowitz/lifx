@@ -227,6 +227,23 @@ CHAR_PAIRING_FEATURES: str = hap_uuid(0x4F)
 # Pairings characteristic — add/remove/list pairings.
 CHAR_PAIRINGS: str = hap_uuid(0x50)
 
+# --- Thread Management Service characteristics (HomeKit-over-Thread) ---
+
+# Thread Control Point — write target for Thread network commissioning
+# on HomeKit-over-Thread accessories. Two-step write: prep (op=3) then
+# commit (op=1, network_tlv, op_flags=1) hands the accessory the
+# Meshcop-shaped credentials so it can join the controller's Thread net.
+CHAR_THREAD_CONTROL_POINT: str = hap_uuid(0x0704)
+
+# Thread Status — read/notify, accessory's current Thread join state.
+CHAR_THREAD_STATUS: str = hap_uuid(0x0703)
+
+# Thread Node Capabilities — read, role/capability bitfield.
+CHAR_THREAD_NODE_CAPABILITIES: str = hap_uuid(0x0702)
+
+# OpenThread version string the accessory is running.
+CHAR_THREAD_OPENTHREAD_VERSION: str = hap_uuid(0x0706)
+
 # --- Sensor characteristics (the ones we actually care about) ---
 
 # Occupancy Detected — boolean, 0 or 1 (our motion trigger).

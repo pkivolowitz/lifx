@@ -301,16 +301,19 @@ def derive_session_keys(shared_secret: bytes) -> tuple[bytes, bytes]:
         Tuple of (controller_to_accessory_key, accessory_to_controller_key),
         each 32 bytes.
     """
+    # Per HAP spec: controller-to-accessory writes use the "Write" info,
+    # accessory-to-controller reads use the "Read" info. The label is from
+    # the accessory's perspective — hence the apparent inversion.
     c2a: bytes = hkdf_sha512(
         ikm=shared_secret,
         salt=b"Control-Salt",
-        info=b"Control-Read-Encryption-Key",
+        info=b"Control-Write-Encryption-Key",
         length=CHACHA_KEY_LEN,
     )
     a2c: bytes = hkdf_sha512(
         ikm=shared_secret,
         salt=b"Control-Salt",
-        info=b"Control-Write-Encryption-Key",
+        info=b"Control-Read-Encryption-Key",
         length=CHACHA_KEY_LEN,
     )
     return c2a, a2c

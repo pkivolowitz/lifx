@@ -48,9 +48,11 @@ from .crypto import (
 from .hap_constants import (
     CHAR_PAIR_SETUP,
     CHAR_PAIR_VERIFY,
+    CHAR_THREAD_CONTROL_POINT,
     ERROR_DESCRIPTIONS,
     METHOD_PAIR_SETUP,
     OPCODE_CHAR_WRITE,
+    PDU_FRAGMENT_CONTINUATION,
     TLV_ENCRYPTED_DATA,
     TLV_ERROR,
     TLV_IDENTIFIER,
@@ -135,6 +137,13 @@ class HapSession:
         self._tid_counter: int = 0
         self._iid_pair_setup: int = 0
         self._iid_pair_verify: int = 0
+        self._iid_thread_control_point: int = 0
+        # Session keys + per-direction nonce counters, populated by pair_verify.
+        # ChaCha20Poly1305 AEAD with nonce = struct.pack("<LQ", 0, counter).
+        self._c2a_key: Optional[bytes] = None
+        self._a2c_key: Optional[bytes] = None
+        self._c2a_counter: int = 0
+        self._a2c_counter: int = 0
 
     def _next_tid(self) -> int:
         """Allocate the next transaction ID (0–255, wrapping)."""
@@ -169,10 +178,15 @@ class HapSession:
                     self._iid_pair_verify = await self._read_iid(
                         client, char
                     )
+                elif uuid_upper == CHAR_THREAD_CONTROL_POINT.upper():
+                    self._iid_thread_control_point = await self._read_iid(
+                        client, char
+                    )
 
         logger.info(
-            "HAP IIDs: pair_setup=0x%04X, pair_verify=0x%04X",
+            "HAP IIDs: pair_setup=0x%04X, pair_verify=0x%04X, thread_cp=0x%04X",
             self._iid_pair_setup, self._iid_pair_verify,
+            self._iid_thread_control_point,
         )
 
     async def _read_iid(self, client, char) -> int:
@@ -216,6 +230,46 @@ class HapSession:
         )
         return header + body
 
+    async def _write_pdu_fragmented(
+        self,
+        char_uuid: str,
+        pdu: bytes,
+        tid: int,
+    ) -> None:
+        """Write a HAP-BLE PDU, fragmenting at the HAP layer if needed.
+
+        HAP-BLE requires application-level fragmentation when a PDU exceeds
+        the negotiated ATT MTU. Continuation fragments use a 2-byte header
+        ``Control(0x80) | TID``; only the first fragment carries the full
+        request header. Without this, Bleak falls back to GATT long-write
+        (prepare/execute) which HAP characteristics reject with
+        ``Prepare Queue Full``.
+        """
+        # Conservative chunk size: well under any reasonable BLE MTU
+        # (typical macOS CoreBluetooth = 185, HAP minimum spec = 158).
+        # 100 keeps us safe across stacks and accessory firmwares.
+        MAX_FRAG_SIZE: int = 100
+
+        if len(pdu) <= MAX_FRAG_SIZE:
+            await self._gatt.write_characteristic(char_uuid, pdu, response=True)
+            return
+
+        # First fragment carries the full PDU header + the start of the body.
+        await self._gatt.write_characteristic(
+            char_uuid, pdu[:MAX_FRAG_SIZE], response=True
+        )
+
+        # Continuation fragments: Control(0x80) | TID(1) | body-chunk.
+        cont_body_size: int = MAX_FRAG_SIZE - 2
+        pos: int = MAX_FRAG_SIZE
+        while pos < len(pdu):
+            chunk: bytes = pdu[pos : pos + cont_body_size]
+            frag: bytes = bytes([PDU_FRAGMENT_CONTINUATION, tid]) + chunk
+            await self._gatt.write_characteristic(
+                char_uuid, frag, response=True
+            )
+            pos += cont_body_size
+
     async def _hap_write_read(
         self,
         char_uuid: str,
@@ -245,7 +299,7 @@ class HapSession:
         tid: int = self._next_tid()
         pdu: bytes = self._build_write_pdu(tid, iid, payload_tlv)
 
-        await self._gatt.write_characteristic(char_uuid, pdu, response=True)
+        await self._write_pdu_fragmented(char_uuid, pdu, tid)
 
         # Wait for accessory to process and update characteristic value.
         await asyncio.sleep(2)
@@ -541,13 +595,170 @@ class HapSession:
         )
         _check_error(m4, "pair-verify M4")
 
-        # Derive session keys.
+        # Derive session keys and stash on the session for encrypted I/O.
         c2a_key, a2c_key = derive_session_keys(shared_secret)
+        self._c2a_key = c2a_key
+        self._a2c_key = a2c_key
+        self._c2a_counter = 0
+        self._a2c_counter = 0
         logger.info("Pair-verify complete — encrypted session established")
 
-        # Session keys derived but not yet stored — encrypted characteristic
-        # I/O requires persisting c2a_key/a2c_key for subscriptions.
-        # Tracked in project backlog, not blocking current BLE scanning use.
+    # ------------------------------------------------------------------
+    # Encrypted characteristic I/O (post-pair-verify)
+    # ------------------------------------------------------------------
+
+    def _encrypt_fragment(self, plaintext: bytes) -> bytes:
+        """ChaCha20Poly1305-encrypt one PDU fragment with the c2a key.
+
+        Nonce per HAP spec: 4 zero bytes + 8-byte little-endian counter.
+        """
+        from cryptography.hazmat.primitives.ciphers.aead import (
+            ChaCha20Poly1305,
+        )
+        if self._c2a_key is None:
+            raise HapError("encrypted I/O requires pair-verify first")
+        nonce: bytes = struct.pack("<LQ", 0, self._c2a_counter)
+        self._c2a_counter += 1
+        return ChaCha20Poly1305(self._c2a_key).encrypt(nonce, plaintext, b"")
+
+    def _decrypt_fragment(self, ciphertext: bytes) -> bytes:
+        """ChaCha20Poly1305-decrypt one PDU fragment with the a2c key."""
+        from cryptography.hazmat.primitives.ciphers.aead import (
+            ChaCha20Poly1305,
+        )
+        if self._a2c_key is None:
+            raise HapError("encrypted I/O requires pair-verify first")
+        nonce: bytes = struct.pack("<LQ", 0, self._a2c_counter)
+        self._a2c_counter += 1
+        return ChaCha20Poly1305(self._a2c_key).decrypt(nonce, ciphertext, b"")
+
+    async def _encrypted_write_read(
+        self,
+        char_uuid: str,
+        iid: int,
+        payload_tlv: bytes,
+        context: str,
+    ) -> dict[int, bytes]:
+        """Encrypted variant of _hap_write_read for post-pair-verify writes.
+
+        Encryption is per-fragment; payloads small enough to fit one MTU
+        write are sent as a single AEAD-encrypted blob (no HAP fragmentation).
+        Larger payloads would need per-fragment encryption — not needed for
+        Thread Control Point's small TLVs.
+        """
+        import asyncio
+
+        tid: int = self._next_tid()
+        plaintext_pdu: bytes = self._build_write_pdu(tid, iid, payload_tlv)
+
+        ciphertext: bytes = self._encrypt_fragment(plaintext_pdu)
+        await self._gatt.write_characteristic(
+            char_uuid, ciphertext, response=True
+        )
+
+        # Give the accessory time to process the write.
+        await asyncio.sleep(2)
+
+        ct_resp: bytes = bytes(
+            await self._gatt.read_characteristic(char_uuid)
+        )
+        if not ct_resp:
+            return {}
+
+        try:
+            pt_resp: bytes = self._decrypt_fragment(ct_resp)
+        except Exception as exc:
+            raise HapError(f"{context}: decryption failed — {exc}")
+
+        if len(pt_resp) < 3:
+            raise HapError(f"{context}: response too short ({len(pt_resp)} bytes)")
+
+        status: int = pt_resp[2]
+        if status != 0:
+            desc: str = ERROR_DESCRIPTIONS.get(status, f"0x{status:02X}")
+            raise HapError(f"{context}: status — {desc}")
+
+        body: bytes = bytes(pt_resp[5:]) if len(pt_resp) > 5 else b""
+        body_tlv: dict[int, bytes] = tlv.decode_dict(body)
+        if HAP_PARAM_VALUE in body_tlv:
+            return tlv.decode_dict(body_tlv[HAP_PARAM_VALUE])
+        return body_tlv
+
+    # ------------------------------------------------------------------
+    # Thread provisioning (HomeKit-over-Thread accessories)
+    # ------------------------------------------------------------------
+
+    async def provision_thread(
+        self,
+        network_name: str,
+        channel: int,
+        panid: int,
+        extpanid: bytes,
+        network_key: bytes,
+    ) -> None:
+        """Send Thread network credentials to a HomeKit-over-Thread device.
+
+        Two-step write to the Thread Control Point characteristic
+        (UUID 0x0704), per aiohomekit's reverse-engineered sequence:
+
+          1. Inner TLV (op=3) — preparation / state-set request.
+          2. Inner TLV (op=1, network=tlv, unknown=1) — actual provisioning.
+
+        After step 2 the accessory is expected to disconnect and transition
+        from BLE-commissioning mode to Thread operational mode — a
+        ``status — Insufficient Authorization`` or transport-level error
+        from step 2 is normal, not a failure.
+        """
+        if self._iid_thread_control_point == 0:
+            raise HapError(
+                "Thread Control Point IID not discovered — call discover_iids()"
+            )
+        if len(extpanid) != 8:
+            raise HapError(f"extpanid must be 8 bytes, got {len(extpanid)}")
+        if len(network_key) != 16:
+            raise HapError(
+                f"network_key must be 16 bytes, got {len(network_key)}"
+            )
+
+        iid: int = self._iid_thread_control_point
+        uuid: str = CHAR_THREAD_CONTROL_POINT
+
+        # Step 1: prep request (operation byte = 3).
+        prep_payload: bytes = tlv.encode([(1, b"\x03")])
+        try:
+            await self._encrypted_write_read(
+                uuid, iid, prep_payload, "thread-provision step1 (prep)"
+            )
+            logger.info("Thread provision step 1 OK")
+        except HapError as exc:
+            logger.warning("Thread provision step 1 returned: %s", exc)
+
+        # Step 2: provision request (operation byte = 1) carrying network details.
+        thread_tlv: bytes = tlv.encode([
+            (1, network_name.encode("utf-8")),
+            (2, channel.to_bytes(1, "little")),
+            (3, panid.to_bytes(2, "little")),
+            (4, extpanid),
+            (5, network_key),
+        ])
+        provision_payload: bytes = tlv.encode([
+            (1, b"\x01"),
+            (2, thread_tlv),
+            (3, b"\x01"),
+        ])
+        try:
+            await self._encrypted_write_read(
+                uuid, iid, provision_payload,
+                "thread-provision step2 (commit)",
+            )
+            logger.info(
+                "Thread provision step 2 returned a response (unusual but OK)"
+            )
+        except HapError as exc:
+            logger.info(
+                "Thread provision step 2 errored as expected — device likely "
+                "transitioning to Thread mode: %s", exc
+            )
 
 
 # ---------------------------------------------------------------------------
