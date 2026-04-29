@@ -180,13 +180,21 @@ class NvrAdapter(AsyncPollingAdapterBase):
         self._db_task: Optional[asyncio.Task] = None
 
     def _check_prerequisites(self) -> bool:
-        """Check reolink_aio, host, and channels."""
+        """Check reolink_aio, host, and channels.
+
+        Hard-fails (raises RuntimeError) when an enabled adapter is
+        missing its Python dependency. Same lesson as the 2026-04-28
+        Vivint outage — quiet-disabling on missing deps means the
+        unit reports `active`, the proxy reports ONLINE, and the
+        dashboard goes silently stale.  Failing loud at startup
+        flips systemd to `failed` and surfaces the gap.
+        """
         if not _HAS_REOLINK:
-            logger.warning(
-                "reolink_aio not installed — NVR adapter disabled. "
-                "Install with: pip install reolink_aio"
+            raise RuntimeError(
+                "NVR adapter cannot start — reolink_aio is not installed. "
+                "Run install.sh (it walks requirements-nvr.txt) or "
+                "`pip install reolink_aio` in the lifx venv."
             )
-            return False
 
         if not self._host_addr:
             logger.error("NVR adapter requires host in config")

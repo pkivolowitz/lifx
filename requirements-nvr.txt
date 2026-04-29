@@ -1,0 +1,9 @@
+# NVR (Reolink) adapter — async Python client for Reolink RTSP/HTTP API.
+# Required by contrib/adapters/nvr_adapter.py.
+#
+# Without this package the NVR adapter previously ran "disabled" and
+# silently never published — the symptom matched the 2026-04-28 Vivint
+# outage: systemd unit `active`, proxy `ONLINE`, dashboard tile stale.
+# install.sh's install_deps walks every requirements-*.txt so this file
+# alone is enough to bring it back on a fresh install.
+reolink_aio
