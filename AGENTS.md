@@ -35,7 +35,17 @@ misconfigured), run the script manually:
   `~/NAS/.claude/handoff/archive/<from>_to_<machine>_<YYYY-MM-DD>.md`
 - If the bootstrap block says **precompact PRESENT**: content is inlined —
   internalize it, then DELETE the file (Compaction Protocol in rules.md)
-- Pull latest branch state from `staging` before code changes
+- Pull latest branch state from `staging` before code changes — for
+  **every repo the bootstrap reports**, not just `~/lifx`. The
+  bootstrap inlines `## git` for the project repo and `## git_twin: …`
+  for each path listed in
+  `~/NAS/.claude/projects/-Users-perrykivolowitz-lifx/memory/_twin_repos.txt`
+  (today: `~/glowup-infra`). Twins are pulled in lock step with the
+  project repo; if any twin shows uncommitted edits, surface them to
+  Perry **before** pulling, never silently stash. The 2026-04-29
+  inventory.yaml event is the named precedent: stashing pre-existing
+  uncommitted twin edits hid Perry's in-flight work behind a stash and
+  forced him to ask "what are my edits?" to discover them.
 - Read project memory files **only if they were NOT inlined** in the blob.
   Files commonly inlined by the bootstrap script:
   - `~/NAS/.claude/global/identity.md`
