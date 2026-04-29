@@ -1,0 +1,9 @@
+# Optional dependencies for the HAP-over-Thread bridge (lifx/hap/).
+# Install on the host running the bridge (typically broker-2, the
+# only fleet host on the Thread mesh).
+#
+# Core lifx does not depend on these — guarded imports in lifx/hap/
+# fail loud if the bridge is invoked without them, per the
+# "Everything above core is optional" architecture rule.
+
+aiocoap>=0.4.7
