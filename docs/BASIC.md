@@ -353,9 +353,9 @@ The dashboard lives at the URL the installer printed (typically
   groups.
 - View the schedule, edit entries, add new ones.
 
-Everything you can do from the CLI, you can do from the dashboard.
-Everything you can do from the dashboard, you can also do from the
-CLI. Pick whichever matches the moment.
+The dashboard covers the normal registry, group, effect, and
+schedule workflows. The CLI remains available for scripting and
+direct control.
 
 ### Telling The Server Where You Are
 
