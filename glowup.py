@@ -2386,10 +2386,43 @@ def cmd_play(args: argparse.Namespace) -> None:
 
         if dev.is_multizone:
             _print(f"  {dev.zone_count} zones", flush=True)
+        elif dev.is_matrix:
+            _print(
+                f"  {dev.matrix_width}x{dev.matrix_height} matrix "
+                f"({dev.zone_count} zones, {dev.tile_count} tile(s))",
+                flush=True,
+            )
         elif dev.is_polychrome:
             _print("  Single color bulb", flush=True)
         else:
             _print("  Monochrome bulb (BT.709 luma mode)", flush=True)
+
+        # If --component is specified, swap dev to the matching virtual
+        # sub-device so the rest of the play path (emitter creation,
+        # frame dispatch) targets the sub-device's cells rather than the
+        # full matrix.  The sub-device duck-types LifxDevice well enough
+        # for LifxEmitter to drive it via send_color.
+        if getattr(args, "component", None):
+            target_id: str = str(args.component)
+            sub_match: Optional[Any] = next(
+                (s for s in dev.subdevices if s.component_id == target_id),
+                None,
+            )
+            if sub_match is None:
+                available: list[str] = [s.component_id for s in dev.subdevices]
+                _print(
+                    f"ERROR: --component '{target_id}' not found on this device. "
+                    f"Available: {available or 'none'}",
+                    file=sys.stderr,
+                )
+                dev.close()
+                sys.exit(1)
+            _print(
+                f"  → component '{sub_match.component_id}' "
+                f"(label: {sub_match.label})",
+                flush=True,
+            )
+            dev = sub_match  # type: ignore[assignment]
 
         em = LifxEmitter.from_device(dev)
 
@@ -2493,6 +2526,17 @@ def cmd_play(args: argparse.Namespace) -> None:
         _install_stop_signal(stop_requested)
         stop_requested.wait()
 
+        # Mirror the non-transient cleanup pattern (see ctrl.stop() +
+        # em.power_off() at the end of the render-loop path): a Ctrl-C
+        # of `play on` should leave the lamp dark, same as a Ctrl-C of
+        # `play matrix_rain`.  For LifxSubdevice this writes black to
+        # the sub-device's cells without touching the parent — a
+        # coexisting matrix effect on the same physical device keeps
+        # running.  For regular LifxDevice this sends LightSetPower(off).
+        try:
+            em.power_off(duration_ms=DEFAULT_FADE_MS)
+        except Exception as exc:
+            logging.debug("transient power_off failed: %s", exc)
         em.close()
         _print("Done.")
         return
@@ -3260,6 +3304,18 @@ def build_parser() -> argparse.ArgumentParser:
             "Requires the GlowUp server — the server resolves "
             "the identifier and runs the effect.  Visible on "
             "the dashboard."
+        ),
+    )
+    p_play.add_argument(
+        "--component", default=None, metavar="ID",
+        help=(
+            "Target a virtual sub-component of the --ip device "
+            "(e.g. 'uplight' on a SuperColor Ceiling) instead of "
+            "the primary surface.  Requires --ip.  Discoverable "
+            "components are listed by 'discover'.  Effects are "
+            "dispatched through the sub-component's single-color "
+            "path; matrix/strip-only effects will fall back to "
+            "average color."
         ),
     )
     p_play.add_argument(

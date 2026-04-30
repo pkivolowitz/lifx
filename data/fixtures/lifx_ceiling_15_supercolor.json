@@ -1,0 +1,44 @@
+{
+  "fixture_id": "lifx_ceiling_15_supercolor_white_trim",
+  "marketing_name": "LIFX SuperColor 15\" Ceiling Light White Trim",
+  "shape": "round",
+  "diameter_inches": 15,
+  "lumens": 2850,
+  "lifx_sku": "LFXRND1556C/WH",
+  "retail_skus": ["LCR15L4W1"],
+
+  "protocol": {
+    "vendor": 1,
+    "pid": 176,
+    "matrix": true,
+    "multizone": false,
+    "kelvin_min": 1500,
+    "kelvin_max": 9000
+  },
+
+  "matrix": {
+    "width": 8,
+    "height": 8,
+    "tile_count": 1,
+    "total_zones": 64,
+    "physical_zones": 56,
+    "row_origin": "top",
+    "col_origin": "left"
+  },
+
+  "dead_cells": [
+    [0, 0], [0, 1], [0, 6], [0, 7],
+    [7, 0], [7, 1], [7, 6]
+  ],
+
+  "uplight_cells": [
+    [7, 7]
+  ],
+
+  "rim_shifted_cells": [
+    [1, 1], [1, 6],
+    [6, 1], [6, 6]
+  ],
+
+  "notes": "Round 15\" 56-zone SuperColor Ceiling.  An 8x8 protocol grid with three classes of cell:\n\n  - 7 truly dead cells (no LED): (0,0), (0,1), (0,6), (0,7), (7,0), (7,1), (7,6).  These are the corner removals that round the square into a circle (less one corner; see uplight_cells).\n\n  - 1 uplight ring at (7,7).  This addresses a SEPARATE physical component — a single-color upward-facing accent ring on the back of the fixture that washes the ceiling above with one color.  It is not part of the 56-zone downlight grid, and effects that treat the matrix as one continuous surface should mask it out (writing a non-black HSBK there will turn the back-ring on with that color, often unintentional).\n\n  - 4 rim-shifted live cells: (1,1), (1,6), (6,1), (6,6).  Lit downlight zones whose physical LED is nudged radially outward from the regular grid position toward the rim, so the upper and lower edges curve gently rather than running flat.  They are part of the 56 downlights.\n\nDownlight count math: 64 protocol slots - 7 dead - 1 uplight = 56.\nGeometry confirmed visually with _grid_map and per-cell Set64 probes by Perry, 2026-04-30."
+}

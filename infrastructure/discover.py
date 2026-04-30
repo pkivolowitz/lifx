@@ -945,6 +945,46 @@ def main() -> None:
             "fw": firmware,
         })
 
+        # Surface virtual sub-components (e.g. the uplight ring on a
+        # SuperColor Ceiling) as their own rows immediately after the
+        # parent.  They share the parent's IP and MAC, are typed "Sub"
+        # so the table makes the relationship obvious, and inherit the
+        # parent's group.  pid-only lookup is good enough here — we
+        # don't have GetDeviceChain results in this scan path, and any
+        # fixture re-using a pid with different geometry will still
+        # have the same component layout in practice.  When LIFX makes
+        # that assumption wrong, switch to a full chain query.
+        if dtype == "Matrix":
+            # pylint: disable=import-outside-toplevel
+            from infrastructure import fixture_db as _fixture_db
+            fx_data = _fixture_db.lookup_by_pid(vendor, product)
+            if fx_data is not None:
+                width = int(fx_data.get("matrix", {}).get("width", 0)) or None
+                height = int(fx_data.get("matrix", {}).get("height", 0)) or None
+                for comp in _fixture_db.get_components(
+                    vendor, product, width, height,
+                ):
+                    suffix: str = str(comp.get("label_suffix", ""))
+                    sub_label: str = (
+                        f"{label} {suffix}".strip() if suffix else label
+                    )
+                    sub_kind: str = str(comp.get("kind", ""))
+                    rows.append({
+                        "mark": "↳",
+                        "label": sub_label,
+                        "product": (
+                            f"{product_name} → {comp.get('id', '')}"
+                        ),
+                        "type": f"Sub:{sub_kind}",
+                        "mac": dev["mac"],
+                        "ip": dev["ip"],
+                        "group": group,
+                        "pwr": "",
+                        "bright": "",
+                        "color": "",
+                        "fw": "",
+                    })
+
     # Append offline registry devices marked with *.
     offline_count: int = 0
     for reg_dev in registry:

@@ -911,6 +911,25 @@ class LifxDevice:
         self.matrix_height: Optional[int] = None
         self.tile_count: Optional[int] = None
 
+        # Per-fixture mask: flat indices into the matrix grid that the
+        # emitter must force to black on every Set64 frame.  Populated
+        # by :meth:`query_all` from data/fixtures/*.json based on
+        # (vendor, pid, matrix_w, matrix_h).  Two classes of cell live
+        # here: physically-absent positions (rounded-corner removals on
+        # the SuperColor Ceiling) and uplight cells that drive a
+        # separately-addressable accent component.  Both must not be
+        # written to by ordinary matrix effects — uplights would glow
+        # unintentionally; dead cells just waste bytes.  Empty set
+        # means no mask, fail-soft for unknown fixtures.
+        self.mask_cells: set[int] = set()
+
+        # Virtual sub-components attached to this physical device — e.g.
+        # the uplight ring on a SuperColor Ceiling presented as its own
+        # single-color "bulb".  Populated by :meth:`query_all` after the
+        # matrix geometry is known.  Empty list for fixtures with no
+        # declared sub-components.
+        self.subdevices: list["LifxSubdevice"] = []
+
         # Per-device ack worker (lazy-started on first animation frame).
         self._ack_worker: Optional[_AckWorker] = (
             _AckWorker(self) if acked else None
@@ -1610,12 +1629,65 @@ class LifxDevice:
         self.query_group()
         if self.is_matrix:
             self.query_device_chain()
+            self._populate_fixture_data()
         elif self.is_multizone:
             self.query_zone_count()
         else:
             # Non-multizone, non-matrix devices are a single zone.
             self.zone_count = SINGLE_ZONE_COUNT
         return self
+
+    def _populate_fixture_data(self) -> None:
+        """Look up this device in the fixture DB and populate mask + sub-devices.
+
+        Imported lazily so non-matrix devices and unit tests that
+        construct ``LifxDevice`` for protocol-only purposes don't pay
+        the import cost or fail if the fixture data is missing.
+
+        Silent on unknown fixtures: mask stays empty, subdevices stays
+        empty, the device behaves as a plain matrix.  Any matrix effect
+        will run; dead-cell positions just won't emit physically and the
+        uplight (if any) will glow whenever an effect happens to write a
+        non-black HSBK to its slot — same behavior as before this
+        machinery existed.  Adding a fixture descriptor in
+        ``data/fixtures/`` is the path to enabling masking and sub-
+        devices for a new product.
+        """
+        # pylint: disable=import-outside-toplevel
+        from infrastructure.fixture_db import (
+            get_components, get_mask_cells, COMPONENT_KIND_SINGLE_COLOR,
+        )
+
+        self.mask_cells = get_mask_cells(
+            self.vendor, self.product, self.matrix_width, self.matrix_height,
+        )
+
+        components: list[dict] = get_components(
+            self.vendor, self.product, self.matrix_width, self.matrix_height,
+        )
+        self.subdevices = []
+        for comp in components:
+            kind: str = str(comp.get("kind", ""))
+            cells_raw: list = comp.get("cells", [])
+            cells: list[tuple[int, int]] = [
+                (int(c[0]), int(c[1])) for c in cells_raw
+                if isinstance(c, list) and len(c) == 2
+            ]
+            if not cells:
+                continue
+            if kind != COMPONENT_KIND_SINGLE_COLOR:
+                # Future kinds (matrix sub-tiles, etc.) need their own
+                # virtual-device class.  Skip with a debug log rather
+                # than fail — adding a new kind shouldn't break old
+                # engine versions.
+                continue
+            self.subdevices.append(LifxSubdevice(
+                parent=self,
+                component_id=str(comp.get("id", "")),
+                kind=kind,
+                cells=cells,
+                label_suffix=str(comp.get("label_suffix", "")),
+            ))
 
     # -- Zone control (extended multizone) -----------------------------------
 
@@ -1732,6 +1804,7 @@ class LifxDevice:
         self,
         colors: list[tuple[int, int, int, int]],
         duration_ms: int = 0,
+        bypass_mask: bool = False,
     ) -> None:
         """Set all pixels on a matrix device using the tile protocol.
 
@@ -1749,6 +1822,12 @@ class LifxDevice:
         Args:
             colors:      Row-major HSBK list, one per pixel.
             duration_ms: Firmware transition duration in milliseconds.
+            bypass_mask: If True, send *colors* verbatim without
+                applying :attr:`mask_cells`.  Used by virtual sub-
+                devices (e.g. the uplight ring on a SuperColor
+                Ceiling) which need to write to cells that ordinary
+                matrix effects must avoid.  Defaults to False so all
+                normal effect paths get masking automatically.
 
         Raises:
             ValueError: If *colors* is empty or *duration_ms* < 0.
@@ -1769,6 +1848,18 @@ class LifxDevice:
             colors = list(colors) + [HSBK_BLACK_DEFAULT] * (total - len(colors))
         elif len(colors) > total:
             colors = colors[:total]
+
+        # Apply per-fixture mask: dead cells and shared-protocol-slot
+        # components (e.g. the uplight on a SuperColor Ceiling).  We
+        # write a fresh list rather than mutating the caller's so an
+        # effect's render output can be reused across frames.  Skipped
+        # when bypass_mask is set — that path belongs to virtual
+        # sub-devices that DO want to write the masked cells.
+        if not bypass_mask and self.mask_cells:
+            colors = list(colors)
+            for idx in self.mask_cells:
+                if 0 <= idx < total:
+                    colors[idx] = HSBK_BLACK_DEFAULT
 
         if tiles == 1 and pixels_per_tile <= TILE_PIXELS_PER_PACKET:
             # Single-tile, single-packet path (Luna, Candle, one Tile).
@@ -1987,6 +2078,274 @@ class LifxDevice:
         # Payload: reserved(u8) + HSBK(4 x u16) + duration(u32)
         payload = struct.pack("<xHHHHI", hue, sat, bri, kelvin, duration_ms)
         self._send(MSG_LIGHT_SET_COLOR, payload, ack=True)
+
+
+# ---------------------------------------------------------------------------
+# Virtual sub-device
+# ---------------------------------------------------------------------------
+
+
+class LifxSubdevice:
+    """Virtual single-color sub-component of a physical LIFX matrix device.
+
+    Some LIFX fixtures expose multiple logically-independent surfaces
+    over a single network device.  The 15" SuperColor Ceiling, for
+    instance, is one IP / one MAC but is internally a 56-zone
+    downlight matrix *plus* a single-color uplight ring.  Both surfaces
+    share the matrix Set64 protocol — different cells of the same 8x8
+    grid drive different LEDs.
+
+    A ``LifxSubdevice`` represents one such logical surface.  It holds
+    a reference to its parent :class:`LifxDevice` and the set of cells
+    it owns; it presents itself to the rest of the engine and CLI as
+    a single-color bulb (``is_polychrome=False``, no zones, no matrix)
+    so it shows up in discovery alongside its parent and accepts the
+    same simple set/power commands as a Mini White.
+
+    Coexistence note: writes to the sub-device and writes to the
+    parent matrix both end up as Set64 frames at the same IP, so
+    last-writer-wins.  Running a matrix effect simultaneously with an
+    independent uplight command will produce visible flicker as each
+    frame stomps the other.  Same-fixture coordination is a v2 problem.
+    """
+
+    def __init__(
+        self,
+        parent: "LifxDevice",
+        component_id: str,
+        kind: str,
+        cells: list[tuple[int, int]],
+        label_suffix: str = "",
+    ) -> None:
+        """Construct a sub-device.
+
+        Args:
+            parent:        The physical :class:`LifxDevice` this
+                sub-device shares a transport with.
+            component_id:  Stable short identifier (e.g. ``"uplight"``).
+                Matches the ``--component`` CLI selector.
+            kind:          One of the ``COMPONENT_KIND_*`` values from
+                :mod:`infrastructure.fixture_db`.  Today only
+                ``single_color`` is implemented.
+            cells:         List of ``(row, col)`` tuples this sub-device
+                owns within the parent's matrix grid.  Must be non-
+                empty and within bounds of the parent's matrix.
+            label_suffix:  Human-readable suffix appended to the parent's
+                label to form this sub-device's label.  E.g. parent
+                label "Kitchen Ceiling" + suffix "Uplight" yields
+                "Kitchen Ceiling Uplight".
+        """
+        if not cells:
+            raise ValueError("LifxSubdevice requires at least one cell")
+        self._parent: "LifxDevice" = parent
+        self._component_id: str = component_id
+        self._kind: str = kind
+        self._cells: list[tuple[int, int]] = list(cells)
+        self._label_suffix: str = label_suffix
+        # Cache last-set color so power=on after power=off restores it
+        # rather than dropping to black-on-black.
+        self._last_color: tuple[int, int, int, int] = (0, 0, HSBK_MAX, 3500)
+
+    # -- Identity -----------------------------------------------------------
+
+    @property
+    def component_id(self) -> str:
+        """Short stable identifier (matches ``--component`` selector)."""
+        return self._component_id
+
+    @property
+    def kind(self) -> str:
+        """One of the ``COMPONENT_KIND_*`` values."""
+        return self._kind
+
+    @property
+    def cells(self) -> list[tuple[int, int]]:
+        """Copy of the (row, col) list this sub-device owns."""
+        return list(self._cells)
+
+    @property
+    def parent(self) -> "LifxDevice":
+        """The physical device this sub-device shares a transport with."""
+        return self._parent
+
+    @property
+    def ip(self) -> str:
+        """Inherited from parent — every sub-device shares its IP."""
+        return self._parent.ip
+
+    @property
+    def mac(self) -> bytes:
+        """Inherited from parent — same physical MAC."""
+        return self._parent.mac
+
+    @property
+    def label(self) -> str:
+        """Compose this sub-device's label from parent + suffix."""
+        parent_label: str = self._parent.label or "?"
+        if self._label_suffix:
+            return f"{parent_label} {self._label_suffix}"
+        return parent_label
+
+    @property
+    def group(self) -> Optional[str]:
+        """Inherited from parent — sub-devices share their parent's group."""
+        return self._parent.group
+
+    # -- Capability flags --------------------------------------------------
+    # Mirror :class:`LifxDevice`'s discriminators so generic engine code
+    # that branches on these properties Just Works.
+
+    @property
+    def is_multizone(self) -> bool:
+        """Always False — a single-color sub-device is not a strip."""
+        return False
+
+    @property
+    def is_matrix(self) -> bool:
+        """Always False — sub-devices ARE one cell of a matrix, not a matrix."""
+        return False
+
+    @property
+    def is_polychrome(self) -> bool:
+        """Whether this sub-device supports full HSBK color.
+
+        True for color-capable single-zone components like the
+        SuperColor Ceiling's uplight ring (an RGB LED that happens
+        to be exposed as one cell of the matrix protocol — its
+        kind in the fixture JSON is 'single_color' meaning "single
+        logical zone, color-capable", NOT "white-only").
+
+        If a future fixture exposes a white-only sub-component it
+        should declare a distinct kind in fixture_db (e.g.
+        'single_white') and this property would branch on that.
+        Until then, all sub-devices are color-capable — returning
+        False here would trigger the LifxEmitter's BT.709 luma
+        conversion path and turn every set_color into a desaturated
+        kelvin-only call.
+        """
+        return True
+
+    @property
+    def zone_count(self) -> int:
+        """Always 1 — a single-color sub-device is one logical zone."""
+        return 1
+
+    # -- Control -----------------------------------------------------------
+
+    def set_power(self, on: bool, duration_ms: int = 0) -> None:
+        """Turn this sub-device on or off.
+
+        Power semantics for a sub-device are subtle.  The physical
+        device has its own LightSetPower (msg 117) state — when it's
+        off, no LED on the fixture emits regardless of what's in the
+        Set64 buffer.  When it's on, the per-cell HSBK values drive
+        the LEDs.  So:
+
+        - ``on=True``: ensure the PARENT device is powered (forwards
+          LightSetPower if needed), then write the last-set color to
+          this sub-device's cells.  Without the parent power-on, a
+          Set64 frame goes into the buffer but the LEDs never light.
+        - ``on=False``: write black to this sub-device's cells.  Do
+          NOT power-off the parent — that would shut down the matrix
+          too, and other code (matrix effects, scheduling) may want
+          the parent to stay up.
+
+        Args:
+            on:          True to turn on (powers parent if needed,
+                restores last color); False to turn off (writes black
+                to this sub-device's cells only).
+            duration_ms: Transition duration in milliseconds.
+        """
+        if on:
+            # Ensure parent is powered before writing cells — otherwise
+            # the Set64 just lands in a buffer no LED is reading.  This
+            # was the root cause of the 2026-04-30 "play on --component
+            # uplight reports success but uplight stays dark" symptom.
+            self._parent.set_power(True, duration_ms=duration_ms)
+            self._write_cells(self._last_color, duration_ms)
+        else:
+            # Kelvin is irrelevant when brightness is 0; reuse the
+            # module's canonical "black" tuple so all paths agree.
+            # Don't touch parent power — coexisting matrix effects
+            # may want the device to stay up.
+            self._write_cells(HSBK_BLACK_DEFAULT, duration_ms)
+
+    def set_color(
+        self,
+        hue: int,
+        sat: int,
+        bri: int,
+        kelvin: int,
+        duration_ms: int = 0,
+    ) -> None:
+        """Set this sub-device to the given HSBK.
+
+        Validates against the same HSBK ranges as :meth:`LifxDevice.set_color`
+        so callers see consistent error behavior across device kinds.
+
+        Args:
+            hue:         Hue (0--65535).
+            sat:         Saturation (0--65535).
+            bri:         Brightness (0--65535).
+            kelvin:      Color temperature (1500--9000).
+            duration_ms: Transition duration in milliseconds.
+
+        Raises:
+            ValueError: If any HSBK value is outside the valid range.
+        """
+        for name, val, lo, hi in [
+            ("hue", hue, 0, HSBK_MAX),
+            ("saturation", sat, 0, HSBK_MAX),
+            ("brightness", bri, 0, HSBK_MAX),
+            ("kelvin", kelvin, KELVIN_MIN, KELVIN_MAX),
+        ]:
+            if not lo <= val <= hi:
+                raise ValueError(
+                    f"{name}={val} out of range [{lo}, {hi}]",
+                )
+        if duration_ms < 0:
+            raise ValueError(f"duration_ms must be >= 0, got {duration_ms}")
+        color: tuple[int, int, int, int] = (hue, sat, bri, kelvin)
+        self._last_color = color
+        self._write_cells(color, duration_ms)
+
+    def close(self) -> None:
+        """Pass-through to the parent's close() — sub-devices share the socket."""
+        self._parent.close()
+
+    # -- Internals --------------------------------------------------------
+
+    def _write_cells(
+        self,
+        color: tuple[int, int, int, int],
+        duration_ms: int,
+    ) -> None:
+        """Build a Set64 frame addressing only this sub-device's cells.
+
+        All cells outside this sub-device are written as black, then
+        the frame is sent with ``bypass_mask=True`` so the parent's
+        mask doesn't strip our writes from the cells we own (those
+        cells live IN the parent's mask precisely to keep matrix
+        effects out of them — this is the path that's allowed in).
+        """
+        parent: "LifxDevice" = self._parent
+        width: int = parent.matrix_width or 0
+        height: int = parent.matrix_height or 0
+        if width <= 0 or height <= 0:
+            raise RuntimeError(
+                "parent matrix geometry not yet queried — call query_all() first",
+            )
+        total: int = width * height
+        colors: list[tuple[int, int, int, int]] = (
+            [HSBK_BLACK_DEFAULT] * total
+        )
+        for r, c in self._cells:
+            idx: int = r * width + c
+            if 0 <= idx < total:
+                colors[idx] = color
+        parent.set_tile_zones(
+            colors, duration_ms=duration_ms, bypass_mask=True,
+        )
 
 
 # ---------------------------------------------------------------------------
