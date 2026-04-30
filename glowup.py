@@ -228,6 +228,26 @@ def _print(*args: Any, **kwargs: Any) -> None:
     print(*args, **kwargs)
 
 
+def _params_for_display(params: dict) -> dict:
+    """Re-key a params dict from Python-identifier form to CLI form.
+
+    Effect parameter names are Python identifiers (underscores) on
+    the wire and inside the engine, but the CLI accepts them with
+    dashes.  Echoing the underscore form back at the user after they
+    typed the dash form is misleading — they search the printout for
+    the flag they used and don't find it.  This helper translates
+    underscores to dashes for human-facing output only; the dict
+    structure is otherwise preserved.
+
+    Args:
+        params: Effect parameter dictionary keyed by Python identifier.
+
+    Returns:
+        A new dict with each key's underscores replaced by dashes.
+    """
+    return {k.replace("_", "-"): v for k, v in params.items()}
+
+
 # ---------------------------------------------------------------------------
 # Null emitter — geometry-only stub for --sim-only mode
 # ---------------------------------------------------------------------------
@@ -839,7 +859,16 @@ def cmd_effects(args: argparse.Namespace) -> None:
         _print("No effects registered.")
         return
 
-    for name in sorted(registry):
+    # Honour the per-effect ``hidden`` flag — diagnostics and
+    # site-private surfaces (nurse_station, _primary_cycle) stay
+    # playable by exact name but are absent from the user-facing
+    # listing.  Mirrors :func:`get_effect_names` and
+    # :meth:`engine.Controller.list_effects`.
+    visible: list[str] = [
+        name for name, cls in registry.items()
+        if not getattr(cls, "hidden", False)
+    ]
+    for name in sorted(visible):
         cls = registry[name]
         # Show affinity as [all] for universal effects, else sorted list
         aff_tag: str = (
@@ -1443,6 +1472,44 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
     """
     print("Screen-reactive mode starting...", flush=True)
 
+    # Precheck: the screen-reactive pipeline needs numpy + opencv +
+    # an ffmpeg binary on PATH.  Imports inside media/* are guarded
+    # with _HAS_* sentinels so the *core* engine still loads on a
+    # bare venv, but this entry point is the place where we know the
+    # user intends to use that pipeline — fail loudly with a single
+    # clear message rather than crashing later inside subprocess or
+    # an opaque NameError on np.* below.
+    import shutil
+    missing_pkgs: list[str] = []
+    try:
+        import numpy as np  # noqa: F401  (re-imported below for use)
+    except ImportError:
+        missing_pkgs.append("numpy")
+    try:
+        import cv2  # noqa: F401
+    except ImportError:
+        missing_pkgs.append("opencv-python")
+    missing_bin: bool = shutil.which("ffmpeg") is None
+    if missing_pkgs or missing_bin:
+        msgs: list[str] = []
+        if missing_pkgs:
+            msgs.append(
+                f"missing Python packages: {', '.join(missing_pkgs)} — "
+                f"install with: pip install -r requirements-media.txt"
+            )
+        if missing_bin:
+            msgs.append(
+                "missing ffmpeg binary on PATH — "
+                "install with: brew install ffmpeg (macOS) "
+                "or sudo apt install ffmpeg (Linux)"
+            )
+        _print(
+            "ERROR: screen-reactive mode unavailable: "
+            + "; ".join(msgs),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     # Use the same proven code path as the test harness: MovieDecoder
     # pointed at avfoundation for screen capture, direct pyramid +
     # extraction on the main thread, render to pygame or LIFX emitter.
@@ -1513,12 +1580,63 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
     no_blur: bool = bool(getattr(args, "no_blur", False))
     cap_fps: int = getattr(args, "fps", None) or 30
 
-    # Vision pipeline (same as test harness).
+    # Vision pipeline (same as test harness).  --extract-method
+    # passes through to the VisionExtractor; default (None here) lets
+    # the extractor's own default ("median_cut") win.
     bus: SignalBus = SignalBus()
-    extractor: VisionExtractor = VisionExtractor(
-        source_name="screen", bus=bus,
-        edge_regions=zone_count,
+    extract_method: Optional[str] = getattr(args, "extract_method", None)
+    extractor_kwargs: dict[str, Any] = dict(
+        source_name="screen", bus=bus, edge_regions=zone_count,
     )
+    if extract_method:
+        extractor_kwargs["grid_extract_method"] = extract_method
+    extractor: VisionExtractor = VisionExtractor(**extractor_kwargs)
+
+    # --- 2D grid effect dispatch -----------------------------------------
+    # The legacy --screen path was 1D edge-light only — it discarded
+    # the requested effect name and rendered ``edge_colors`` to a
+    # single chain of zones.  Matrix-mode effects (e.g. screen_light2d)
+    # need the per-cell ``grid_hues/grid_sats/grid_bris`` signals and
+    # a tile-aware send.  Detect them up front, instantiate via the
+    # registry, and let the main loop branch on ``effect_2d``.
+    effect_name: str = getattr(args, "effect", "") or ""
+    effect_2d: Optional[Any] = None
+    if emitter is not None and effect_name == "screen_light2d":
+        from effects import create_effect, get_registry as _get_registry
+        registry_2d: dict = _get_registry()
+        effect_cls_2d = registry_2d.get(effect_name)
+        if effect_cls_2d is None:
+            _print(
+                f"ERROR: effect '{effect_name}' not in registry",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        # Auto-fill matrix dimensions from the device.  --width/--height
+        # the user typed override; otherwise hardware geometry wins.
+        dev_for_dims: Any = getattr(emitter, "_device", None)
+        mw: Optional[int] = getattr(dev_for_dims, "matrix_width", None)
+        mh: Optional[int] = getattr(dev_for_dims, "matrix_height", None)
+        param_defs_2d = effect_cls_2d.get_param_defs()
+        effect_params_2d: dict[str, Any] = {}
+        for pname in param_defs_2d:
+            v: Any = getattr(args, pname, None)
+            if v is not None:
+                effect_params_2d[pname] = v
+        if mw and "width" in param_defs_2d and "width" not in effect_params_2d:
+            effect_params_2d["width"] = mw
+        if mh and "height" in param_defs_2d and "height" not in effect_params_2d:
+            effect_params_2d["height"] = mh
+        effect_2d = create_effect(effect_name, **effect_params_2d)
+        # Wire the effect to our local bus — MediaEffect.signal() reads
+        # from this attribute and would otherwise return defaults
+        # forever, leaving the matrix black.
+        effect_2d._signal_bus = bus
+        effect_2d.on_start(zone_count)
+        _print(
+            f"  2D effect '{effect_name}' "
+            f"({effect_params_2d.get('width', '?')}×"
+            f"{effect_params_2d.get('height', '?')}) wired to grid signals"
+        )
 
     # Video input via ffmpeg — screen capture or URL (HDHomeRun, RTSP, etc.).
     import subprocess as _sp
@@ -1602,6 +1720,29 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
     _fps_frame_count: int = 0
     _fps_last_time: float = time.time()
     _fps_display: float = 0.0
+
+    # Effect-time origin for any 2D effect — render() takes seconds
+    # since start, not wall-clock time.
+    _effect_start_t: float = time.time()
+
+    # Power the device on before the first send.  The legacy 1D
+    # path skipped this and worked only when the lamp happened to
+    # already be on; on a freshly Ctrl-C'd device the matrix Set64
+    # buffer writes silently because the device-level power gate
+    # is closed (see precompact 2026-04-30 — "uplight stays dark").
+    if emitter is not None:
+        try:
+            emitter.power_on(duration_ms=0)
+        except Exception as exc:
+            _print(f"  WARNING: power_on failed: {exc}", file=sys.stderr)
+
+    # Light diagnostic for the 2D path so we can see grid signals
+    # arriving on the bus.  Fires once per second of wall clock —
+    # helps catch "extractor not publishing" or "all-zero frames"
+    # without spamming the console at 30fps.
+    _diag_last_t: float = time.time()
+    _diag_max_bri: float = 0.0
+    _diag_frames: int = 0
 
     while running:
         # Read one complete frame, accumulating partial reads.
@@ -1963,6 +2104,87 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
 
             pygame.display.flip()
             clock.tick(cap_fps)
+        elif emitter is not None and effect_2d is not None:
+            # 2D matrix path.  The effect already reads
+            # grid_hues/grid_sats/grid_bris off the bus inside
+            # render() and applies its own smoothing/sensitivity/
+            # saturation logic; we just deliver the resulting flat
+            # row-major HSBK list to the device's tile pipeline.
+            grid_colors: list[HSBK] = effect_2d.render(
+                time.time() - _effect_start_t, zone_count,
+            )
+            emitter.send_tile_zones(grid_colors)
+
+            # Per-second diagnostic — shows whether grid signals
+            # are arriving and whether the effect is producing any
+            # non-zero output.  All-zeros means the bus path is
+            # broken; non-zeros + still-dark device means the send
+            # path is.
+            _diag_frames += 1
+            if grid_colors:
+                _frame_max: int = max((c[2] for c in grid_colors), default=0)
+                if _frame_max > _diag_max_bri:
+                    _diag_max_bri = float(_frame_max)
+            _diag_now: float = time.time()
+            if _diag_now - _diag_last_t >= 1.0:
+                _grid_bris_now: list = bus.read(
+                    f"{src}:vision:grid_bris", [],
+                )
+                _grid_hues_now: list = bus.read(
+                    f"{src}:vision:grid_hues", [],
+                )
+                _grid_w_now: int = int(bus.read(
+                    f"{src}:vision:grid_w", 0,
+                ))
+                _grid_h_now: int = int(bus.read(
+                    f"{src}:vision:grid_h", 0,
+                ))
+                _bus_max: float = (
+                    max(_grid_bris_now) if _grid_bris_now else 0.0
+                )
+                # Sample hues at four spatially-spread cells so we can
+                # eyeball whether the bus's color pattern corresponds
+                # to the TV scene.  Hue is in [0,1]: 0=red, 1/6=yellow,
+                # 1/3=green, 1/2=cyan, 2/3=blue, 5/6=magenta.
+                def _h(idx: int) -> str:
+                    if 0 <= idx < len(_grid_hues_now):
+                        return f"{float(_grid_hues_now[idx]):.2f}"
+                    return "—"
+                _samples: str = ""
+                if _grid_w_now and _grid_h_now:
+                    _w2: int = _grid_w_now // 4
+                    _h2: int = _grid_h_now // 4
+                    _samples = (
+                        f"  hues@(TL,TR,BL,BR)="
+                        f"{_h(0)},"
+                        f"{_h(_w2 * 3)},"
+                        f"{_h(_h2 * 3 * _grid_w_now)},"
+                        f"{_h(_h2 * 3 * _grid_w_now + _w2 * 3)}"
+                    )
+                # Also show what the effect is sending to the lamp,
+                # in HSB space — if bus values look right but lamp
+                # values don't, the conversion in the effect is wrong.
+                _eff_samples: str = ""
+                if grid_colors:
+                    def _eh(idx: int) -> str:
+                        if 0 <= idx < len(grid_colors):
+                            h, s, b, _k = grid_colors[idx]
+                            return f"H{h / 65535:.2f}/S{s / 65535:.2f}/B{b / 65535:.2f}"
+                        return "—"
+                    _eff_samples = (
+                        f"  lamp@(0,7,56,63)="
+                        f"{_eh(0)} {_eh(7)} {_eh(56)} {_eh(63)}"
+                    )
+                _print(
+                    f"  [2d] {_diag_frames} frames/s  "
+                    f"grid={_grid_w_now}×{_grid_h_now}  "
+                    f"bus.bri.max={_bus_max:.3f}  "
+                    f"eff.peak_bri={int(_diag_max_bri)}"
+                    f"{_samples}{_eff_samples}",
+                )
+                _diag_last_t = _diag_now
+                _diag_max_bri = 0.0
+                _diag_frames = 0
         elif emitter is not None:
             # Send to real LIFX device.
             if isinstance(edge_colors, list) and len(edge_colors) >= zone_count:
@@ -1986,11 +2208,15 @@ def _play_screen_reactive(args: argparse.Namespace) -> None:
     if use_sim:
         pygame.quit()
     if emitter is not None:
-        # Turn off the lights.
-        off_colors: list[tuple[int, int, int, int]] = [
-            (0, 0, 0, 3500)
-        ] * zone_count
-        emitter.send_zones(off_colors)
+        # Definitively turn the device off.  send_zones (1D) used to
+        # be the cleanup path but it does not reach matrix tile cells
+        # — those need set_tile_zones.  power_off shuts the device's
+        # power gate which works for every device class regardless of
+        # zone topology, mask state, or polychrome flag.
+        try:
+            emitter.power_off(duration_ms=DEFAULT_FADE_MS)
+        except Exception as exc:
+            _print(f"  WARNING: power_off failed: {exc}", file=sys.stderr)
 
 
 def _play_via_server(args: argparse.Namespace) -> None:
@@ -2144,7 +2370,7 @@ def _play_via_server(args: argparse.Namespace) -> None:
     if "effect" in resp:
         _print(f"  Effect: {resp['effect']}")
     if "params" in resp:
-        _print(f"  Params: {json.dumps(resp['params'], indent=2)}")
+        _print(f"  Params: {json.dumps(_params_for_display(resp['params']), indent=2)}")
 
     # If music_dir is active, calibrate audio sync and start streaming.
     ffplay_proc: Optional[subprocess.Popen] = None
@@ -2638,7 +2864,7 @@ def cmd_play(args: argparse.Namespace) -> None:
 
     status: dict = ctrl.get_status()
     _print(f"\nPlaying '{effect_name}' at {status['fps']} fps")
-    _print(f"Params: {json.dumps(status['params'], indent=2)}")
+    _print(f"Params: {json.dumps(_params_for_display(status['params']), indent=2)}")
     _print("Press Ctrl+C to stop.\n")
 
     # --- Wait for interrupt (SIGINT / SIGTERM) --------------------------------
@@ -3378,6 +3604,16 @@ def build_parser() -> argparse.ArgumentParser:
             "Disable Gaussian blur in screen-reactive sim mode.  "
             "Shows flat color rects instead of the blurred glow.  "
             "Useful for performance comparison and debugging."
+        ),
+    )
+    p_play.add_argument(
+        "--extract-method", default=None, choices=("average", "median_cut"),
+        help=(
+            "Per-cell color extraction for the screen_light2d grid path.  "
+            "'median_cut' (default) yields more faithful dominant colors on "
+            "multi-color cells; 'average' is the cheaper channel-wise mean "
+            "with brightest-pixel hue.  Pick 'average' if a Pi-class host "
+            "can't keep up at the desired fps."
         ),
     )
     p_play.add_argument(

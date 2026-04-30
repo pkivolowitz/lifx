@@ -1,26 +1,27 @@
 """2D fireworks effect for LIFX matrix devices.
 
-Shells launch from random positions along the bottom edge and rise with
-ease-out deceleration (simulating drag / gravity).  At zenith they
-detonate into a circular burst that expands as a 2D gaussian bloom and
-fades through white-hot → chemical color → cooling orange.
+Shells detonate at random positions across the grid and bloom outward
+as a 2D gaussian halo, fading through white-hot → chemical color →
+warm orange.
+
+The earlier "rocket-up" preamble (shell rising from the bottom edge
+with an ease-out trail to a zenith in the upper portion of the grid)
+has been removed.  On a ceiling-mounted fixture there is no notion of
+"up" — every direction looks the same — so a directional ascent reads
+as wrong and adds latency before the visual payoff.  The burst is the
+interesting part; we go straight to it.
 
 Multiple simultaneous shells blend **additively in RGB space** — the
 same physically correct compositing used by the 1D fireworks effect.
 
-All ballistic and color-evolution lessons from the 1D fireworks are
-preserved: ease-out ascent with white-hot head and trailing exhaust,
-gaussian burst expansion, four-phase color evolution (white flash →
-saturated chemical color → peak hold → warm orange cooldown), and
-Poisson-process launch scheduling.
-
-Designed for LIFX Tile matrices and the grid simulator.
+Designed for LIFX matrix fixtures (Luna, Tile chains, the SuperColor
+Ceiling) and the grid simulator.
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__: str = "1.0"
+__version__: str = "2.0"
 
 import math
 import random
@@ -45,23 +46,15 @@ BLACK: HSBK = (0, 0, 0, KELVIN_DEFAULT)
 DEFAULT_WIDTH: int = 7
 DEFAULT_HEIGHT: int = 5
 
-# Easing exponent applied to the ascent fraction.
-# Higher = sharper deceleration as the shell approaches zenith.
-EASE_EXPONENT: float = 2.0
-
-# Quadratic decay exponent for the exhaust trail falloff.
-TRAIL_EXPONENT: float = 2.0
-
 # Fade exponent for burst brightness over time.
 # 1.4 lets the burst linger near full brightness before fading —
 # the hallmark of a real BOOM (tuned in 1D fireworks).
 BURST_FADE_EXPONENT: float = 1.4
 
-# Saturation of the shell head (low = white-hot).
+# Saturation at the white-hot core of the burst (briefly held during
+# the initial flash, then transitions to BURST_SATURATION as the
+# chemical color blooms).  Low = white-hot.
 HEAD_SATURATION: float = 0.10
-
-# Saturation of the exhaust trail (slightly warmer than the head).
-TRAIL_SATURATION: float = 0.25
 
 # Saturation of the burst — maximum vivid color.
 BURST_SATURATION: float = 1.0
@@ -85,19 +78,8 @@ BURST_COOL_HUE: float = 25.0        # warm orange target hue
 # Brightness below which we skip a pixel (performance).
 BURST_MIN_BRIGHTNESS: float = 0.005
 
-# Fraction of grid height that is off-limits as zenith (from top).
-# Shells always peak somewhere in the upper portion.
-ZENITH_TOP_MARGIN: float = 0.10
-
-# Minimum fraction of grid height that a shell must travel.
-ZENITH_MIN_TRAVEL: float = 0.30
-
 # HSB color space sextant count for RGB conversion.
 HUE_SEXTANTS: int = 6
-
-# Trail width perpendicular to ascent direction (pixels).
-# Gives the exhaust trail a visible body instead of a single-pixel line.
-TRAIL_HALF_WIDTH: float = 0.8
 
 
 # ---------------------------------------------------------------------------
@@ -106,25 +88,19 @@ TRAIL_HALF_WIDTH: float = 0.8
 
 @dataclass
 class _Shell:
-    """State for one fireworks shell from launch through burst fade.
+    """State for one fireworks shell — burst-only, no ascent.
 
     Attributes:
-        launch_x:   Horizontal pixel position at launch.
-        launch_y:   Vertical pixel position at launch (bottom edge).
-        zenith_x:   Horizontal position at detonation.
-        zenith_y:   Vertical position at detonation.
-        launch_t:   Global effect-time at moment of launch.
-        ascent_dur: Seconds from launch to zenith.
-        burst_hue:  Explosion hue in degrees (0-360).
-        burst_dur:  Seconds for the burst to fade to black.
+        burst_x:   Horizontal pixel position of the detonation.
+        burst_y:   Vertical pixel position of the detonation.
+        burst_t:   Global effect-time at moment of detonation.
+        burst_hue: Explosion hue in degrees (0-360).
+        burst_dur: Seconds for the burst to fade to black.
     """
 
-    launch_x: float
-    launch_y: float
-    zenith_x: float
-    zenith_y: float
-    launch_t: float
-    ascent_dur: float
+    burst_x: float
+    burst_y: float
+    burst_t: float
     burst_hue: float
     burst_dur: float
 
@@ -137,7 +113,7 @@ class _Shell:
         Returns:
             ``True`` if this shell has no further contribution.
         """
-        return (t - self.launch_t) >= (self.ascent_dur + self.burst_dur)
+        return (t - self.burst_t) >= self.burst_dur
 
 
 # ---------------------------------------------------------------------------
@@ -145,22 +121,22 @@ class _Shell:
 # ---------------------------------------------------------------------------
 
 class Fireworks2D(Effect):
-    """2D fireworks — shells rise and burst into expanding circular halos.
+    """2D fireworks — shells detonate at random points and bloom outward.
 
-    Each shell:
-
-    1. Launches from a random position along the bottom edge.
-    2. Rises with ease-out deceleration toward a random zenith in the
-       upper portion of the grid, trailing white-hot exhaust.
-    3. Detonates at zenith: a circular gaussian bloom expands outward
-       and fades through white-hot → chemical color → warm orange.
+    Each shell detonates at a random position anywhere on the grid;
+    a circular gaussian bloom expands from that point and fades
+    through white-hot → chemical color → warm orange.  No rocket
+    ascent — the previous "shell rises from the bottom edge to a
+    zenith in the upper portion" preamble assumed a wall-mounted
+    fixture with a clear up/down.  On a ceiling-mounted matrix every
+    direction is equivalent and the ascent reads as wrong.
 
     Multiple shells overlap additively in RGB space for physically
     correct color mixing.
     """
 
     name: str = "fireworks2d"
-    description: str = "2D fireworks — shells rise and burst into circular halos"
+    description: str = "2D fireworks — bursts bloom from random points across the grid"
     affinity: frozenset[str] = frozenset({DEVICE_TYPE_MATRIX})
 
     width = Param(DEFAULT_WIDTH, min=1, max=500,
@@ -169,23 +145,15 @@ class Fireworks2D(Effect):
                    description="Grid height in pixels (rows)")
     max_shells = Param(
         3, min=1, max=20,
-        description="Maximum simultaneous shells in flight",
+        description="Maximum simultaneous bursts on screen",
     )
     launch_rate = Param(
         0.4, min=0.05, max=5.0,
-        description="Average new shells launched per second",
-    )
-    ascent_speed = Param(
-        6.0, min=1.0, max=40.0,
-        description="Rise speed in pixels per second",
-    )
-    trail_length = Param(
-        4.0, min=0.5, max=20.0,
-        description="Exhaust trail length in pixels",
+        description="Average new bursts per second",
     )
     burst_spread = Param(
         6.0, min=1.0, max=30.0,
-        description="Maximum burst radius in pixels from zenith",
+        description="Maximum burst radius in pixels from detonation point",
     )
     burst_duration = Param(
         1.8, min=0.2, max=8.0,
@@ -230,41 +198,26 @@ class Fireworks2D(Effect):
     # ------------------------------------------------------------------
 
     def _spawn_shell(self, t: float, w: int, h: int) -> None:
-        """Create and register a new shell from the bottom edge.
+        """Create and register a new shell that detonates immediately.
 
-        The shell launches from a random X along the bottom row and
-        rises to a zenith in the upper portion of the grid.  A slight
-        horizontal drift gives the trajectory a natural arc.
+        The detonation point is uniformly random across the entire
+        grid — no upper-region bias, no horizontal drift, no ascent.
+        On a ceiling-mounted fixture this reads as fireworks viewed
+        from directly below: bursts blooming everywhere, no
+        gravity-implied direction.
 
         Args:
             t: Current global effect-time.
             w: Grid width in pixels.
             h: Grid height in pixels.
         """
-        # Launch from a random X along the bottom edge.
-        launch_x: float = random.uniform(0.0, w - 1.0)
-        launch_y: float = float(h - 1)
-
-        # Zenith: upper portion of the grid.
-        min_y: int = max(0, int(h * ZENITH_TOP_MARGIN))
-        max_y: int = max(min_y, int(h * (1.0 - ZENITH_MIN_TRAVEL)) - 1)
-        zenith_y: float = float(random.randint(min_y, max(min_y, max_y)))
-
-        # Slight horizontal drift — shells don't rise perfectly straight.
-        drift: float = random.uniform(-w * 0.15, w * 0.15)
-        zenith_x: float = max(0.0, min(w - 1.0, launch_x + drift))
-
-        # Ascent duration = vertical distance / speed.
-        vert_dist: float = launch_y - zenith_y
-        ascent_dur: float = vert_dist / max(float(self.ascent_speed), 1.0)
+        burst_x: float = random.uniform(0.0, max(w - 1, 0))
+        burst_y: float = random.uniform(0.0, max(h - 1, 0))
 
         self._shells.append(_Shell(
-            launch_x=launch_x,
-            launch_y=launch_y,
-            zenith_x=zenith_x,
-            zenith_y=zenith_y,
-            launch_t=t,
-            ascent_dur=ascent_dur,
+            burst_x=burst_x,
+            burst_y=burst_y,
+            burst_t=t,
             burst_hue=random.uniform(0.0, 360.0),
             burst_dur=float(self.burst_duration),
         ))
@@ -296,144 +249,77 @@ class Fireworks2D(Effect):
         total: int = w * h
         contrib: list[tuple[float, float, float]] = [(0.0, 0.0, 0.0)] * total
 
-        age: float = t - shell.launch_t
-        if age < 0:
+        age: float = t - shell.burst_t
+        if age < 0 or age >= shell.burst_dur:
             return contrib
 
-        if age < shell.ascent_dur:
-            # ----------------------------------------------------------
-            # Ascent phase
-            # ----------------------------------------------------------
-            frac: float = age / shell.ascent_dur
+        # ----------------------------------------------------------
+        # Burst phase — circular 2D gaussian bloom expanding from
+        # the detonation point.  No ascent phase (rocket-up was
+        # removed in v2.0; see module docstring for rationale).
+        # ----------------------------------------------------------
+        burst_frac: float = age / shell.burst_dur
 
-            # Ease-out: fast start, slowing finish.
-            eased: float = 1.0 - (1.0 - frac) ** EASE_EXPONENT
+        # Quadratic fade: bright flash then long slow dimming.
+        fade: float = (1.0 - burst_frac) ** BURST_FADE_EXPONENT
 
-            # Current head position (interpolated along trajectory).
-            head_x: float = shell.launch_x + (shell.zenith_x - shell.launch_x) * eased
-            head_y: float = shell.launch_y + (shell.zenith_y - shell.launch_y) * eased
+        # 2D gaussian sigma expands over the burst lifetime.
+        sigma: float = (
+            BURST_SIGMA_START
+            + burst_frac * float(self.burst_spread) / BURST_SIGMA_DIVISOR
+        )
+        two_sigma_sq: float = 2.0 * sigma * sigma
 
-            # Direction vector (normalized) for trail computation.
-            dx: float = shell.zenith_x - shell.launch_x
-            dy: float = shell.zenith_y - shell.launch_y
-            traj_len: float = math.sqrt(dx * dx + dy * dy)
-            if traj_len < 0.01:
-                return contrib
-            nx: float = dx / traj_len
-            ny: float = dy / traj_len
-
-            trail_len: float = float(self.trail_length)
-
-            for row in range(h):
-                for col in range(w):
-                    # Vector from head to this pixel.
-                    px: float = col - head_x
-                    py: float = row - head_y
-
-                    # Project onto trajectory axis:
-                    # behind > 0 means pixel is behind the head (in the trail).
-                    behind: float = -(px * nx + py * ny)
-
-                    # Perpendicular distance from trajectory line.
-                    perp: float = abs(px * ny - py * nx)
-
-                    if perp > TRAIL_HALF_WIDTH + 0.5:
-                        # Too far from the trajectory line.
-                        continue
-
-                    # Width falloff — pixels off-axis are dimmer.
-                    width_atten: float = max(
-                        0.0, 1.0 - perp / (TRAIL_HALF_WIDTH + 0.5)
-                    )
-
-                    idx: int = row * w + col
-
-                    if -0.7 <= behind <= 0.7:
-                        # At the shell head — white-hot, full brightness.
-                        contrib[idx] = (
-                            shell.burst_hue,
-                            HEAD_SATURATION,
-                            1.0 * width_atten,
-                        )
-                    elif 0.7 < behind <= trail_len:
-                        # In the exhaust trail — quadratic decay.
-                        trail_frac: float = (behind - 0.7) / trail_len
-                        bri: float = (
-                            (1.0 - trail_frac) ** TRAIL_EXPONENT * width_atten
-                        )
-                        if bri > BURST_MIN_BRIGHTNESS:
-                            contrib[idx] = (
-                                shell.burst_hue, TRAIL_SATURATION, bri,
-                            )
-
+        # Temporal color evolution — same four phases as 1D.
+        if burst_frac < BURST_WHITE_PHASE:
+            # Initial flash — white-hot.
+            zone_hue: float = shell.burst_hue
+            zone_sat: float = HEAD_SATURATION
+        elif burst_frac < BURST_COLOR_PEAK:
+            # Ramp to full chemical color.
+            ramp: float = (
+                (burst_frac - BURST_WHITE_PHASE)
+                / (BURST_COLOR_PEAK - BURST_WHITE_PHASE)
+            )
+            zone_hue = shell.burst_hue
+            zone_sat = HEAD_SATURATION + (
+                BURST_SATURATION - HEAD_SATURATION
+            ) * ramp
+        elif burst_frac < BURST_COOL_START:
+            # Peak chemical color.
+            zone_hue = shell.burst_hue
+            zone_sat = BURST_SATURATION
         else:
-            burst_age: float = age - shell.ascent_dur
-            if burst_age < shell.burst_dur:
-                # ----------------------------------------------------------
-                # Burst phase — circular 2D gaussian bloom
-                # ----------------------------------------------------------
-                burst_frac: float = burst_age / shell.burst_dur
+            # Cooling toward warm orange.
+            cool_frac: float = (
+                (burst_frac - BURST_COOL_START)
+                / (1.0 - BURST_COOL_START)
+            )
+            diff: float = BURST_COOL_HUE - shell.burst_hue
+            if diff > 180.0:
+                diff -= 360.0
+            elif diff < -180.0:
+                diff += 360.0
+            zone_hue = (shell.burst_hue + diff * cool_frac) % 360.0
+            zone_sat = BURST_SATURATION * (1.0 - 0.5 * cool_frac)
 
-                # Quadratic fade: bright flash then long slow dimming.
-                fade: float = (1.0 - burst_frac) ** BURST_FADE_EXPONENT
+        for row in range(h):
+            for col in range(w):
+                dx: float = col - shell.burst_x
+                dy: float = row - shell.burst_y
+                dist_sq: float = dx * dx + dy * dy
 
-                # 2D gaussian sigma expands over the burst lifetime.
-                sigma: float = (
-                    BURST_SIGMA_START
-                    + burst_frac * float(self.burst_spread) / BURST_SIGMA_DIVISOR
+                # 2D gaussian falloff from detonation point.
+                gaussian: float = math.exp(-dist_sq / two_sigma_sq)
+                bri: float = min(
+                    1.0, fade * gaussian * BURST_BRIGHTNESS_BOOST,
                 )
-                two_sigma_sq: float = 2.0 * sigma * sigma
 
-                # Temporal color evolution — same four phases as 1D.
-                if burst_frac < BURST_WHITE_PHASE:
-                    # Initial flash — white-hot.
-                    zone_hue: float = shell.burst_hue
-                    zone_sat: float = HEAD_SATURATION
-                elif burst_frac < BURST_COLOR_PEAK:
-                    # Ramp to full chemical color.
-                    ramp: float = (
-                        (burst_frac - BURST_WHITE_PHASE)
-                        / (BURST_COLOR_PEAK - BURST_WHITE_PHASE)
-                    )
-                    zone_hue = shell.burst_hue
-                    zone_sat = HEAD_SATURATION + (
-                        BURST_SATURATION - HEAD_SATURATION
-                    ) * ramp
-                elif burst_frac < BURST_COOL_START:
-                    # Peak chemical color.
-                    zone_hue = shell.burst_hue
-                    zone_sat = BURST_SATURATION
-                else:
-                    # Cooling toward warm orange.
-                    cool_frac: float = (
-                        (burst_frac - BURST_COOL_START)
-                        / (1.0 - BURST_COOL_START)
-                    )
-                    diff: float = BURST_COOL_HUE - shell.burst_hue
-                    if diff > 180.0:
-                        diff -= 360.0
-                    elif diff < -180.0:
-                        diff += 360.0
-                    zone_hue = (shell.burst_hue + diff * cool_frac) % 360.0
-                    zone_sat = BURST_SATURATION * (1.0 - 0.5 * cool_frac)
+                if bri < BURST_MIN_BRIGHTNESS:
+                    continue
 
-                for row in range(h):
-                    for col in range(w):
-                        dx: float = col - shell.zenith_x
-                        dy: float = row - shell.zenith_y
-                        dist_sq: float = dx * dx + dy * dy
-
-                        # 2D gaussian falloff from zenith point.
-                        gaussian: float = math.exp(-dist_sq / two_sigma_sq)
-                        bri: float = min(
-                            1.0, fade * gaussian * BURST_BRIGHTNESS_BOOST,
-                        )
-
-                        if bri < BURST_MIN_BRIGHTNESS:
-                            continue
-
-                        idx: int = row * w + col
-                        contrib[idx] = (zone_hue, zone_sat, bri)
+                idx: int = row * w + col
+                contrib[idx] = (zone_hue, zone_sat, bri)
 
         return contrib
 

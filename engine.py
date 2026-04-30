@@ -944,6 +944,11 @@ class Controller:
         """
         result: dict[str, Any] = {}
         for name, cls in get_registry().items():
+            # Skip effects flagged hidden (diagnostics, site-private
+            # surfaces).  They remain in the full registry and stay
+            # playable by exact name; this listing is the public face.
+            if getattr(cls, "hidden", False):
+                continue
             params: dict[str, Any] = {}
             for pname, pdef in cls.get_param_defs().items():
                 params[pname] = {

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# glowup — dev-checkout wrapper around glowup.py.
+#
+# Why this exists: glowup.py's #!/usr/bin/env python3 resolves to
+# system Python on Macs, which lacks the project deps.  This wrapper
+# picks the project venv explicitly so plain ./glowup (or a
+# PATH-symlinked glowup) Just Works on dev hosts (Conway, Bed,
+# Daedalus — all of which have ~/venv).
+#
+# The public installer (install.sh from the BASIC.md scope) writes
+# its own PATH wrapper for end users.  That is a separate artifact
+# and does not conflict with this dev-only one.
+set -e
+DIR="$(cd "$(dirname "$0")" && pwd)"
+PY="$HOME/venv/bin/python"
+if [[ ! -x "$PY" ]]; then
+  echo "glowup wrapper: $PY not found; expected the project venv at ~/venv" >&2
+  exit 1
+fi
+exec "$PY" "$DIR/glowup.py" "$@"

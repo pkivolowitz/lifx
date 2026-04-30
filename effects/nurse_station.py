@@ -253,6 +253,11 @@ class NurseStation(Effect):
     name: str = "nurse_station"
     description: str = "Patient census on Luna — color-coded vitals"
     affinity: frozenset[str] = frozenset({DEVICE_TYPE_MATRIX})
+    # Site-private surface — wired to the Retro-Med MQTT telemetry
+    # stack; not meaningful outside that deployment.  Hidden from
+    # public listings (``glowup effects``, /api/effects) but still
+    # playable by exact name (``glowup play nurse_station ...``).
+    hidden: bool = True
 
     # Tunable parameters.
     broker = Param("localhost", description="MQTT broker for Retro-Med telemetry")

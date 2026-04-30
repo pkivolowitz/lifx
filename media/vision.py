@@ -63,6 +63,24 @@ DEFAULT_EDGE_REGIONS: int = 24
 GRID_EXTRACT_W: int = 32
 GRID_EXTRACT_H: int = 32
 
+# Allowed methods for per-cell color extraction in the 2D grid path.
+#   "average":    fast — channel-wise mean + brightest-pixel hue.
+#   "median_cut": dominant-cluster color via median cut at depth=2;
+#                 better hue fidelity on multi-color cells (e.g. a
+#                 cell straddling a face and a saturated background)
+#                 at the cost of an extra sort per cell.  Default,
+#                 because Mac dev hardware easily handles it at 30fps;
+#                 fall back to "average" on Pi-class hosts if a future
+#                 deployment is throughput-bound.
+GRID_EXTRACT_METHODS: tuple[str, ...] = ("average", "median_cut")
+GRID_EXTRACT_DEFAULT: str = "median_cut"
+
+# Median-cut recursion depth used by both the 1D edge path and the
+# 2D grid path.  Each level doubles the cluster count; depth=2 → 4
+# clusters → pick the dominant.  Higher depth is overkill at the
+# typical cell sizes we operate on.
+GRID_MEDIAN_CUT_DEPTH: int = 2
+
 # Number of random pixel samples per edge region for stochastic sampling.
 # Higher = more stable color, more CPU.  64 at 24 regions = 1536 samples
 # total per frame — negligible cost vs the blur.
@@ -161,10 +179,19 @@ class VisionExtractor:
         source_name: str,
         bus: Any,
         edge_regions: int = DEFAULT_EDGE_REGIONS,
+        grid_extract_method: str = GRID_EXTRACT_DEFAULT,
     ) -> None:
         self._source_name: str = source_name
         self._bus: Any = bus
         self._edge_regions: int = edge_regions
+        # Validate at the boundary — bad strings here would silently
+        # fall through to the default branch and confuse the user.
+        if grid_extract_method not in GRID_EXTRACT_METHODS:
+            raise ValueError(
+                f"grid_extract_method must be one of "
+                f"{GRID_EXTRACT_METHODS}, got {grid_extract_method!r}",
+            )
+        self._grid_extract_method: str = grid_extract_method
 
         # Temporal state.
         self._prev_brightness: float = 0.0
@@ -187,8 +214,8 @@ class VisionExtractor:
 
         logger.info(
             "VisionExtractor '%s': %d edge regions, "
-            "numpy=%s, opencv=%s",
-            source_name, edge_regions,
+            "grid_extract=%s, numpy=%s, opencv=%s",
+            source_name, edge_regions, grid_extract_method,
             _HAS_NUMPY, _HAS_OPENCV,
         )
 
@@ -442,6 +469,24 @@ class VisionExtractor:
         # --- Grid colors (full-frame downscale for 2D effects) ---
         # Downscale the frame to a fixed grid and publish per-cell
         # hue, saturation, and brightness arrays for screen_light2d.
+        # One-time RGB sanity probe: dump the raw center-pixel RGB
+        # of the bottom pyramid frame so an external observer can
+        # verify the channel order is RGB (not BGR or some weirder
+        # YUV→RGB conversion artifact).  Fires once per ~30 frames
+        # to avoid console spam.
+        if not hasattr(self, "_rgb_probe_n"):
+            self._rgb_probe_n = 0
+        self._rgb_probe_n += 1
+        if self._rgb_probe_n % 30 == 1:
+            cy: int = h // 2
+            cx: int = w // 2
+            r_v: float = float(fframe[cy, cx, 0])
+            g_v: float = float(fframe[cy, cx, 1])
+            b_v: float = float(fframe[cy, cx, 2])
+            logger.info(
+                "rgb-probe @(%d,%d) chan0=%.3f chan1=%.3f chan2=%.3f",
+                cx, cy, r_v, g_v, b_v,
+            )
         self._extract_and_publish_grid(fframe, hue, sat, max_c, prefix)
 
     def _extract_and_publish_grid(
@@ -454,9 +499,14 @@ class VisionExtractor:
     ) -> None:
         """Downscale per-pixel HSB to a fixed grid and publish.
 
-        Divides the frame into a grid of cells and computes the average
-        hue, saturation, and brightness per cell.  Published as flat
-        row-major arrays on the signal bus.
+        Two extraction methods are supported, selected at construction
+        time via ``grid_extract_method``:
+
+        - ``"average"`` — channel-wise mean over the cell, with hue
+          taken from the brightest pixel (avoids mean-of-hues wrap).
+        - ``"median_cut"`` — recursive median-cut color quantization
+          on the cell's RGB pixels; the dominant cluster's median is
+          converted back to HSB.  More faithful on multi-color cells.
 
         Args:
             fframe: Float frame [0,1] (H, W, 3).
@@ -475,10 +525,40 @@ class VisionExtractor:
         cw: float = fw / gw
         ch: float = fh / gh
 
+        if self._grid_extract_method == "median_cut":
+            grid_hues, grid_sats, grid_bris = self._grid_cells_median_cut(
+                fframe, gw, gh, cw, ch,
+            )
+        else:
+            grid_hues, grid_sats, grid_bris = self._grid_cells_average(
+                hue, sat, bri, gw, gh, cw, ch,
+            )
+
+        self._bus.write(f"{prefix}:grid_hues", grid_hues)
+        self._bus.write(f"{prefix}:grid_sats", grid_sats)
+        self._bus.write(f"{prefix}:grid_bris", grid_bris)
+        self._bus.write(f"{prefix}:grid_w", gw)
+        self._bus.write(f"{prefix}:grid_h", gh)
+
+    def _grid_cells_average(
+        self,
+        hue: "np.ndarray",
+        sat: "np.ndarray",
+        bri: "np.ndarray",
+        gw: int,
+        gh: int,
+        cw: float,
+        ch: float,
+    ) -> tuple[list[float], list[float], list[float]]:
+        """Average per-pixel HSB over each cell.
+
+        Hue is taken from the brightest pixel in the cell (rather
+        than averaged) to avoid the mean-of-hues wrap artifact where
+        e.g. red pixels at 0.0 and 0.95 would average to green ~0.475.
+        """
         grid_hues: list[float] = []
         grid_sats: list[float] = []
         grid_bris: list[float] = []
-
         for gy in range(gh):
             y0: int = int(gy * ch)
             y1: int = int((gy + 1) * ch)
@@ -486,13 +566,9 @@ class VisionExtractor:
                 x0: int = int(gx * cw)
                 x1: int = int((gx + 1) * cw)
 
-                # Average HSB over the cell region.
                 cell_bri: float = float(bri[y0:y1, x0:x1].mean())
                 cell_sat: float = float(sat[y0:y1, x0:x1].mean())
 
-                # Hue averaging uses the brightest pixel's hue to
-                # avoid mean-of-hues wrapping artifacts (e.g., red
-                # pixels at 0.0 and 0.95 averaging to green at 0.475).
                 cell_region_bri = bri[y0:y1, x0:x1]
                 if cell_region_bri.size > 0 and cell_bri > 0.01:
                     peak_idx = cell_region_bri.argmax()
@@ -506,12 +582,55 @@ class VisionExtractor:
                 grid_hues.append(cell_hue)
                 grid_sats.append(cell_sat)
                 grid_bris.append(cell_bri)
+        return grid_hues, grid_sats, grid_bris
 
-        self._bus.write(f"{prefix}:grid_hues", grid_hues)
-        self._bus.write(f"{prefix}:grid_sats", grid_sats)
-        self._bus.write(f"{prefix}:grid_bris", grid_bris)
-        self._bus.write(f"{prefix}:grid_w", gw)
-        self._bus.write(f"{prefix}:grid_h", gh)
+    def _grid_cells_median_cut(
+        self,
+        fframe: "np.ndarray",
+        gw: int,
+        gh: int,
+        cw: float,
+        ch: float,
+    ) -> tuple[list[float], list[float], list[float]]:
+        """Per-cell dominant color via median-cut quantization.
+
+        Each cell's RGB pixels are flattened to (N, 3) and fed to
+        :meth:`_median_cut` at :data:`GRID_MEDIAN_CUT_DEPTH`.  The
+        dominant cluster's median RGB is converted to HSB.  This is
+        the same machinery used by the 1D edge path; reusing it
+        keeps the two surfaces consistent so a cell on the screen
+        edge and a cell in the middle interpret color the same way.
+        """
+        grid_hues: list[float] = []
+        grid_sats: list[float] = []
+        grid_bris: list[float] = []
+        for gy in range(gh):
+            y0: int = int(gy * ch)
+            y1: int = int((gy + 1) * ch)
+            for gx in range(gw):
+                x0: int = int(gx * cw)
+                x1: int = int((gx + 1) * cw)
+
+                cell_rgb: np.ndarray = fframe[y0:y1, x0:x1]
+                if cell_rgb.size == 0:
+                    grid_hues.append(0.0)
+                    grid_sats.append(0.0)
+                    grid_bris.append(0.0)
+                    continue
+
+                pixels: np.ndarray = cell_rgb.reshape(-1, 3).astype(
+                    np.float32,
+                )
+                dom: np.ndarray = self._median_cut(
+                    pixels, depth=GRID_MEDIAN_CUT_DEPTH,
+                )
+                cell_hue, cell_sat, cell_bri = _rgb_to_hsb(
+                    float(dom[0]), float(dom[1]), float(dom[2]),
+                )
+                grid_hues.append(cell_hue)
+                grid_sats.append(cell_sat)
+                grid_bris.append(cell_bri)
+        return grid_hues, grid_sats, grid_bris
 
     def _median_cut(
         self,

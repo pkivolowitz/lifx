@@ -1,0 +1,26 @@
+# Media pipeline — screen capture, video URL ingestion, vision extraction.
+#
+# Required by the screen_light / screen_light2d effects and the
+# `glowup play --screen` / `--video-url` flow.  The core engine and
+# all non-media effects run without these — imports are guarded by
+# _HAS_NUMPY / _HAS_OPENCV sentinels in media/vision.py and
+# media/screen_source.py.
+#
+# Install with:
+#
+#   pip install -r requirements-media.txt
+#
+# External (non-Python) dependency:
+#
+#   ffmpeg — used as a subprocess to decode HDHomeRun streams, RTSP
+#            URLs, local video files, and the macOS avfoundation
+#            screen capture path.  PATH-resolved at runtime.
+#
+#     macOS:  brew install ffmpeg
+#     Linux:  sudo apt install ffmpeg
+#
+# If any of these are missing, `glowup play --screen ...` fails fast
+# with a single clear error message naming what to install.
+
+numpy>=1.24
+opencv-python>=4.8

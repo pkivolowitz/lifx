@@ -376,8 +376,20 @@ def get_registry() -> dict[str, type[Effect]]:
 
 
 def get_effect_names() -> list[str]:
-    """Return a sorted list of available effect names."""
-    return sorted(_registry.keys())
+    """Return a sorted list of user-visible effect names.
+
+    Effects whose class declares ``hidden = True`` are skipped — they
+    remain in :func:`get_registry` and are still playable by exact
+    name, but do not appear in listings, error-message "Available:"
+    enumerations, the public ``GET /api/effects`` response, or any
+    end-user picker.  Reserved for diagnostics (``_primary_cycle``)
+    and private/site-specific surfaces (``nurse_station`` for the
+    Retro-Med Luna integration).
+    """
+    return sorted(
+        name for name, cls in _registry.items()
+        if not getattr(cls, "hidden", False)
+    )
 
 
 def create_effect(name: str, **params: Any) -> Effect:

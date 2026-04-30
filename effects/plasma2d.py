@@ -15,7 +15,7 @@ Works on both 1D strips (single-row plasma) and 2D matrix emitters.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import math
 
@@ -32,8 +32,11 @@ TWO_PI: float = 2.0 * math.pi
 DEFAULT_WIDTH: int = 78
 DEFAULT_HEIGHT: int = 22
 
-# Brightness as fraction of HSBK_MAX.
-DEFAULT_BRIGHTNESS: float = 0.76
+# Default peak brightness as fraction of HSBK_MAX.  Tuned to 0.38
+# (38%) on the 15" Ceiling 2026-04-30: the round-diffuser optic is
+# very efficient and full plasma at 76% washes out all hue contrast,
+# while ~38% lets the rolling color field stay visibly chromatic.
+DEFAULT_BRIGHTNESS: float = 0.38
 
 
 class Plasma2D(Effect):
@@ -50,13 +53,13 @@ class Plasma2D(Effect):
 
     speed = Param(1.0, min=0.1, max=5.0,
                   description="Animation speed multiplier")
-    scale = Param(12.0, min=2.0, max=50.0,
+    scale = Param(6.0, min=2.0, max=50.0,
                   description="Spatial scale (larger = coarser pattern)")
     width = Param(DEFAULT_WIDTH, min=4, max=500,
                   description="Grid width in pixels (set by viewer)")
     height = Param(DEFAULT_HEIGHT, min=4, max=300,
                    description="Grid height in pixels (set by viewer)")
-    brightness = Param(76, min=10, max=100,
+    brightness = Param(38, min=10, max=100,
                        description="Peak brightness (percent)")
 
     def render(self, t: float, zone_count: int) -> list[HSBK]:
