@@ -687,13 +687,14 @@ const openSeaMap = L.tileLayer(
    Each toggleable feature lives in its own LayerGroup so the
    layer-control checkboxes drive add/remove uniformly.  Vessel
    markers go into either the local-RX or external group based
-   on their ``source`` field; tracks and heading indicators each
-   get their own group so they can be hidden independently of the
-   markers themselves. */
+   on their ``source`` field; tracks get their own group so they can
+   be hidden independently of the markers themselves.  Heading-line
+   indicators were dropped 2026-05-01 — they cost a per-vessel
+   polyline pair on every render and the boat-icon rotation already
+   conveys direction at zero polyline cost. */
 const localVesselLayer    = L.featureGroup().addTo(map);
 const externalVesselLayer = L.featureGroup().addTo(map);
 const trackLayer          = L.featureGroup().addTo(map);
-const headingLayer        = L.featureGroup().addTo(map);
 const buoyLayer           = L.featureGroup().addTo(map);
 const aircraftLayer       = L.featureGroup().addTo(map);
 
@@ -716,7 +717,7 @@ const labelsToggle = (new LabelsToggleLayer()).addTo(map);
    prior textual position later in the script, the temporal dead
    zone would ReferenceError on first restore.
 
-   markers:         mmsi -> { marker, heading, headingBacking, kind, layer }
+   markers:         mmsi -> { marker, kind, layer }
                     (layer is the LayerGroup the marker is currently in,
                      so we can move it on source change without leaks)
    trackLines:      mmsi -> Polyline (lives in trackLayer)
@@ -727,7 +728,6 @@ const labelsToggle = (new LabelsToggleLayer()).addTo(map);
 const markers = new Map();
 const trackLines = new Map();
 const lastVesselsById = new Map();
-let firstFitDone = false;
 
 /* ----- Vessel-table side panel + persisted view state -----
    Persistence is browser-local (localStorage) — that's the right
@@ -836,7 +836,6 @@ const layerControl = L.control.layers(
         "Vessels — local RX":          localVesselLayer,
         "Vessels — aisstream":         externalVesselLayer,
         "Breadcrumb tracks":           trackLayer,
-        "Heading indicators":          headingLayer,
         "Vessel name labels":          labelsToggle,
         "Buoys (NDBC)":                buoyLayer,
         "Aircraft (ADS-B)":            aircraftLayer,
@@ -858,11 +857,10 @@ const layerControl = L.control.layers(
 
 /* ----- URL-driven layer presets -----
    Same maritime.html serves three URLs.  Each is a saved view:
-     /maritime   vessels + tracks + headings + labels + buoys ON,
-                 aircraft OFF
+     /maritime   vessels + tracks + labels + buoys ON, aircraft OFF
      /air        aircraft ON, everything else OFF
-     /traffic    maritime + air — vessels + tracks + headings +
-                 labels + buoys + aircraft ON
+     /traffic    maritime + air — vessels + tracks + labels + buoys +
+                 aircraft ON
    Layer visibility comes from the URL on every load (overrides any
    prior session state).  Other UI chrome — panel width, columns,
    sort, range — still persists in localStorage because those are
@@ -871,18 +869,18 @@ const layerControl = L.control.layers(
 const PATHNAME_PRESET = (() => {
     const path = location.pathname.replace(/\/+$/, "");
     if (path === "/air") return {
-        vessels: false, tracks: false, headings: false, labels: false,
+        vessels: false, tracks: false, labels: false,
         buoys:   false, aircraft: true,
         title:   "Air Traffic",
     };
     if (path === "/traffic") return {
-        vessels: true, tracks: true, headings: true, labels: true,
+        vessels: true, tracks: true, labels: true,
         buoys:   true, aircraft: true,
         title:   "Traffic",
     };
     /* Default + explicit /maritime */
     return {
-        vessels: true, tracks: true, headings: true, labels: true,
+        vessels: true, tracks: true, labels: true,
         buoys:   true, aircraft: false,
         title:   "Maritime",
     };
@@ -904,7 +902,6 @@ function _setLayer(layer, on) {
 _setLayer(localVesselLayer,    PATHNAME_PRESET.vessels);
 _setLayer(externalVesselLayer, PATHNAME_PRESET.vessels);
 _setLayer(trackLayer,          PATHNAME_PRESET.tracks);
-_setLayer(headingLayer,        PATHNAME_PRESET.headings);
 _setLayer(labelsToggle,        PATHNAME_PRESET.labels);
 _setLayer(buoyLayer,           PATHNAME_PRESET.buoys);
 _setLayer(aircraftLayer,       PATHNAME_PRESET.aircraft);
@@ -1292,8 +1289,8 @@ document.addEventListener("fullscreenchange",
    rendering what the operator can actually see.  Critical at the
    1000+ vessel scale aisstream pumps in.
 
-   markers / trackLines / lastVesselsById / firstFitDone are
-   declared earlier in this script — see the "Vessel state" block
+   markers / trackLines / lastVesselsById are declared earlier in
+   this script — see the "Vessel state" block
    above the panel init.  This kept the temporal-dead-zone-free
    ordering needed by the column-toggle restoration. */
 
@@ -1554,39 +1551,6 @@ function upsertVessel(v) {
         entry.marker.unbindTooltip();
     }
 
-    /* Heading indicator: a thick polyline from the marker in the
-       reported heading direction with a small dark backing line
-       underneath for visibility against any basemap colour.  Length
-       scales with zoom so it stays visible at port-area scales
-       without dominating at ocean scales, and is multiplied by
-       (1 + speed/8) so faster vessels get a longer "trail" — an
-       at-a-glance speed cue.  Skip if heading is unknown. */
-    if (entry.heading) {
-        map.removeLayer(entry.heading);
-        if (entry.headingBacking) map.removeLayer(entry.headingBacking);
-        entry.heading = null;
-        entry.headingBacking = null;
-    }
-    if (heading != null) {
-        const speedFactor = Math.max(1.0, 1.0 + (speed || 0) / 8.0);
-        const lengthDeg = 0.0055 * speedFactor *
-                          Math.pow(2, 13 - map.getZoom());
-        const headEnd = [
-            v.lat + Math.sin((90 - heading) * Math.PI / 180) * lengthDeg,
-            v.lon + Math.cos((90 - heading) * Math.PI / 180) * lengthDeg,
-        ];
-        /* Dark backing line goes down first, slightly thicker, so the
-           coloured top line reads as a stroked indicator regardless
-           of basemap colour underneath.  Both go into headingLayer
-           so the layer-control toggle hides them as a pair. */
-        entry.headingBacking = L.polyline([pos, headEnd], {
-            color: MARKER_STROKE, weight: 5, opacity: 0.6,
-        }).addTo(headingLayer);
-        entry.heading = L.polyline([pos, headEnd], {
-            color: colour, weight: 3, opacity: 0.95,
-        }).addTo(headingLayer);
-    }
-
     /* Breadcrumb track — polyline through recent positions.  Replace
        whole-cloth on each update so we don't need to dedup.  Weight
        and opacity tuned to be readable against busy port-area OSM
@@ -1607,8 +1571,6 @@ function removeMissingVessels(currentMmsis) {
     for (const [mmsi, entry] of markers) {
         if (!currentMmsis.has(mmsi)) {
             entry.layer.removeLayer(entry.marker);
-            if (entry.heading) headingLayer.removeLayer(entry.heading);
-            if (entry.headingBacking) headingLayer.removeLayer(entry.headingBacking);
             markers.delete(mmsi);
             const tl = trackLines.get(mmsi);
             if (tl) { trackLayer.removeLayer(tl); trackLines.delete(mmsi); }
@@ -1675,22 +1637,14 @@ async function poll() {
     lastVesselsById.clear();
     vessels.forEach(v => { if (v.mmsi != null) lastVesselsById.set(v.mmsi, v); });
 
-    /* Auto-fit on first non-empty payload — but use ONLY local-RX
-       vessels for the framing rather than the full Gulf-wide
-       aisstream herd.  Local vessels reflect what the operator's
-       actual antenna can hear; an autofit including Houston and
-       Tampa would zoom out so far that nothing reads at all.  Fall
-       back to the full set if there's no local data yet. */
-    if (!firstFitDone && vessels.length > 0) {
-        const localOnly = vessels.filter(v => !v.source || v.source === "local");
-        const fitSet = (localOnly.length > 0 ? localOnly : vessels);
-        const bounds = L.latLngBounds(fitSet.map(v => [v.lat, v.lon]));
-        if (bounds.isValid()) {
-            map.fitBounds(bounds.pad(0.2), { maxZoom: 13 });
-            firstFitDone = true;
-        }
-    }
-
+    /* No first-payload autofit.  The map opens at HOME (server-
+       stamped maritime_reference, with a CONUS fallback for
+       unconfigured operators) and stays there until the user pans
+       or zooms — when local-RX is empty the previous autofit fell
+       through to the full aisstream set, which routinely framed
+       the entire Gulf and queued ~1.5M markers for render before
+       the viewport-cull at renderVessels could rescue the browser.
+       Removing the autofit makes the home view authoritative. */
     renderVessels(vessels);
     /* Re-render the side-panel table off the same cache.  The
        table is independent from the map's viewport culling — it
