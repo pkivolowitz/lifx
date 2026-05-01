@@ -139,6 +139,17 @@ _CHAT_HISTORY_MAX: int = 10
 # History expires after 30 minutes of inactivity.
 _CHAT_HISTORY_TTL_S: float = 1800.0
 
+# Default sampling temperature for freeform chat.
+_CHAT_TEMPERATURE: float = 0.7
+
+# num_predict cap for chat-style Ollama calls — ~90 words, enough
+# for 1-3 short spoken sentences.
+_CHAT_NUM_PREDICT: int = 120
+
+# /api/chat call timeout.  Local Ollama on the hub typically
+# responds in 0.5-3s for gemma3:27b; 30s is generous headroom.
+_OLLAMA_TIMEOUT_S: float = 30.0
+
 # System prompt for freeform chat — concise spoken responses.
 _CHAT_SYSTEM_PROMPT: str = (
     "You are GlowUp, a home assistant built on the Gemma 3 language "
@@ -147,6 +158,47 @@ _CHAT_SYSTEM_PROMPT: str = (
     "and factual. Every response MUST be 1-2 sentences maximum. "
     "You have a warm personality."
 )
+
+# System prompt for the joke action.  The category enumeration is
+# load-bearing: at default chat temperature, gemma3:27b converges on
+# the same handful of jokes when asked cold (the "atoms make up
+# everything" attractor and a few others).  Listing many styles +
+# many subjects + an explicit avoidance list of the worst offenders
+# pushes the sampler off the deterministic favorites and into the
+# long tail.  Per-room chat history (shared with the chat action)
+# provides the within-session "don't repeat" signal naturally.
+_JOKE_SYSTEM_PROMPT: str = (
+    "You are GlowUp, a home assistant. The user has asked for a "
+    "joke. Reply with exactly one joke and nothing else — no "
+    "preamble like \"Sure!\" or \"Here's one:\", no commentary "
+    "after. The reply is spoken aloud over a speaker, so keep it "
+    "to 1-3 short sentences and make it land cleanly when read. "
+    "Deliver it casually, as a friend would tell it.\n\n"
+    "Pick uniformly at random from a wide range of comedic styles: "
+    "one-liner, observational, pun, anti-joke, absurdist, dad joke, "
+    "dry British, self-deprecating, paraprosdokian, hyperbole, "
+    "malaphor, deadpan, shaggy-dog (kept short), Borscht-belt, "
+    "callback, surreal, bar-walks-into, doctor-doctor, Tom Swifty, "
+    "Spoonerism, Wellerism, news-headline twist, Bayesian-prior "
+    "subversion. Subjects span science, language, food, work, "
+    "animals, weather, philosophy, technology, history, sports, "
+    "music, math, geography, domestic life, travel, money. "
+    "Avoid knock-knock unless the user explicitly asks for one. "
+    "Do not default to the most common LLM joke attractors — "
+    "in particular, never use: \"why don't scientists trust "
+    "atoms\", \"I'm reading a book about anti-gravity\", "
+    "\"parallel lines have so much in common\", \"I told my wife "
+    "she was drawing her eyebrows too high\", \"why don't "
+    "skeletons fight each other\", \"what do you call a fish "
+    "with no eyes\". If the conversation history shows a joke you "
+    "already told, pick a different style and a different subject."
+)
+
+# Higher sampling temperature on joke calls.  At chat-default 0.7,
+# the model collapses to its favorites; at 1.1 with the category
+# list above, it samples broadly across the long tail without
+# losing coherence.
+_JOKE_TEMPERATURE: float = 1.1
 
 # ---------------------------------------------------------------------------
 # Actions config path — adjacent to this module.
@@ -320,6 +372,7 @@ class GlowUpExecutor:
             "list_locks": self._handle_list_locks,
             "enable_voice_gate": self._handle_enable_voice_gate,
             "disable_voice_gate": self._handle_disable_voice_gate,
+            "joke": self._handle_joke,
         }
 
         # TTS reference — set after init by the coordinator daemon.
@@ -3028,17 +3081,33 @@ class GlowUpExecutor:
 
         return self._chat_history[room]
 
-    def _exec_chat(
-        self, message: str, room: str,
+    def _call_ollama_chat(
+        self,
+        system_prompt: str,
+        message: str,
+        room: str,
+        temperature: float,
+        fail_message: str,
     ) -> dict[str, Any]:
-        """Handle freeform chat via Ollama with per-room history.
+        """Call Ollama /api/chat with a custom system prompt and
+        per-room history.
+
+        Shared by freeform chat and category-specific handlers
+        (jokes, etc.).  The system prompt and temperature vary per
+        caller; the conversation history, model, timeout, and reply
+        bookkeeping are common — extracting this helper keeps the
+        per-category handlers to a few lines and prevents the
+        Ollama-call logic from drifting between copies.
 
         Args:
-            message: The user's spoken message.
-            room:    Room name for history isolation.
+            system_prompt: System role content for this call.
+            message:       User message.
+            room:          Room name for history isolation.
+            temperature:   Sampling temperature.
+            fail_message:  Spoken fallback if the call raises.
 
         Returns:
-            Dict with spoken confirmation.
+            Result dict with status and confirmation.
         """
         if not message.strip():
             return {
@@ -3050,7 +3119,7 @@ class GlowUpExecutor:
         history: list[dict[str, str]] = self._get_chat_history(room)
 
         messages: list[dict[str, str]] = [
-            {"role": "system", "content": _CHAT_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
         ]
         messages.extend(history)
         messages.append({"role": "user", "content": message})
@@ -3060,8 +3129,8 @@ class GlowUpExecutor:
             "messages": messages,
             "stream": False,
             "options": {
-                "temperature": 0.7,
-                "num_predict": 120,
+                "temperature": temperature,
+                "num_predict": _CHAT_NUM_PREDICT,
             },
         }
 
@@ -3075,7 +3144,9 @@ class GlowUpExecutor:
 
         try:
             t0: float = time.time()
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(
+                req, timeout=_OLLAMA_TIMEOUT_S,
+            ) as resp:
                 result = json.loads(resp.read())
                 reply: str = (
                     result.get("message", {}).get("content", "").strip()
@@ -3102,6 +3173,56 @@ class GlowUpExecutor:
             logger.error("Chat failed: %s", exc)
             return {
                 "status": "error",
-                "confirmation": "Sorry, I couldn't think of a response.",
+                "confirmation": fail_message,
                 "speak": True,
             }
+
+    def _exec_chat(
+        self, message: str, room: str,
+    ) -> dict[str, Any]:
+        """Handle freeform chat via Ollama with per-room history.
+
+        Thin wrapper over :meth:`_call_ollama_chat` with the
+        general-purpose chat system prompt and default temperature.
+        Kept as a named method because the chat action type in
+        :meth:`execute_intent` dispatches to this name explicitly.
+        """
+        return self._call_ollama_chat(
+            system_prompt=_CHAT_SYSTEM_PROMPT,
+            message=message,
+            room=room,
+            temperature=_CHAT_TEMPERATURE,
+            fail_message="Sorry, I couldn't think of a response.",
+        )
+
+    def _handle_joke(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Tell a joke via Ollama with broad-category sampling.
+
+        The intent parser routes any joke-shaped request here and
+        forwards the user's exact spoken text in ``params.message``.
+        Forwarding the raw phrasing lets style-specific requests
+        ("knock knock", "dad joke", "tell me a science joke") reach
+        the model verbatim and override the system prompt's
+        knock-knock-avoidance default.  Falls back to a generic
+        "tell me a joke" if the intent didn't supply a message.
+
+        Per-room chat history is shared with the chat action so
+        consecutive "another joke" requests within the 30-minute
+        history window naturally avoid what was just said.
+        """
+        room: str = getattr(self, "_current_room", "unknown")
+        message: str = params.get("message") or "Tell me a joke."
+        return self._call_ollama_chat(
+            system_prompt=_JOKE_SYSTEM_PROMPT,
+            message=message,
+            room=room,
+            temperature=_JOKE_TEMPERATURE,
+            fail_message="Sorry, I can't think of a joke right now.",
+        )

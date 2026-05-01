@@ -260,6 +260,21 @@ repair:
   confirm: "{target} has been restarted."
   speak: true
 
+# Joke — Ollama call with a joke-specific system prompt that
+# explicitly enumerates a wide range of comedic styles so Gemma 3
+# doesn't converge on its handful of deterministic favorites
+# ("atoms make up everything", anti-gravity book, parallel lines).
+# The user's exact phrasing is forwarded as params.message so style
+# requests ("knock knock", "dad joke", "science joke") reach the
+# model verbatim and override the prompt's "avoid knock-knock"
+# default.  Per-room chat history is shared with the chat action so
+# "another joke" naturally avoids what the model just said.
+joke:
+  type: query
+  label: joke
+  handler: joke
+  speak: true
+
 # ---------------------------------------------------------------------------
 # Chat — freeform Ollama conversation (special handling in executor)
 # ---------------------------------------------------------------------------
