@@ -3205,20 +3205,44 @@ class GlowUpExecutor:
     ) -> dict[str, Any]:
         """Tell a joke via Ollama with broad-category sampling.
 
-        The intent parser routes any joke-shaped request here and
-        forwards the user's exact spoken text in ``params.message``.
-        Forwarding the raw phrasing lets style-specific requests
-        ("knock knock", "dad joke", "tell me a science joke") reach
-        the model verbatim and override the system prompt's
-        knock-knock-avoidance default.  Falls back to a generic
-        "tell me a joke" if the intent didn't supply a message.
+        The intent parser routes any joke-shaped request here.
+        Optional ``style`` (e.g. "knock knock", "dad",
+        "one-liner", "anti-joke") and ``topic`` (e.g. "science",
+        "food") are read from params and used to construct a
+        clean user message for the chat model.
+
+        ``params.message`` is deliberately IGNORED, even if the
+        intent parser supplies one.  The small intent classifier
+        (llama3.2:3b) reliably hallucinates an entire joke into
+        params.message when it sees a "tell me a joke" request —
+        and when that hallucinated joke gets forwarded as the user
+        turn, gemma3 reads it as the user having TOLD it a joke
+        and replies with a comeback / review instead of telling
+        its own joke.  Observed live 2026-05-01.  Building the
+        user message ourselves from short atomic param fields
+        eliminates that failure mode entirely.
 
         Per-room chat history is shared with the chat action so
         consecutive "another joke" requests within the 30-minute
         history window naturally avoid what was just said.
         """
         room: str = getattr(self, "_current_room", "unknown")
-        message: str = params.get("message") or "Tell me a joke."
+        # Defensive caps — style and topic are short labels, never
+        # full sentences.  A cap also bounds prompt size if the
+        # intent layer ever returns something unexpected.
+        _PARAM_CAP: int = 64  # max chars per style/topic field
+        style: str = str(params.get("style", "")).strip()[:_PARAM_CAP]
+        topic: str = str(params.get("topic", "")).strip()[:_PARAM_CAP]
+
+        if style and topic:
+            message: str = f"Tell me a {style} joke about {topic}."
+        elif style:
+            message = f"Tell me a {style} joke."
+        elif topic:
+            message = f"Tell me a joke about {topic}."
+        else:
+            message = "Tell me a joke."
+
         return self._call_ollama_chat(
             system_prompt=_JOKE_SYSTEM_PROMPT,
             message=message,

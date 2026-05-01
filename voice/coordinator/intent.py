@@ -83,7 +83,7 @@ Available actions:
 - enable_voice_gate: temporarily enable listening on a gated satellite (the porch/doorbell). Target is the gate slug ("doorbell" for the front porch). Params MUST include a duration in seconds. If the user does not say a duration, still emit this action with params.duration_seconds = 0 so the system can ask. Use when someone says "enable the porch for two hours", "open the doorbell for thirty minutes", "turn on the porch mic for ten minutes", etc. Convert spoken durations to integer seconds: "two hours" -> 7200, "thirty minutes" -> 1800, "one hour" -> 3600, "ninety seconds" -> 90.
 - disable_voice_gate: immediately disable listening on a gated satellite. Target is the gate slug ("doorbell"). Use when someone says "disable the porch", "close the doorbell", "turn off the porch mic", "shut the porch", etc.
 - scene: activate a named scene or preset
-- joke: tell the user a joke. Use when the user asks for a joke, says "make me laugh", "got a joke?", "tell me something funny", "do you know any jokes", or asks for a specific style/topic of joke ("tell me a dad joke", "tell me a science joke", "knock knock", "another joke"). Always include params.message = the user's full spoken text verbatim, so the joke handler can honor specific style or topic requests.
+- joke: tell the user a joke. Use when the user asks for a joke, says "make me laugh", "got a joke?", "tell me something funny", "do you know any jokes", or asks for a specific style/topic of joke ("tell me a dad joke", "tell me a science joke", "knock knock", "another joke"). Optional params: style (a short label like "knock knock", "dad", "one-liner", "anti-joke", "pun", "limerick") and topic (a short noun like "science", "food", "music"). Use empty params {{}} when no style or topic is named. DO NOT generate or include the joke itself in params — generating the joke is the assistant's job, never the parser's. NEVER put a punchline, setup, or any joke text into a params field.
 - chat: general conversation, questions, or anything NOT related to controlling devices or querying sensors (params: message=<the user's full message>)
 
 {capabilities}
@@ -215,16 +215,19 @@ Examples:
 - "disable the porch" -> {{"action": "disable_voice_gate", "target": "doorbell", "params": {{}}}}
 - "close the doorbell" -> {{"action": "disable_voice_gate", "target": "doorbell", "params": {{}}}}
 - "tell me about the battle of Gettysburg" -> {{"action": "chat", "target": "all", "params": {{"message": "tell me about the battle of Gettysburg"}}}}
-- "tell me a joke" -> {{"action": "joke", "target": "all", "params": {{"message": "tell me a joke"}}}}
-- "another joke" -> {{"action": "joke", "target": "all", "params": {{"message": "another joke"}}}}
-- "got a joke?" -> {{"action": "joke", "target": "all", "params": {{"message": "got a joke?"}}}}
-- "make me laugh" -> {{"action": "joke", "target": "all", "params": {{"message": "make me laugh"}}}}
-- "tell me something funny" -> {{"action": "joke", "target": "all", "params": {{"message": "tell me something funny"}}}}
-- "do you know any jokes?" -> {{"action": "joke", "target": "all", "params": {{"message": "do you know any jokes?"}}}}
-- "tell me a dad joke" -> {{"action": "joke", "target": "all", "params": {{"message": "tell me a dad joke"}}}}
-- "tell me a science joke" -> {{"action": "joke", "target": "all", "params": {{"message": "tell me a science joke"}}}}
-- "tell me a knock knock joke" -> {{"action": "joke", "target": "all", "params": {{"message": "tell me a knock knock joke"}}}}
-- "tell me a one-liner" -> {{"action": "joke", "target": "all", "params": {{"message": "tell me a one-liner"}}}}
+- "tell me a joke" -> {{"action": "joke", "target": "all", "params": {{}}}}
+- "another joke" -> {{"action": "joke", "target": "all", "params": {{}}}}
+- "got a joke?" -> {{"action": "joke", "target": "all", "params": {{}}}}
+- "make me laugh" -> {{"action": "joke", "target": "all", "params": {{}}}}
+- "tell me something funny" -> {{"action": "joke", "target": "all", "params": {{}}}}
+- "do you know any jokes?" -> {{"action": "joke", "target": "all", "params": {{}}}}
+- "tell me a dad joke" -> {{"action": "joke", "target": "all", "params": {{"style": "dad"}}}}
+- "tell me a knock knock joke" -> {{"action": "joke", "target": "all", "params": {{"style": "knock knock"}}}}
+- "tell me a one-liner" -> {{"action": "joke", "target": "all", "params": {{"style": "one-liner"}}}}
+- "tell me an anti-joke" -> {{"action": "joke", "target": "all", "params": {{"style": "anti-joke"}}}}
+- "tell me a science joke" -> {{"action": "joke", "target": "all", "params": {{"topic": "science"}}}}
+- "tell me a joke about food" -> {{"action": "joke", "target": "all", "params": {{"topic": "food"}}}}
+- "tell me a dad joke about cars" -> {{"action": "joke", "target": "all", "params": {{"style": "dad", "topic": "cars"}}}}
 """
 
 
