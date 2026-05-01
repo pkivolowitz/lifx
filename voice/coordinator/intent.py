@@ -101,6 +101,19 @@ If the user is asking a general knowledge question, making conversation, or requ
 
 If you cannot determine the intent, use "chat" — do NOT return "unknown".
 
+Target disambiguation rules:
+- Each plug listed above shows its "type words" in parentheses, e.g.
+  "Main Bedroom TV Switch (tv, television)" means that plug controls
+  a tv.  When the user's noun matches a plug's type words, target
+  that plug — even if the user says "lights" or "lamp", a plug whose
+  type words include "light"/"lamp" IS a light.
+- "lights" with no matching plug type words and a matching room group
+  refers to the bulb group for that room.
+- An unqualified room name ("main bedroom", "the living room") with
+  no plug type-word match refers to the group for that room.
+- A phrase containing "switch", "plug", "outlet", or a literal plug
+  label always targets that plug.
+
 Examples:
 - "turn off the bedroom lights" -> {{"action": "power", "target": "bedroom", "params": {{"on": false}}}}
 - "play cylon on the living room" -> {{"action": "play_effect", "target": "living", "params": {{"effect": "cylon"}}}}
@@ -111,6 +124,10 @@ Examples:
 - "is the living room on?" -> {{"action": "query_status", "target": "living", "params": {{}}}}
 - "turn on the ML switch" -> {{"action": "power", "target": "ML Switch", "params": {{"on": true}}}}
 - "turn off the main bedroom TV switch" -> {{"action": "power", "target": "Main Bedroom TV Switch", "params": {{"on": false}}}}
+- "turn off the lights in the main bedroom" -> {{"action": "power", "target": "Main Bedroom", "params": {{"on": false}}}}
+- "turn on the lights in the main bedroom" -> {{"action": "power", "target": "Main Bedroom", "params": {{"on": true}}}}
+- "turn off the lights in the blue bedroom" -> {{"action": "power", "target": "Blue Bedroom", "params": {{"on": false}}}}
+- "turn off everything in the main bedroom" -> {{"action": "power", "target": "Main Bedroom", "params": {{"on": false}}}}
 - "is the backyard IR switch on?" -> {{"action": "query_status", "target": "Backyard IR Switch", "params": {{}}}}
 - "is the living room TV switch on?" -> {{"action": "query_status", "target": "Living Room TV Switch", "params": {{}}}}
 - "what was my last question?" -> {{"action": "chat", "target": "all", "params": {{"message": "what was my last question?"}}}}
@@ -251,11 +268,32 @@ class IntentParser:
             if actions_file.exists():
                 with open(actions_file) as f:
                     _actions = _yaml.safe_load(f) or {}
-                plug_names = list((_actions.get("plugs") or {}).keys())
-                if plug_names:
+                plugs_dict = _actions.get("plugs") or {}
+                plug_strs: list[str] = []
+                for friendly, val in plugs_dict.items():
+                    # Each plug entry is either a dict
+                    # {zigbee, type_words} or (legacy) a bare string
+                    # treated as zigbee with no type_words.  type_words
+                    # render in parens after the friendly name so the
+                    # LLM can match user nouns ("tv", "lamp") to the
+                    # right plug.  Bare-string plugs render alone and
+                    # are reachable only by their friendly name.
+                    if isinstance(val, dict):
+                        words = [
+                            str(w) for w in (val.get("type_words") or [])
+                        ]
+                    else:
+                        words = []
+                    if words:
+                        plug_strs.append(
+                            f"{friendly} ({', '.join(words)})"
+                        )
+                    else:
+                        plug_strs.append(friendly)
+                if plug_strs:
                     parts.append(
                         "Available switches (Zigbee plugs): "
-                        + ", ".join(plug_names)
+                        + ", ".join(plug_strs)
                     )
         except Exception as exc:
             logger.debug("Plug capability load failed: %s", exc)

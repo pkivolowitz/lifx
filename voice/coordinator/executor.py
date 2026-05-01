@@ -241,14 +241,45 @@ class GlowUpExecutor:
         # *normalized* form so "ML Switch", "ml", "the ML smart plug"
         # all resolve to the same plug. _plug_display preserves the
         # original friendly name for spoken confirmation.
-        plugs_cfg: dict[str, str] = self._actions.get("plugs", {}) or {}
-        self._plug_synonyms: dict[str, str] = {
-            self._normalize_plug_phrase(friendly): zigbee
-            for friendly, zigbee in plugs_cfg.items()
-        }
-        self._plug_display: dict[str, str] = {
-            zigbee: friendly for friendly, zigbee in plugs_cfg.items()
-        }
+        #
+        # Schema: each plug value is either a dict
+        # {zigbee: <name>, type_words: [<word>, ...]} or a bare string
+        # (legacy) interpreted as the Z2M name with empty type_words.
+        # type_words are surfaced to the LLM via intent.py's capabilities
+        # prompt; the executor itself does not match user phrases against
+        # them — the LLM is expected to pick the friendly name as the
+        # target after seeing the parenthesized type words.
+        plugs_cfg: dict[str, Any] = self._actions.get("plugs", {}) or {}
+        self._plug_synonyms: dict[str, str] = {}
+        self._plug_display: dict[str, str] = {}
+        self._plug_type_words: dict[str, list[str]] = {}
+        for _friendly, _val in plugs_cfg.items():
+            if isinstance(_val, str):
+                _zigbee_id: str = _val
+                _type_words: list[str] = []
+            elif isinstance(_val, dict):
+                _zigbee_id = str(_val.get("zigbee", ""))
+                _type_words = [
+                    str(w) for w in (_val.get("type_words") or [])
+                ]
+            else:
+                # Malformed entry — log and skip rather than crash the
+                # whole executor on one bad plug.
+                logger.warning(
+                    "Skipping malformed plug entry %r: %r",
+                    _friendly, _val,
+                )
+                continue
+            if not _zigbee_id:
+                logger.warning(
+                    "Skipping plug %r with empty zigbee name", _friendly,
+                )
+                continue
+            self._plug_synonyms[
+                self._normalize_plug_phrase(_friendly)
+            ] = _zigbee_id
+            self._plug_display[_zigbee_id] = _friendly
+            self._plug_type_words[_zigbee_id] = _type_words
 
         # Named query handlers — the config's "function pointers."
         # Each takes (api_data, action_config, target_raw, params)

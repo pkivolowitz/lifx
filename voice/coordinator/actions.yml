@@ -23,14 +23,39 @@
 # Zigbee smart plug synonyms — map spoken friendly name to Z2M device name.
 # Voice targets matching a key here are resolved to "plug:<zigbee_name>" and
 # handled by the executor's plug path (direct HTTP to glowup-zigbee-service
-# on broker-2, not via hub /api/devices). Adding a plug is a YAML edit.
+# on broker-2, not via hub /api/devices).
+#
+# Each entry is a mapping with:
+#   zigbee:     Z2M device name (the friendly_name in zigbee2mqtt config)
+#   type_words: list of natural-language nouns the user might say to
+#               refer to what the plug controls.  Rendered in parens
+#               after the friendly name in the LLM capabilities prompt
+#               so the intent parser can disambiguate "lights"/"tv"/etc.
+#               against the right plug.  A plug with type_word "light"
+#               or "lamp" IS treated as a light by the prompt rules,
+#               which is how a dumb lamp on a Zigbee plug stays
+#               distinguishable from a TV plug in the same room.
+#
+# Bare-string entries (legacy) parse as zigbee with empty type_words —
+# they will not be matched by user nouns, only by the friendly name.
+#
+# Adding a plug is a YAML edit.  Editing type_words from the dashboard
+# is a future task (Perry, 2026-05-01).
 # ---------------------------------------------------------------------------
 
 plugs:
-  "ML Switch": ML_Power
-  "Main Bedroom TV Switch": MBTV
-  "Living Room TV Switch": LRTV
-  "Backyard IR Switch": BYIR
+  "ML Switch":
+    zigbee: ML_Power
+    type_words: ["ML", "Machine Learning Computer", "Beast"]
+  "Main Bedroom TV Switch":
+    zigbee: MBTV
+    type_words: ["tv", "television"]
+  "Living Room TV Switch":
+    zigbee: LRTV
+    type_words: ["tv", "television"]
+  "Backyard IR Switch":
+    zigbee: BYIR
+    type_words: ["IR illuminator", "back yard ir"]
 
 # ---------------------------------------------------------------------------
 # Commands — POST to API, says "Got it" after execution
