@@ -25,7 +25,7 @@ Typical usage::
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "1.0"
+__version__ = "1.1"
 
 import json
 import logging
@@ -85,10 +85,32 @@ class DeviceRegistry:
             "devices": {
                 "d0:73:d5:69:70:db": {
                     "label": "porch-left",
-                    "notes": "optional human notes"
+                    "notes": "optional human notes",
+                    "subdevices": {
+                        "uplight": {
+                            "label": "porch-left uplight",
+                            "notes": "optional"
+                        }
+                    }
                 }
             }
         }
+
+    The optional ``subdevices`` map registers virtual sub-components
+    (e.g. the uplight ring on a SuperColor Ceiling) that share the
+    parent MAC but have their own user-facing label.  Sub-device
+    labels live in the same global label namespace as parent labels —
+    no two entries (parent or sub-device) may share a label.  The
+    fixture's ``--component`` selector (a stable id such as
+    ``"uplight"``) is the registry key for sub-devices.
+
+    Sub-devices are inventoried but not yet first-class
+    label-resolution targets: ``label_to_mac`` returns only parent
+    MACs.  Use :meth:`subdevice_label_to_address` to resolve a
+    sub-device label to ``(parent_mac, component_id)``.  This is the
+    deliberate v1 surface — full label-dispatch routing is deferred
+    until a second sub-device fixture lands and the cross-cutting
+    cost is justified.
 
     Attributes:
         path: Filesystem path to the loaded registry file.
@@ -98,6 +120,10 @@ class DeviceRegistry:
         self.path: Optional[str] = None
         self._devices: dict[str, dict[str, Any]] = {}   # MAC → entry
         self._label_to_mac: dict[str, str] = {}          # label → MAC
+        # Sub-device label → (parent_mac, component_id).  Lives in the
+        # same lowercased label namespace as ``_label_to_mac`` so the
+        # uniqueness check across both maps catches collisions.
+        self._subdev_label_to_address: dict[str, tuple[str, str]] = {}
         self._lock: threading.Lock = threading.Lock()
         # Serializes file I/O (load/save) to prevent concurrent
         # read-modify-write races.  Separate from _lock so lookups
@@ -183,13 +209,75 @@ class DeviceRegistry:
                 devices[mac]["label"] = label  # normalized
                 label_to_mac[label_lower] = mac
 
+            # Second pass: parse subdevices.  Done after parents are
+            # accepted so a malformed sub-device can't strand a parent.
+            subdev_label_to_address: dict[str, tuple[str, str]] = {}
+            for mac, entry in devices.items():
+                subs_raw: Any = entry.get("subdevices", {})
+                if not isinstance(subs_raw, dict):
+                    raise ValueError(
+                        f"Device {mac}: subdevices must be a dict"
+                    )
+                normalized_subs: dict[str, dict[str, Any]] = {}
+                for comp_id_raw, sub_entry in subs_raw.items():
+                    comp_id: str = str(comp_id_raw).strip()
+                    if not comp_id:
+                        raise ValueError(
+                            f"Device {mac}: empty component_id in subdevices"
+                        )
+                    if not isinstance(sub_entry, dict):
+                        raise ValueError(
+                            f"Device {mac} subdevice {comp_id!r}: "
+                            f"entry must be a dict"
+                        )
+                    sub_label: str = str(sub_entry.get("label", "")).strip()
+                    if not sub_label:
+                        raise ValueError(
+                            f"Device {mac} subdevice {comp_id!r}: "
+                            f"label is required"
+                        )
+                    sub_label_bytes: int = len(sub_label.encode("utf-8"))
+                    if sub_label_bytes > MAX_LABEL_BYTES:
+                        raise ValueError(
+                            f"Subdevice label {sub_label!r} for {mac}/"
+                            f"{comp_id} is {sub_label_bytes} bytes "
+                            f"(max {MAX_LABEL_BYTES})"
+                        )
+                    sub_label_lower: str = sub_label.lower()
+                    if sub_label_lower in label_to_mac:
+                        raise ValueError(
+                            f"Subdevice label {sub_label!r} for {mac}/"
+                            f"{comp_id} collides with parent label "
+                            f"on {label_to_mac[sub_label_lower]}"
+                        )
+                    if sub_label_lower in subdev_label_to_address:
+                        prev_mac, prev_comp = (
+                            subdev_label_to_address[sub_label_lower]
+                        )
+                        raise ValueError(
+                            f"Duplicate subdevice label {sub_label!r}: "
+                            f"{prev_mac}/{prev_comp} and {mac}/{comp_id}"
+                        )
+                    normalized_sub: dict[str, Any] = {"label": sub_label}
+                    sub_notes: str = str(sub_entry.get("notes", "")).strip()
+                    if sub_notes:
+                        normalized_sub["notes"] = sub_notes
+                    normalized_subs[comp_id] = normalized_sub
+                    subdev_label_to_address[sub_label_lower] = (mac, comp_id)
+                if normalized_subs:
+                    entry["subdevices"] = normalized_subs
+                elif "subdevices" in entry:
+                    # Drop empty/absent subdevices key so saves stay tidy.
+                    del entry["subdevices"]
+
             with self._lock:
                 self._devices = devices
                 self._label_to_mac = label_to_mac
+                self._subdev_label_to_address = subdev_label_to_address
 
         logger.info(
-            "Loaded device registry: %d device(s) from %s",
-            len(devices), resolved,
+            "Loaded device registry: %d device(s), %d sub-device(s) from %s",
+            len(devices), len(subdev_label_to_address), resolved,
         )
         return True
 
@@ -206,13 +294,53 @@ class DeviceRegistry:
             return entry["label"] if entry else None
 
     def label_to_mac(self, label: str) -> Optional[str]:
-        """Return the MAC for a label, or ``None`` if not registered.
+        """Return the MAC for a parent-device label, or ``None``.
+
+        Sub-device labels are NOT resolved here — call
+        :meth:`subdevice_label_to_address` for the full ``(mac,
+        component_id)`` resolution.  This split is deliberate: sub-
+        device addressing requires the component_id, and silently
+        returning the parent MAC would route effects to the wrong
+        surface.
 
         Args:
             label: Case-insensitive device label.
         """
         with self._lock:
             return self._label_to_mac.get(label.lower())
+
+    def subdevice_label_to_address(
+        self, label: str,
+    ) -> Optional[tuple[str, str]]:
+        """Resolve a sub-device label to ``(parent_mac, component_id)``.
+
+        Returns ``None`` if no sub-device has the given label.  The
+        component_id is the stable identifier (e.g. ``"uplight"``)
+        used by the fixture's ``--component`` selector.
+
+        Args:
+            label: Case-insensitive sub-device label.
+        """
+        with self._lock:
+            return self._subdev_label_to_address.get(label.lower())
+
+    def mac_subdevices(self, mac: str) -> dict[str, dict[str, Any]]:
+        """Return a snapshot of the sub-device map for *mac*, or empty dict.
+
+        Args:
+            mac: Lowercase colon-separated parent MAC.
+
+        Returns:
+            ``{component_id: {"label": ..., "notes": ...}, ...}``.
+            Empty dict if the parent has no sub-devices or is unknown.
+        """
+        with self._lock:
+            entry = self._devices.get(mac.lower())
+            if entry is None:
+                return {}
+            subs: dict[str, dict[str, Any]] = entry.get("subdevices", {})
+            # Deep-ish copy so callers can't mutate registry state.
+            return {cid: dict(sub) for cid, sub in subs.items()}
 
     def all_devices(self) -> dict[str, dict[str, Any]]:
         """Return a snapshot of the full registry (MAC → entry dict)."""
@@ -452,8 +580,14 @@ class DeviceRegistry:
     def remove_device(self, identifier: str) -> bool:
         """Remove a device by MAC or label.
 
+        Removing a parent device also removes all of its sub-device
+        entries from the label namespace — anything else would leave
+        dangling sub-device labels pointing at a vanished MAC.
+
         Args:
-            identifier: MAC address or label.
+            identifier: MAC address or parent label.  Sub-device labels
+                are NOT accepted here; use :meth:`remove_subdevice` to
+                drop a single sub-device entry.
 
         Returns:
             ``True`` if a device was removed, ``False`` if not found.
@@ -462,21 +596,207 @@ class DeviceRegistry:
 
         with self._lock:
             # Try as MAC.
-            if ident in self._devices:
-                entry = self._devices.pop(ident)
-                label = entry.get("label", "")
-                if label:
-                    self._label_to_mac.pop(label.lower(), None)
-                return True
+            mac: Optional[str] = ident if ident in self._devices else None
+            # Or as parent label.
+            if mac is None:
+                mac = self._label_to_mac.get(ident)
+            if mac is None:
+                return False
 
-            # Try as label.
-            mac = self._label_to_mac.get(ident)
-            if mac:
-                self._devices.pop(mac, None)
-                self._label_to_mac.pop(ident, None)
-                return True
+            entry = self._devices.pop(mac, None)
+            if entry is None:
+                return False
+            label: str = entry.get("label", "")
+            if label:
+                self._label_to_mac.pop(label.lower(), None)
+            # Drop every sub-device label belonging to this parent so
+            # the namespace doesn't keep ghost entries.
+            for comp_id, sub in entry.get("subdevices", {}).items():
+                sub_label: str = str(sub.get("label", "")).strip().lower()
+                if sub_label:
+                    self._subdev_label_to_address.pop(sub_label, None)
+                logger.debug("removed subdevice %s/%s with parent", mac, comp_id)
+            return True
 
-        return False
+    # -- Sub-device add / remove ------------------------------------------
+
+    def add_subdevice(
+        self,
+        parent_mac: str,
+        component_id: str,
+        label: str,
+        notes: str = "",
+        force: bool = False,
+    ) -> None:
+        """Register or update a sub-device under an existing parent.
+
+        Args:
+            parent_mac:   Lowercase MAC of an already-registered parent.
+            component_id: Stable short identifier (e.g. ``"uplight"``).
+                Matches the fixture's ``--component`` selector.
+            label:        User-defined label, globally unique across
+                          parent and sub-device labels.
+            notes:        Optional human-readable notes.
+            force:        If ``True``, reassign the label from its
+                          current owner (parent or sub-device).
+
+        Raises:
+            ValueError: If the parent MAC is unknown, the component_id
+                or label is empty, the label exceeds the byte limit, or
+                the label collides with an existing entry (and *force*
+                is ``False``).
+        """
+        parent_mac = parent_mac.strip().lower()
+        component_id = component_id.strip()
+        label = label.strip()
+
+        if not MAC_PATTERN.match(parent_mac):
+            raise ValueError(f"Invalid parent MAC: {parent_mac!r}")
+        if not component_id:
+            raise ValueError("component_id cannot be empty")
+        if not label:
+            raise ValueError("Label cannot be empty")
+        label_bytes: int = len(label.encode("utf-8"))
+        if label_bytes > MAX_LABEL_BYTES:
+            raise ValueError(
+                f"Label {label!r} is {label_bytes} bytes "
+                f"(max {MAX_LABEL_BYTES})"
+            )
+
+        label_lower: str = label.lower()
+
+        with self._lock:
+            parent_entry: Optional[dict[str, Any]] = (
+                self._devices.get(parent_mac)
+            )
+            if parent_entry is None:
+                raise ValueError(
+                    f"Parent MAC {parent_mac} is not registered — "
+                    f"register the parent first"
+                )
+
+            # Collision check across BOTH namespaces.
+            collide_parent_mac: Optional[str] = (
+                self._label_to_mac.get(label_lower)
+            )
+            collide_subdev: Optional[tuple[str, str]] = (
+                self._subdev_label_to_address.get(label_lower)
+            )
+            owner_is_self: bool = (
+                collide_subdev is not None
+                and collide_subdev == (parent_mac, component_id)
+            )
+            if collide_parent_mac is not None and not force:
+                raise ValueError(
+                    f"Label {label!r} is already a parent label on "
+                    f"{collide_parent_mac}"
+                )
+            if (
+                collide_subdev is not None
+                and not owner_is_self
+                and not force
+            ):
+                prev_mac, prev_comp = collide_subdev
+                raise ValueError(
+                    f"Label {label!r} is already a sub-device label on "
+                    f"{prev_mac}/{prev_comp}"
+                )
+            # Force path: evict the prior owner from whichever map
+            # it lives in so the new entry takes the label cleanly.
+            if force and collide_parent_mac is not None:
+                old_entry = self._devices.pop(collide_parent_mac, None)
+                if old_entry is not None:
+                    for cid, sub in old_entry.get("subdevices", {}).items():
+                        old_sub_label: str = (
+                            str(sub.get("label", "")).strip().lower()
+                        )
+                        if old_sub_label:
+                            self._subdev_label_to_address.pop(
+                                old_sub_label, None,
+                            )
+                        logger.debug(
+                            "force-evicted subdevice %s/%s",
+                            collide_parent_mac, cid,
+                        )
+                self._label_to_mac.pop(label_lower, None)
+                logger.info(
+                    "Force: reassigned label %r from parent %s to "
+                    "subdevice %s/%s",
+                    label, collide_parent_mac, parent_mac, component_id,
+                )
+            if force and collide_subdev is not None and not owner_is_self:
+                prev_mac, prev_comp = collide_subdev
+                prev_entry = self._devices.get(prev_mac)
+                if prev_entry is not None:
+                    prev_subs: dict[str, dict[str, Any]] = (
+                        prev_entry.get("subdevices", {})
+                    )
+                    prev_subs.pop(prev_comp, None)
+                    if not prev_subs and "subdevices" in prev_entry:
+                        del prev_entry["subdevices"]
+                self._subdev_label_to_address.pop(label_lower, None)
+                logger.info(
+                    "Force: reassigned subdevice label %r from %s/%s "
+                    "to %s/%s",
+                    label, prev_mac, prev_comp, parent_mac, component_id,
+                )
+
+            # If this (parent, component_id) already had a different
+            # label, drop the old label mapping.
+            existing_subs: dict[str, dict[str, Any]] = (
+                parent_entry.setdefault("subdevices", {})
+            )
+            old_sub: Optional[dict[str, Any]] = existing_subs.get(component_id)
+            if old_sub is not None:
+                old_label: str = (
+                    str(old_sub.get("label", "")).strip().lower()
+                )
+                if old_label and old_label != label_lower:
+                    self._subdev_label_to_address.pop(old_label, None)
+
+            new_sub: dict[str, Any] = {"label": label}
+            if notes:
+                new_sub["notes"] = notes
+            existing_subs[component_id] = new_sub
+            self._subdev_label_to_address[label_lower] = (
+                parent_mac, component_id,
+            )
+
+    def remove_subdevice(
+        self, parent_mac: str, component_id: str,
+    ) -> bool:
+        """Remove a single sub-device entry.
+
+        Args:
+            parent_mac:   Lowercase MAC of the parent device.
+            component_id: Sub-device identifier (e.g. ``"uplight"``).
+
+        Returns:
+            ``True`` if the sub-device was removed, ``False`` if the
+            parent or sub-device was not found.
+        """
+        parent_mac = parent_mac.strip().lower()
+        component_id = component_id.strip()
+
+        with self._lock:
+            parent_entry: Optional[dict[str, Any]] = (
+                self._devices.get(parent_mac)
+            )
+            if parent_entry is None:
+                return False
+            subs: dict[str, dict[str, Any]] = (
+                parent_entry.get("subdevices", {})
+            )
+            sub: Optional[dict[str, Any]] = subs.pop(component_id, None)
+            if sub is None:
+                return False
+            sub_label: str = str(sub.get("label", "")).strip().lower()
+            if sub_label:
+                self._subdev_label_to_address.pop(sub_label, None)
+            if not subs and "subdevices" in parent_entry:
+                # Tidy up so saved JSON doesn't carry an empty map.
+                del parent_entry["subdevices"]
+            return True
 
     # -- Display -----------------------------------------------------------
 

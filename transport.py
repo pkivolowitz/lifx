@@ -1804,30 +1804,23 @@ class LifxDevice:
         self,
         colors: list[tuple[int, int, int, int]],
         duration_ms: int = 0,
-        bypass_mask: bool = False,
     ) -> None:
-        """Set all pixels on a matrix device using the tile protocol.
+        """Set all pixels on a matrix device, applying the per-fixture mask.
 
-        For devices with <=64 zones (Luna, Candle, Tile): sends a single
-        ``Set64`` (715) packet directly to the display buffer.
-
-        For devices with >64 zones (Ceiling, 128 zones): writes batches
-        to the temp buffer (fb=1) then ``CopyFrameBuffer`` (716) to
-        atomically swap to the display buffer.
-
-        ``Set64`` does not support acknowledgement — all sends are
-        fire-and-forget.  This is consistent with the Djelibeybi
-        lifx-async reference implementation.
+        Public matrix entry point.  Always applies :attr:`mask_cells` so
+        dead positions and shared-protocol-slot sub-components (e.g. the
+        uplight ring on a SuperColor Ceiling) are forced to black before
+        the frame goes out.  This is the only path effect code should
+        ever take — there is no caller-facing escape hatch (the prior
+        ``bypass_mask`` parameter was removed because any effect that
+        passed True would silently re-introduce the uplight-glow
+        regression that motivated masking in the first place).
+        :class:`LifxSubdevice` writes go through the private
+        :meth:`_set_tile_zones_raw` instead.
 
         Args:
             colors:      Row-major HSBK list, one per pixel.
             duration_ms: Firmware transition duration in milliseconds.
-            bypass_mask: If True, send *colors* verbatim without
-                applying :attr:`mask_cells`.  Used by virtual sub-
-                devices (e.g. the uplight ring on a SuperColor
-                Ceiling) which need to write to cells that ordinary
-                matrix effects must avoid.  Defaults to False so all
-                normal effect paths get masking automatically.
 
         Raises:
             ValueError: If *colors* is empty or *duration_ms* < 0.
@@ -1840,36 +1833,96 @@ class LifxDevice:
         width: int = self.matrix_width or 8
         height: int = self.matrix_height or 8
         tiles: int = self.tile_count or 1
-        pixels_per_tile: int = width * height
-        total: int = pixels_per_tile * tiles
+        total: int = width * height * tiles
 
-        # Pad or trim to exact device pixel count.
-        if len(colors) < total:
-            colors = list(colors) + [HSBK_BLACK_DEFAULT] * (total - len(colors))
-        elif len(colors) > total:
-            colors = colors[:total]
+        colors = self._pad_or_trim_tile_colors(colors, total)
 
         # Apply per-fixture mask: dead cells and shared-protocol-slot
-        # components (e.g. the uplight on a SuperColor Ceiling).  We
-        # write a fresh list rather than mutating the caller's so an
-        # effect's render output can be reused across frames.  Skipped
-        # when bypass_mask is set — that path belongs to virtual
-        # sub-devices that DO want to write the masked cells.
-        if not bypass_mask and self.mask_cells:
+        # components.  Fresh list — never mutate caller's render output
+        # so a frame can be reused across calls.
+        if self.mask_cells:
             colors = list(colors)
             for idx in self.mask_cells:
                 if 0 <= idx < total:
                     colors[idx] = HSBK_BLACK_DEFAULT
 
+        self._send_tile_zones(colors, width, height, tiles, duration_ms)
+
+    def _set_tile_zones_raw(
+        self,
+        colors: list[tuple[int, int, int, int]],
+        duration_ms: int = 0,
+    ) -> None:
+        """Unmasked tile write — for :class:`LifxSubdevice` only.
+
+        A sub-device owns cells that live INSIDE :attr:`mask_cells`
+        precisely so ordinary matrix effects can't write them; the
+        sub-device IS the legitimate writer for those cells, so this
+        path skips the mask.  Private (leading underscore) by intent —
+        no public caller should ever take it.
+
+        ``Set64`` does not support acknowledgement — all sends are
+        fire-and-forget, consistent with the Djelibeybi lifx-async
+        reference implementation.
+
+        Args:
+            colors:      Row-major HSBK list, one per pixel.
+            duration_ms: Firmware transition duration in milliseconds.
+
+        Raises:
+            ValueError: If *colors* is empty or *duration_ms* < 0.
+        """
+        if not colors:
+            raise ValueError("colors list must not be empty")
+        if duration_ms < 0:
+            raise ValueError(f"duration_ms must be >= 0, got {duration_ms}")
+
+        width: int = self.matrix_width or 8
+        height: int = self.matrix_height or 8
+        tiles: int = self.tile_count or 1
+        total: int = width * height * tiles
+
+        colors = self._pad_or_trim_tile_colors(colors, total)
+        self._send_tile_zones(colors, width, height, tiles, duration_ms)
+
+    def _pad_or_trim_tile_colors(
+        self,
+        colors: list[tuple[int, int, int, int]],
+        total: int,
+    ) -> list[tuple[int, int, int, int]]:
+        """Return *colors* exactly *total* entries long (pad with black or trim)."""
+        if len(colors) < total:
+            return list(colors) + [HSBK_BLACK_DEFAULT] * (total - len(colors))
+        if len(colors) > total:
+            return colors[:total]
+        return colors
+
+    def _send_tile_zones(
+        self,
+        colors: list[tuple[int, int, int, int]],
+        width: int,
+        height: int,
+        tiles: int,
+        duration_ms: int,
+    ) -> None:
+        """Dispatch a pre-padded, mask-resolved color list to the right transport.
+
+        Three transport shapes:
+        - Single tile, fits in one ``Set64``: write straight to display
+          buffer (Luna, Candle, single Tile).
+        - Single tile, exceeds one packet (Ceiling = 128 zones): write
+          row batches to temp buffer (fb=1), then ``CopyFrameBuffer``
+          (716) atomically swaps temp → display.
+        - Multi-tile chain: one ``Set64`` per tile, each addressing
+          its slice of *colors*.
+        """
+        pixels_per_tile: int = width * height
         if tiles == 1 and pixels_per_tile <= TILE_PIXELS_PER_PACKET:
-            # Single-tile, single-packet path (Luna, Candle, one Tile).
             self._send_set64(
                 tile_index=0, colors=colors, width=width,
                 duration_ms=duration_ms, fb_index=FB_DISPLAY,
             )
         elif tiles == 1:
-            # Single-tile, multi-packet path (Ceiling = 128 zones).
-            # Write to temp buffer in row batches, then copy to display.
             rows_per_batch: int = TILE_PIXELS_PER_PACKET // width
             for row_start in range(0, height, rows_per_batch):
                 row_end: int = min(row_start + rows_per_batch, height)
@@ -1881,14 +1934,11 @@ class LifxDevice:
                     duration_ms=duration_ms, fb_index=FB_TEMP,
                     x=0, y=row_start,
                 )
-            # Swap temp → display atomically.
             self._send_copy_frame_buffer(
                 tile_index=0, width=width, height=height,
                 duration_ms=duration_ms,
             )
         else:
-            # Multi-tile chain — send Set64 per tile.  Each tile gets
-            # its own slice of the color array.
             for t in range(tiles):
                 start: int = t * pixels_per_tile
                 end: int = start + pixels_per_tile
@@ -2143,7 +2193,11 @@ class LifxSubdevice:
         self._cells: list[tuple[int, int]] = list(cells)
         self._label_suffix: str = label_suffix
         # Cache last-set color so power=on after power=off restores it
-        # rather than dropping to black-on-black.
+        # rather than dropping to black-on-black.  Initialized to bright
+        # neutral white (max brightness, 3500K) so the first
+        # ``play on --component <id>`` with no prior set_color lights
+        # the cells at full white instead of leaving them dark; any
+        # subsequent set_color call replaces this seed.
         self._last_color: tuple[int, int, int, int] = (0, 0, HSBK_MAX, 3500)
 
     # -- Identity -----------------------------------------------------------
@@ -2323,10 +2377,11 @@ class LifxSubdevice:
         """Build a Set64 frame addressing only this sub-device's cells.
 
         All cells outside this sub-device are written as black, then
-        the frame is sent with ``bypass_mask=True`` so the parent's
-        mask doesn't strip our writes from the cells we own (those
-        cells live IN the parent's mask precisely to keep matrix
-        effects out of them — this is the path that's allowed in).
+        the frame is sent through the parent's private
+        :meth:`LifxDevice._set_tile_zones_raw` so the parent's mask
+        doesn't strip our writes from the cells we own.  Those cells
+        live IN the parent's mask precisely to keep matrix effects
+        out of them — the sub-device IS the legitimate writer.
         """
         parent: "LifxDevice" = self._parent
         width: int = parent.matrix_width or 0
@@ -2343,8 +2398,8 @@ class LifxSubdevice:
             idx: int = r * width + c
             if 0 <= idx < total:
                 colors[idx] = color
-        parent.set_tile_zones(
-            colors, duration_ms=duration_ms, bypass_mask=True,
+        parent._set_tile_zones_raw(  # pylint: disable=protected-access
+            colors, duration_ms=duration_ms,
         )
 
 

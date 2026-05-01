@@ -189,24 +189,37 @@ def lookup_by_pid(
     vendor: Optional[int],
     pid: Optional[int],
 ) -> Optional[dict[str, Any]]:
-    """Return the first fixture matching just (vendor, pid), or None.
+    """Return the unique fixture matching (vendor, pid), or None.
 
     Used by the discovery table where matrix dimensions haven't been
     queried yet but we still want to surface sub-components in the
-    listing.  When LIFX re-uses a pid for products with different
-    geometries, this returns the first-loaded match (fixture file
-    iteration order) — that's wrong for disambiguation but correct
-    enough for "is there any fixture data for this product" checks.
-    Use :func:`lookup` whenever the matrix dimensions are available.
+    listing.  Returns ``None`` if no fixture matches, AND returns
+    ``None`` (with a warning) if more than one fixture matches — the
+    caller would otherwise have to pick blindly between geometries.
+    Refusing to disambiguate is preferable to silently surfacing the
+    wrong fixture's sub-components on every device sharing that pid
+    (LIFX reuses pid 176 across both 11" and 15" round Ceilings, and
+    sub-component layout differs by geometry).  Use :func:`lookup`
+    whenever the matrix dimensions are available.
     """
     if vendor is None or pid is None:
         return None
     _load_all()
     target: tuple[int, int] = (int(vendor), int(pid))
-    for (v, p, _w, _h), data in _cache.items():
-        if (v, p) == target:
-            return data
-    return None
+    matches: list[dict[str, Any]] = [
+        data for (v, p, _w, _h), data in _cache.items() if (v, p) == target
+    ]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        logger.warning(
+            "lookup_by_pid(vendor=%s, pid=%s) matched %d fixtures; "
+            "geometry-aware lookup() is required to disambiguate. "
+            "Returning None to avoid surfacing wrong sub-components.",
+            vendor, pid, len(matches),
+        )
+        return None
+    return matches[0]
 
 
 def get_components(
@@ -228,9 +241,12 @@ def get_components(
 
     Today the only auto-derived component is ``uplight`` (single
     component per fixture, owning all entries in ``uplight_cells``).
-    Future fixtures with richer component graphs can declare them
-    directly in JSON; this function will pass that list through once
-    we add the schema.
+
+    TODO: support a JSON ``components`` array for fixtures with richer
+    component graphs.  The pass-through point is the bottom of this
+    function — append parsed entries to ``components`` before
+    returning.  Schema not yet defined; design when a fixture needs
+    it (e.g. multi-zone strips inside a matrix).
 
     Returns an empty list if the fixture is unknown or has no
     components.

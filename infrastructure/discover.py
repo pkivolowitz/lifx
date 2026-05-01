@@ -895,6 +895,22 @@ def main() -> None:
     if not registry:
         print("No server configured. Using broadcast only.\n", flush=True)
 
+    # Build a (parent_mac, component_id) → registered label index from
+    # the registry response.  Sub-devices ride nested under the parent
+    # in /api/registry; this index lets the per-component row below
+    # show the user-assigned label (if any) instead of the auto-
+    # composed "<firmware label> <suffix>".
+    subdev_label_index: dict[tuple[str, str], str] = {}
+    for reg_dev in registry:
+        reg_mac: str = str(reg_dev.get("mac", "")).lower()
+        if not reg_mac:
+            continue
+        for sub in reg_dev.get("subdevices", []) or []:
+            cid: str = str(sub.get("component_id", "")).strip()
+            sub_label_reg: str = str(sub.get("label", "")).strip()
+            if cid and sub_label_reg:
+                subdev_label_index[(reg_mac, cid)] = sub_label_reg
+
     # Collect discovered MACs so we can identify offline registry devices.
     discovered_macs: set[str] = set()
 
@@ -965,15 +981,21 @@ def main() -> None:
                     vendor, product, width, height,
                 ):
                     suffix: str = str(comp.get("label_suffix", ""))
-                    sub_label: str = (
+                    auto_label: str = (
                         f"{label} {suffix}".strip() if suffix else label
+                    )
+                    comp_id: str = str(comp.get("id", ""))
+                    # Prefer the user-registered sub-device label when
+                    # one is set; fall back to firmware-label + suffix.
+                    sub_label = subdev_label_index.get(
+                        (dev["mac"].lower(), comp_id), auto_label,
                     )
                     sub_kind: str = str(comp.get("kind", ""))
                     rows.append({
                         "mark": "↳",
                         "label": sub_label,
                         "product": (
-                            f"{product_name} → {comp.get('id', '')}"
+                            f"{product_name} → {comp_id}"
                         ),
                         "type": f"Sub:{sub_kind}",
                         "mac": dev["mac"],

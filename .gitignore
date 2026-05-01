@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .claude/
+.mcp.json
+.vscode/
 server.json
 ble_pairing.json
 .DS_Store

@@ -21,7 +21,7 @@ Ceiling) and the grid simulator.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__: str = "2.0"
+__version__: str = "2.1"
 
 import math
 import random
@@ -162,6 +162,15 @@ class Fireworks2D(Effect):
     kelvin = Param(
         KELVIN_DEFAULT, min=KELVIN_MIN, max=KELVIN_MAX,
         description="Color temperature in Kelvin",
+    )
+    brightness = Param(
+        100, min=1, max=100,
+        description=(
+            "Peak brightness (percent).  Scales the additive RGB sum "
+            "uniformly before the per-channel clip; 100 = original "
+            "behaviour, lower values dim the whole show without "
+            "altering the colour evolution or the bloom shape."
+        ),
     )
 
     # ------------------------------------------------------------------
@@ -376,13 +385,17 @@ class Fireworks2D(Effect):
                 px_g[i] += g
                 px_b[i] += bl
 
-        # Convert accumulated RGB back to HSBK.
+        # Convert accumulated RGB back to HSBK.  --brightness scales
+        # every channel before the clip, so a low value uniformly dims
+        # the show without changing the bloom shape or the colour
+        # evolution; 100 reproduces the original behaviour exactly.
         kelvin_val: int = int(self.kelvin)
+        bri_scale: float = float(self.brightness) / 100.0
         colors: list[HSBK] = []
         for i in range(total):
-            r: float = min(1.0, px_r[i])
-            g: float = min(1.0, px_g[i])
-            bl: float = min(1.0, px_b[i])
+            r: float = min(1.0, px_r[i] * bri_scale)
+            g: float = min(1.0, px_g[i] * bri_scale)
+            bl: float = min(1.0, px_b[i] * bri_scale)
             if r + g + bl <= 0.0:
                 colors.append(BLACK)
             else:

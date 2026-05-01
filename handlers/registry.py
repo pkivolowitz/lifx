@@ -6,7 +6,7 @@ Mixin class for GlowUpRequestHandler.  Extracted from server.py.
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__: str = "1.0"
+__version__: str = "1.1"
 
 import json
 import logging
@@ -34,6 +34,9 @@ class RegistryHandlerMixin:
 
         Returns the full device registry merged with live ARP data so
         each entry includes the current IP and online/offline status.
+        Sub-devices are nested under their parent as a ``subdevices``
+        list of ``{component_id, label, notes}`` dicts so the client
+        can render them indented or look them up by composed label.
         """
         reg: Optional[DeviceRegistry] = self.registry
         if reg is None:
@@ -49,13 +52,24 @@ class RegistryHandlerMixin:
         result: list[dict] = []
         for mac, entry in sorted(devices.items()):
             ip: str = mac_to_ip.get(mac, "")
-            result.append({
+            row: dict[str, Any] = {
                 "mac": mac,
                 "label": entry.get("label", ""),
                 "notes": entry.get("notes", ""),
                 "ip": ip,
                 "online": bool(ip),
-            })
+            }
+            subs: dict[str, dict] = entry.get("subdevices", {})
+            if subs:
+                row["subdevices"] = [
+                    {
+                        "component_id": cid,
+                        "label": sub.get("label", ""),
+                        "notes": sub.get("notes", ""),
+                    }
+                    for cid, sub in sorted(subs.items())
+                ]
+            result.append(row)
 
         self._send_json(200, {"devices": result, "count": len(result)})
 
@@ -255,6 +269,91 @@ class RegistryHandlerMixin:
             })
         except Exception as exc:
             self._send_json(500, {"error": f"SetLabel failed: {exc}"})
+
+
+    def _handle_post_registry_subdevice(self) -> None:
+        """POST /api/registry/subdevice — register a sub-device.
+
+        Body: ``{"parent_mac": "...", "component_id": "uplight",
+        "label": "...", "notes": "...", "force": false}``.
+
+        The parent's IP may be supplied as ``"parent_ip"`` instead of
+        ``"parent_mac"`` and is resolved via the keepalive ARP table.
+        Sub-devices have no firmware identity — there is no SetLabel
+        side effect, so this handler is purely a registry write.
+        """
+        body: Optional[dict] = self._read_json_body()
+        if body is None:
+            return
+
+        reg: Optional[DeviceRegistry] = self.registry
+        if reg is None:
+            self._send_json(500, {"error": "Registry not loaded"})
+            return
+
+        parent_mac: str = body.get("parent_mac", "").strip().lower()
+        parent_ip: str = body.get("parent_ip", "").strip()
+        component_id: str = body.get("component_id", "").strip()
+        label: str = body.get("label", "").strip()
+        notes: str = body.get("notes", "").strip()
+        force: bool = bool(body.get("force", False))
+
+        if not parent_mac and parent_ip:
+            daemon: Optional[KeepaliveProxy] = self.keepalive
+            if daemon is not None:
+                bulbs: dict[str, str] = daemon.known_bulbs
+                parent_mac = bulbs.get(parent_ip, "")
+
+        if not parent_mac:
+            self._send_json(400, {
+                "error": "parent_mac required (or parent_ip + reachable device)",
+            })
+            return
+        if not component_id:
+            self._send_json(400, {"error": "component_id required"})
+            return
+        if not label:
+            self._send_json(400, {"error": "label required"})
+            return
+
+        try:
+            reg.add_subdevice(
+                parent_mac, component_id, label, notes=notes, force=force,
+            )
+            reg.save()
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        self._send_json(200, {
+            "parent_mac": parent_mac,
+            "component_id": component_id,
+            "label": label,
+        })
+
+
+    def _handle_delete_registry_subdevice(
+        self, parent_mac: str, component_id: str,
+    ) -> None:
+        """DELETE /api/registry/subdevice/{parent_mac}/{component_id}.
+
+        Removes a single sub-device entry; the parent device is
+        untouched.
+        """
+        reg: Optional[DeviceRegistry] = self.registry
+        if reg is None:
+            self._send_json(500, {"error": "Registry not loaded"})
+            return
+
+        if reg.remove_subdevice(parent_mac, component_id):
+            reg.save()
+            self._send_json(200, {
+                "removed": f"{parent_mac.lower()}/{component_id}",
+            })
+        else:
+            self._send_json(404, {
+                "error": f"Sub-device not found: {parent_mac}/{component_id}",
+            })
 
     # -- Command handlers --------------------------------------------------
 

@@ -19,13 +19,21 @@ Usage::
     Add --force to any registration command to reassign a label
     that is already in use by a different MAC address.
 
+Sub-device registration (e.g. the uplight ring on a SuperColor
+Ceiling — registry inventory only; addressing still uses --ip +
+--component on the play path)::
+
+    python3 register_device.py <parent-ip-or-mac> "Label" \\
+            --component <id>                              # register a sub-device
+    python3 register_device.py --remove-sub <parent-mac-or-label> <id>  # unregister
+
 Designed for rapid use during a bulk identification session.
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
 # Licensed under the MIT License. See LICENSE file in the project root.
 
-__version__ = "2.0"
+__version__ = "2.1"
 
 import json
 import sys
@@ -178,7 +186,7 @@ def _api_delete(path: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def cmd_list() -> None:
-    """List all registered devices with live status."""
+    """List all registered devices (and sub-devices) with live status."""
     data: dict[str, Any] = _api_get("/api/registry")
     devices: list[dict] = data.get("devices", [])
 
@@ -191,6 +199,7 @@ def cmd_list() -> None:
         f"{'Status':8}  {'Notes'}"
     )
     print("=" * 80)
+    sub_count: int = 0
     for d in devices:
         mac: str = d.get("mac", "?")
         label: str = d.get("label", "?")
@@ -198,8 +207,23 @@ def cmd_list() -> None:
         status: str = "online" if d.get("online") else "offline"
         notes: str = d.get("notes", "")
         print(f"{mac:19}  {label:24}  {ip:15}  {status:8}  {notes}")
+        # Sub-devices indented under their parent so the parent/child
+        # relationship is visible without a second column.
+        for sub in d.get("subdevices", []):
+            sub_count += 1
+            sub_id: str = sub.get("component_id", "?")
+            sub_label: str = sub.get("label", "?")
+            sub_notes: str = sub.get("notes", "")
+            indented: str = f"  ↳ {sub_id}"
+            print(
+                f"{indented:19}  {sub_label:24}  {'':15}  "
+                f"{'-':8}  {sub_notes}"
+            )
 
-    print(f"\n{len(devices)} device(s) registered.")
+    suffix: str = (
+        f" ({sub_count} sub-device(s))" if sub_count else ""
+    )
+    print(f"\n{len(devices)} device(s) registered{suffix}.")
 
 
 def _is_mac(identifier: str) -> bool:
@@ -291,6 +315,90 @@ def cmd_remove(identifier: str) -> None:
     print(f"Removed: {result.get('removed', identifier)}")
 
 
+def _resolve_parent_mac(identifier: str) -> str:
+    """Resolve a parent device identifier to its MAC via the registry API.
+
+    Accepts a MAC, a label, or an IP.  Falls back to the registry GET
+    endpoint to resolve labels and IPs because this client doesn't have
+    direct access to the keepalive ARP table.
+
+    Args:
+        identifier: MAC, label, or IP of the parent device.
+
+    Returns:
+        Lowercase MAC string.
+
+    Raises:
+        SystemExit: If no parent device matches the identifier.
+    """
+    ident: str = identifier.strip()
+    if _is_mac(ident):
+        return ident.lower()
+
+    data: dict[str, Any] = _api_get("/api/registry")
+    devices: list[dict] = data.get("devices", [])
+    ident_lower: str = ident.lower()
+    for d in devices:
+        if d.get("label", "").lower() == ident_lower:
+            return str(d.get("mac", "")).lower()
+        if d.get("ip", "") == ident:
+            return str(d.get("mac", "")).lower()
+    print(
+        f"ERROR: No registered parent device matches {identifier!r}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def cmd_add_subdevice(
+    parent_identifier: str,
+    component_id: str,
+    label: str,
+    force: bool = False,
+) -> None:
+    """Register a sub-device under an already-registered parent.
+
+    Args:
+        parent_identifier: MAC, label, or IP of the parent device.
+        component_id:      Stable sub-device id (e.g. ``"uplight"``).
+        label:             User-defined label for the sub-device.
+        force:             If True, reassign the label from its current
+                           owner.
+    """
+    parent_mac: str = _resolve_parent_mac(parent_identifier)
+    body: dict[str, Any] = {
+        "parent_mac": parent_mac,
+        "component_id": component_id,
+        "label": label,
+    }
+    if force:
+        body["force"] = True
+    result: dict[str, Any] = _api_post("/api/registry/subdevice", body)
+    print(
+        f"Registered sub-device: {result.get('parent_mac', parent_mac)}/"
+        f"{result.get('component_id', component_id)} → "
+        f"{result.get('label', label)}"
+    )
+
+
+def cmd_remove_subdevice(
+    parent_identifier: str, component_id: str,
+) -> None:
+    """Remove a sub-device entry; parent registration is untouched.
+
+    Args:
+        parent_identifier: MAC, label, or IP of the parent device.
+        component_id:      Sub-device id to remove.
+    """
+    parent_mac: str = _resolve_parent_mac(parent_identifier)
+    encoded_mac: str = urllib.request.quote(parent_mac, safe="")
+    encoded_comp: str = urllib.request.quote(component_id, safe="")
+    result: dict[str, Any] = _api_delete(
+        f"/api/registry/subdevice/{encoded_mac}/{encoded_comp}"
+    )
+    print(f"Removed: {result.get('removed', f'{parent_mac}/{component_id}')}")
+
+
 def cmd_clear_label(identifier: str) -> None:
     """Clear (blank) the firmware label on a bulb via the server API.
 
@@ -356,6 +464,22 @@ def cmd_push_labels() -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+def _extract_flag_value(argv: list[str], flag: str) -> tuple[list[str], str]:
+    """Pop ``--flag <value>`` out of *argv* and return (remaining_argv, value).
+
+    Returns an empty value if the flag is absent.  Errors with usage if
+    the flag appears without a following value.
+    """
+    if flag not in argv:
+        return argv, ""
+    idx: int = argv.index(flag)
+    if idx + 1 >= len(argv):
+        print(f"ERROR: {flag} requires a value", file=sys.stderr)
+        sys.exit(1)
+    value: str = argv[idx + 1]
+    return argv[:idx] + argv[idx + 2:], value
+
+
 def main() -> None:
     """Entry point — parse args and dispatch."""
     if len(sys.argv) < 2:
@@ -365,6 +489,9 @@ def main() -> None:
     # Extract --force flag from anywhere in the arg list.
     force: bool = "--force" in sys.argv
     argv: list[str] = [a for a in sys.argv if a != "--force"]
+
+    # Extract --component <id> flag (sub-device add path).
+    argv, component_id = _extract_flag_value(argv, "--component")
 
     arg1: str = argv[1]
 
@@ -389,6 +516,15 @@ def main() -> None:
                   file=sys.stderr)
             sys.exit(1)
         cmd_remove(argv[2])
+    elif arg1 == "--remove-sub":
+        if len(argv) < 4:
+            print(
+                "Usage: register_device.py --remove-sub "
+                "<parent-mac-or-label> <component_id>",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        cmd_remove_subdevice(argv[2], argv[3])
     elif arg1 == "--clear-label":
         if len(argv) < 3:
             print("Usage: register_device.py --clear-label <ip>",
@@ -396,7 +532,7 @@ def main() -> None:
             sys.exit(1)
         cmd_clear_label(argv[2])
     else:
-        # register_device.py <ip-or-mac> [label] [--force]
+        # register_device.py <ip-or-mac> [label] [--component <id>] [--force]
         identifier: str = arg1
         if len(argv) >= 3:
             label: str = argv[2]
@@ -405,7 +541,10 @@ def main() -> None:
             if not label:
                 print("ERROR: Label cannot be empty", file=sys.stderr)
                 sys.exit(1)
-        cmd_add(identifier, label, force=force)
+        if component_id:
+            cmd_add_subdevice(identifier, component_id, label, force=force)
+        else:
+            cmd_add(identifier, label, force=force)
 
 
 if __name__ == "__main__":

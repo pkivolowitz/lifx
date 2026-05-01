@@ -36,6 +36,15 @@ DEFAULT_HEIGHT: int = 22
 # (38%) on the 15" Ceiling 2026-04-30: the round-diffuser optic is
 # very efficient and full plasma at 76% washes out all hue contrast,
 # while ~38% lets the rolling color field stay visibly chromatic.
+#
+# REGRESSION NOTE (Bed code review, 2026-04-30): this default — and
+# the ``scale=6.0`` default below — were retuned for the SuperColor
+# Ceiling's diffuser and now apply to ALL matrix targets.  Tile-array
+# users (LIFX Tile, Candle, Luna) will see dimmer / coarser plasma
+# than pre-2026-04-30.  Pass ``--brightness 76 --scale 12`` (the
+# previous defaults) to restore the older look on bare-LED matrices.
+# Per-fixture default overrides (option 7c in Bed's review) are
+# deferred until a second fixture-specific tuning need lands.
 DEFAULT_BRIGHTNESS: float = 0.38
 
 
