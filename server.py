@@ -473,9 +473,11 @@ _ROUTES: tuple[_Route, ...] = (
     # dashboard.  handlers/ernie.py + static/ernie.html removed.
 
     _Route("GET", ("photos", "{filename}"),
-           "_handle_get_photo", requires_auth=False),
+           "_handle_get_photo", requires_auth=False,
+           unquote_params=("filename",)),
     _Route("GET", ("js", "{filename}"),
-           "_handle_get_static_js", requires_auth=False),
+           "_handle_get_static_js", requires_auth=False,
+           unquote_params=("filename",)),
 
     # -- GET: static ---------------------------------------------------------
     _Route("GET", ("api", "status"),
@@ -573,9 +575,11 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_put_schedule_entry",
            param_types={"index": int}),
     _Route("POST", ("api", "media", "sources", "{name}", "start"),
-           "_handle_post_media_source_start"),
+           "_handle_post_media_source_start",
+           unquote_params=("name",)),
     _Route("POST", ("api", "media", "sources", "{name}", "stop"),
-           "_handle_post_media_source_stop"),
+           "_handle_post_media_source_stop",
+           unquote_params=("name",)),
     _Route("POST", ("api", "assign", "{node_id}", "cancel", "{assignment_id}"),
            "_handle_post_cancel_assignment"),
 
