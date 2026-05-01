@@ -944,7 +944,13 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
     """Seed /etc/glowup/{site,server}.json (read-only) and /var/lib/glowup/*
     (state).  Existing files are preserved; only README.md is overwritten on
     every install."""
-    # /etc/glowup/server.json — port + auth_token only.
+    # /etc/glowup/server.json — port + auth_token + state-file pointers.
+    # The state-file split (BASIC.md §Server / Installing) keeps
+    # server.json read-only and pushes runtime data to /var/lib/glowup.
+    # ``groups_file`` and ``schedule_file`` tell server.py where the
+    # canonical registry and schedule live; the dashboard's PUT/POST
+    # group + schedule handlers route writes there too (see
+    # handlers/dashboard.py:_save_config_field).
     server_json = ETC_DIR / SERVER_JSON
     if not server_json.is_file():
         token = generate_auth_token()
@@ -952,6 +958,8 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
             "schema_version": SCHEMA_VERSION,
             "port": DEFAULT_PORT,
             "auth_token": token,
+            "groups_file": str(VAR_LIB_DIR / GROUPS_JSON),
+            "schedule_file": str(VAR_LIB_DIR / SCHEDULES_JSON),
         })
     else:
         ok(f"{server_json} exists; leaving alone")
@@ -990,10 +998,14 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
     else:
         ok(f"{groups_json} exists; leaving alone")
 
-    # /var/lib/glowup/schedules.json — empty list.
+    # /var/lib/glowup/schedules.json — empty schedule wrapper.
+    # server.py's schedule_file consumer expects a top-level dict with
+    # ``schedule`` (and optional ``location``) keys; a bare list would
+    # KeyError on ``sched_config["schedule"]``.  Write the canonical
+    # shape so the server boots immediately on a fresh install.
     schedules_json = VAR_LIB_DIR / SCHEDULES_JSON
     if not schedules_json.is_file():
-        write_var_lib_json(schedules_json, [])
+        write_var_lib_json(schedules_json, {"schedule": []})
     else:
         ok(f"{schedules_json} exists; leaving alone")
 

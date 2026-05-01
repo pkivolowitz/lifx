@@ -1556,6 +1556,28 @@ class DashboardHandlerMixin:
                     )
                 return
 
+            # Route groups writes to the groups file if it exists.
+            # Mirrors the schedule_file pattern above — when the
+            # operator's server.json sets ``groups_file``, server.py's
+            # ``_load_config`` stamps ``_groups_path`` into the live
+            # config dict; we look for it here and write the registry
+            # directly to that file rather than back into server.json.
+            # The file's top-level shape is the groups dict itself
+            # (``{name: [entries], ...}``), not wrapped in another
+            # key, matching server.py's ``groups_data`` consumer.
+            groups_path: Optional[str] = self.config.get("_groups_path")
+            if key == "groups" and groups_path:
+                try:
+                    with open(groups_path, "w") as f:
+                        json.dump(value, f, indent=4)
+                        f.write("\n")
+                except Exception as exc:
+                    logging.exception(
+                        "Failed to save groups to '%s'",
+                        groups_path,
+                    )
+                return
+
             config_path: Optional[str] = self.config_path
             if config_path is None:
                 return

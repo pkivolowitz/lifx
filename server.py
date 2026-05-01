@@ -1555,6 +1555,53 @@ def _load_config(config_path: str) -> dict[str, Any]:
                         if entry not in existing:
                             config["groups"][gname].append(entry)
 
+    # --- Merge external groups file if referenced ---
+    # State-file split (BASIC.md §Server / Installing): the canonical
+    # device registry lives in /var/lib/glowup/groups.json (writable by
+    # the service), and /etc/glowup/server.json is the read-only
+    # config — auth, port, file pointers.  The two are joined here so
+    # downstream code keeps reading ``config["groups"]`` exactly as it
+    # always has.  If both ``groups`` and ``groups_file`` are present
+    # we loud-warn and prefer the file (single source of truth).
+    # When unset (existing fleet hosts on master) the path is a no-op
+    # and behavior is unchanged — public-release sets ``groups_file``
+    # via install.py; master keeps groups directly in server.json.
+    groups_file: Optional[str] = config.get("groups_file")
+    if groups_file:
+        groups_path: str = groups_file
+        if not os.path.isabs(groups_path):
+            config_dir2: str = os.path.dirname(os.path.abspath(config_path))
+            groups_path = os.path.join(config_dir2, groups_path)
+        if not os.path.exists(groups_path):
+            raise FileNotFoundError(
+                f"groups_file '{groups_path}' not found "
+                f"(referenced from {config_path})"
+            )
+        with open(groups_path, "r") as gf:
+            groups_data: Any = json.load(gf)
+        if not isinstance(groups_data, dict):
+            raise ValueError(
+                f"groups_file '{groups_path}' must contain a JSON "
+                f"object mapping group names to device-identifier "
+                f"lists, got {type(groups_data).__name__}"
+            )
+        if "groups" in config and config["groups"]:
+            logging.warning(
+                "Both 'groups' and 'groups_file' set in %s; "
+                "groups_file '%s' wins (single source of truth)",
+                config_path, groups_path,
+            )
+        config["groups"] = groups_data
+        # Store resolved path for live group editing via the dashboard
+        # API — handlers/dashboard.py:_save_config_field routes
+        # ``groups`` writes here when this key is present.
+        config["_groups_path"] = groups_path
+        logging.info(
+            "Loaded groups from external file: %s (%d group(s))",
+            groups_path,
+            sum(1 for k in groups_data if not k.startswith("_")),
+        )
+
     # Validate auth token.
     token: Any = config.get("auth_token")
     if not token or not isinstance(token, str) or token == "CHANGE_ME":
