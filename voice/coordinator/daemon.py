@@ -178,6 +178,10 @@ class CoordinatorDaemon:
         chat_cfg: dict[str, Any] = self._config.get("chat", {})
         intent_cfg: dict[str, Any] = self._config.get("intent", {})
         zigbee_cfg: dict[str, Any] = self._config.get("zigbee", {})
+        # Optional ``jokes.pool_path`` overrides the executor's
+        # default (~/models/jokes/jokes.json).  Useful for dev hosts
+        # that keep the curated file under a non-standard tree.
+        jokes_cfg: dict[str, Any] = self._config.get("jokes", {})
         self._executor = GlowUpExecutor(
             api_base=self._api_base,
             auth_token=self._auth_token,
@@ -189,6 +193,7 @@ class CoordinatorDaemon:
             # (zigbee_service_url) when this is None.  Coordinator
             # config zigbee.service_url is for one-off dev overrides.
             zigbee_service_url=zigbee_cfg.get("service_url"),
+            joke_pool_path=jokes_cfg.get("pool_path"),
         )
 
     def _init_tts(self) -> None:

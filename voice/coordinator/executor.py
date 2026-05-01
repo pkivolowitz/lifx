@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -35,6 +36,7 @@ except ImportError:
 
 from glowup_site import site, SiteConfigError
 from voice import constants as C
+from voice.coordinator.joke_pool import JokePool
 from voice.coordinator.weather_sources import (
     AirQuality,
     CurrentConditions,
@@ -159,46 +161,28 @@ _CHAT_SYSTEM_PROMPT: str = (
     "You have a warm personality."
 )
 
-# System prompt for the joke action.  The category enumeration is
-# load-bearing: at default chat temperature, gemma3:27b converges on
-# the same handful of jokes when asked cold (the "atoms make up
-# everything" attractor and a few others).  Listing many styles +
-# many subjects + an explicit avoidance list of the worst offenders
-# pushes the sampler off the deterministic favorites and into the
-# long tail.  Per-room chat history (shared with the chat action)
-# provides the within-session "don't repeat" signal naturally.
-_JOKE_SYSTEM_PROMPT: str = (
-    "You are GlowUp, a home assistant. The user has asked for a "
-    "joke. Reply with exactly one joke and nothing else — no "
-    "preamble like \"Sure!\" or \"Here's one:\", no commentary "
-    "after. The reply is spoken aloud over a speaker, so keep it "
-    "to 1-3 short sentences and make it land cleanly when read. "
-    "Deliver it casually, as a friend would tell it.\n\n"
-    "Pick uniformly at random from a wide range of comedic styles: "
-    "one-liner, observational, pun, anti-joke, absurdist, dad joke, "
-    "dry British, self-deprecating, paraprosdokian, hyperbole, "
-    "malaphor, deadpan, shaggy-dog (kept short), Borscht-belt, "
-    "callback, surreal, bar-walks-into, doctor-doctor, Tom Swifty, "
-    "Spoonerism, Wellerism, news-headline twist, Bayesian-prior "
-    "subversion. Subjects span science, language, food, work, "
-    "animals, weather, philosophy, technology, history, sports, "
-    "music, math, geography, domestic life, travel, money. "
-    "Avoid knock-knock unless the user explicitly asks for one. "
-    "Do not default to the most common LLM joke attractors — "
-    "in particular, never use: \"why don't scientists trust "
-    "atoms\", \"I'm reading a book about anti-gravity\", "
-    "\"parallel lines have so much in common\", \"I told my wife "
-    "she was drawing her eyebrows too high\", \"why don't "
-    "skeletons fight each other\", \"what do you call a fish "
-    "with no eyes\". If the conversation history shows a joke you "
-    "already told, pick a different style and a different subject."
-)
+# ---------------------------------------------------------------------------
+# Joke action constants
+# ---------------------------------------------------------------------------
 
-# Higher sampling temperature on joke calls.  At chat-default 0.7,
-# the model collapses to its favorites; at 1.1 with the category
-# list above, it samples broadly across the long tail without
-# losing coherence.
-_JOKE_TEMPERATURE: float = 1.1
+# Default location of the curated joke pool — sibling to the other
+# large voice resources (piper TTS / wakeword ONNX in ``~/models``).
+# Override at coordinator construction time via ``joke_pool_path``.
+_DEFAULT_JOKE_POOL_PATH: str = "~/models/jokes/jokes.json"
+
+# Per-room ring of recent joke IDs.  ``deque(maxlen=N)`` automatically
+# evicts the oldest entry on append; N is small because the
+# coordinator's value is variety-within-a-session, not lifetime
+# uniqueness — the pool is large enough that a 16-deep recency
+# window guarantees ~no immediate repeats while leaving the rest of
+# the corpus eligible.
+_RECENT_JOKE_IDS_MAX: int = 16
+
+# Max chars for params.style / params.topic — both are short labels
+# from the intent layer (e.g., "science", "knock-knock"); a cap
+# bounds substring-match cost if the intent layer ever returns
+# something pathological.
+_PARAM_CAP: int = 64
 
 # ---------------------------------------------------------------------------
 # Actions config path — adjacent to this module.
@@ -228,6 +212,7 @@ class GlowUpExecutor:
         chat_model: str = "gemma3:27b",
         ollama_host: str = "http://localhost:11434",
         zigbee_service_url: Optional[str] = None,
+        joke_pool_path: Optional[str] = None,
     ) -> None:
         """Initialize the executor.
 
@@ -236,6 +221,12 @@ class GlowUpExecutor:
         coordinator's plug commands cannot work without this URL, so
         a missing value is fatal at construction time rather than at
         first plug call.
+
+        ``joke_pool_path`` points at the curated jokes file produced
+        by ``tools/curate_jokes.py``.  A missing or unreadable file
+        is non-fatal — the coordinator stays up and ``_handle_joke``
+        reports "no jokes available" instead of crashing the whole
+        voice path on a curation hiccup.
         """
         self._api_base: str = api_base.rstrip("/")
         self._auth_token: str = auth_token
@@ -263,6 +254,33 @@ class GlowUpExecutor:
         # Per-room conversation history.
         self._chat_history: dict[str, list[dict[str, str]]] = {}
         self._chat_timestamps: dict[str, float] = {}
+        # Per-room ring of recent joke IDs for repeat avoidance.  TTL
+        # is shared with chat history (see ``_touch_room``) so a
+        # quiet 30 minutes resets both at once.
+        self._recent_joke_ids: dict[str, deque[str]] = {}
+
+        # Curated joke pool — loaded fail-soft so the rest of the
+        # voice path still works if the file is missing on a fresh
+        # host.  Re-curation is a deploy-time concern (see
+        # ``tools/curate_jokes.py``); the coordinator just reads.
+        resolved_pool_path: str = joke_pool_path or _DEFAULT_JOKE_POOL_PATH
+        try:
+            self._joke_pool: JokePool = JokePool.from_file(resolved_pool_path)
+        except FileNotFoundError:
+            logger.warning(
+                "joke pool not found at %s — '/say a joke' will report "
+                "no jokes available.  Run tools/curate_jokes.py to "
+                "generate it.",
+                resolved_pool_path,
+            )
+            self._joke_pool = JokePool.empty()
+        except ValueError as exc:
+            # Schema mismatch or malformed JSON.  Loud-warn, run empty.
+            logger.error(
+                "joke pool at %s is unreadable: %s — running with empty "
+                "pool", resolved_pool_path, exc,
+            )
+            self._joke_pool = JokePool.empty()
 
         # Weather client with NWS primary + Open-Meteo fallback.
         # The fallback notice hook is rebound per-utterance by the
@@ -3059,6 +3077,22 @@ class GlowUpExecutor:
     # Chat — freeform Ollama conversation (the one special case)
     # ------------------------------------------------------------------
 
+    def _touch_room(self, room: str) -> None:
+        """Mark *room* active; expire any per-room state past the TTL.
+
+        Centralised so chat history and the recent-joke ring expire
+        together — a 30-minute lull resets both, preserving the
+        invariant that "back after a while" feels like a fresh
+        session everywhere it matters.  Update both maps before
+        returning, then let callers populate whichever they need.
+        """
+        now: float = time.time()
+        last_active: float = self._chat_timestamps.get(room, 0.0)
+        if now - last_active > _CHAT_HISTORY_TTL_S:
+            self._chat_history.pop(room, None)
+            self._recent_joke_ids.pop(room, None)
+        self._chat_timestamps[room] = now
+
     def _get_chat_history(self, room: str) -> list[dict[str, str]]:
         """Get conversation history for a room, expiring stale sessions.
 
@@ -3068,18 +3102,22 @@ class GlowUpExecutor:
         Returns:
             List of message dicts.
         """
-        now: float = time.time()
-        last_active: float = self._chat_timestamps.get(room, 0.0)
-
-        if now - last_active > _CHAT_HISTORY_TTL_S:
-            self._chat_history.pop(room, None)
-
-        self._chat_timestamps[room] = now
-
+        self._touch_room(room)
         if room not in self._chat_history:
             self._chat_history[room] = []
-
         return self._chat_history[room]
+
+    def _get_recent_joke_ids(self, room: str) -> deque[str]:
+        """Per-room ring of joke IDs spoken within the active session.
+
+        Used by :meth:`_handle_joke` to avoid telling the same joke
+        twice in a row.  Shares TTL semantics with chat history via
+        :meth:`_touch_room`.
+        """
+        self._touch_room(room)
+        if room not in self._recent_joke_ids:
+            self._recent_joke_ids[room] = deque(maxlen=_RECENT_JOKE_IDS_MAX)
+        return self._recent_joke_ids[room]
 
     def _call_ollama_chat(
         self,
@@ -3203,50 +3241,73 @@ class GlowUpExecutor:
         display_target: str,
         params: dict[str, Any],
     ) -> dict[str, Any]:
-        """Tell a joke via Ollama with broad-category sampling.
+        """Tell a joke from the curated pool, avoiding recent repeats.
 
-        The intent parser routes any joke-shaped request here.
-        Optional ``style`` (e.g. "knock knock", "dad",
-        "one-liner", "anti-joke") and ``topic`` (e.g. "science",
-        "food") are read from params and used to construct a
-        clean user message for the chat model.
+        Replaced the old Ollama-generated path on 2026-05-01.  Local
+        3B-class chat models have memorised a small attractor set
+        (the "atoms" / "anti-gravity" / "skeletons" jokes) and
+        high-temperature prompting just rotates through them; humour
+        competence is the missing piece, not vocabulary.  Sampling
+        from the taivop joke-dataset (curated via
+        ``tools/curate_jokes.py``, score-filtered for r/jokes,
+        rating-filtered for stupidstuff, length-capped for voice
+        TTS) gets us the actual humans-laughed-at-this signal that
+        the LLM lacks.
 
-        ``params.message`` is deliberately IGNORED, even if the
-        intent parser supplies one.  The small intent classifier
-        (llama3.2:3b) reliably hallucinates an entire joke into
-        params.message when it sees a "tell me a joke" request —
-        and when that hallucinated joke gets forwarded as the user
-        turn, gemma3 reads it as the user having TOLD it a joke
-        and replies with a comeback / review instead of telling
-        its own joke.  Observed live 2026-05-01.  Building the
-        user message ourselves from short atomic param fields
-        eliminates that failure mode entirely.
-
-        Per-room chat history is shared with the chat action so
-        consecutive "another joke" requests within the 30-minute
-        history window naturally avoid what was just said.
+        Optional ``style`` and ``topic`` from params become a soft
+        substring filter against the joke body / category; if no
+        joke matches, fall back to an unfiltered sample so the user
+        still hears a joke instead of "no joke matched".  Repeat
+        avoidance: the per-room ring of recent joke IDs (16 deep,
+        same 30-minute TTL as chat history) is passed to the pool's
+        ``exclude_ids`` so consecutive "another one" requests
+        traverse the corpus without doubling back.  ``params.message``
+        is ignored deliberately — the small intent classifier
+        hallucinates entire jokes into that field, and we don't
+        want them.
         """
         room: str = getattr(self, "_current_room", "unknown")
-        # Defensive caps — style and topic are short labels, never
-        # full sentences.  A cap also bounds prompt size if the
-        # intent layer ever returns something unexpected.
-        _PARAM_CAP: int = 64  # max chars per style/topic field
+        if self._joke_pool.is_empty():
+            return {
+                "status": "error",
+                "confirmation": "Sorry, I don't have any jokes loaded.",
+                "speak": True,
+            }
+
         style: str = str(params.get("style", "")).strip()[:_PARAM_CAP]
         topic: str = str(params.get("topic", "")).strip()[:_PARAM_CAP]
+        recent: deque[str] = self._get_recent_joke_ids(room)
+        excluded: set[str] = set(recent)
 
-        if style and topic:
-            message: str = f"Tell me a {style} joke about {topic}."
-        elif style:
-            message = f"Tell me a {style} joke."
-        elif topic:
-            message = f"Tell me a joke about {topic}."
-        else:
-            message = "Tell me a joke."
-
-        return self._call_ollama_chat(
-            system_prompt=_JOKE_SYSTEM_PROMPT,
-            message=message,
-            room=room,
-            temperature=_JOKE_TEMPERATURE,
-            fail_message="Sorry, I can't think of a joke right now.",
+        # First try with the user-hinted filters.  If the substring
+        # match yields no candidate, fall through to an unfiltered
+        # pick rather than reporting failure — the user asked for a
+        # joke, the pool has thousands; better to deliver a random
+        # one than to apologise for the topic miss.
+        joke = self._joke_pool.sample(
+            topic=topic, style=style, exclude_ids=excluded,
         )
+        if joke is None and (topic or style):
+            joke = self._joke_pool.sample(exclude_ids=excluded)
+        if joke is None:
+            # Pool is non-empty but every joke is excluded by the
+            # recency ring — should be unreachable while the pool is
+            # larger than the ring (12K >> 16) but the branch keeps
+            # the contract honest if curation ever produces a tiny
+            # pool during development.
+            return {
+                "status": "error",
+                "confirmation": "I've told you all my best ones already.",
+                "speak": True,
+            }
+
+        recent.append(joke.id)
+        logger.info(
+            "joke selected: id=%s source=%s score=%.1f topic=%r style=%r",
+            joke.id, joke.source, joke.score, topic, style,
+        )
+        return {
+            "status": "ok",
+            "confirmation": joke.body,
+            "speak": True,
+        }
