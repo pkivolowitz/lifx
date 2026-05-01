@@ -52,10 +52,19 @@ var uvValue = document.getElementById("uvValue");
 var uvLabel = document.getElementById("uvLabel");
 var uvDetails = document.getElementById("uvDetails");
 
-var UV_URL = "https://api.open-meteo.com/v1/forecast" +
-    "?latitude=30.69&longitude=-88.04" +
-    "&current=uv_index&daily=uv_index_max" +
-    "&temperature_unit=fahrenheit&timezone=America/Chicago&forecast_days=1";
+/* Operator coordinates come from window.__GLOWUP_COORDS__, stamped
+   into home.html by handlers/dashboard.py.  Same pattern the live
+   weather/AQI/alerts tiles use; if you paste this snippet back into
+   home.html, GLOWUP_COORDS is already declared there.  When coords
+   are absent the URL is null and pollUv short-circuits, leaving the
+   tile in its initial empty state. */
+var UV_URL = (typeof GLOWUP_COORDS !== "undefined" && GLOWUP_COORDS)
+    ? "https://api.open-meteo.com/v1/forecast" +
+      "?latitude=" + GLOWUP_COORDS.latitude +
+      "&longitude=" + GLOWUP_COORDS.longitude +
+      "&current=uv_index&daily=uv_index_max" +
+      "&temperature_unit=fahrenheit&timezone=America/Chicago&forecast_days=1"
+    : null;
 
 function uvCategory(uv) {
     if (uv < 3)  return ["Low", "uv-low"];
@@ -66,6 +75,7 @@ function uvCategory(uv) {
 }
 
 function pollUv() {
+    if (!UV_URL) return;  /* coords not configured — see GLOWUP_COORDS comment */
     fetch(UV_URL)
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -93,6 +103,8 @@ function pollUv() {
         .catch(function () {});
 }
 
-pollUv();
-setInterval(pollUv, WEATHER_POLL_MS);
+if (UV_URL) {
+    pollUv();
+    setInterval(pollUv, WEATHER_POLL_MS);
+}
 </script>

@@ -33,7 +33,7 @@ except ImportError:
     yaml = None  # type: ignore[assignment]
     _HAS_YAML = False
 
-from glowup_site import site, SiteConfigError
+from glowup_site import SiteConfigError, site
 from voice import constants as C
 from voice.coordinator.weather_sources import (
     AirQuality,
@@ -53,13 +53,11 @@ logger: logging.Logger = logging.getLogger("glowup.voice.executor")
 # Constants
 # ---------------------------------------------------------------------------
 
-# Mobile, AL residential electricity rate ($/kWh).
-_ELECTRICITY_RATE_PER_KWH: float = 0.171
-
-# Mobile, AL coordinates — shared by weather, forecast, and air quality.
-# Matches the /home dashboard's location.
-_WEATHER_LAT: float = 30.69
-_WEATHER_LON: float = -88.04
+# Operator coordinates and electricity rate come from
+# /etc/glowup/site.json via :mod:`glowup_site`.  Resolved once at
+# executor construction (lat/lon required for weather sources;
+# rate optional, controls whether the power-summary handler quotes
+# cost).  This module no longer carries any site-specific defaults.
 
 # Feels-like vs. actual-temperature spread at which "feels like"
 # becomes worth mentioning on the default (all-aspects) weather
@@ -212,18 +210,30 @@ class GlowUpExecutor:
         self._chat_history: dict[str, list[dict[str, str]]] = {}
         self._chat_timestamps: dict[str, float] = {}
 
+        # Operator coordinates from site.json — required for every
+        # weather / air-quality / UV lookup the executor performs.
+        # site.latitude / site.longitude raise SiteConfigError with a
+        # clear message if either is unset; that's intentional, since
+        # the voice action map dispatches to weather handlers and a
+        # silent fall-through to a default coordinate would surface
+        # later as a confused "weather for somewhere I don't live"
+        # bug.  install.py prompts for these on the Linux server
+        # install and writes them to /etc/glowup/site.json.
+        weather_lat: float = site.latitude
+        weather_lon: float = site.longitude
+
         # Weather client with NWS primary + Open-Meteo fallback.
         # The fallback notice hook is rebound per-utterance by the
         # daemon (via :meth:`set_interim_speaker`) so "retrying" is
         # routed to the correct satellite.
         self._weather_client: WeatherClient = WeatherClient(
-            primary=NWSSource(_WEATHER_LAT, _WEATHER_LON),
-            fallback=OpenMeteoSource(_WEATHER_LAT, _WEATHER_LON),
+            primary=NWSSource(weather_lat, weather_lon),
+            fallback=OpenMeteoSource(weather_lat, weather_lon),
             on_fallback=self._speak_interim,
         )
         # Air quality has no viable US fallback provider — single-source.
         self._air_quality: OpenMeteoAirQuality = OpenMeteoAirQuality(
-            _WEATHER_LAT, _WEATHER_LON,
+            weather_lat, weather_lon,
         )
 
         # Interim-speech callback — set by the daemon before each
@@ -1097,16 +1107,31 @@ class GlowUpExecutor:
         avg: float = data.get("avg_watts", 0)
         peak: float = data.get("peak_watts", 0)
         kwh: float = data.get("total_kwh", 0)
-        cost: float = kwh * _ELECTRICITY_RATE_PER_KWH
 
-        return {
-            "status": "ok",
-            "confirmation": (
+        # Cost line is conditional on the operator having configured
+        # ``electricity_rate_per_kwh`` in site.json.  Absent rate →
+        # bare-energy reply (still useful), no apology.  Voice replies
+        # are spoken; tacking on "I don't know your electricity rate"
+        # every time would be noise.
+        rate: float | None = site.electricity_rate_per_kwh
+        if rate is not None:
+            cost: float = kwh * rate
+            confirmation: str = (
                 f"{display_target} averages {avg:.0f} watts, "
                 f"peaked at {peak:.0f} watts. "
                 f"Total energy {kwh:.1f} kilowatt hours, "
                 f"costing about ${cost:.2f}."
-            ),
+            )
+        else:
+            confirmation = (
+                f"{display_target} averages {avg:.0f} watts, "
+                f"peaked at {peak:.0f} watts. "
+                f"Total energy {kwh:.1f} kilowatt hours."
+            )
+
+        return {
+            "status": "ok",
+            "confirmation": confirmation,
             "speak": True,
         }
 

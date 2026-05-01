@@ -180,9 +180,23 @@ class DashboardHandlerMixin:
     def _handle_get_home(self) -> None:
         """GET /home — serve the sensor display dashboard.
 
-        Reads ``static/home.html`` from the server's directory
-        and returns it as ``text/html``.  Display-only page showing
+        Reads ``static/home.html`` from the server's directory and
+        returns it as ``text/html``.  Display-only page showing
         time, sensor readings, and photos.
+
+        The page's weather / AQI / NWS-alerts widgets need the
+        operator's coordinates.  Rather than baking lat/lon into the
+        repo source (where any change would show as a git delta on
+        every operator's local checkout), we splice
+        ``window.__GLOWUP_COORDS__`` in just before ``</head>`` from
+        ``site.latitude`` / ``site.longitude``.  The static file in
+        the repo carries no real coordinates; every operator gets
+        their own values stamped at serve time.  When site.json
+        hasn't been configured (no latitude / longitude), the script
+        is omitted and the page's JS detects the absent global,
+        skips the polls, and shows a "configure /etc/glowup/site.json"
+        notice in each affected tile.  This mirrors the pattern
+        ``handlers/maritime.py`` uses for ``window.__GLOWUP_HOME__``.
         """
         # static/ is at the project root, one level up from handlers/.
         home_path: str = os.path.join(
@@ -192,17 +206,41 @@ class DashboardHandlerMixin:
         try:
             with open(home_path, "r") as f:
                 html: str = f.read()
-            body: bytes = html.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("Pragma", "no-cache")
-            self.send_header("Expires", "0")
-            self.end_headers()
-            self.wfile.write(body)
         except FileNotFoundError:
             self._send_json(404, {"error": "Home display page not found"})
+            return
+
+        # Stamp the operator's coordinates if site.json has them.
+        # Any failure resolving the coords (unset, malformed, out of
+        # range) is non-fatal here — the page still renders, the JS
+        # gracefully handles the absent global.  The catch-all is
+        # narrow on purpose: SiteConfigError is the documented signal,
+        # not a wildcard hide.
+        try:
+            coords_payload: str = json.dumps({
+                "latitude": _site.latitude,
+                "longitude": _site.longitude,
+            })
+            inject: str = (
+                "<script>window.__GLOWUP_COORDS__ = "
+                + coords_payload
+                + ";</script>\n"
+            )
+            html = html.replace("</head>", inject + "</head>", 1)
+        except SiteConfigError as exc:
+            logger.info(
+                "/home served without coords — site.json: %s", exc,
+            )
+
+        body: bytes = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.end_headers()
+        self.wfile.write(body)
 
 
     def _handle_get_home_photos(self) -> None:
