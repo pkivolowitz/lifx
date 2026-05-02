@@ -71,7 +71,7 @@ Usage::
 
 from __future__ import annotations
 
-__version__ = "2.0"
+__version__ = "6.0"
 
 import argparse
 import hmac
