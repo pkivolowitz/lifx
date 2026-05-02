@@ -1,6 +1,17 @@
 {
-  "effect": "boing_ball",
+  "command": "python3 glowup.py record boing_ball --grid 8x8 --brightness 80 --hue -1 --rate medium",
+  "created": "2026-05-02",
   "description": "Amiga Boing Ball \u2014 antialiased circle bouncing in a box",
+  "duration": 6.0,
+  "effect": "boing_ball",
+  "file": "boing_ball.gif",
+  "format": "gif",
+  "fps": 20,
+  "grid": "8x8",
+  "height": 360,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "assets/previews/boing_ball.gif",
   "params": {
     "brightness": 80,
     "height": 8,
@@ -8,18 +19,7 @@
     "rate": "medium",
     "width": 8
   },
-  "zones": 64,
-  "zpb": 1,
-  "duration": 6.0,
-  "looping": false,
-  "fps": 20,
   "width": 360,
-  "height": 360,
-  "format": "gif",
-  "lerp": "lab",
-  "file": "boing_ball.gif",
-  "created": "2026-05-02",
-  "grid": "8x8",
-  "media_url": "boing_ball.gif",
-  "command": "python3 glowup.py record boing_ball --grid 8x8 --brightness 80 --hue -1 --rate medium"
+  "zones": 64,
+  "zpb": 1
 }

@@ -1,6 +1,16 @@
 {
-  "effect": "twinkle",
+  "command": "python3 glowup.py play twinkle --zones 64 --zpb 1 --bg-bri 10 --bg-hue 240.0 --bg-sat 80 --brightness 100 --density 0.15 --hue 0.0 --kelvin 3500 --saturation 0 --speed 0.5",
+  "created": "2026-05-02",
   "description": "Random zones sparkle and fade like Christmas lights",
+  "duration": 5.0,
+  "effect": "twinkle",
+  "file": "twinkle.gif",
+  "format": "gif",
+  "fps": 20,
+  "height": 80,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "assets/previews/twinkle.gif",
   "params": {
     "bg_bri": 10,
     "bg_hue": 240.0,
@@ -12,17 +22,7 @@
     "saturation": 0,
     "speed": 0.5
   },
-  "zones": 64,
-  "zpb": 1,
-  "duration": 5.0,
-  "looping": false,
-  "fps": 20,
   "width": 600,
-  "height": 80,
-  "format": "gif",
-  "lerp": "lab",
-  "file": "twinkle.gif",
-  "created": "2026-05-02",
-  "media_url": "twinkle.gif",
-  "command": "python3 glowup.py play twinkle --zones 64 --zpb 1 --bg-bri 10 --bg-hue 240.0 --bg-sat 80 --brightness 100 --density 0.15 --hue 0.0 --kelvin 3500 --saturation 0 --speed 0.5"
+  "zones": 64,
+  "zpb": 1
 }

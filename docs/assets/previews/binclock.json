@@ -1,6 +1,16 @@
 {
-  "effect": "binclock",
+  "command": "python3 glowup.py play binclock --zones 108 --zpb 3 --brightness 80 --gap-bri 0 --hour-hue 0.0 --kelvin 3500 --min-hue 120.0 --off-bri 0 --sec-hue 240.0",
+  "created": "2026-05-02",
   "description": "Display the current time in binary",
+  "duration": 10.0,
+  "effect": "binclock",
+  "file": "binclock.gif",
+  "format": "gif",
+  "fps": 20,
+  "height": 80,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "assets/previews/binclock.gif",
   "params": {
     "brightness": 80,
     "gap_bri": 0,
@@ -10,17 +20,7 @@
     "off_bri": 0,
     "sec_hue": 240.0
   },
-  "zones": 108,
-  "zpb": 3,
-  "duration": 10.0,
-  "looping": false,
-  "fps": 20,
   "width": 600,
-  "height": 80,
-  "format": "gif",
-  "lerp": "lab",
-  "file": "binclock.gif",
-  "created": "2026-05-02",
-  "media_url": "binclock.gif",
-  "command": "python3 glowup.py play binclock --zones 108 --zpb 3 --brightness 80 --gap-bri 0 --hour-hue 0.0 --kelvin 3500 --min-hue 120.0 --off-bri 0 --sec-hue 240.0"
+  "zones": 108,
+  "zpb": 3
 }

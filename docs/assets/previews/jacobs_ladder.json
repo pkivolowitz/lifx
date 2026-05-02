@@ -1,6 +1,16 @@
 {
-  "effect": "jacobs_ladder",
+  "command": "python3 glowup.py play jacobs_ladder --zones 108 --zpb 3 --arcs 2 --brightness 100 --gap 4 --kelvin 3500 --reverse 0 --speed 0.15",
+  "created": "2026-05-02",
   "description": "Rising electric arcs between electrode pairs (Frankenstein lab)",
+  "duration": 5.0,
+  "effect": "jacobs_ladder",
+  "file": "jacobs_ladder.gif",
+  "format": "gif",
+  "fps": 20,
+  "height": 80,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "assets/previews/jacobs_ladder.gif",
   "params": {
     "arcs": 2,
     "brightness": 100,
@@ -10,17 +20,7 @@
     "speed": 0.15,
     "zones_per_bulb": 3
   },
-  "zones": 108,
-  "zpb": 3,
-  "duration": 5.0,
-  "looping": false,
-  "fps": 20,
   "width": 600,
-  "height": 80,
-  "format": "gif",
-  "lerp": "lab",
-  "file": "jacobs_ladder.gif",
-  "created": "2026-05-02",
-  "media_url": "jacobs_ladder.gif",
-  "command": "python3 glowup.py play jacobs_ladder --zones 108 --zpb 3 --arcs 2 --brightness 100 --gap 4 --kelvin 3500 --reverse 0 --speed 0.15"
+  "zones": 108,
+  "zpb": 3
 }

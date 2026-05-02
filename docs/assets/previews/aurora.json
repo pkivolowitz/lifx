@@ -1,23 +1,23 @@
 {
-  "effect": "aurora",
+  "command": "python3 glowup.py play aurora --zones 108 --zpb 3 --bg-bri 5 --brightness 80 --kelvin 3500 --speed 8.0",
+  "created": "2026-05-02",
   "description": "Slow-moving curtains of color like the northern lights",
+  "duration": 8.0,
+  "effect": "aurora",
+  "file": "aurora.gif",
+  "format": "gif",
+  "fps": 20,
+  "height": 80,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "assets/previews/aurora.gif",
   "params": {
     "bg_bri": 5,
     "brightness": 80,
     "kelvin": 3500,
     "speed": 8.0
   },
-  "zones": 108,
-  "zpb": 3,
-  "duration": 8.0,
-  "looping": false,
-  "fps": 20,
   "width": 600,
-  "height": 80,
-  "format": "gif",
-  "lerp": "lab",
-  "file": "aurora.gif",
-  "created": "2026-05-02",
-  "media_url": "aurora.gif",
-  "command": "python3 glowup.py play aurora --zones 108 --zpb 3 --bg-bri 5 --brightness 80 --kelvin 3500 --speed 8.0"
+  "zones": 108,
+  "zpb": 3
 }

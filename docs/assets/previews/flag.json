@@ -1,6 +1,16 @@
 {
-  "effect": "flag",
+  "command": "python3 glowup.py play flag --zones 108 --zpb 3 --brightness 80 --country us --direction left --kelvin 3500 --speed 1.5",
+  "created": "2026-05-02",
   "description": "Waving national flag with perspective ripple",
+  "duration": 1.5,
+  "effect": "flag",
+  "file": "flag.gif",
+  "format": "gif",
+  "fps": 20,
+  "height": 80,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "assets/previews/flag.gif",
   "params": {
     "brightness": 80,
     "country": "us",
@@ -8,17 +18,7 @@
     "kelvin": 3500,
     "speed": 1.5
   },
-  "zones": 108,
-  "zpb": 3,
-  "duration": 1.5,
-  "looping": false,
-  "fps": 20,
   "width": 600,
-  "height": 80,
-  "format": "gif",
-  "lerp": "lab",
-  "file": "flag.gif",
-  "created": "2026-05-02",
-  "media_url": "flag.gif",
-  "command": "python3 glowup.py play flag --zones 108 --zpb 3 --brightness 80 --country us --direction left --kelvin 3500 --speed 1.5"
+  "zones": 108,
+  "zpb": 3
 }

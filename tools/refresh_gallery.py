@@ -46,6 +46,13 @@ MANIFEST: Path = REPO / "docs" / "effects.json"
 PYTHON: str = "/Users/perrykivolowitz/venv/bin/python"
 GLOWUP: str = str(REPO / "glowup.py")
 
+# Gallery JS resolves <img src> relative to the page URL, which is
+# served from docs/ as the Pages root.  GIFs live in docs/assets/
+# previews/, so each sidecar's ``media_url`` must be the path *from
+# the gallery page to the GIF*, not just the basename — otherwise the
+# browser requests https://…/glowup/<file>.gif and 404s.
+MEDIA_URL_PREFIX: str = "assets/previews"
+
 # ---------------------------------------------------------------------------
 # Render geometry.
 #
@@ -228,6 +235,7 @@ def render(
         "--output", str(out),
         "--format", "gif",
         "--lerp", "lab",
+        "--media-url", f"{MEDIA_URL_PREFIX}/{effect}.gif",
     ]
     if is_2d:
         cmd += [
