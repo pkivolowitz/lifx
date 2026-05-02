@@ -291,6 +291,14 @@ _PARAM_CLOSE: str = "}"
 # only when patterns could overlap — currently none do.
 _ROUTES: tuple[_Route, ...] = (
     # -- Pre-auth routes -----------------------------------------------------
+    # Root path: a fresh public install should not greet the operator
+    # with a 404 — they typed http://<host>:8420/ and the only
+    # honest answer is "the dashboard is at /home".  302 redirect
+    # there so a browser follows automatically and the address bar
+    # reflects where they actually are.  ("",) is what the dispatch
+    # parser produces for "/" after strip("/").split("/").
+    _Route("GET", ("",),
+           "_handle_get_root", requires_auth=False),
     _Route("GET", ("dashboard",),
            "_handle_get_dashboard", requires_auth=False),
     _Route("GET", ("home",),

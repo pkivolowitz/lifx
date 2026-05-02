@@ -100,6 +100,21 @@ _NODE_IPS: dict[str, str] = _load_node_ips()
 class DashboardHandlerMixin:
     """Dashboard and /home UI endpoint handlers."""
 
+    def _handle_get_root(self) -> None:
+        """GET / — 302 redirect to /home.
+
+        The /home page is the BASIC public install's primary surface.
+        A bare ``http://<host>:8420/`` previously returned 404, which
+        reads as "this didn't install correctly" even when the server
+        is healthy.  302 (rather than 301) so the browser revisits /
+        on each load — keeps room for the redirect target to change
+        without leaving permanent caches behind.
+        """
+        self.send_response(302)
+        self.send_header("Location", "/home")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _handle_get_dashboard(self) -> None:
         """GET /dashboard — serve the static HTML dashboard page.
 
