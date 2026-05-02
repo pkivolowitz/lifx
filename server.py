@@ -2407,11 +2407,43 @@ def main() -> None:
             # Must exist before KeepaliveProxy (and later, AdapterProxy).
             # Moved here from its original location so keepalive can
             # subscribe to MQTT topics before we wait for device data.
-            mqtt_cfg_early: dict = config.get("mqtt", {})
-            broker_addr_early: str = mqtt_cfg_early.get("broker", "localhost")
-            broker_port_early: int = mqtt_cfg_early.get("port", 1883)
+            #
+            # Three exit conditions, in priority order:
+            #   1. No "mqtt" section in config → BASIC public install
+            #      where the operator has no broker.  Log a single INFO
+            #      line and skip — every downstream consumer of
+            #      proc_mqtt already guards with ``if proc_mqtt is not
+            #      None`` so adapters / operators / SDR subscriptions
+            #      degrade silently.
+            #   2. mqtt configured but connect raises a socket error
+            #      (broker not running, firewall, wrong host) → log a
+            #      one-line WARNING and set proc_mqtt back to None.  We
+            #      deliberately do NOT let the exception propagate: the
+            #      outer try/except logs a multi-line traceback and
+            #      aborts the rest of background startup, which kills
+            #      KeepaliveProxy / AdapterProxy / operators that have
+            #      nothing to do with the broker being down.
+            #   3. Connect succeeds → existing happy path.
+            mqtt_cfg_early: Optional[dict] = config.get("mqtt")
 
-            if _MQTT_AVAILABLE:
+            if not _MQTT_AVAILABLE:
+                logging.info(
+                    "paho-mqtt not installed — running without "
+                    "process-comm MQTT (proxies, operators, SDR "
+                    "subscriptions disabled)"
+                )
+            elif not mqtt_cfg_early:
+                logging.info(
+                    "No 'mqtt' section in server.json — running "
+                    "standalone (proxies, operators, SDR "
+                    "subscriptions disabled).  Set mqtt.broker to "
+                    "enable distributed features."
+                )
+            else:
+                broker_addr_early: str = mqtt_cfg_early.get(
+                    "broker", "localhost",
+                )
+                broker_port_early: int = mqtt_cfg_early.get("port", 1883)
                 import paho.mqtt.client as _paho
                 _paho_v2: bool = hasattr(_paho, "CallbackAPIVersion")
                 _proc_id: str = f"glowup-server-proc-{int(time.time())}"
@@ -2422,12 +2454,24 @@ def main() -> None:
                     )
                 else:
                     proc_mqtt = _paho.Client(client_id=_proc_id)
-                proc_mqtt.connect(broker_addr_early, broker_port_early)
-                proc_mqtt.loop_start()
-                logging.info(
-                    "Process comm MQTT client connected to %s:%d",
-                    broker_addr_early, broker_port_early,
-                )
+                try:
+                    proc_mqtt.connect(broker_addr_early, broker_port_early)
+                    proc_mqtt.loop_start()
+                    logging.info(
+                        "Process comm MQTT client connected to %s:%d",
+                        broker_addr_early, broker_port_early,
+                    )
+                except (OSError, ConnectionError) as exc:
+                    # OSError covers ConnectionRefusedError, TimeoutError,
+                    # and socket.gaierror (DNS).  Convert the multi-frame
+                    # paho stack into one informative line.
+                    logging.warning(
+                        "MQTT broker %s:%d unreachable (%s) — running "
+                        "without process-comm MQTT this run; will retry "
+                        "on next server restart.",
+                        broker_addr_early, broker_port_early, exc,
+                    )
+                    proc_mqtt = None
 
             # -- Step 1: Keepalive proxy (replaces in-process KeepaliveProxy) --
             # The keepalive process runs separately via systemd.
