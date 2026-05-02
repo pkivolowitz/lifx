@@ -104,6 +104,19 @@ class DiagnosticsLogger:
             return None
 
         dsn: str = os.environ.get(DSN_ENV_VAR, DEFAULT_DSN)
+        if not dsn:
+            # BASIC scope: no Postgres configured.  Same rationale as
+            # power_logger / thermal_logger — an empty DSN means
+            # libpq tries the local socket and emits a noisy
+            # "PGSQL.5432 ... No such file" failure.  Skip cleanly
+            # at INFO; an unset DSN on a BASIC install is the
+            # default state, not a misconfiguration.
+            logger.info(
+                "Diagnostics logger disabled — no DSN configured "
+                "(set 'postgres_dsn' in site.json or %s env var "
+                "to enable)", DSN_ENV_VAR,
+            )
+            return None
         instance: DiagnosticsLogger = cls(dsn)
         if not instance._connect():
             return None
