@@ -73,7 +73,7 @@
         "command": "python3 glowup.py play binclock --zones 108 --zpb 3 --brightness 80 --gap-bri 0 --hour-hue 0.0 --kelvin 3500 --min-hue 120.0 --off-bri 0 --sec-hue 240.0"
     },
     {
-        "command": "python3 glowup.py play boing_ball --zones 36 --zpb 6 --brightness 80 --height 64 --hue -1 --rate medium --width 64",
+        "command": "python3 glowup.py record boing_ball --grid 24x24 --brightness 80 --hue -1 --rate medium",
         "created": "2026-05-02",
         "description": "The classic Amiga checkerboard sphere bouncing on a 2D grid",
         "duration": 6.0,
@@ -81,21 +81,22 @@
         "file": "boing_ball.gif",
         "format": "gif",
         "fps": 20,
-        "height": 80,
+        "grid": "24x24",
+        "height": 360,
         "lerp": "lab",
         "looping": false,
         "media_url": "boing_ball.gif",
         "params": {
             "brightness": 80,
-            "height": 64,
+            "height": 24,
             "hue": -1,
             "rate": "medium",
-            "width": 64
+            "width": 24
         },
         "title": "Boing Ball",
-        "width": 600,
-        "zones": 36,
-        "zpb": 6
+        "width": 360,
+        "zones": 576,
+        "zpb": 1
     },
     {
         "effect": "breathe",
@@ -124,7 +125,7 @@
         "command": "python3 glowup.py play breathe --zones 108 --zpb 3 --brightness 100 --hue1 240.0 --hue2 0.0 --kelvin 3500 --sat1 100 --sat2 100 --speed 4.0"
     },
     {
-        "command": "python3 glowup.py play conway2d --zones 36 --zpb 6 --brightness 80 --hue -1 --mode dissolve --pattern 1 --rate medium",
+        "command": "python3 glowup.py record conway2d --grid 24x24 --brightness 80 --hue -1 --mode dissolve --pattern 1 --rate medium",
         "created": "2026-05-02",
         "description": "Cellular automaton evolving on a 2D matrix device",
         "duration": 8.0,
@@ -132,7 +133,8 @@
         "file": "conway2d.gif",
         "format": "gif",
         "fps": 20,
-        "height": 80,
+        "grid": "24x24",
+        "height": 360,
         "lerp": "lab",
         "looping": false,
         "media_url": "conway2d.gif",
@@ -144,9 +146,9 @@
             "rate": "medium"
         },
         "title": "Conway's Game of Life",
-        "width": 600,
-        "zones": 36,
-        "zpb": 6
+        "width": 360,
+        "zones": 576,
+        "zpb": 1
     },
     {
         "effect": "cylon",
@@ -255,7 +257,7 @@
         "command": "python3 glowup.py play fireworks --zones 108 --zpb 3 --ascent-speed 10.0 --burst-duration 1.8 --burst-spread 20 --kelvin 3500 --launch-rate 0.5 --max-rockets 3 --trail-length 8"
     },
     {
-        "command": "python3 glowup.py play fireworks2d --zones 36 --zpb 6 --brightness 100 --burst-duration 1.8 --burst-spread 2.0 --height 80 --kelvin 3500 --launch-rate 0.4 --max-shells 3 --width 500",
+        "command": "python3 glowup.py record fireworks2d --grid 24x24 --brightness 100 --burst-duration 1.8 --burst-spread 2.0 --kelvin 3500 --launch-rate 0.4 --max-shells 3",
         "created": "2026-05-02",
         "description": "Bursts bloom from random points across a matrix surface",
         "duration": 8.0,
@@ -263,7 +265,8 @@
         "file": "fireworks2d.gif",
         "format": "gif",
         "fps": 20,
-        "height": 80,
+        "grid": "24x24",
+        "height": 360,
         "lerp": "lab",
         "looping": false,
         "media_url": "fireworks2d.gif",
@@ -271,16 +274,16 @@
             "brightness": 100,
             "burst_duration": 1.8,
             "burst_spread": 2.0,
-            "height": 80,
+            "height": 24,
             "kelvin": 3500,
             "launch_rate": 0.4,
             "max_shells": 3,
-            "width": 500
+            "width": 24
         },
         "title": "Fireworks (2D)",
-        "width": 600,
-        "zones": 36,
-        "zpb": 6
+        "width": 360,
+        "zones": 576,
+        "zpb": 1
     },
     {
         "effect": "flag",
@@ -361,7 +364,7 @@
         "zpb": 3
     },
     {
-        "command": "python3 glowup.py play matrix_rain --zones 36 --zpb 6 --brightness 80 --height 80 --luna 0 --rotate 0 --speed 10.0 --tail 2 --width 500",
+        "command": "python3 glowup.py record matrix_rain --grid 24x24 --brightness 80 --luna 0 --rotate 0 --speed 10.0 --tail 2",
         "created": "2026-05-02",
         "description": "Cascading green columns \u00e0 la The Matrix on a 2D grid",
         "duration": 8.0,
@@ -369,23 +372,24 @@
         "file": "matrix_rain.gif",
         "format": "gif",
         "fps": 20,
-        "height": 80,
+        "grid": "24x24",
+        "height": 360,
         "lerp": "lab",
         "looping": false,
         "media_url": "matrix_rain.gif",
         "params": {
             "brightness": 80,
-            "height": 80,
+            "height": 24,
             "luna": 0,
             "rotate": 0,
             "speed": 10.0,
             "tail": 2,
-            "width": 500
+            "width": 24
         },
         "title": "Matrix Rain",
-        "width": 600,
-        "zones": 36,
-        "zpb": 6
+        "width": 360,
+        "zones": 576,
+        "zpb": 1
     },
     {
         "effect": "morse",
@@ -499,7 +503,7 @@
         "command": "python3 glowup.py play plasma --zones 108 --zpb 3 --brightness 100 --hue 270.0 --hue-spread 40.0 --kelvin 3500 --saturation 80 --speed 2.0 --tendril-rate 8.0"
     },
     {
-        "command": "python3 glowup.py play plasma2d --zones 36 --zpb 6 --brightness 38 --height 80 --scale 6.0 --speed 1.0 --width 500",
+        "command": "python3 glowup.py record plasma2d --grid 24x24 --brightness 38 --scale 6.0 --speed 1.0",
         "created": "2026-05-02",
         "description": "Smooth flowing plasma field across a matrix surface",
         "duration": 6.0,
@@ -507,24 +511,25 @@
         "file": "plasma2d.gif",
         "format": "gif",
         "fps": 20,
-        "height": 80,
+        "grid": "24x24",
+        "height": 360,
         "lerp": "lab",
         "looping": false,
         "media_url": "plasma2d.gif",
         "params": {
             "brightness": 38,
-            "height": 80,
+            "height": 24,
             "scale": 6.0,
             "speed": 1.0,
-            "width": 500
+            "width": 24
         },
         "title": "Plasma (2D)",
-        "width": 600,
-        "zones": 36,
-        "zpb": 6
+        "width": 360,
+        "zones": 576,
+        "zpb": 1
     },
     {
-        "command": "python3 glowup.py play pong2d --zones 36 --zpb 6 --brightness 80 --height 64 --hue -1 --paddle-size 2 --rate medium --width 64",
+        "command": "python3 glowup.py record pong2d --grid 24x24 --brightness 80 --hue -1 --paddle-size 2 --rate medium",
         "created": "2026-05-02",
         "description": "The 1972 paddle-and-ball game played by an autonomous AI",
         "duration": 8.0,
@@ -532,25 +537,26 @@
         "file": "pong2d.gif",
         "format": "gif",
         "fps": 20,
-        "height": 80,
+        "grid": "24x24",
+        "height": 360,
         "lerp": "lab",
         "looping": false,
         "media_url": "pong2d.gif",
         "params": {
             "brightness": 80,
-            "height": 64,
+            "height": 24,
             "hue": -1,
             "paddle_size": 2,
             "rate": "medium",
-            "width": 64
+            "width": 24
         },
         "title": "Pong",
-        "width": 600,
-        "zones": 36,
-        "zpb": 6
+        "width": 360,
+        "zones": 576,
+        "zpb": 1
     },
     {
-        "command": "python3 glowup.py play radar_scope --zones 36 --zpb 6 --brightness 80 --height 64 --hue -1 --rate medium --width 64",
+        "command": "python3 glowup.py record radar_scope --grid 24x24 --brightness 80 --hue -1 --rate medium",
         "created": "2026-05-02",
         "description": "Sweeping radar beam with persistent contact afterglow",
         "duration": 6.0,
@@ -558,21 +564,22 @@
         "file": "radar_scope.gif",
         "format": "gif",
         "fps": 20,
-        "height": 80,
+        "grid": "24x24",
+        "height": 360,
         "lerp": "lab",
         "looping": false,
         "media_url": "radar_scope.gif",
         "params": {
             "brightness": 80,
-            "height": 64,
+            "height": 24,
             "hue": -1,
             "rate": "medium",
-            "width": 64
+            "width": 24
         },
         "title": "Radar Scope",
-        "width": 600,
-        "zones": 36,
-        "zpb": 6
+        "width": 360,
+        "zones": 576,
+        "zpb": 1
     },
     {
         "effect": "ripple",
@@ -603,7 +610,7 @@
         "command": "python3 glowup.py play ripple --zones 108 --zpb 3 --brightness 100 --damping 0.03 --drop-rate 1.5 --hue1 200.0 --hue2 330.0 --kelvin 3500 --saturation 100 --speed 30.0"
     },
     {
-        "command": "python3 glowup.py play ripple2d --zones 36 --zpb 6 --brightness 100 --decay-time 2.0 --height 80 --hue 200.0 --hue-spread 60.0 --luna 0 --max-pebbles 4 --spawn-rate 1.5 --speed 4.0 --thickness 1.0 --wavelength 2.0 --width 500",
+        "command": "python3 glowup.py record ripple2d --grid 24x24 --brightness 100 --decay-time 2.0 --hue 200.0 --hue-spread 60.0 --luna 0 --max-pebbles 4 --spawn-rate 1.5 --speed 4.0 --thickness 1.0 --wavelength 2.0",
         "created": "2026-05-02",
         "description": "Concentric water-like ripples spreading across a matrix",
         "duration": 6.0,
@@ -611,14 +618,15 @@
         "file": "ripple2d.gif",
         "format": "gif",
         "fps": 20,
-        "height": 80,
+        "grid": "24x24",
+        "height": 360,
         "lerp": "lab",
         "looping": false,
         "media_url": "ripple2d.gif",
         "params": {
             "brightness": 100,
             "decay_time": 2.0,
-            "height": 80,
+            "height": 24,
             "hue": 200.0,
             "hue_spread": 60.0,
             "luna": 0,
@@ -627,12 +635,12 @@
             "speed": 4.0,
             "thickness": 1.0,
             "wavelength": 2.0,
-            "width": 500
+            "width": 24
         },
         "title": "Ripple (2D)",
-        "width": 600,
-        "zones": 36,
-        "zpb": 6
+        "width": 360,
+        "zones": 576,
+        "zpb": 1
     },
     {
         "effect": "rule30",

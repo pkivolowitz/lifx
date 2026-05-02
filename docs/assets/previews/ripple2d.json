@@ -1,5 +1,5 @@
 {
-  "command": "python3 glowup.py play ripple2d --zones 36 --zpb 6 --brightness 100 --decay-time 2.0 --height 80 --hue 200.0 --hue-spread 60.0 --luna 0 --max-pebbles 4 --spawn-rate 1.5 --speed 4.0 --thickness 1.0 --wavelength 2.0 --width 500",
+  "command": "python3 glowup.py record ripple2d --grid 24x24 --brightness 100 --decay-time 2.0 --hue 200.0 --hue-spread 60.0 --luna 0 --max-pebbles 4 --spawn-rate 1.5 --speed 4.0 --thickness 1.0 --wavelength 2.0",
   "created": "2026-05-02",
   "description": "Concentric water-like ripples spreading across a matrix",
   "duration": 6.0,
@@ -7,14 +7,15 @@
   "file": "ripple2d.gif",
   "format": "gif",
   "fps": 20,
-  "height": 80,
+  "grid": "24x24",
+  "height": 360,
   "lerp": "lab",
   "looping": false,
   "media_url": "ripple2d.gif",
   "params": {
     "brightness": 100,
     "decay_time": 2.0,
-    "height": 80,
+    "height": 24,
     "hue": 200.0,
     "hue_spread": 60.0,
     "luna": 0,
@@ -23,10 +24,10 @@
     "speed": 4.0,
     "thickness": 1.0,
     "wavelength": 2.0,
-    "width": 500
+    "width": 24
   },
   "title": "Ripple (2D)",
-  "width": 600,
-  "zones": 36,
-  "zpb": 6
+  "width": 360,
+  "zones": 576,
+  "zpb": 1
 }

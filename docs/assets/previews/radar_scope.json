@@ -1,5 +1,5 @@
 {
-  "command": "python3 glowup.py play radar_scope --zones 36 --zpb 6 --brightness 80 --height 64 --hue -1 --rate medium --width 64",
+  "command": "python3 glowup.py record radar_scope --grid 24x24 --brightness 80 --hue -1 --rate medium",
   "created": "2026-05-02",
   "description": "Sweeping radar beam with persistent contact afterglow",
   "duration": 6.0,
@@ -7,19 +7,20 @@
   "file": "radar_scope.gif",
   "format": "gif",
   "fps": 20,
-  "height": 80,
+  "grid": "24x24",
+  "height": 360,
   "lerp": "lab",
   "looping": false,
   "media_url": "radar_scope.gif",
   "params": {
     "brightness": 80,
-    "height": 64,
+    "height": 24,
     "hue": -1,
     "rate": "medium",
-    "width": 64
+    "width": 24
   },
   "title": "Radar Scope",
-  "width": 600,
-  "zones": 36,
-  "zpb": 6
+  "width": 360,
+  "zones": 576,
+  "zpb": 1
 }

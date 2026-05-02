@@ -3494,6 +3494,66 @@ def _render_frame_pixels(
     return row * height
 
 
+def _render_frame_pixels_2d(
+    colors: list,
+    grid_w: int,
+    grid_h: int,
+    out_width: int,
+    out_height: int,
+) -> bytes:
+    """Render a row-major HSBK grid as a 2D image scaled to ``out_width`` × ``out_height``.
+
+    The flat ``colors`` list is interpreted as a ``grid_h`` × ``grid_w``
+    row-major matrix — the same shape every 2D effect emits when its
+    ``width`` and ``height`` Params are honoured.  Each grid cell is
+    painted as an axis-aligned rectangle, integer-scaled to fill the
+    output frame.  No anti-aliasing — matrix LEDs themselves don't
+    blend, so the gallery preview reflects the actual visual experience.
+
+    Args:
+        colors:     Flat HSBK list of length ``grid_w * grid_h``.
+        grid_w:     Logical grid columns (effect's ``width`` Param).
+        grid_h:     Logical grid rows (effect's ``height`` Param).
+        out_width:  Output GIF / video pixel width.
+        out_height: Output GIF / video pixel height.
+
+    Returns:
+        Raw RGB bytes (out_width * out_height * 3) for ffmpeg rawvideo.
+    """
+    if grid_w <= 0 or grid_h <= 0:
+        return bytes(out_width * out_height * 3)
+
+    # Pre-compute each grid cell's RGB so we sample HSBK→RGB once per
+    # cell rather than once per output pixel.  At a typical 24×24
+    # gallery grid that's 576 conversions vs ~hundreds of thousands.
+    cell_rgb: list[tuple[int, int, int]] = []
+    for h, s, br, k in colors[: grid_w * grid_h]:
+        cell_rgb.append(_hsbk_to_rgb_tuple(h, s, br, k))
+
+    # Map each output pixel to a grid cell via integer division.  Floor
+    # division rather than rounding gives crisp cell boundaries — what
+    # an LED matrix actually displays.
+    bg: tuple[int, int, int] = RECORD_BG_COLOR
+    out: bytearray = bytearray()
+    for y in range(out_height):
+        gy: int = (y * grid_h) // out_height
+        if gy >= grid_h:
+            gy = grid_h - 1
+        for x in range(out_width):
+            gx: int = (x * grid_w) // out_width
+            if gx >= grid_w:
+                gx = grid_w - 1
+            idx: int = gy * grid_w + gx
+            if 0 <= idx < len(cell_rgb):
+                r, g, b = cell_rgb[idx]
+            else:
+                r, g, b = bg
+            out.append(r)
+            out.append(g)
+            out.append(b)
+    return bytes(out)
+
+
 def cmd_record(args: argparse.Namespace) -> None:
     """Render an effect to a video file (GIF, MP4, or WebM) via ffmpeg.
 
@@ -3554,10 +3614,56 @@ def cmd_record(args: argparse.Namespace) -> None:
     if "zones_per_bulb" in param_defs:
         effect_params["zones_per_bulb"] = zpb
 
+    # --- 2D grid mode --------------------------------------------------------
+    # ``--grid WxH`` opts the recorder into 2D rendering: the colors list
+    # is treated row-major as a width × height matrix and painted as
+    # crisp axis-aligned cells (matrix-LED accurate, no anti-aliasing).
+    # Required for boing_ball, conway2d, fireworks2d, matrix_rain,
+    # plasma2d, pong2d, radar_scope, ripple2d — every effect that
+    # declares both ``width`` and ``height`` Params.  When --grid is
+    # set the effect's width/height Params are forced to W/H so
+    # zone_count = W*H matches what the recorder feeds in; --zones and
+    # --zpb are ignored for 2D mode.
+    grid_spec: Optional[str] = getattr(args, "grid", None)
+    grid_w: int = 0
+    grid_h: int = 0
+    is_2d: bool = False
+    if grid_spec:
+        try:
+            w_str, h_str = grid_spec.lower().split("x", 1)
+            grid_w = int(w_str)
+            grid_h = int(h_str)
+        except (ValueError, AttributeError):
+            _print(
+                f"ERROR: --grid expected 'WxH' (e.g. '24x24'), got "
+                f"{grid_spec!r}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if grid_w <= 0 or grid_h <= 0:
+            _print(
+                "ERROR: --grid dimensions must be positive.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        is_2d = True
+        # Force the effect's width/height Params to match the grid so
+        # zones consumed = grid_w * grid_h regardless of the effect's
+        # own defaults.  Non-2D effects (no width/height Params) reject
+        # the kwargs, so we only set them when valid.
+        if "width" in param_defs:
+            effect_params["width"] = grid_w
+        if "height" in param_defs:
+            effect_params["height"] = grid_h
+
     effect = create_effect(effect_name, **effect_params)
 
     # --- Determine recording parameters -------------------------------------
-    zones: int = getattr(args, "zones", DEFAULT_RECORD_ZONES)
+    if is_2d:
+        zones: int = grid_w * grid_h
+        zpb = 1  # No zones-per-bulb concept on a 2D matrix.
+    else:
+        zones = getattr(args, "zones", DEFAULT_RECORD_ZONES)
     fps: int = getattr(args, "fps", DEFAULT_FPS)
     width: int = getattr(args, "width", DEFAULT_RECORD_WIDTH)
     height: int = getattr(args, "height", DEFAULT_RECORD_HEIGHT)
@@ -3657,7 +3763,12 @@ def cmd_record(args: argparse.Namespace) -> None:
         for frame_idx in range(total_frames):
             t: float = frame_idx * dt
             colors = effect.render(t, zones)
-            pixels: bytes = _render_frame_pixels(colors, zpb, width, height)
+            if is_2d:
+                pixels: bytes = _render_frame_pixels_2d(
+                    colors, grid_w, grid_h, width, height,
+                )
+            else:
+                pixels = _render_frame_pixels(colors, zpb, width, height)
             proc.stdin.write(pixels)
 
             # In realtime mode, sleep between frames so wall-clock-
@@ -3712,6 +3823,8 @@ def cmd_record(args: argparse.Namespace) -> None:
         "file": os.path.basename(output),
         "created": str(date.today()),
     }
+    if is_2d:
+        metadata["grid"] = f"{grid_w}x{grid_h}"
     if author:
         metadata["author"] = author
     if title:
@@ -3721,14 +3834,27 @@ def cmd_record(args: argparse.Namespace) -> None:
     media_url: str = getattr(args, "media_url", None) or os.path.basename(output)
     metadata["media_url"] = media_url
 
-    # Build a CLI command that reproduces this recording.
-    cmd_parts: list[str] = [
-        "python3 glowup.py play", effect_name,
-        f"--zones {zones}", f"--zpb {zpb}",
-    ]
+    # Build a CLI command that reproduces this recording.  2D
+    # recordings reproduce via ``glowup record --grid WxH …`` (a 2D
+    # play command would need a real matrix device, which the
+    # gallery viewer doesn't have).  1D recordings reproduce via the
+    # play form so the user can drive it on real bulbs.
+    cmd_parts: list[str]
+    if is_2d:
+        cmd_parts = [
+            "python3 glowup.py record", effect_name,
+            f"--grid {grid_w}x{grid_h}",
+        ]
+    else:
+        cmd_parts = [
+            "python3 glowup.py play", effect_name,
+            f"--zones {zones}", f"--zpb {zpb}",
+        ]
     for pname, pval in all_params.items():
         if pname == "zones_per_bulb":
             continue  # already covered by --zpb
+        if is_2d and pname in ("width", "height"):
+            continue  # already covered by --grid
         cmd_parts.append(f"--{pname.replace('_', '-')} {pval}")
     metadata["command"] = " ".join(cmd_parts)
 
@@ -4292,6 +4418,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--lerp", type=str, default="oklab",
         choices=["oklab", "lab", "hsb"],
         help="Color interpolation method (default: oklab)",
+    )
+    p_record.add_argument(
+        "--grid", type=str, default=None, metavar="WxH",
+        help=(
+            "Render as a 2D matrix.  W and H are the grid columns and "
+            "rows.  Required for matrix-shaped effects (boing_ball, "
+            "conway2d, fireworks2d, matrix_rain, plasma2d, pong2d, "
+            "radar_scope, ripple2d) — each one renders to a row-major "
+            "grid that flattens to nonsense as a 1D strip.  Forces the "
+            "effect's 'width' and 'height' Params to match; "
+            "--zones / --zpb are ignored in 2D mode."
+        ),
     )
     p_record.add_argument(
         "--author", type=str, default=None,

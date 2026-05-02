@@ -1,5 +1,5 @@
 {
-  "command": "python3 glowup.py play plasma2d --zones 36 --zpb 6 --brightness 38 --height 80 --scale 6.0 --speed 1.0 --width 500",
+  "command": "python3 glowup.py record plasma2d --grid 24x24 --brightness 38 --scale 6.0 --speed 1.0",
   "created": "2026-05-02",
   "description": "Smooth flowing plasma field across a matrix surface",
   "duration": 6.0,
@@ -7,19 +7,20 @@
   "file": "plasma2d.gif",
   "format": "gif",
   "fps": 20,
-  "height": 80,
+  "grid": "24x24",
+  "height": 360,
   "lerp": "lab",
   "looping": false,
   "media_url": "plasma2d.gif",
   "params": {
     "brightness": 38,
-    "height": 80,
+    "height": 24,
     "scale": 6.0,
     "speed": 1.0,
-    "width": 500
+    "width": 24
   },
   "title": "Plasma (2D)",
-  "width": 600,
-  "zones": 36,
-  "zpb": 6
+  "width": 360,
+  "zones": 576,
+  "zpb": 1
 }

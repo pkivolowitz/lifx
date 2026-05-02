@@ -1,5 +1,5 @@
 {
-  "command": "python3 glowup.py play boing_ball --zones 36 --zpb 6 --brightness 80 --height 64 --hue -1 --rate medium --width 64",
+  "command": "python3 glowup.py record boing_ball --grid 24x24 --brightness 80 --hue -1 --rate medium",
   "created": "2026-05-02",
   "description": "The classic Amiga checkerboard sphere bouncing on a 2D grid",
   "duration": 6.0,
@@ -7,19 +7,20 @@
   "file": "boing_ball.gif",
   "format": "gif",
   "fps": 20,
-  "height": 80,
+  "grid": "24x24",
+  "height": 360,
   "lerp": "lab",
   "looping": false,
   "media_url": "boing_ball.gif",
   "params": {
     "brightness": 80,
-    "height": 64,
+    "height": 24,
     "hue": -1,
     "rate": "medium",
-    "width": 64
+    "width": 24
   },
   "title": "Boing Ball",
-  "width": 600,
-  "zones": 36,
-  "zpb": 6
+  "width": 360,
+  "zones": 576,
+  "zpb": 1
 }
