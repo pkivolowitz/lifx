@@ -2487,7 +2487,20 @@ def main() -> None:
                     "device discovery will not work"
                 )
 
-            # -- Step 2: Load the device registry -------------------------
+            # -- Step 1.5: Bail early if keepalive is unavailable -------
+            # Every remaining step (Steps 3 / 4 / 5 / operator manager /
+            # LockManager) calls into ``keepalive`` directly or
+            # subscribes via ``proc_mqtt``.  Without MQTT none of them
+            # can do useful work — Step 3's ``keepalive.wait_initial_scan``
+            # was the canonical AttributeError on the BASIC public install.
+            # A clean early return here keeps the foreground HTTP path
+            # (``/api/home/health``, static dashboard, /api endpoints
+            # that don't depend on live device data) responsive while
+            # making it explicit in the journal that distributed
+            # features are off.  Device registry load (Step 2) is
+            # cheap and useful even without MQTT — labels for whatever
+            # the operator already registered — so we leave it before
+            # the bail-out.
             device_reg: DeviceRegistry = DeviceRegistry()
             if device_reg.load():
                 logging.info(
@@ -2500,6 +2513,16 @@ def main() -> None:
                     "until devices are registered"
                 )
             GlowUpRequestHandler.registry = device_reg
+
+            if keepalive is None:
+                logging.info(
+                    "Background startup: stopping at Step 2 — keepalive "
+                    "proxy unavailable, distributed features (ARP scan, "
+                    "group resolution, adapters, operators, lock "
+                    "manager) skipped.  Foreground HTTP API remains "
+                    "available."
+                )
+                return
 
             # -- Step 3: Wait for initial ARP scan ------------------------
             logging.info("Waiting for initial ARP scan...")
