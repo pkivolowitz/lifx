@@ -16,15 +16,14 @@
   "zones": 108,
   "zpb": 3,
   "duration": 3.0,
-  "looping": true,
+  "looping": false,
   "fps": 20,
   "width": 600,
   "height": 80,
   "format": "gif",
   "lerp": "lab",
   "file": "wave.gif",
-  "created": "2026-03-11",
-  "title": "Standing Wave",
-  "media_url": "assets/previews/wave.gif",
+  "created": "2026-05-02",
+  "media_url": "wave.gif",
   "command": "python3 glowup.py play wave --zones 108 --zpb 3 --brightness 100 --drift 0.0 --hue1 240.0 --hue2 0.0 --kelvin 3500 --nodes 6 --sat1 100 --sat2 100 --speed 3.0"
 }

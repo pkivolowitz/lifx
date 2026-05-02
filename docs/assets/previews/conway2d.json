@@ -1,0 +1,25 @@
+{
+  "command": "python3 glowup.py play conway2d --zones 36 --zpb 6 --brightness 80 --hue -1 --mode dissolve --pattern 1 --rate medium",
+  "created": "2026-05-02",
+  "description": "Cellular automaton evolving on a 2D matrix device",
+  "duration": 8.0,
+  "effect": "conway2d",
+  "file": "conway2d.gif",
+  "format": "gif",
+  "fps": 20,
+  "height": 80,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "conway2d.gif",
+  "params": {
+    "brightness": 80,
+    "hue": -1,
+    "mode": "dissolve",
+    "pattern": 1,
+    "rate": "medium"
+  },
+  "title": "Conway's Game of Life",
+  "width": 600,
+  "zones": 36,
+  "zpb": 6
+}

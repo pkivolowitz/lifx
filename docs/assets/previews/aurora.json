@@ -17,8 +17,7 @@
   "format": "gif",
   "lerp": "lab",
   "file": "aurora.gif",
-  "created": "2026-03-11",
-  "title": "Aurora Borealis",
-  "media_url": "assets/previews/aurora.gif",
+  "created": "2026-05-02",
+  "media_url": "aurora.gif",
   "command": "python3 glowup.py play aurora --zones 108 --zpb 3 --bg-bri 5 --brightness 80 --kelvin 3500 --speed 8.0"
 }

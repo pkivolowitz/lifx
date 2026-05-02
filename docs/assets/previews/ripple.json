@@ -22,8 +22,7 @@
   "format": "gif",
   "lerp": "lab",
   "file": "ripple.gif",
-  "created": "2026-03-12",
-  "title": "Ripple Tank",
-  "media_url": "assets/previews/ripple.gif",
+  "created": "2026-05-02",
+  "media_url": "ripple.gif",
   "command": "python3 glowup.py play ripple --zones 108 --zpb 3 --brightness 100 --damping 0.03 --drop-rate 1.5 --hue1 200.0 --hue2 330.0 --kelvin 3500 --saturation 100 --speed 30.0"
 }

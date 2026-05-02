@@ -1,0 +1,24 @@
+{
+  "command": "python3 glowup.py play arcs --zones 108 --zpb 3 --brightness 80 --height 64 --rate medium --width 64",
+  "created": "2026-05-02",
+  "description": "Sweeping color arcs traveling across the strip",
+  "duration": 6.0,
+  "effect": "arcs",
+  "file": "arcs.gif",
+  "format": "gif",
+  "fps": 20,
+  "height": 80,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "arcs.gif",
+  "params": {
+    "brightness": 80,
+    "height": 64,
+    "rate": "medium",
+    "width": 64
+  },
+  "title": "Arcs",
+  "width": 600,
+  "zones": 108,
+  "zpb": 3
+}

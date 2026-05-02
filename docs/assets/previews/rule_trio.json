@@ -28,8 +28,7 @@
   "format": "gif",
   "lerp": "lab",
   "file": "rule_trio.gif",
-  "created": "2026-03-11",
-  "title": "Rule Trio \u2014 Fire Palette",
-  "media_url": "assets/previews/rule_trio.gif",
+  "created": "2026-05-02",
+  "media_url": "rule_trio.gif",
   "command": "python3 glowup.py play rule_trio --zones 108 --zpb 3 --bg 0 --brightness 90 --drift-b 1.31 --drift-c 1.73 --gap-fill 3 --hue-a 0.0 --hue-b 120.0 --hue-c 240.0 --kelvin 3500 --palette fire --rule-a 30 --rule-b 30 --rule-c 30 --sat 80 --speed 1.5"
 }

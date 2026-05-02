@@ -14,15 +14,14 @@
   "zones": 108,
   "zpb": 3,
   "duration": 9.05,
-  "looping": true,
+  "looping": false,
   "fps": 20,
   "width": 600,
   "height": 80,
   "format": "gif",
   "lerp": "lab",
   "file": "morse.gif",
-  "created": "2026-03-11",
-  "title": "Morse Code \u2014 SOS",
-  "media_url": "assets/previews/morse.gif",
+  "created": "2026-05-02",
+  "media_url": "morse.gif",
   "command": "python3 glowup.py play morse --zones 108 --zpb 3 --bg-bri 0 --brightness 100 --hue 0.0 --kelvin 3500 --message SOS --pause 5.0 --saturation 0 --unit 0.15"
 }

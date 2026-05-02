@@ -3639,6 +3639,20 @@ def cmd_record(args: argparse.Namespace) -> None:
 
     realtime: bool = getattr(args, "realtime", False)
 
+    # Effects that defer per-zone state initialisation to ``on_start``
+    # (leapfrog, ripple2d, etc.) crash on the first ``render`` call
+    # without this — their ``__init__`` sets only Param defaults.  The
+    # play / scheduler paths already call on_start before render; this
+    # commit brings the record path into the same lifecycle.
+    if hasattr(effect, "on_start"):
+        try:
+            effect.on_start(zones)
+        except Exception as exc:  # noqa: BLE001 — non-fatal, render may still work
+            _print(
+                f"  on_start({zones}) raised {type(exc).__name__}: {exc} "
+                f"— continuing; some effects may misrender",
+            )
+
     try:
         for frame_idx in range(total_frames):
             t: float = frame_idx * dt
@@ -4304,6 +4318,48 @@ def build_parser() -> argparse.ArgumentParser:
         "effect", "zones", "zpb", "fps", "duration", "width", "height",
         "format", "output", "lerp", "author", "title", "media_url",
     }
+    # Pre-scan: when two effects declare the same param name with
+    # different default types (e.g. fireworks.burst_spread = Param(20,
+    # int) vs fireworks2d.burst_spread = Param(2.0, float)), the
+    # union argparse needs the most permissive type or it rejects
+    # values it should accept.  Float > int > bool; str is its own
+    # bucket and only wins when no numeric default exists.  Without
+    # this pre-scan the first-registered effect's type silently wins
+    # and the user's perfectly valid ``--burst-spread 2.0`` for
+    # fireworks2d gets rejected as ``invalid int value``.
+    _type_rank: Dict[type, int] = {bool: 0, int: 1, float: 2, str: 1}
+    _param_type: Dict[str, type] = {}
+    _param_choices: Dict[str, Any] = {}
+    _choice_disagreement: set = set()
+    for _effect_name_pre, effect_cls_pre in get_registry().items():
+        for pname_pre, pdef_pre in effect_cls_pre.get_param_defs().items():
+            if pname_pre in record_reserved:
+                continue
+            cur_type: type = type(pdef_pre.default)
+            if cur_type not in _type_rank:
+                continue
+            existing: Optional[type] = _param_type.get(pname_pre)
+            if existing is None \
+                    or _type_rank[cur_type] > _type_rank[existing]:
+                _param_type[pname_pre] = cur_type
+            # Track choice agreement.  When two effects declare the
+            # same param with different choice lists (leapfrog's
+            # direction = ['forward','backward'] vs sine's direction =
+            # ['left','right']), argparse can only accept the union;
+            # but a record CLI for either effect needs to pass values
+            # the OTHER effect would reject.  Simplest correct
+            # behaviour: drop choice validation entirely for the
+            # disputed param and let the effect's own runtime
+            # validation surface a clearer error.  We still keep
+            # choices when every effect that declares the param
+            # agrees on the same set.
+            if pdef_pre.choices is not None:
+                prev: Any = _param_choices.get(pname_pre)
+                if prev is None:
+                    _param_choices[pname_pre] = list(pdef_pre.choices)
+                elif list(prev) != list(pdef_pre.choices):
+                    _choice_disagreement.add(pname_pre)
+
     seen_rec: set = set()
     for _effect_name, effect_cls in get_registry().items():
         for pname, pdef in effect_cls.get_param_defs().items():
@@ -4316,15 +4372,12 @@ def build_parser() -> argparse.ArgumentParser:
                 "help": argparse.SUPPRESS,
             }
 
-            if isinstance(pdef.default, int):
-                kwargs_rec["type"] = int
-            elif isinstance(pdef.default, float):
-                kwargs_rec["type"] = float
-            elif isinstance(pdef.default, str):
-                kwargs_rec["type"] = str
+            chosen_type: Optional[type] = _param_type.get(pname)
+            if chosen_type is not None:
+                kwargs_rec["type"] = chosen_type
 
-            if pdef.choices:
-                kwargs_rec["choices"] = pdef.choices
+            if pname in _param_choices and pname not in _choice_disagreement:
+                kwargs_rec["choices"] = _param_choices[pname]
 
             p_record.add_argument(
                 f"--{pname.replace('_', '-')}",

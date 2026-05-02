@@ -19,8 +19,7 @@
   "format": "gif",
   "lerp": "lab",
   "file": "embers.gif",
-  "created": "2026-03-11",
-  "title": "Embers",
-  "media_url": "assets/previews/embers.gif",
+  "created": "2026-05-02",
+  "media_url": "embers.gif",
   "command": "python3 glowup.py play embers --zones 108 --zpb 3 --brightness 100 --cooling 0.98 --intensity 0.7 --kelvin 3500 --turbulence 0.08"
 }

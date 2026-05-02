@@ -1,0 +1,28 @@
+{
+  "command": "python3 glowup.py play fireworks2d --zones 36 --zpb 6 --brightness 100 --burst-duration 1.8 --burst-spread 2.0 --height 80 --kelvin 3500 --launch-rate 0.4 --max-shells 3 --width 500",
+  "created": "2026-05-02",
+  "description": "Bursts bloom from random points across a matrix surface",
+  "duration": 8.0,
+  "effect": "fireworks2d",
+  "file": "fireworks2d.gif",
+  "format": "gif",
+  "fps": 20,
+  "height": 80,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "fireworks2d.gif",
+  "params": {
+    "brightness": 100,
+    "burst_duration": 1.8,
+    "burst_spread": 2.0,
+    "height": 80,
+    "kelvin": 3500,
+    "launch_rate": 0.4,
+    "max_shells": 3,
+    "width": 500
+  },
+  "title": "Fireworks (2D)",
+  "width": 600,
+  "zones": 36,
+  "zpb": 6
+}

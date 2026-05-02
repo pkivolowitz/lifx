@@ -1,0 +1,28 @@
+{
+  "command": "python3 glowup.py play leapfrog --zones 108 --zpb 3 --beat-duration 1.2 --beat-order sequential --brightness 100 --direction forward --kelvin 3500 --m 12 --palette neon --seed 0",
+  "created": "2026-05-02",
+  "description": "Pairs of pulses leapfrog past one another along the strip",
+  "duration": 6.0,
+  "effect": "leapfrog",
+  "file": "leapfrog.gif",
+  "format": "gif",
+  "fps": 20,
+  "height": 80,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "leapfrog.gif",
+  "params": {
+    "beat_duration": 1.2,
+    "beat_order": "sequential",
+    "brightness": 100,
+    "direction": "forward",
+    "kelvin": 3500,
+    "m": 12,
+    "palette": "neon",
+    "seed": 0
+  },
+  "title": "Leapfrog",
+  "width": 600,
+  "zones": 108,
+  "zpb": 3
+}

@@ -20,8 +20,7 @@
   "format": "gif",
   "lerp": "lab",
   "file": "jacobs_ladder.gif",
-  "created": "2026-03-11",
-  "title": "Jacob's Ladder",
-  "media_url": "assets/previews/jacobs_ladder.gif",
+  "created": "2026-05-02",
+  "media_url": "jacobs_ladder.gif",
   "command": "python3 glowup.py play jacobs_ladder --zones 108 --zpb 3 --arcs 2 --brightness 100 --gap 4 --kelvin 3500 --reverse 0 --speed 0.15"
 }

@@ -20,8 +20,7 @@
   "format": "gif",
   "lerp": "lab",
   "file": "fireworks.gif",
-  "created": "2026-03-11",
-  "title": "Fireworks",
-  "media_url": "assets/previews/fireworks.gif",
+  "created": "2026-05-02",
+  "media_url": "fireworks.gif",
   "command": "python3 glowup.py play fireworks --zones 108 --zpb 3 --ascent-speed 10.0 --burst-duration 1.8 --burst-spread 20 --kelvin 3500 --launch-rate 0.5 --max-rockets 3 --trail-length 8"
 }

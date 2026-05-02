@@ -22,8 +22,7 @@
   "format": "gif",
   "lerp": "lab",
   "file": "twinkle.gif",
-  "created": "2026-03-11",
-  "title": "Twinkle",
-  "media_url": "assets/previews/twinkle.gif",
+  "created": "2026-05-02",
+  "media_url": "twinkle.gif",
   "command": "python3 glowup.py play twinkle --zones 108 --zpb 3 --bg-bri 10 --bg-hue 240.0 --bg-sat 80 --brightness 100 --density 0.15 --hue 0.0 --kelvin 3500 --saturation 0 --speed 0.5"
 }

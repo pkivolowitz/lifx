@@ -13,15 +13,14 @@
   "zones": 108,
   "zpb": 3,
   "duration": 4.0,
-  "looping": true,
+  "looping": false,
   "fps": 20,
   "width": 600,
   "height": 80,
   "format": "gif",
   "lerp": "lab",
   "file": "breathe.gif",
-  "created": "2026-03-11",
-  "title": "Breathe",
-  "media_url": "assets/previews/breathe.gif",
+  "created": "2026-05-02",
+  "media_url": "breathe.gif",
   "command": "python3 glowup.py play breathe --zones 108 --zpb 3 --brightness 100 --hue1 240.0 --hue2 0.0 --kelvin 3500 --sat1 100 --sat2 100 --speed 4.0"
 }

@@ -22,8 +22,7 @@
   "format": "gif",
   "lerp": "lab",
   "file": "pendulum_wave.gif",
-  "created": "2026-03-12",
-  "title": "Pendulum Wave",
-  "media_url": "assets/previews/pendulum_wave.gif",
+  "created": "2026-05-02",
+  "media_url": "pendulum_wave.gif",
   "command": "python3 glowup.py play pendulum_wave --zones 108 --zpb 3 --brightness 100 --cycles 10 --hue1 240.0 --hue2 0.0 --kelvin 3500 --sat1 100 --sat2 100 --speed 30.0"
 }

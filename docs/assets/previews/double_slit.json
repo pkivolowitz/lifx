@@ -16,15 +16,14 @@
   "zones": 108,
   "zpb": 3,
   "duration": 20.0,
-  "looping": true,
+  "looping": false,
   "fps": 20,
   "width": 600,
   "height": 80,
   "format": "gif",
   "lerp": "lab",
   "file": "double_slit.gif",
-  "created": "2026-03-12",
-  "title": "Double Slit Interference",
-  "media_url": "assets/previews/double_slit.gif",
+  "created": "2026-05-02",
+  "media_url": "double_slit.gif",
   "command": "python3 glowup.py play double_slit --zones 108 --zpb 3 --breathe 20.0 --brightness 100 --hue1 200.0 --hue2 330.0 --kelvin 3500 --saturation 100 --separation 0.4 --speed 4.0 --wavelength 0.25"
 }

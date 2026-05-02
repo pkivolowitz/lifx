@@ -1,0 +1,27 @@
+{
+  "command": "python3 glowup.py play matrix_rain --zones 36 --zpb 6 --brightness 80 --height 80 --luna 0 --rotate 0 --speed 10.0 --tail 2 --width 500",
+  "created": "2026-05-02",
+  "description": "Cascading green columns \u00e0 la The Matrix on a 2D grid",
+  "duration": 8.0,
+  "effect": "matrix_rain",
+  "file": "matrix_rain.gif",
+  "format": "gif",
+  "fps": 20,
+  "height": 80,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "matrix_rain.gif",
+  "params": {
+    "brightness": 80,
+    "height": 80,
+    "luna": 0,
+    "rotate": 0,
+    "speed": 10.0,
+    "tail": 2,
+    "width": 500
+  },
+  "title": "Matrix Rain",
+  "width": 600,
+  "zones": 36,
+  "zpb": 6
+}

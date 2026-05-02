@@ -1,0 +1,26 @@
+{
+  "command": "python3 glowup.py play pong2d --zones 36 --zpb 6 --brightness 80 --height 64 --hue -1 --paddle-size 2 --rate medium --width 64",
+  "created": "2026-05-02",
+  "description": "The 1972 paddle-and-ball game played by an autonomous AI",
+  "duration": 8.0,
+  "effect": "pong2d",
+  "file": "pong2d.gif",
+  "format": "gif",
+  "fps": 20,
+  "height": 80,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "pong2d.gif",
+  "params": {
+    "brightness": 80,
+    "height": 64,
+    "hue": -1,
+    "paddle_size": 2,
+    "rate": "medium",
+    "width": 64
+  },
+  "title": "Pong",
+  "width": 600,
+  "zones": 36,
+  "zpb": 6
+}

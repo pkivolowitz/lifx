@@ -22,8 +22,7 @@
   "format": "gif",
   "lerp": "lab",
   "file": "sonar.gif",
-  "created": "2026-03-11",
-  "title": "Sonar",
-  "media_url": "assets/previews/sonar.gif",
+  "created": "2026-05-02",
+  "media_url": "sonar.gif",
   "command": "python3 glowup.py play sonar --zones 108 --zpb 3 --brightness 100 --decay 2.0 --kelvin 6500 --obstacle-brightness 80 --obstacle-hue 15.0 --obstacle-speed 0.5 --pulse-interval 2.0 --speed 8.0"
 }

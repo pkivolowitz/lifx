@@ -1,0 +1,25 @@
+{
+  "command": "python3 glowup.py play plasma2d --zones 36 --zpb 6 --brightness 38 --height 80 --scale 6.0 --speed 1.0 --width 500",
+  "created": "2026-05-02",
+  "description": "Smooth flowing plasma field across a matrix surface",
+  "duration": 6.0,
+  "effect": "plasma2d",
+  "file": "plasma2d.gif",
+  "format": "gif",
+  "fps": 20,
+  "height": 80,
+  "lerp": "lab",
+  "looping": false,
+  "media_url": "plasma2d.gif",
+  "params": {
+    "brightness": 38,
+    "height": 80,
+    "scale": 6.0,
+    "speed": 1.0,
+    "width": 500
+  },
+  "title": "Plasma (2D)",
+  "width": 600,
+  "zones": 36,
+  "zpb": 6
+}

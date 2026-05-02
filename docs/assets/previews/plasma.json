@@ -21,8 +21,7 @@
   "format": "gif",
   "lerp": "lab",
   "file": "plasma.gif",
-  "created": "2026-03-12",
-  "title": "Plasma Ball",
-  "media_url": "assets/previews/plasma.gif",
+  "created": "2026-05-02",
+  "media_url": "plasma.gif",
   "command": "python3 glowup.py play plasma --zones 108 --zpb 3 --brightness 100 --hue 270.0 --hue-spread 40.0 --kelvin 3500 --saturation 80 --speed 2.0 --tendril-rate 8.0"
 }
