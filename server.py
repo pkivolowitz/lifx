@@ -1646,6 +1646,28 @@ def _load_config(config_path: str) -> dict[str, Any]:
         )
     config["_state_path"] = state_path
 
+    # --- Resolve device-registry path ---
+    # Phase 2 sibling of groups_file / schedule_file / state_file.  The
+    # MAC-keyed device registry (label assignments + per-device notes)
+    # is mutable state — handlers/registry.py writes to it on add /
+    # update / remove via the dashboard.  Public installs route it to
+    # /var/lib/glowup/devices.json so the writes land on the writable
+    # state mount instead of the read-only /etc tree.  Absent
+    # ``device_registry_file`` we don't synthesize a path here — let
+    # DeviceRegistry.load() fall through to its own default chain
+    # (explicit arg → GLOWUP_DEVICE_REGISTRY env → DEFAULT_REGISTRY_PATH)
+    # so the legacy contract is byte-identical when the key isn't set.
+    # The file itself is allowed to be missing on first run; the loader
+    # treats that as "legacy IP-only mode" (an empty registry, not an
+    # error).
+    device_registry_file: Optional[str] = config.get("device_registry_file")
+    if device_registry_file:
+        registry_path: str = device_registry_file
+        if not os.path.isabs(registry_path):
+            config_dir4: str = os.path.dirname(os.path.abspath(config_path))
+            registry_path = os.path.join(config_dir4, registry_path)
+        config["_device_registry_path"] = registry_path
+
     # Validate auth token.
     token: Any = config.get("auth_token")
     if not token or not isinstance(token, str) or token == "CHANGE_ME":
@@ -2526,9 +2548,14 @@ def main() -> None:
             # -- Step 2: Load the device registry ------------------------
             # Cheap, useful with or without MQTT — provides labels for
             # registered devices so /api/devices output names them
-            # rather than showing bare IPs.
+            # rather than showing bare IPs.  ``_device_registry_path``
+            # is set by load_config when ``device_registry_file`` is
+            # in server.json (public installs); absent on legacy fleet
+            # hosts where DeviceRegistry's own default chain still
+            # picks /etc/glowup/device_registry.json.
             device_reg: DeviceRegistry = DeviceRegistry()
-            if device_reg.load():
+            registry_path: Optional[str] = config.get("_device_registry_path")
+            if device_reg.load(registry_path):
                 logging.info(
                     "Device registry loaded: %d device(s)",
                     device_reg.device_count,

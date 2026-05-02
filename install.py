@@ -969,6 +969,7 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
             "groups_file": str(VAR_LIB_DIR / GROUPS_JSON),
             "schedule_file": str(VAR_LIB_DIR / SCHEDULES_JSON),
             "state_file": str(VAR_LIB_DIR / STATE_DB),
+            "device_registry_file": str(VAR_LIB_DIR / DEVICES_JSON),
         })
     else:
         ok(f"{server_json} exists; leaving alone")
@@ -988,9 +989,13 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
         ok(f"{site_json} exists; leaving alone")
 
     # /var/lib/glowup/devices.json — empty registry.
+    # Schema is ``{"devices": {<MAC>: {<entry>}}}`` — DeviceRegistry.load
+    # tolerates a bare ``{}`` (the old shape) via ``raw.get("devices", {})``
+    # but the explicit wrapper makes the schema visible to operators
+    # who open the file before the first registration.
     devices_json = VAR_LIB_DIR / DEVICES_JSON
     if not devices_json.is_file():
-        write_var_lib_json(devices_json, {})
+        write_var_lib_json(devices_json, {"devices": {}})
     else:
         ok(f"{devices_json} exists; leaving alone")
 

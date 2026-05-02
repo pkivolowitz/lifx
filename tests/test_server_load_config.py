@@ -233,5 +233,66 @@ class TestStateFileResolution(_TempDirCase):
         self.assertEqual(config["_state_path"], str(target))
 
 
+# ---------------------------------------------------------------------------
+# device_registry_file resolution — Phase 2 of the state-file split
+# ---------------------------------------------------------------------------
+
+
+class TestDeviceRegistryFileResolution(_TempDirCase):
+    """``device_registry_file`` resolves to ``_device_registry_path``."""
+
+    def _write_minimal_server_json(self, **extra: Any) -> None:
+        body: dict[str, Any] = {
+            "schema_version": 1,
+            "port": 8420,
+            "auth_token": _valid_token(),
+            "groups": {"placeholder": ["192.0.2.1"]},
+        }
+        body.update(extra)
+        self.server_json.write_text(json.dumps(body))
+
+    def test_absolute_device_registry_file_passes_through(self) -> None:
+        """Absolute ``device_registry_file`` is stored verbatim."""
+        target: Path = self.tmp / "devices.json"
+        self._write_minimal_server_json(device_registry_file=str(target))
+        config: dict[str, Any] = _load_config(str(self.server_json))
+        self.assertEqual(config["_device_registry_path"], str(target))
+
+    def test_relative_device_registry_file_resolves(self) -> None:
+        """Relative ``device_registry_file`` resolves against server.json's dir."""
+        self._write_minimal_server_json(device_registry_file="devices.json")
+        config: dict[str, Any] = _load_config(str(self.server_json))
+        self.assertEqual(
+            config["_device_registry_path"],
+            str(self.tmp / "devices.json"),
+        )
+
+    def test_legacy_no_key_leaves_path_unset(self) -> None:
+        """No ``device_registry_file`` set → no ``_device_registry_path``.
+
+        DeviceRegistry's own default chain (env var → DEFAULT_REGISTRY_PATH)
+        is the legacy contract; this loader must not synthesise a path
+        that would override it.
+        """
+        self._write_minimal_server_json()
+        config: dict[str, Any] = _load_config(str(self.server_json))
+        self.assertNotIn(
+            "_device_registry_path", config,
+            "_device_registry_path must be absent when device_registry_file unset",
+        )
+
+    def test_device_registry_file_does_not_require_existing(self) -> None:
+        """Non-existent target is fine — first run before any registrations.
+
+        The loader resolves the path; DeviceRegistry.load() handles
+        missing-file by entering legacy IP-only mode, which is the
+        first-run state.
+        """
+        target: Path = self.tmp / "subdir" / "devices.json"
+        self._write_minimal_server_json(device_registry_file=str(target))
+        config: dict[str, Any] = _load_config(str(self.server_json))
+        self.assertEqual(config["_device_registry_path"], str(target))
+
+
 if __name__ == "__main__":
     unittest.main()
