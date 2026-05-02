@@ -1134,5 +1134,111 @@ class TestInterimSpeaker(unittest.TestCase):
         ex._speak_interim("anything")  # Must not raise.
 
 
+class TestPlayAssetResolve(unittest.TestCase):
+    """Asset resolution — direct param, trigger map, sanitization."""
+
+    def test_explicit_asset_param_passes_through(self) -> None:
+        from voice.coordinator.executor import GlowUpExecutor as _E
+        self.assertEqual(
+            _E._resolve_play_asset({"asset": "daisy_bell"}),
+            "daisy_bell",
+        )
+
+    def test_explicit_asset_with_path_traversal_rejected(self) -> None:
+        from voice.coordinator.executor import GlowUpExecutor as _E
+        self.assertIsNone(_E._resolve_play_asset({"asset": "../etc/passwd"}))
+        self.assertIsNone(_E._resolve_play_asset({"asset": "a/b"}))
+        self.assertIsNone(_E._resolve_play_asset({"asset": ".hidden"}))
+        self.assertIsNone(_E._resolve_play_asset({"asset": ""}))
+        self.assertIsNone(_E._resolve_play_asset({"asset": "x" * 65}))
+
+    def test_trigger_map_matches_daisy_phrases(self) -> None:
+        from voice.coordinator.executor import GlowUpExecutor as _E
+        for phrase in (
+            "sing daisy",
+            "sing me daisy bell",
+            "please sing daisy from 2001",
+            "sing the song from 2001 a space odyssey",
+            "Daisy Daisy give me your answer do",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(
+                    _E._resolve_play_asset({"message": phrase}),
+                    "daisy_bell",
+                )
+
+    def test_no_match_returns_none(self) -> None:
+        from voice.coordinator.executor import GlowUpExecutor as _E
+        self.assertIsNone(_E._resolve_play_asset({"message": "sing happy birthday"}))
+        self.assertIsNone(_E._resolve_play_asset({}))
+
+
+class TestHandlePlayAsset(unittest.TestCase):
+    """End-to-end handler: publish on success, fall through on misses."""
+
+    def _make(self) -> GlowUpExecutor:
+        ex = _MockExecutor.make({
+            "play_asset": {
+                "type": "query",
+                "label": "easter egg",
+                "handler": "play_asset",
+                "speak": True,
+            },
+        })
+        ex._current_room = "Main Bedroom"
+        ex._mqtt_client = MagicMock()
+        return ex
+
+    def test_published_on_match(self) -> None:
+        ex = self._make()
+        result = ex._handle_play_asset(
+            cfg={}, target_url="all", target_raw="all",
+            display_target="all",
+            params={"message": "sing daisy"},
+        )
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["confirmation"], "")
+        self.assertTrue(result["speak"])  # speak=True + empty = silent
+        ex._mqtt_client.publish.assert_called_once()
+        topic, payload, *_ = ex._mqtt_client.publish.call_args.args
+        self.assertEqual(topic, "glowup/voice/play_asset")
+        body = json.loads(payload)
+        self.assertEqual(body["asset"], "daisy_bell")
+        self.assertEqual(body["room"], "Main Bedroom")
+
+    def test_no_match_returns_friendly_error(self) -> None:
+        ex = self._make()
+        result = ex._handle_play_asset(
+            cfg={}, target_url="all", target_raw="all",
+            display_target="all",
+            params={"message": "sing despacito"},
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertTrue(result["speak"])
+        ex._mqtt_client.publish.assert_not_called()
+
+    def test_no_mqtt_client_returns_friendly_error(self) -> None:
+        ex = self._make()
+        ex._mqtt_client = None
+        result = ex._handle_play_asset(
+            cfg={}, target_url="all", target_raw="all",
+            display_target="all",
+            params={"message": "sing daisy"},
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertTrue(result["speak"])
+
+    def test_publish_exception_returns_friendly_error(self) -> None:
+        ex = self._make()
+        ex._mqtt_client.publish.side_effect = RuntimeError("broker gone")
+        result = ex._handle_play_asset(
+            cfg={}, target_url="all", target_raw="all",
+            display_target="all",
+            params={"message": "sing daisy"},
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertTrue(result["speak"])
+
+
 if __name__ == "__main__":
     unittest.main()

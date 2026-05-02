@@ -28,6 +28,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -80,6 +81,15 @@ from infrastructure.mqtt_resilient_client import MqttResilientClient
 # ---------------------------------------------------------------------------
 # Audio device helpers
 # ---------------------------------------------------------------------------
+
+# play_asset: pre-recorded audio assets resolve to ~/models/sounds/<name>.wav.
+# Sanitization is strict — alnum + underscore only, max 64 chars — so a
+# malicious or malformed asset name from MQTT can't traverse out of the
+# sounds/ directory.  The coordinator validates before publish and the
+# satellite re-validates here as defence in depth.
+_ASSET_NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
+_ASSETS_DIR: str = os.path.expanduser("~/models/sounds")
+
 
 def list_audio_devices() -> None:
     """Print available audio input devices and exit."""
@@ -339,6 +349,7 @@ class SatelliteDaemon:
             (C.TOPIC_TTS_TEXT, 0),
             (C.TOPIC_FLUSH, 1),
             (C.TOPIC_THINKING, 0),
+            (C.TOPIC_PLAY_ASSET, 0),
             # Deep health probe — hub broadcasts a request and every
             # satellite replies with its own subsystem snapshot.
             # QoS 1 so a single dropped packet does not silently hide
@@ -407,6 +418,8 @@ class SatelliteDaemon:
             self._on_flush_message(msg)
         elif topic == C.TOPIC_THINKING:
             self._on_thinking_message(msg)
+        elif topic == C.TOPIC_PLAY_ASSET:
+            self._on_play_asset_message(msg)
         elif topic == C.TOPIC_HEALTH_REQUEST:
             self._on_health_request_message(msg)
         elif self._gated and topic == self._gate_topic:
@@ -649,6 +662,77 @@ class SatelliteDaemon:
             threading.Thread(target=_play_working, daemon=True).start()
         except (json.JSONDecodeError, KeyError, TypeError, OSError) as exc:
             logger.error("Thinking message error: %s", exc)
+
+    def _on_play_asset_message(self, msg: Any) -> None:
+        """Play a pre-recorded audio asset from ~/models/sounds/.
+
+        The coordinator publishes {"room", "asset", "timestamp"} when
+        the user triggers an easter-egg phrase.  The satellite resolves
+        the validated asset name to a WAV path and plays it through
+        aplay, mirroring the _on_thinking_message playback machinery
+        (cancellable, suppression-counted, non-blocking).
+        """
+        try:
+            data: dict[str, Any] = json.loads(msg.payload)
+            room: str = data.get("room", "")
+            asset: str = data.get("asset", "")
+
+            if room != self._room:
+                return
+
+            if not isinstance(asset, str) or not _ASSET_NAME_RE.match(asset):
+                logger.warning(
+                    "play_asset rejected: invalid asset name %r", asset,
+                )
+                return
+
+            wav_path: str = os.path.join(_ASSETS_DIR, f"{asset}.wav")
+            if not os.path.isfile(wav_path):
+                logger.warning(
+                    "play_asset: file not found %s — drop a WAV in %s",
+                    wav_path, _ASSETS_DIR,
+                )
+                return
+
+            # Cancel any in-flight TTS so the asset doesn't overlap with
+            # a stale Piper run, then play through aplay in a worker
+            # thread.  Suppression count keeps the wake detector
+            # quiet for the duration of playback so the satellite
+            # doesn't trigger on its own audio.
+            self._cancel_speech()
+
+            def _play_asset() -> None:
+                with self._suppress_lock:
+                    self._suppress_count += 1
+                logger.info("Playing asset: %s", asset)
+                try:
+                    cmd: list[str] = ["aplay", "-q"]
+                    if self._alsa_playback_device:
+                        cmd += ["-D", self._alsa_playback_device]
+                    cmd.append(wav_path)
+                    aplay: subprocess.Popen = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    with self._active_lock:
+                        self._active_aplay = aplay
+                    aplay.wait()
+                    if aplay.returncode and aplay.returncode < 0:
+                        logger.info("Asset playback cancelled: %s", asset)
+                    else:
+                        logger.info("Asset playback finished: %s", asset)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    logger.warning("Asset playback failed: %s", exc)
+                finally:
+                    with self._active_lock:
+                        self._active_aplay = None
+                    with self._suppress_lock:
+                        self._suppress_count = max(0, self._suppress_count - 1)
+
+            threading.Thread(target=_play_asset, daemon=True).start()
+        except (json.JSONDecodeError, KeyError, TypeError, OSError) as exc:
+            logger.error("play_asset message error: %s", exc)
 
     def _on_playback_message(self, msg: Any) -> None:
         """Handle playback state messages from the coordinator.

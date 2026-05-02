@@ -275,6 +275,17 @@ joke:
   handler: joke
   speak: true
 
+# Play a pre-recorded audio asset on the originating satellite.
+# Used for "sing X" / easter-egg requests where the response is a
+# canned audio file (Piper can't sing).  The handler maps params.asset
+# (or, fallback, a substring of params.message) to a key, then publishes
+# TOPIC_PLAY_ASSET so the satellite plays ~/models/sounds/<key>.wav.
+play_asset:
+  type: query
+  label: easter egg
+  handler: play_asset
+  speak: true
+
 # ---------------------------------------------------------------------------
 # Chat — freeform Ollama conversation (special handling in executor)
 # ---------------------------------------------------------------------------

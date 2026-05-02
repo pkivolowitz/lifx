@@ -18,6 +18,7 @@ __version__ = "2.1"
 import json
 import logging
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -183,6 +184,33 @@ _RECENT_JOKE_IDS_MAX: int = 16
 # bounds substring-match cost if the intent layer ever returns
 # something pathological.
 _PARAM_CAP: int = 64
+
+# ---------------------------------------------------------------------------
+# Easter-egg "play_asset" trigger map
+# ---------------------------------------------------------------------------
+
+# Substring → asset key.  Lowercased substring match against the
+# user's transcribed utterance (or params.message if the intent layer
+# passes one through).  Asset key resolves on the satellite to
+# ~/models/sounds/<key>.wav.  Order matters: the first match wins, so
+# put more-specific phrases first.
+#
+# The asset key is constrained to alnum + underscore on both ends
+# (handler-side validation here, satellite-side sanitization there)
+# so a malformed map entry can't escape ~/models/sounds/.
+_PLAY_ASSET_TRIGGERS: tuple[tuple[str, str], ...] = (
+    ("daisy bell",          "daisy_bell"),
+    ("daisy daisy",         "daisy_bell"),
+    ("song from 2001",      "daisy_bell"),
+    ("song from two thousand and one", "daisy_bell"),
+    ("sing daisy",          "daisy_bell"),
+    ("sing me daisy",       "daisy_bell"),
+    ("hal sing",            "daisy_bell"),
+)
+
+# Asset names must satisfy this — no path separators, no leading
+# dot, no spaces.  The satellite re-validates before opening the file.
+_ASSET_NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 
 # ---------------------------------------------------------------------------
 # Actions config path — adjacent to this module.
@@ -391,6 +419,7 @@ class GlowUpExecutor:
             "enable_voice_gate": self._handle_enable_voice_gate,
             "disable_voice_gate": self._handle_disable_voice_gate,
             "joke": self._handle_joke,
+            "play_asset": self._handle_play_asset,
         }
 
         # TTS reference — set after init by the coordinator daemon.
@@ -3309,5 +3338,107 @@ class GlowUpExecutor:
         return {
             "status": "ok",
             "confirmation": joke.body,
+            "speak": True,
+        }
+
+    # ------------------------------------------------------------------
+    # Easter-egg play_asset handler — publishes to TOPIC_PLAY_ASSET
+    # so the originating satellite plays a pre-recorded WAV from
+    # ~/models/sounds/<asset>.wav.  Used when the response is audio
+    # rather than synthesised speech (e.g. HAL singing Daisy Bell).
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_play_asset(
+        params: dict[str, Any],
+    ) -> Optional[str]:
+        """Pick an asset key from intent params, or None if no match.
+
+        Resolution order:
+          1. ``params.asset`` if present and well-formed.
+          2. Substring scan of ``params.message`` against the trigger map.
+
+        Returns the asset key (validated against ``_ASSET_NAME_RE``)
+        or None if nothing matched.
+        """
+        asset_raw = params.get("asset")
+        if isinstance(asset_raw, str):
+            candidate = asset_raw.strip()
+            if _ASSET_NAME_RE.match(candidate):
+                return candidate
+
+        message = params.get("message")
+        if isinstance(message, str):
+            haystack = message.lower()
+            for needle, asset in _PLAY_ASSET_TRIGGERS:
+                if needle in haystack:
+                    return asset
+
+        return None
+
+    def _handle_play_asset(
+        self,
+        cfg: dict[str, Any],
+        target_url: str,
+        target_raw: str,
+        display_target: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Tell the originating satellite to play a canned audio file.
+
+        Returns ``speak: False`` on success — the audio file IS the
+        response; layering "Got it." on top would be jarring.  Falls
+        through to a friendly spoken error if the asset can't be
+        identified or MQTT isn't wired (unit-test path).
+        """
+        room: str = getattr(self, "_current_room", "")
+        asset = self._resolve_play_asset(params)
+        if asset is None:
+            logger.info(
+                "play_asset: no trigger match (params=%r)", params,
+            )
+            return {
+                "status": "error",
+                "confirmation": "I don't have that one.",
+                "speak": True,
+            }
+
+        if self._mqtt_client is None:
+            logger.error("play_asset requested but no MQTT client wired")
+            return {
+                "status": "error",
+                "confirmation": "I can't reach the satellites right now.",
+                "speak": True,
+            }
+
+        payload: bytes = json.dumps({
+            "room": room,
+            "asset": asset,
+            "timestamp": time.time(),
+        }).encode("utf-8")
+
+        try:
+            self._mqtt_client.publish(
+                C.TOPIC_PLAY_ASSET, payload, qos=0,
+            )
+        except Exception as exc:
+            logger.error("play_asset publish failed: %s", exc)
+            return {
+                "status": "error",
+                "confirmation": "Something went wrong playing that.",
+                "speak": True,
+            }
+
+        logger.info(
+            "play_asset published: room=%s asset=%s", room, asset,
+        )
+        # speak=True + empty confirmation suppresses BOTH pipeline TTS
+        # branches (`should_speak and confirmation` is False, and the
+        # "Got it." branch is gated on `not should_speak`).  The audio
+        # asset itself is the response — layering Piper on top would
+        # be jarring.
+        return {
+            "status": "ok",
+            "confirmation": "",
             "speak": True,
         }

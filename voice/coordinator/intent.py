@@ -84,6 +84,7 @@ Available actions:
 - disable_voice_gate: immediately disable listening on a gated satellite. Target is the gate slug ("doorbell"). Use when someone says "disable the porch", "close the doorbell", "turn off the porch mic", "shut the porch", etc.
 - scene: activate a named scene or preset
 - joke: tell the user a joke. Use when the user asks for a joke, says "make me laugh", "got a joke?", "tell me something funny", "do you know any jokes", or asks for a specific style/topic of joke ("tell me a dad joke", "tell me a science joke", "knock knock", "another joke"). Optional params: style (a short label like "knock knock", "dad", "one-liner", "anti-joke", "pun", "limerick") and topic (a short noun like "science", "food", "music"). Use empty params {{}} when no style or topic is named. DO NOT generate or include the joke itself in params — generating the joke is the assistant's job, never the parser's. NEVER put a punchline, setup, or any joke text into a params field.
+- play_asset: play a pre-recorded audio file (an "easter egg"). Use ONLY when the user asks to sing or play a SPECIFIC named song that is in the small easter-egg catalogue: "Daisy" / "Daisy Bell" / "the song from 2001". Always pass the user's full spoken text in params.message — the executor will match it against the trigger map. Do NOT use this for general singing requests, music playback, or songs that aren't in the catalogue; for those, use chat (which will politely decline).
 - chat: general conversation, questions, or anything NOT related to controlling devices or querying sensors (params: message=<the user's full message>)
 
 {capabilities}
@@ -228,6 +229,12 @@ Examples:
 - "tell me a science joke" -> {{"action": "joke", "target": "all", "params": {{"topic": "science"}}}}
 - "tell me a joke about food" -> {{"action": "joke", "target": "all", "params": {{"topic": "food"}}}}
 - "tell me a dad joke about cars" -> {{"action": "joke", "target": "all", "params": {{"style": "dad", "topic": "cars"}}}}
+- "sing daisy" -> {{"action": "play_asset", "target": "all", "params": {{"message": "sing daisy"}}}}
+- "sing daisy bell" -> {{"action": "play_asset", "target": "all", "params": {{"message": "sing daisy bell"}}}}
+- "sing me daisy" -> {{"action": "play_asset", "target": "all", "params": {{"message": "sing me daisy"}}}}
+- "sing daisy from 2001" -> {{"action": "play_asset", "target": "all", "params": {{"message": "sing daisy from 2001"}}}}
+- "sing the song from 2001" -> {{"action": "play_asset", "target": "all", "params": {{"message": "sing the song from 2001"}}}}
+- "sing the song hal sang" -> {{"action": "play_asset", "target": "all", "params": {{"message": "sing the song hal sang"}}}}
 """
 
 

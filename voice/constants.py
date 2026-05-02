@@ -56,6 +56,14 @@ TOPIC_FLUSH: str = "glowup/voice/flush"
 # JSON payload: {"room": "...", "timestamp": ...}.
 TOPIC_THINKING: str = "glowup/voice/thinking"
 
+# Coordinator → satellites: play a pre-recorded audio asset locally.
+# JSON payload: {"room": "...", "asset": "<name>", "timestamp": ...}.
+# The satellite resolves <name> to ~/models/sounds/<name>.wav after
+# strict sanitization (alnum + underscore only — no path traversal).
+# Used by the easter-egg / "sing" path where the response is an
+# audio file rather than synthesized speech (Piper can't sing).
+TOPIC_PLAY_ASSET: str = "glowup/voice/play_asset"
+
 # ---------------------------------------------------------------------------
 # Audio format — all satellites must produce this format
 # ---------------------------------------------------------------------------
