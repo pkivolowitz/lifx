@@ -171,5 +171,67 @@ class TestLegacyGroupsInServerJson(_TempDirCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# state_file resolution — the SQLite state store path
+# ---------------------------------------------------------------------------
+
+
+class TestStateFileResolution(_TempDirCase):
+    """``state_file`` resolves to ``_state_path``; absent key falls back."""
+
+    def _write_minimal_server_json(self, **extra: Any) -> None:
+        """Write a minimal valid server.json plus any extra keys."""
+        body: dict[str, Any] = {
+            "schema_version": 1,
+            "port": 8420,
+            "auth_token": _valid_token(),
+            "groups": {"placeholder": ["192.0.2.1"]},
+        }
+        body.update(extra)
+        self.server_json.write_text(json.dumps(body))
+
+    def test_absolute_state_file_passes_through(self) -> None:
+        """An absolute ``state_file`` is stored verbatim under ``_state_path``."""
+        target: Path = self.tmp / "state.db"
+        self._write_minimal_server_json(state_file=str(target))
+        config: dict[str, Any] = _load_config(str(self.server_json))
+        self.assertEqual(config["_state_path"], str(target))
+
+    def test_relative_state_file_resolves_against_server_json(self) -> None:
+        """A relative ``state_file`` resolves against the server.json directory."""
+        self._write_minimal_server_json(state_file="state.db")
+        config: dict[str, Any] = _load_config(str(self.server_json))
+        self.assertEqual(
+            config["_state_path"], str(self.tmp / "state.db"),
+        )
+
+    def test_legacy_no_state_file_defaults_to_config_dir(self) -> None:
+        """No ``state_file`` set → fallback to ``<config_dir>/state.db``.
+
+        This is the byte-identical-on-fleet contract — master hosts that
+        don't ship ``state_file`` must keep opening state.db right next
+        to server.json, otherwise we silently move their existing
+        SQLite state out from under them on first restart after pull.
+        """
+        self._write_minimal_server_json()
+        config: dict[str, Any] = _load_config(str(self.server_json))
+        self.assertEqual(
+            config["_state_path"], str(self.tmp / "state.db"),
+        )
+
+    def test_state_file_does_not_require_existing_db(self) -> None:
+        """A non-existent ``state_file`` is fine — SQLite creates it lazily.
+
+        Unlike groups_file (must exist; loaded eagerly), state_file is
+        only a path — the actual sqlite3 connect happens later in the
+        consumers (DeviceManager / LockManager / occupancy operator).
+        """
+        target: Path = self.tmp / "subdir" / "state.db"
+        self._write_minimal_server_json(state_file=str(target))
+        # Loader must not raise even though the target file is absent.
+        config: dict[str, Any] = _load_config(str(self.server_json))
+        self.assertEqual(config["_state_path"], str(target))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -145,14 +145,21 @@ class OccupancyOperator(Operator):
             config: Full server config.
         """
         if not self._db_path:
-            # Try to derive from config location.
-            import os
-            config_path: str = config.get("_config_path", "")
-            if config_path:
-                self._db_path = os.path.join(
-                    os.path.dirname(os.path.abspath(config_path)),
-                    "state.db",
-                )
+            # Prefer the resolved ``_state_path`` set by load_config —
+            # honours the public installer's /var/lib/glowup/state.db
+            # location and falls back to the legacy config-dir-adjacent
+            # path for fleet hosts that don't ship state_file.
+            state_path: str = config.get("_state_path", "")
+            if state_path:
+                self._db_path = state_path
+            else:
+                import os
+                config_path: str = config.get("_config_path", "")
+                if config_path:
+                    self._db_path = os.path.join(
+                        os.path.dirname(os.path.abspath(config_path)),
+                        "state.db",
+                    )
 
         if self._db_path:
             try:

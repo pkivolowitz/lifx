@@ -95,7 +95,8 @@ class DeviceManager:
                  nicknames: Optional[dict[str, str]] = None,
                  config_dir: Optional[str] = None,
                  groups: Optional[dict[str, list[str]]] = None,
-                 grids: Optional[dict[str, Any]] = None) -> None:
+                 grids: Optional[dict[str, Any]] = None,
+                 state_path: Optional[str] = None) -> None:
         """Initialize with the device IPs from the config file.
 
         Args:
@@ -111,6 +112,12 @@ class DeviceManager:
                         multizone devices with a unified zone canvas.
             grids:      Grid name → grid definition dict from config.
                         2D spatial arrangements of matrix/strip devices.
+            state_path: Resolved path to the SQLite state store.  When
+                        set (public installs) this is honoured directly;
+                        when None we fall back to ``<config_dir>/state.db``
+                        for byte-identical behaviour on legacy fleet
+                        hosts that don't ship a ``state_file`` config
+                        key.
         """
         self._devices: dict[str, LifxDevice] = {}
         self._emitters: dict[str, Emitter] = {}
@@ -171,8 +178,12 @@ class DeviceManager:
         # so the dashboard is accurate even when the scheduler is running.
         self._state: Optional[Any] = None
         if _HAS_STATE_STORE:
-            db_path: str = os.path.join(config_dir, "state.db") \
-                if config_dir else "state.db"
+            if state_path:
+                db_path: str = state_path
+            elif config_dir:
+                db_path = os.path.join(config_dir, "state.db")
+            else:
+                db_path = "state.db"
             self._state = StateStore.open(db_path)
 
     def query_power_state(self, ip: str) -> None:

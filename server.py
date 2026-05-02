@@ -1602,6 +1602,35 @@ def _load_config(config_path: str) -> dict[str, Any]:
             sum(1 for k in groups_data if not k.startswith("_")),
         )
 
+    # --- Resolve state-store path ---
+    # State-file split companion to groups_file / schedule_file (Phase 1).
+    # The state.db SQLite file is written by:
+    #   1. DeviceManager._state — per-device power/effect record for the dashboard
+    #   2. LockManager — lock state mirror keyed off lock_state signals
+    #   3. operators.occupancy — HOME/AWAY persistence for restart recovery
+    # All three previously joined ``state.db`` to ``dirname(config_path)``,
+    # which works on fleet hosts where /etc/glowup is writable, but breaks
+    # on the public installer where /etc/glowup is mounted read-only by
+    # ProtectHome=true and writable state lives under /var/lib/glowup.
+    # When ``state_file`` is set (public-release default), the public
+    # installer points it at /var/lib/glowup/state.db.  When unset
+    # (legacy fleet), the resolved path mirrors the pre-split behaviour
+    # so master hosts stay byte-identical.  Unlike groups_file the
+    # SQLite file may not exist yet — SQLite creates it on first connect
+    # — so we resolve the path and stop there.
+    state_file: Optional[str] = config.get("state_file")
+    if state_file:
+        state_path: str = state_file
+        if not os.path.isabs(state_path):
+            config_dir3: str = os.path.dirname(os.path.abspath(config_path))
+            state_path = os.path.join(config_dir3, state_path)
+    else:
+        state_path = os.path.join(
+            os.path.dirname(os.path.abspath(config_path)),
+            "state.db",
+        )
+    config["_state_path"] = state_path
+
     # Validate auth token.
     token: Any = config.get("auth_token")
     if not token or not isinstance(token, str) or token == "CHANGE_ME":
@@ -2056,6 +2085,7 @@ def main() -> None:
         config_dir=os.path.dirname(os.path.abspath(config_path)),
         groups={},
         grids=config.get("grids", {}),
+        state_path=config["_state_path"],
     )
 
     # -- HTTP server (bind immediately) -------------------------------------
@@ -3300,12 +3330,13 @@ def main() -> None:
 
             # Lock manager (presentation layer for /home dashboard).
             if config.get("locks") and _HAS_LOCK_MANAGER:
-                config_path_local2: str = GlowUpRequestHandler.config_path or ""
-                db_dir: str = os.path.dirname(os.path.abspath(config_path_local2)) if config_path_local2 else "."
+                # ``_state_path`` is resolved by load_config — points at
+                # /var/lib/glowup/state.db on public installs and at
+                # <config_dir>/state.db on legacy fleet hosts.
                 lock_mgr = LockManager(
                     config=config,
                     server=server,
-                    db_path=os.path.join(db_dir, "state.db"),
+                    db_path=config["_state_path"],
                     broker=broker_addr,
                     port=broker_port,
                     bus=signal_bus,

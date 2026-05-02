@@ -121,6 +121,7 @@ GROUPS_JSON: str = "groups.json"
 SCHEDULES_JSON: str = "schedules.json"
 SERVER_JSON: str = "server.json"
 SITE_JSON: str = "site.json"
+STATE_DB: str = "state.db"
 README_MD: str = "README.md"
 
 SUPPORTED_LINUX_IDS: tuple[str, ...] = ("debian", "ubuntu", "raspbian")
@@ -950,7 +951,14 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
     # ``groups_file`` and ``schedule_file`` tell server.py where the
     # canonical registry and schedule live; the dashboard's PUT/POST
     # group + schedule handlers route writes there too (see
-    # handlers/dashboard.py:_save_config_field).
+    # handlers/dashboard.py:_save_config_field).  ``state_file``
+    # routes the SQLite state store (DeviceManager, LockManager,
+    # occupancy operator) into the writable state directory rather
+    # than the read-only /etc tree where SQLite's first connect
+    # fails under ProtectHome=true.  The DB file itself is created
+    # on demand by SQLite — the installer only needs to publish the
+    # path; ensuring /var/lib/glowup exists with mode 0750 owned by
+    # glowup is enough.
     server_json = ETC_DIR / SERVER_JSON
     if not server_json.is_file():
         token = generate_auth_token()
@@ -960,6 +968,7 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
             "auth_token": token,
             "groups_file": str(VAR_LIB_DIR / GROUPS_JSON),
             "schedule_file": str(VAR_LIB_DIR / SCHEDULES_JSON),
+            "state_file": str(VAR_LIB_DIR / STATE_DB),
         })
     else:
         ok(f"{server_json} exists; leaving alone")
