@@ -100,6 +100,21 @@ _NODE_IPS: dict[str, str] = _load_node_ips()
 class DashboardHandlerMixin:
     """Dashboard and /home UI endpoint handlers."""
 
+    def _handle_get_root(self) -> None:
+        """GET / — 302 redirect to /home.
+
+        The /home page is the BASIC public install's primary surface.
+        A bare ``http://<host>:8420/`` previously returned 404, which
+        reads as "this didn't install correctly" even when the server
+        is healthy.  302 (rather than 301) so the browser revisits /
+        on each load — keeps room for the redirect target to change
+        without leaving permanent caches behind.
+        """
+        self.send_response(302)
+        self.send_header("Location", "/home")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _handle_get_dashboard(self) -> None:
         """GET /dashboard — serve the static HTML dashboard page.
 
@@ -180,9 +195,23 @@ class DashboardHandlerMixin:
     def _handle_get_home(self) -> None:
         """GET /home — serve the sensor display dashboard.
 
-        Reads ``static/home.html`` from the server's directory
-        and returns it as ``text/html``.  Display-only page showing
+        Reads ``static/home.html`` from the server's directory and
+        returns it as ``text/html``.  Display-only page showing
         time, sensor readings, and photos.
+
+        The page's weather / AQI / NWS-alerts widgets need the
+        operator's coordinates.  Rather than baking lat/lon into the
+        repo source (where any change would show as a git delta on
+        every operator's local checkout), we splice
+        ``window.__GLOWUP_COORDS__`` in just before ``</head>`` from
+        ``site.latitude`` / ``site.longitude``.  The static file in
+        the repo carries no real coordinates; every operator gets
+        their own values stamped at serve time.  When site.json
+        hasn't been configured (no latitude / longitude), the script
+        is omitted and the page's JS detects the absent global,
+        skips the polls, and shows a "configure /etc/glowup/site.json"
+        notice in each affected tile.  This mirrors the pattern
+        ``handlers/maritime.py`` uses for ``window.__GLOWUP_HOME__``.
         """
         # static/ is at the project root, one level up from handlers/.
         home_path: str = os.path.join(
@@ -192,17 +221,41 @@ class DashboardHandlerMixin:
         try:
             with open(home_path, "r") as f:
                 html: str = f.read()
-            body: bytes = html.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("Pragma", "no-cache")
-            self.send_header("Expires", "0")
-            self.end_headers()
-            self.wfile.write(body)
         except FileNotFoundError:
             self._send_json(404, {"error": "Home display page not found"})
+            return
+
+        # Stamp the operator's coordinates if site.json has them.
+        # Any failure resolving the coords (unset, malformed, out of
+        # range) is non-fatal here — the page still renders, the JS
+        # gracefully handles the absent global.  The catch-all is
+        # narrow on purpose: SiteConfigError is the documented signal,
+        # not a wildcard hide.
+        try:
+            coords_payload: str = json.dumps({
+                "latitude": _site.latitude,
+                "longitude": _site.longitude,
+            })
+            inject: str = (
+                "<script>window.__GLOWUP_COORDS__ = "
+                + coords_payload
+                + ";</script>\n"
+            )
+            html = html.replace("</head>", inject + "</head>", 1)
+        except SiteConfigError as exc:
+            logger.info(
+                "/home served without coords — site.json: %s", exc,
+            )
+
+        body: bytes = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.end_headers()
+        self.wfile.write(body)
 
 
     def _handle_get_home_photos(self) -> None:
@@ -1515,6 +1568,28 @@ class DashboardHandlerMixin:
                     logging.exception(
                         "Failed to save schedule to '%s'",
                         sched_path,
+                    )
+                return
+
+            # Route groups writes to the groups file if it exists.
+            # Mirrors the schedule_file pattern above — when the
+            # operator's server.json sets ``groups_file``, server.py's
+            # ``_load_config`` stamps ``_groups_path`` into the live
+            # config dict; we look for it here and write the registry
+            # directly to that file rather than back into server.json.
+            # The file's top-level shape is the groups dict itself
+            # (``{name: [entries], ...}``), not wrapped in another
+            # key, matching server.py's ``groups_data`` consumer.
+            groups_path: Optional[str] = self.config.get("_groups_path")
+            if key == "groups" and groups_path:
+                try:
+                    with open(groups_path, "w") as f:
+                        json.dump(value, f, indent=4)
+                        f.write("\n")
+                except Exception as exc:
+                    logging.exception(
+                        "Failed to save groups to '%s'",
+                        groups_path,
                     )
                 return
 

@@ -83,11 +83,45 @@ VAR_LIB_DIR: Path = Path("/var/lib/glowup")
 SYSTEMD_UNIT_PATH: Path = Path("/etc/systemd/system/glowup-server.service")
 # FHS-canonical locations (BASIC.md §Server / Installing).
 
+OPT_DIR: Path = Path("/opt/glowup")
+RUNTIME_REPO_DIR: Path = OPT_DIR / "repo"
+# The server runs as the unprivileged ``glowup`` system user with
+# ``ProtectHome=true`` in its systemd unit, which makes /home invisible
+# to the service regardless of filesystem permissions.  Running directly
+# from the user's clone (`~/glowup`) is therefore impossible — the
+# service would 200/CHDIR out instantly.  install.py syncs the clone
+# tree to RUNTIME_REPO_DIR (root-owned, glowup-readable, mode 0750)
+# and the systemd unit's WorkingDirectory + ExecStart point there.
+# Re-running install.sh after `git pull` re-syncs, which is the
+# upgrade path the BASIC.md "re-run = upgrade" promise documents.
+
+# --- --no-prompt fallback coordinates ---
+#
+# When ``--no-prompt`` is set we can't ask the operator for lat/lon, so
+# we have to write SOMETHING into /etc/glowup/site.json so the server
+# can boot.  The choice matters: 0.0/0.0 (off the African coast) reads
+# as "installer bug — broken default".  A real-but-deliberately-wrong
+# place reads as "the installer chose this for you, you should change
+# it".  We pick the Royal Observatory at Greenwich (51.4778°N, 0.0°)
+# because:
+#   - It IS the world coordinate reference (prime meridian + IERS
+#     reference latitude); a meaningful default rather than arbitrary.
+#   - Open-Meteo serves real weather there; NWS 404s (UK is outside
+#     its coverage) and the executor's NWS→Open-Meteo fallback handles
+#     that path cleanly.
+#   - Distinctively not where any household operator lives, so the
+#     dashboard's "London weather" reading is an immediate signal
+#     to fix /etc/glowup/site.json.
+NO_PROMPT_LAT: float = 51.4778
+NO_PROMPT_LON: float = 0.0
+NO_PROMPT_PLACE_LABEL: str = "Greenwich, UK (Royal Observatory)"
+
 DEVICES_JSON: str = "devices.json"
 GROUPS_JSON: str = "groups.json"
 SCHEDULES_JSON: str = "schedules.json"
 SERVER_JSON: str = "server.json"
 SITE_JSON: str = "site.json"
+STATE_DB: str = "state.db"
 README_MD: str = "README.md"
 
 SUPPORTED_LINUX_IDS: tuple[str, ...] = ("debian", "ubuntu", "raspbian")
@@ -911,7 +945,20 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
     """Seed /etc/glowup/{site,server}.json (read-only) and /var/lib/glowup/*
     (state).  Existing files are preserved; only README.md is overwritten on
     every install."""
-    # /etc/glowup/server.json — port + auth_token only.
+    # /etc/glowup/server.json — port + auth_token + state-file pointers.
+    # The state-file split (BASIC.md §Server / Installing) keeps
+    # server.json read-only and pushes runtime data to /var/lib/glowup.
+    # ``groups_file`` and ``schedule_file`` tell server.py where the
+    # canonical registry and schedule live; the dashboard's PUT/POST
+    # group + schedule handlers route writes there too (see
+    # handlers/dashboard.py:_save_config_field).  ``state_file``
+    # routes the SQLite state store (DeviceManager, LockManager,
+    # occupancy operator) into the writable state directory rather
+    # than the read-only /etc tree where SQLite's first connect
+    # fails under ProtectHome=true.  The DB file itself is created
+    # on demand by SQLite — the installer only needs to publish the
+    # path; ensuring /var/lib/glowup exists with mode 0750 owned by
+    # glowup is enough.
     server_json = ETC_DIR / SERVER_JSON
     if not server_json.is_file():
         token = generate_auth_token()
@@ -919,6 +966,10 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
             "schema_version": SCHEMA_VERSION,
             "port": DEFAULT_PORT,
             "auth_token": token,
+            "groups_file": str(VAR_LIB_DIR / GROUPS_JSON),
+            "schedule_file": str(VAR_LIB_DIR / SCHEDULES_JSON),
+            "state_file": str(VAR_LIB_DIR / STATE_DB),
+            "device_registry_file": str(VAR_LIB_DIR / DEVICES_JSON),
         })
     else:
         ok(f"{server_json} exists; leaving alone")
@@ -938,9 +989,13 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
         ok(f"{site_json} exists; leaving alone")
 
     # /var/lib/glowup/devices.json — empty registry.
+    # Schema is ``{"devices": {<MAC>: {<entry>}}}`` — DeviceRegistry.load
+    # tolerates a bare ``{}`` (the old shape) via ``raw.get("devices", {})``
+    # but the explicit wrapper makes the schema visible to operators
+    # who open the file before the first registration.
     devices_json = VAR_LIB_DIR / DEVICES_JSON
     if not devices_json.is_file():
-        write_var_lib_json(devices_json, {})
+        write_var_lib_json(devices_json, {"devices": {}})
     else:
         ok(f"{devices_json} exists; leaving alone")
 
@@ -957,10 +1012,14 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
     else:
         ok(f"{groups_json} exists; leaving alone")
 
-    # /var/lib/glowup/schedules.json — empty list.
+    # /var/lib/glowup/schedules.json — empty schedule wrapper.
+    # server.py's schedule_file consumer expects a top-level dict with
+    # ``schedule`` (and optional ``location``) keys; a bare list would
+    # KeyError on ``sched_config["schedule"]``.  Write the canonical
+    # shape so the server boots immediately on a fresh install.
     schedules_json = VAR_LIB_DIR / SCHEDULES_JSON
     if not schedules_json.is_file():
-        write_var_lib_json(schedules_json, [])
+        write_var_lib_json(schedules_json, {"schedule": []})
     else:
         ok(f"{schedules_json} exists; leaving alone")
 
@@ -980,19 +1039,28 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
 def _prompt_lat_lon(*, assume_yes: bool) -> tuple[float, float]:
     """Ask for latitude and longitude (decimal degrees).
 
-    Defaults to 0.0/0.0 in non-interactive mode; the operator can edit
-    /etc/glowup/site.json later.  Symbolic schedule times (sunset-30m,
-    etc.) need real values.
+    In ``--no-prompt`` mode, defaults to ``NO_PROMPT_LAT/LON``
+    (Greenwich Royal Observatory; see the constant's comment for why
+    that point and not 0.0/0.0).  Operator edits /etc/glowup/site.json
+    after install to point at their real location.  Symbolic schedule
+    times (sunset-30m, etc.) need real values; until then the server
+    boots and serves the dashboard happily, just with weather pulled
+    for the wrong city.
     """
     if assume_yes:
-        warn("--no-prompt set; latitude/longitude default to 0.0,0.0. "
-             "Edit /etc/glowup/site.json before using sunrise/sunset schedules.")
-        return (0.0, 0.0)
+        warn(
+            f"--no-prompt set; latitude/longitude default to "
+            f"{NO_PROMPT_LAT},{NO_PROMPT_LON} ({NO_PROMPT_PLACE_LABEL}). "
+            f"Edit /etc/glowup/site.json before using "
+            f"sunrise/sunset schedules."
+        )
+        return (NO_PROMPT_LAT, NO_PROMPT_LON)
     info("Latitude/longitude lets the server compute sunrise and sunset for "
          "your location.  Decimal degrees, four or five digits is plenty. "
-         "Press Enter to leave both at 0.0 and edit later.")
-    return (_prompt_float("Latitude (decimal degrees)", 0.0),
-            _prompt_float("Longitude (decimal degrees)", 0.0))
+         f"Press Enter to leave both at {NO_PROMPT_PLACE_LABEL} "
+         f"({NO_PROMPT_LAT}, {NO_PROMPT_LON}) and edit later.")
+    return (_prompt_float("Latitude (decimal degrees)", NO_PROMPT_LAT),
+            _prompt_float("Longitude (decimal degrees)", NO_PROMPT_LON))
 
 
 def _prompt_float(label: str, default: float) -> float:
@@ -1082,20 +1150,87 @@ WantedBy=multi-user.target
 """
 
 
+def sync_runtime_repo(host: HostInfo) -> None:
+    """Mirror the user's clone tree to ``RUNTIME_REPO_DIR``.
+
+    The systemd service runs as the unprivileged ``glowup`` system
+    user with ``ProtectHome=true``; it cannot read the user's
+    ``$HOME``/glowup at all.  Mirror the source tree to
+    ``/opt/glowup/repo`` (root-owned, glowup-readable, mode 0750)
+    so the service has a discoverable WorkingDirectory + ExecStart
+    that lives outside the protected /home tree.
+
+    Re-running install.sh after a ``git pull`` re-syncs this mirror,
+    which is the upgrade path BASIC.md promises ("Re-running
+    ./install.sh after a git pull is the upgrade path").  ``--delete``
+    on the rsync ensures files removed upstream don't linger in the
+    mirror.
+
+    Excludes ``.git`` (the mirror is a runtime artifact, not a
+    development checkout — shaving git history saves ~30 MB) and
+    ``__pycache__`` (stale .pyc files from a prior Python version
+    can bite mid-upgrade).
+    """
+    if not host.clone_dir.is_dir():
+        fail(
+            f"clone directory not found at {host.clone_dir}; "
+            "install.sh must be run from inside the cloned glowup repo.",
+            exit_code=24,
+        )
+    if not have_command("rsync"):
+        fail(
+            "rsync is required for the server install (mirrors the "
+            "user clone to /opt/glowup/repo so the unprivileged "
+            "glowup service can read it).  Install with: "
+            "sudo apt-get install -y rsync",
+            exit_code=25,
+        )
+    # Ensure /opt/glowup exists (created with mode 0755 root:glowup
+    # in ensure_server_venv too — defensive in case ordering changes).
+    if not OPT_DIR.is_dir():
+        run_sudo([
+            "install", "-d", "-m", "0755",
+            "-o", "root", "-g", GLOWUP_GROUP_NAME, str(OPT_DIR),
+        ])
+    if not RUNTIME_REPO_DIR.is_dir():
+        run_sudo([
+            "install", "-d", "-m", "0750",
+            "-o", "root", "-g", GLOWUP_GROUP_NAME, str(RUNTIME_REPO_DIR),
+        ])
+    # Trailing slash on the source = "copy contents", not "copy the
+    # directory itself".  --delete drops files removed upstream;
+    # excludes match the install-side gitignore plus a defensive
+    # __pycache__ scrub.
+    run_sudo([
+        "rsync", "-a", "--delete",
+        "--exclude=.git", "--exclude=__pycache__",
+        "--exclude=*.pyc", "--exclude=.vscode",
+        "--exclude=.mcp.json",
+        str(host.clone_dir) + "/", str(RUNTIME_REPO_DIR) + "/",
+    ])
+    # Re-assert ownership in case rsync preserved a non-root uid from
+    # the source tree (parallels:parallels in the test VM, real-user
+    # ownership in the wild).  Mode stays 0750 on the dir; files
+    # inherit rsync's preserved mode bits which are fine for source
+    # files.
+    run_sudo([
+        "chown", "-R", f"root:{GLOWUP_GROUP_NAME}", str(RUNTIME_REPO_DIR),
+    ])
+    ok(f"mirrored {host.clone_dir} → {RUNTIME_REPO_DIR}")
+
+
 def render_systemd_unit(host: HostInfo) -> bool:
     """Write the systemd unit, daemon-reload, return True if the file changed."""
-    # The clone-side venv path doesn't apply to the server; the server runs
-    # the venv installed for the *invoking* user (typically the human who
-    # ran sudo).  But on a fresh server install where there is no human
-    # standalone setup, we drop the server-mode venv into /opt/glowup/venv.
-    # This is the one place server install diverges from the standalone
-    # path layout.
+    # WorkingDirectory + ExecStart point at RUNTIME_REPO_DIR (the
+    # root-owned mirror written by sync_runtime_repo) rather than
+    # host.clone_dir.  See RUNTIME_REPO_DIR's comment for why /opt is
+    # the only viable home given ProtectHome=true on the service.
     server_venv = Path("/opt/glowup/venv")
-    entry_point = host.clone_dir / "server.py"
+    entry_point = RUNTIME_REPO_DIR / "server.py"
     if not entry_point.is_file():
         fail(f"server entry point not found at {entry_point}", exit_code=22)
     body = SYSTEMD_UNIT_TEMPLATE.format(
-        clone_dir=host.clone_dir,
+        clone_dir=RUNTIME_REPO_DIR,
         user=GLOWUP_USER_NAME,
         group=GLOWUP_GROUP_NAME,
         venv_python=server_venv / "bin" / "python3",
@@ -1151,7 +1286,17 @@ def ensure_server_venv(host: HostInfo) -> None:
         ok(f"created server venv at {venv}")
 
     pip = venv / "bin" / "pip"
-    req = host.clone_dir / "requirements.txt"
+    # requirements.txt comes from the runtime mirror written by
+    # ``sync_runtime_repo`` (run earlier in run_server) — same code
+    # the service will execute, no risk of host.clone_dir / mirror
+    # drift between pip and runtime.
+    req = RUNTIME_REPO_DIR / "requirements.txt"
+    if not req.is_file():
+        fail(
+            f"requirements.txt not found at {req}; sync_runtime_repo "
+            f"must run before ensure_server_venv.",
+            exit_code=26,
+        )
     run_sudo([str(pip), "install", "--upgrade", "pip"])
     run_sudo([str(pip), "install", "--upgrade", "-r", str(req)])
     ok("server requirements installed")
@@ -1257,6 +1402,11 @@ def run_server(host: HostInfo, *, assume_yes: bool) -> None:
     ensure_glowup_user()
     ensure_etc_dir()
     ensure_var_lib_dir()
+    # Mirror the user's clone to /opt/glowup/repo BEFORE we install
+    # requirements (ensure_server_venv pip-installs from the mirror,
+    # not the user's $HOME copy) and BEFORE we render the systemd
+    # unit (its WorkingDirectory + ExecStart point at the mirror).
+    sync_runtime_repo(host)
     ensure_server_venv(host)
     seed_server_config(host, assume_yes=assume_yes)
     unit_changed = render_systemd_unit(host)

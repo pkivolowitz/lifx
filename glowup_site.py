@@ -201,10 +201,95 @@ class _Site:
             raise SiteConfigError(
                 f"required site config key {key!r} is not set in "
                 f"{self._source}; add it (or copy from "
-                "site.json.example in the lifx repo) and restart the "
+                "site.json.example in the glowup repo) and restart the "
                 "service"
             )
         return v
+
+    # -- Typed feature accessors ----------------------------------------
+    #
+    # Common site values get typed properties on top of get/require so
+    # callers don't repeat the float-coerce + range-check at every site.
+    # The free-form ``site.get("foo")`` API still works and remains the
+    # right tool for keys this module doesn't know about (operator-added
+    # extensions, deploy-specific values).  Adding a typed property here
+    # is appropriate when (a) the key is common across the codebase,
+    # (b) it has a well-defined unit / range, or (c) silently accepting
+    # a malformed value would cause a downstream failure that's hard to
+    # trace back to site.json.
+
+    @property
+    def latitude(self) -> float:
+        """Operator latitude in decimal degrees, ``[-90, 90]``.
+
+        Raises:
+            SiteConfigError: If unset, malformed, or out of range.
+                Sunrise/sunset and weather lookups all need this; a
+                missing value is not a soft fall-through.
+        """
+        return self._coerce_coord(
+            self.require("latitude"), "latitude", -90.0, 90.0,
+        )
+
+    @property
+    def longitude(self) -> float:
+        """Operator longitude in decimal degrees, ``[-180, 180]``.
+
+        Raises:
+            SiteConfigError: If unset, malformed, or out of range.
+        """
+        return self._coerce_coord(
+            self.require("longitude"), "longitude", -180.0, 180.0,
+        )
+
+    @property
+    def electricity_rate_per_kwh(self) -> "float | None":
+        """Operator residential electricity rate in $/kWh, or ``None``.
+
+        Optional — features that quote energy cost (voice power
+        summary) read this and adapt their reply if it isn't set.
+        Returns ``None`` cleanly when the key is absent.
+
+        Raises:
+            SiteConfigError: If the value is present but not a number.
+                Out-of-range checks are intentionally lenient (rates
+                vary widely by region; refusing to load a real-world
+                value because it's "too high" would defeat the point).
+        """
+        val: Any = self.get("electricity_rate_per_kwh")
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (TypeError, ValueError) as exc:
+            raise SiteConfigError(
+                f"site config key 'electricity_rate_per_kwh' in "
+                f"{self._source} must be a number; got {val!r}"
+            ) from exc
+
+    @staticmethod
+    def _coerce_coord(
+        val: Any, key: str, lo: float, hi: float,
+    ) -> float:
+        """Float-coerce *val* and bounds-check against ``[lo, hi]``.
+
+        Centralised here so latitude / longitude / future per-feature
+        coordinates all surface the same error shape — operator sees
+        which key failed, what they wrote, and what the legal range is.
+        """
+        try:
+            f: float = float(val)
+        except (TypeError, ValueError) as exc:
+            raise SiteConfigError(
+                f"site config key {key!r} must be a number; "
+                f"got {val!r}"
+            ) from exc
+        if not lo <= f <= hi:
+            raise SiteConfigError(
+                f"site config key {key!r} must be between {lo} and "
+                f"{hi}; got {f}"
+            )
+        return f
 
 
 def _candidate_paths(env_var: str, system_path: Path, user_path: Path) -> list[Path]:

@@ -1786,15 +1786,35 @@ body.portrait .sensor-card {
     /* Poll interval: 15 minutes (weather doesn't change fast). */
     var WEATHER_POLL_MS = 900000;
 
-    /* Mobile, AL coordinates. */
-    var WEATHER_URL = "https://api.open-meteo.com/v1/forecast" +
-        "?latitude=30.69&longitude=-88.04" +
-        "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m" +
-        "&temperature_unit=fahrenheit&wind_speed_unit=mph";
+    /* Operator coordinates come from window.__GLOWUP_COORDS__, stamped
+       into the page by handlers/dashboard.py from /etc/glowup/site.json
+       (latitude / longitude keys).  When the global is absent the
+       operator hasn't configured coords; the weather / AQI / NWS-alert
+       pollers detect the absence and skip — repo source carries no
+       hardcoded location, so no operator's git pull ever shows a
+       delta on this file. */
+    var GLOWUP_COORDS = (typeof window.__GLOWUP_COORDS__ === "object" &&
+                         window.__GLOWUP_COORDS__ !== null)
+        ? window.__GLOWUP_COORDS__
+        : null;
+
+    var WEATHER_URL = GLOWUP_COORDS
+        ? "https://api.open-meteo.com/v1/forecast" +
+          "?latitude=" + GLOWUP_COORDS.latitude +
+          "&longitude=" + GLOWUP_COORDS.longitude +
+          "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m" +
+          "&temperature_unit=fahrenheit&wind_speed_unit=mph"
+        : null;
 
     var weatherRetries = 0;
 
     function pollWeather() {
+        if (!WEATHER_URL) {
+            /* Coordinates not configured \u2014 leave the card hidden.
+               Operator fixes by setting latitude/longitude in
+               /etc/glowup/site.json and reloading the page. */
+            return;
+        }
         fetch(WEATHER_URL)
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -1820,8 +1840,10 @@ body.portrait .sensor-card {
             });
     }
 
-    pollWeather();
-    setInterval(pollWeather, WEATHER_POLL_MS);
+    if (WEATHER_URL) {
+        pollWeather();
+        setInterval(pollWeather, WEATHER_POLL_MS);
+    }
 
     /* -------------------------------------------------------------- */
     /* Air Quality + Pollen — Open-Meteo AQI API                      */
@@ -1832,9 +1854,12 @@ body.portrait .sensor-card {
     var aqiLabel = document.getElementById("aqiLabel");
     var aqiDetails = document.getElementById("aqiDetails");
 
-    var AQI_URL = "https://air-quality-api.open-meteo.com/v1/air-quality" +
-        "?latitude=30.69&longitude=-88.04" +
-        "&current=us_aqi,pm2_5,pm10,grass_pollen,birch_pollen,ragweed_pollen,alder_pollen";
+    var AQI_URL = GLOWUP_COORDS
+        ? "https://air-quality-api.open-meteo.com/v1/air-quality" +
+          "?latitude=" + GLOWUP_COORDS.latitude +
+          "&longitude=" + GLOWUP_COORDS.longitude +
+          "&current=us_aqi,pm2_5,pm10,grass_pollen,birch_pollen,ragweed_pollen,alder_pollen"
+        : null;
 
     function aqiCategory(aqi) {
         if (aqi <= 50)  return ["Good", "aqi-good"];
@@ -1846,6 +1871,7 @@ body.portrait .sensor-card {
     }
 
     function pollAqi() {
+        if (!AQI_URL) return;  /* coords not configured — see WEATHER_URL */
         fetch(AQI_URL)
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -1875,8 +1901,10 @@ body.portrait .sensor-card {
             .catch(function () {});
     }
 
-    pollAqi();
-    setInterval(pollAqi, WEATHER_POLL_MS);
+    if (AQI_URL) {
+        pollAqi();
+        setInterval(pollAqi, WEATHER_POLL_MS);
+    }
 
     /* -------------------------------------------------------------- */
     /* System Health — polls /api/home/health, pages 4 rows at a time */
@@ -1983,13 +2011,17 @@ body.portrait .sensor-card {
     var alertsTitle = document.getElementById("alertsTitle");
     var alertsList = document.getElementById("alertsList");
 
-    /* NWS point-based alerts for Mobile, AL. */
-    var NWS_URL = "https://api.weather.gov/alerts/active?point=30.69,-88.04";
+    /* NWS point-based alerts for the operator's coordinates. */
+    var NWS_URL = GLOWUP_COORDS
+        ? "https://api.weather.gov/alerts/active?point=" +
+          GLOWUP_COORDS.latitude + "," + GLOWUP_COORDS.longitude
+        : null;
 
     /* Poll every 5 minutes — severe weather changes fast. */
     var ALERTS_POLL_MS = 300000;
 
     function pollAlerts() {
+        if (!NWS_URL) return;  /* coords not configured — see WEATHER_URL */
         fetch(NWS_URL, {headers: {"User-Agent": "GlowUp/1.0"}})
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -2021,8 +2053,10 @@ body.portrait .sensor-card {
             .catch(function () {});
     }
 
-    pollAlerts();
-    setInterval(pollAlerts, ALERTS_POLL_MS);
+    if (NWS_URL) {
+        pollAlerts();
+        setInterval(pollAlerts, ALERTS_POLL_MS);
+    }
 
     /* -------------------------------------------------------------- */
     /* Moon phase — pure math, canvas-drawn                           */

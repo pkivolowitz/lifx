@@ -6,7 +6,14 @@
   "hub_broker": "<hub host or IP — REQUIRED for any service that publishes to the hub>",
   "hub_port": 1883,
 
+  "_comment_location": "Operator's home location in decimal degrees, WGS-84.  REQUIRED for any feature that needs sunrise/sunset (schedule entries with sunset-30m / sunrise+15m), or that calls a location-aware external API (NWS weather, Open-Meteo, UV index).  install.py prompts for these during the Linux server install and writes them here automatically; on a standalone install they default to 0.0/0.0 and the operator edits afterwards.  Latitude in [-90, 90]; longitude in [-180, 180].",
+  "latitude":  "<your latitude, decimal degrees>",
+  "longitude": "<your longitude, decimal degrees>",
+
   "_comment_optional": "Everything below is optional — remove a key to disable its feature.",
+
+  "_comment_electricity_rate_per_kwh": "Residential electricity rate in $/kWh.  Optional; consumed by voice features that quote energy cost (e.g., 'how much did the porch lights use today').  If absent the cost-aware replies fall back to bare-energy figures.  Look up your effective rate on a recent power bill or your utility's tariff page.",
+  "electricity_rate_per_kwh": "<your rate in dollars per kWh, e.g. 0.171>",
 
   "broker_2": "<secondary broker host, if you run a per-room mosquitto>",
 

@@ -196,6 +196,13 @@ from infrastructure.adapter_proxy import (
     AdapterProxy, KeepaliveProxy, MatterProxyWrapper,
 )
 
+# In-process keepalive (BASIC scope — no MQTT, no separate process).
+# BulbKeepAlive exposes the same public interface as KeepaliveProxy
+# (known_bulbs / known_bulbs_by_mac / ip_for_mac / wait_initial_scan
+# / _on_new_bulb) so the rest of _background_startup can be agnostic
+# about which one is wired in.
+from infrastructure.bulb_keepalive import BulbKeepAlive
+
 # MAC-based device identity registry.
 from device_registry import DeviceRegistry
 
@@ -291,6 +298,14 @@ _PARAM_CLOSE: str = "}"
 # only when patterns could overlap — currently none do.
 _ROUTES: tuple[_Route, ...] = (
     # -- Pre-auth routes -----------------------------------------------------
+    # Root path: a fresh public install should not greet the operator
+    # with a 404 — they typed http://<host>:8420/ and the only
+    # honest answer is "the dashboard is at /home".  302 redirect
+    # there so a browser follows automatically and the address bar
+    # reflects where they actually are.  ("",) is what the dispatch
+    # parser produces for "/" after strip("/").split("/").
+    _Route("GET", ("",),
+           "_handle_get_root", requires_auth=False),
     _Route("GET", ("dashboard",),
            "_handle_get_dashboard", requires_auth=False),
     _Route("GET", ("home",),
@@ -1566,6 +1581,104 @@ def _load_config(config_path: str) -> dict[str, Any]:
                         if entry not in existing:
                             config["groups"][gname].append(entry)
 
+    # --- Merge external groups file if referenced ---
+    # State-file split (BASIC.md §Server / Installing): the canonical
+    # device registry lives in /var/lib/glowup/groups.json (writable by
+    # the service), and /etc/glowup/server.json is the read-only
+    # config — auth, port, file pointers.  The two are joined here so
+    # downstream code keeps reading ``config["groups"]`` exactly as it
+    # always has.  If both ``groups`` and ``groups_file`` are present
+    # we loud-warn and prefer the file (single source of truth).
+    # When unset (existing fleet hosts on master) the path is a no-op
+    # and behavior is unchanged — public-release sets ``groups_file``
+    # via install.py; master keeps groups directly in server.json.
+    groups_file: Optional[str] = config.get("groups_file")
+    if groups_file:
+        groups_path: str = groups_file
+        if not os.path.isabs(groups_path):
+            config_dir2: str = os.path.dirname(os.path.abspath(config_path))
+            groups_path = os.path.join(config_dir2, groups_path)
+        if not os.path.exists(groups_path):
+            raise FileNotFoundError(
+                f"groups_file '{groups_path}' not found "
+                f"(referenced from {config_path})"
+            )
+        with open(groups_path, "r") as gf:
+            groups_data: Any = json.load(gf)
+        if not isinstance(groups_data, dict):
+            raise ValueError(
+                f"groups_file '{groups_path}' must contain a JSON "
+                f"object mapping group names to device-identifier "
+                f"lists, got {type(groups_data).__name__}"
+            )
+        if "groups" in config and config["groups"]:
+            logging.warning(
+                "Both 'groups' and 'groups_file' set in %s; "
+                "groups_file '%s' wins (single source of truth)",
+                config_path, groups_path,
+            )
+        config["groups"] = groups_data
+        # Store resolved path for live group editing via the dashboard
+        # API — handlers/dashboard.py:_save_config_field routes
+        # ``groups`` writes here when this key is present.
+        config["_groups_path"] = groups_path
+        logging.info(
+            "Loaded groups from external file: %s (%d group(s))",
+            groups_path,
+            sum(1 for k in groups_data if not k.startswith("_")),
+        )
+
+    # --- Resolve state-store path ---
+    # State-file split companion to groups_file / schedule_file (Phase 1).
+    # The state.db SQLite file is written by:
+    #   1. DeviceManager._state — per-device power/effect record for the dashboard
+    #   2. LockManager — lock state mirror keyed off lock_state signals
+    #   3. operators.occupancy — HOME/AWAY persistence for restart recovery
+    # All three previously joined ``state.db`` to ``dirname(config_path)``,
+    # which works on fleet hosts where /etc/glowup is writable, but breaks
+    # on the public installer where /etc/glowup is mounted read-only by
+    # ProtectHome=true and writable state lives under /var/lib/glowup.
+    # When ``state_file`` is set (public-release default), the public
+    # installer points it at /var/lib/glowup/state.db.  When unset
+    # (legacy fleet), the resolved path mirrors the pre-split behaviour
+    # so master hosts stay byte-identical.  Unlike groups_file the
+    # SQLite file may not exist yet — SQLite creates it on first connect
+    # — so we resolve the path and stop there.
+    state_file: Optional[str] = config.get("state_file")
+    if state_file:
+        state_path: str = state_file
+        if not os.path.isabs(state_path):
+            config_dir3: str = os.path.dirname(os.path.abspath(config_path))
+            state_path = os.path.join(config_dir3, state_path)
+    else:
+        state_path = os.path.join(
+            os.path.dirname(os.path.abspath(config_path)),
+            "state.db",
+        )
+    config["_state_path"] = state_path
+
+    # --- Resolve device-registry path ---
+    # Phase 2 sibling of groups_file / schedule_file / state_file.  The
+    # MAC-keyed device registry (label assignments + per-device notes)
+    # is mutable state — handlers/registry.py writes to it on add /
+    # update / remove via the dashboard.  Public installs route it to
+    # /var/lib/glowup/devices.json so the writes land on the writable
+    # state mount instead of the read-only /etc tree.  Absent
+    # ``device_registry_file`` we don't synthesize a path here — let
+    # DeviceRegistry.load() fall through to its own default chain
+    # (explicit arg → GLOWUP_DEVICE_REGISTRY env → DEFAULT_REGISTRY_PATH)
+    # so the legacy contract is byte-identical when the key isn't set.
+    # The file itself is allowed to be missing on first run; the loader
+    # treats that as "legacy IP-only mode" (an empty registry, not an
+    # error).
+    device_registry_file: Optional[str] = config.get("device_registry_file")
+    if device_registry_file:
+        registry_path: str = device_registry_file
+        if not os.path.isabs(registry_path):
+            config_dir4: str = os.path.dirname(os.path.abspath(config_path))
+            registry_path = os.path.join(config_dir4, registry_path)
+        config["_device_registry_path"] = registry_path
+
     # Validate auth token.
     token: Any = config.get("auth_token")
     if not token or not isinstance(token, str) or token == "CHANGE_ME":
@@ -2020,6 +2133,7 @@ def main() -> None:
         config_dir=os.path.dirname(os.path.abspath(config_path)),
         groups={},
         grids=config.get("grids", {}),
+        state_path=config["_state_path"],
     )
 
     # -- HTTP server (bind immediately) -------------------------------------
@@ -2341,11 +2455,43 @@ def main() -> None:
             # Must exist before KeepaliveProxy (and later, AdapterProxy).
             # Moved here from its original location so keepalive can
             # subscribe to MQTT topics before we wait for device data.
-            mqtt_cfg_early: dict = config.get("mqtt", {})
-            broker_addr_early: str = mqtt_cfg_early.get("broker", "localhost")
-            broker_port_early: int = mqtt_cfg_early.get("port", 1883)
+            #
+            # Three exit conditions, in priority order:
+            #   1. No "mqtt" section in config → BASIC public install
+            #      where the operator has no broker.  Log a single INFO
+            #      line and skip — every downstream consumer of
+            #      proc_mqtt already guards with ``if proc_mqtt is not
+            #      None`` so adapters / operators / SDR subscriptions
+            #      degrade silently.
+            #   2. mqtt configured but connect raises a socket error
+            #      (broker not running, firewall, wrong host) → log a
+            #      one-line WARNING and set proc_mqtt back to None.  We
+            #      deliberately do NOT let the exception propagate: the
+            #      outer try/except logs a multi-line traceback and
+            #      aborts the rest of background startup, which kills
+            #      KeepaliveProxy / AdapterProxy / operators that have
+            #      nothing to do with the broker being down.
+            #   3. Connect succeeds → existing happy path.
+            mqtt_cfg_early: Optional[dict] = config.get("mqtt")
 
-            if _MQTT_AVAILABLE:
+            if not _MQTT_AVAILABLE:
+                logging.info(
+                    "paho-mqtt not installed — running without "
+                    "process-comm MQTT (proxies, operators, SDR "
+                    "subscriptions disabled)"
+                )
+            elif not mqtt_cfg_early:
+                logging.info(
+                    "No 'mqtt' section in server.json — running "
+                    "standalone (proxies, operators, SDR "
+                    "subscriptions disabled).  Set mqtt.broker to "
+                    "enable distributed features."
+                )
+            else:
+                broker_addr_early: str = mqtt_cfg_early.get(
+                    "broker", "localhost",
+                )
+                broker_port_early: int = mqtt_cfg_early.get("port", 1883)
                 import paho.mqtt.client as _paho
                 _paho_v2: bool = hasattr(_paho, "CallbackAPIVersion")
                 _proc_id: str = f"glowup-server-proc-{int(time.time())}"
@@ -2356,30 +2502,71 @@ def main() -> None:
                     )
                 else:
                     proc_mqtt = _paho.Client(client_id=_proc_id)
-                proc_mqtt.connect(broker_addr_early, broker_port_early)
-                proc_mqtt.loop_start()
-                logging.info(
-                    "Process comm MQTT client connected to %s:%d",
-                    broker_addr_early, broker_port_early,
-                )
+                try:
+                    proc_mqtt.connect(broker_addr_early, broker_port_early)
+                    proc_mqtt.loop_start()
+                    logging.info(
+                        "Process comm MQTT client connected to %s:%d",
+                        broker_addr_early, broker_port_early,
+                    )
+                except (OSError, ConnectionError) as exc:
+                    # OSError covers ConnectionRefusedError, TimeoutError,
+                    # and socket.gaierror (DNS).  Convert the multi-frame
+                    # paho stack into one informative line.
+                    logging.warning(
+                        "MQTT broker %s:%d unreachable (%s) — running "
+                        "without process-comm MQTT this run; will retry "
+                        "on next server restart.",
+                        broker_addr_early, broker_port_early, exc,
+                    )
+                    proc_mqtt = None
 
-            # -- Step 1: Keepalive proxy (replaces in-process KeepaliveProxy) --
-            # The keepalive process runs separately via systemd.
-            # KeepaliveProxy subscribes to its MQTT topics and presents
-            # the same interface (known_bulbs, known_bulbs_by_mac, etc.)
-            # so all handlers and device_manager work unchanged.
+            # -- Step 1: Keepalive — pick implementation based on MQTT --
+            # Two equivalent implementations of the same interface
+            # (known_bulbs / known_bulbs_by_mac / ip_for_mac /
+            # wait_initial_scan / _on_new_bulb), selected by whether
+            # process-comm MQTT is wired:
+            #
+            #   - proc_mqtt set → KeepaliveProxy (subscribes to the
+            #     out-of-process glowup-keepalive's MQTT publishes;
+            #     fleet hosts ship that systemd unit).
+            #   - proc_mqtt None → BulbKeepAlive in-process thread
+            #     (BASIC public install has no broker and no separate
+            #     keepalive process; the same ARP-discovery + UDP-ping
+            #     daemon runs inside the server process instead).
+            #
+            # Steps 3+ call only the shared interface, so they don't
+            # need to know which implementation is active.  This is
+            # what BASIC.md's "LIFX discovery" line in the Basic scope
+            # actually requires — the previous proxy-only path silently
+            # disabled discovery on BASIC and broke real-light control.
             if proc_mqtt is not None:
                 keepalive = KeepaliveProxy(proc_mqtt)
-                GlowUpRequestHandler.keepalive = keepalive
-            else:
-                logging.warning(
-                    "MQTT not available — keepalive proxy disabled, "
-                    "device discovery will not work"
+                logging.info(
+                    "Keepalive: KeepaliveProxy over MQTT"
                 )
+            else:
+                bka: BulbKeepAlive = BulbKeepAlive()
+                bka.start()
+                keepalive = bka
+                logging.info(
+                    "Keepalive: in-process BulbKeepAlive (no broker — "
+                    "BASIC scope; ARP-based discovery + UDP keepalive "
+                    "running inside server process)"
+                )
+            GlowUpRequestHandler.keepalive = keepalive
 
-            # -- Step 2: Load the device registry -------------------------
+            # -- Step 2: Load the device registry ------------------------
+            # Cheap, useful with or without MQTT — provides labels for
+            # registered devices so /api/devices output names them
+            # rather than showing bare IPs.  ``_device_registry_path``
+            # is set by load_config when ``device_registry_file`` is
+            # in server.json (public installs); absent on legacy fleet
+            # hosts where DeviceRegistry's own default chain still
+            # picks /etc/glowup/device_registry.json.
             device_reg: DeviceRegistry = DeviceRegistry()
-            if device_reg.load():
+            registry_path: Optional[str] = config.get("_device_registry_path")
+            if device_reg.load(registry_path):
                 logging.info(
                     "Device registry loaded: %d device(s)",
                     device_reg.device_count,
@@ -3264,12 +3451,13 @@ def main() -> None:
 
             # Lock manager (presentation layer for /home dashboard).
             if config.get("locks") and _HAS_LOCK_MANAGER:
-                config_path_local2: str = GlowUpRequestHandler.config_path or ""
-                db_dir: str = os.path.dirname(os.path.abspath(config_path_local2)) if config_path_local2 else "."
+                # ``_state_path`` is resolved by load_config — points at
+                # /var/lib/glowup/state.db on public installs and at
+                # <config_dir>/state.db on legacy fleet hosts.
                 lock_mgr = LockManager(
                     config=config,
                     server=server,
-                    db_path=os.path.join(db_dir, "state.db"),
+                    db_path=config["_state_path"],
                     broker=broker_addr,
                     port=broker_port,
                     bus=signal_bus,
