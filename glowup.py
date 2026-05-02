@@ -25,6 +25,7 @@ __version__ = "6.0"
 import argparse
 import json
 import math
+import os
 import platform
 import signal
 import subprocess
@@ -141,6 +142,27 @@ DEFAULT_SERVER_PORT: int = 8420
 
 TOKEN_PATH: Path = Path.home() / ".glowup_token"
 """Path to the bearer-token file for server authentication."""
+
+# ---------------------------------------------------------------------------
+# Standalone local registry — ~/.glowup/{devices,groups}.json
+# ---------------------------------------------------------------------------
+# When no GlowUp server is reachable (the BASIC standalone path documented
+# in docs/BASIC.md), the CLI manages bulb labels and groups directly in
+# JSON files under the user's home directory.  ``glowup name`` writes
+# devices.json; ``glowup group add/rm`` write groups.json; ``--device
+# <label>`` resolves through devices.json before falling back to a server
+# call.  Keys starting with ``_`` (operator notes / comments) are
+# preserved on read but never written by the runtime — same contract the
+# install.py-generated README describes.
+
+_LOCAL_HOME: Path = Path.home() / ".glowup"
+"""Per-user GlowUp home (matches install.py STANDALONE state directory)."""
+
+_LOCAL_DEVICES: Path = _LOCAL_HOME / "devices.json"
+"""Standalone bulb registry: {<MAC>: {label, ip, product}, _comment: ...}."""
+
+_LOCAL_GROUPS: Path = _LOCAL_HOME / "groups.json"
+"""Standalone group definitions: {<name>: [<ref>, ...], _comment: ...}."""
 
 SERVER_TIMEOUT_SECONDS: float = 5.0
 """HTTP timeout for server API requests."""
@@ -635,6 +657,142 @@ def _server_delete(
     return _server_request(server, path, method="DELETE", timeout=timeout)
 
 
+# ---------------------------------------------------------------------------
+# Standalone local-registry I/O — ~/.glowup/{devices,groups}.json
+# ---------------------------------------------------------------------------
+
+
+def _load_local_json(path: Path) -> dict[str, Any]:
+    """Read a standalone state file, returning ``{}`` if absent.
+
+    The runtime contract documented in install.py's standalone README:
+    keys starting with ``_`` (e.g. ``_comment``, hand-written notes) pass
+    through on every read but are never overwritten by the runtime.
+    Callers get the raw dict including those keys; ``_save_local_json``
+    preserves them.
+
+    Args:
+        path: ``~/.glowup/devices.json`` or ``~/.glowup/groups.json``.
+
+    Returns:
+        Parsed dict, or ``{}`` if the file doesn't exist or is empty.
+    """
+    if not path.is_file():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data: Any = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        _print(
+            f"ERROR: Cannot read {path}: {exc}", file=sys.stderr,
+        )
+        sys.exit(1)
+    if not isinstance(data, dict):
+        _print(
+            f"ERROR: {path} must contain a JSON object, "
+            f"got {type(data).__name__}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return data
+
+
+def _save_local_json(path: Path, data: dict[str, Any]) -> None:
+    """Atomically write a standalone state file.
+
+    Creates ``~/.glowup`` if missing.  Writes via temp file + rename so a
+    crash mid-write never leaves a half-written JSON file.  Sorts keys
+    deterministically — the user can diff their state file against a
+    git checkout without spurious churn.
+
+    Args:
+        path: Target path under ``~/.glowup``.
+        data: Dict to serialize.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp: Path = path.with_suffix(path.suffix + ".tmp")
+    body: str = json.dumps(data, indent=2, sort_keys=True) + "\n"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(body)
+    os.replace(tmp, path)
+
+
+def _load_local_devices() -> dict[str, dict[str, Any]]:
+    """Return the standalone devices registry verbatim (incl. ``_`` keys)."""
+    return _load_local_json(_LOCAL_DEVICES)
+
+
+def _save_local_devices(data: dict[str, Any]) -> None:
+    """Persist the standalone devices registry."""
+    _save_local_json(_LOCAL_DEVICES, data)
+
+
+def _load_local_groups() -> dict[str, Any]:
+    """Return the standalone groups dict verbatim (incl. ``_`` keys)."""
+    return _load_local_json(_LOCAL_GROUPS)
+
+
+def _save_local_groups(data: dict[str, Any]) -> None:
+    """Persist the standalone groups dict."""
+    _save_local_json(_LOCAL_GROUPS, data)
+
+
+def _resolve_ref_local(ref: str) -> Optional[str]:
+    """Resolve a label / MAC / IP to an IP address using the local registry.
+
+    Order:
+
+    1. If ``ref`` already looks like an IP, return it unchanged.
+    2. If ``ref`` looks like a MAC, look it up in ``devices.json``.
+    3. Otherwise treat ``ref`` as a label (case-insensitive); the first
+       MAC whose ``label`` field matches wins.
+
+    Args:
+        ref: Identifier the user typed at the CLI.
+
+    Returns:
+        Resolved IPv4 string, or ``None`` if not in the local registry.
+    """
+    candidate: str = ref.strip()
+    if not candidate:
+        return None
+
+    # IP literal — pass through.
+    if all(p.isdigit() for p in candidate.split(".")) \
+            and candidate.count(".") == 3:
+        return candidate
+
+    devices: dict[str, dict[str, Any]] = _load_local_devices()
+
+    # Skip operator-comment keys.
+    real_entries: dict[str, dict[str, Any]] = {
+        k: v for k, v in devices.items()
+        if not k.startswith("_") and isinstance(v, dict)
+    }
+
+    candidate_lower: str = candidate.lower()
+
+    # MAC lookup (lowercase colon-separated form, what install.py writes).
+    if candidate_lower.count(":") == 5:
+        entry: Optional[dict[str, Any]] = real_entries.get(candidate_lower)
+        if entry is not None:
+            ip: Any = entry.get("ip")
+            if isinstance(ip, str) and ip:
+                return ip
+        return None
+
+    # Label match (case-insensitive on the entry's ``label`` field).
+    for entry in real_entries.values():
+        label_field: Any = entry.get("label")
+        if isinstance(label_field, str) \
+                and label_field.lower() == candidate_lower:
+            ip = entry.get("ip")
+            if isinstance(ip, str) and ip:
+                return ip
+
+    return None
+
+
 def _connect_group(ips: list[str]) -> list[LifxDevice]:
     """Connect to and query a list of devices.
 
@@ -995,6 +1153,288 @@ def cmd_identify(args: argparse.Namespace) -> None:
     dev.set_power(on=False, duration_ms=DEFAULT_FADE_MS)
     dev.close()
     _print("Done.")
+
+
+# ---------------------------------------------------------------------------
+# cmd_name — name a bulb (BASIC.md §Naming Your Lights)
+# ---------------------------------------------------------------------------
+
+
+def cmd_name(args: argparse.Namespace) -> None:
+    """Assign a label to a bulb, write it to firmware, persist to registry.
+
+    Server reachable
+        POST /api/registry/device with mac+label+ip — the server handles
+        firmware label write, registry persistence, and dashboard
+        refresh in one round-trip (handlers/registry.py:103+).
+
+    Standalone (server unreachable or ``--local``)
+        Connect to the bulb via UDP, read its MAC + product, write
+        ``label`` to firmware via SetLabel (LifxDevice.set_label), then
+        upsert into ``~/.glowup/devices.json`` keyed by MAC.  If the
+        bulb is unreachable but the operator passed ``--mac``, skip
+        the firmware write and just record the entry — useful for
+        offline bulbs whose IP is known from a router reservation.
+
+    Args:
+        args: Parsed CLI namespace.  Expected attributes:
+            ``label`` (positional), ``ip`` (str | None),
+            ``mac`` (str | None).
+    """
+    label: str = (args.label or "").strip()
+    ip: str = (getattr(args, "ip", "") or "").strip()
+    mac_arg: str = (getattr(args, "mac", "") or "").strip().lower()
+
+    if not label:
+        _print("ERROR: a label is required.", file=sys.stderr)
+        sys.exit(1)
+    if len(label.encode("utf-8")) > 32:
+        _print(
+            "ERROR: label must be at most 32 UTF-8 bytes "
+            "(LIFX firmware limit).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not ip and not mac_arg:
+        _print(
+            "ERROR: --ip is required (or --mac for an offline bulb "
+            "whose IP is set by router reservation).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # --- Server path: POST /api/registry/device ---------------------------
+    if _server_url:
+        body: dict[str, Any] = {"label": label}
+        if ip:
+            body["ip"] = ip
+        if mac_arg:
+            body["mac"] = mac_arg
+        _print(
+            f"Registering '{label}' via server "
+            f"({ip or mac_arg})...", flush=True,
+        )
+        resp: dict = _server_post(
+            _server_url, "/api/registry/device", body,
+        )
+        firmware: bool = bool(resp.get("firmware_written"))
+        _print(
+            f"  registered  mac={resp.get('mac', '?')}  "
+            f"ip={resp.get('ip', '?')}  "
+            f"firmware-written={firmware}"
+        )
+        return
+
+    # --- Standalone path: UDP query + firmware write + JSON registry ------
+    mac: str = mac_arg
+    product: str = ""
+    firmware_written: bool = False
+    if ip:
+        _print(f"Connecting to {ip}...", flush=True)
+        try:
+            dev: LifxDevice = LifxDevice(ip)
+        except ValueError as exc:
+            _print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+        dev.query_all()
+        if dev.product is None and not mac:
+            _print(
+                f"ERROR: No response from {ip} and no --mac given.\n"
+                f"       Power-cycle the bulb, set a static DHCP "
+                f"reservation, or pass --mac directly.",
+                file=sys.stderr,
+            )
+            dev.close()
+            sys.exit(1)
+        if not mac:
+            mac = dev.mac_str
+        product = dev.product_name or ""
+        try:
+            firmware_written = dev.set_label(label)
+        except Exception as exc:  # noqa: BLE001 — soft fail, label still recorded
+            _print(
+                f"  WARNING: firmware label write failed: {exc} "
+                f"(label still recorded in devices.json)",
+            )
+        finally:
+            dev.close()
+
+    # Persist to ~/.glowup/devices.json — preserve any pre-existing entry
+    # for this MAC (the user may have added notes via _-prefixed keys at
+    # the entry level; we only touch label / ip / product).
+    if not mac:
+        # Shouldn't happen — guarded above, but defensively.
+        _print("ERROR: could not determine MAC.", file=sys.stderr)
+        sys.exit(1)
+    devices: dict[str, dict[str, Any]] = _load_local_devices()
+    entry: dict[str, Any] = dict(devices.get(mac, {}))
+    entry["label"] = label
+    if ip:
+        entry["ip"] = ip
+    if product:
+        entry["product"] = product
+    devices[mac] = entry
+    _save_local_devices(devices)
+    _print(
+        f"  registered  mac={mac}  ip={ip or '?'}  "
+        f"firmware-written={firmware_written}  "
+        f"→ {_LOCAL_DEVICES}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# cmd_group — manage groups (BASIC.md §Grouping Lights)
+# ---------------------------------------------------------------------------
+
+
+def _format_group_table(groups: dict[str, Any]) -> str:
+    """Render groups dict as a terse aligned table.
+
+    Skips ``_``-prefixed keys.  Used by ``glowup group list``.
+    """
+    real: list[tuple[str, list[str]]] = sorted(
+        (k, v) for k, v in groups.items()
+        if not k.startswith("_") and isinstance(v, list)
+    )
+    if not real:
+        return "(no groups)"
+    width: int = max(len(name) for name, _ in real)
+    lines: list[str] = []
+    for name, members in real:
+        lines.append(f"  {name.ljust(width)}  {len(members):>3}  {', '.join(members)}")
+    return "GROUP".ljust(width + 2) + "  CNT  MEMBERS\n" + "\n".join(lines)
+
+
+def cmd_group(args: argparse.Namespace) -> None:
+    """Dispatch to the per-action handler.
+
+    Subcommands: ``add <name> <ref...>``, ``list``, ``show <name>``,
+    ``rm <name>``.  Server reachable → REST API; otherwise edit
+    ``~/.glowup/groups.json`` directly.  Member refs (label / MAC / IP)
+    are stored verbatim — the runtime resolves them at effect time.
+    """
+    action: str = args.group_action
+    if action == "list":
+        return _cmd_group_list()
+    if action == "show":
+        return _cmd_group_show(args.name)
+    if action == "add":
+        return _cmd_group_add(args.name, args.members)
+    if action == "rm":
+        return _cmd_group_rm(args.name)
+    _print(
+        f"ERROR: unknown group action {action!r}.", file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def _cmd_group_list() -> None:
+    """``glowup group list`` — print all known groups."""
+    if _server_url:
+        resp: dict = _server_get(_server_url, "/api/groups")
+        groups: dict = resp.get("groups", {}) or {}
+    else:
+        groups = _load_local_groups()
+    _print(_format_group_table(groups))
+
+
+def _cmd_group_show(name: str) -> None:
+    """``glowup group show <name>`` — print one group's members."""
+    if _server_url:
+        resp: dict = _server_get(_server_url, "/api/groups")
+        groups: dict = resp.get("groups", {}) or {}
+    else:
+        groups = _load_local_groups()
+    if name not in groups or name.startswith("_"):
+        _print(f"ERROR: group {name!r} not found.", file=sys.stderr)
+        sys.exit(1)
+    members: list = groups[name]
+    if not isinstance(members, list):
+        _print(
+            f"ERROR: group {name!r} is not a list "
+            f"(got {type(members).__name__}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    _print(f"{name}  ({len(members)} member(s)):")
+    for ref in members:
+        _print(f"  {ref}")
+
+
+def _cmd_group_add(name: str, members: list[str]) -> None:
+    """``glowup group add <name> <ref...>`` — create or replace a group.
+
+    Members are stored verbatim (label / MAC / IP); order is preserved
+    so the leftmost zone of the virtual strip matches the first
+    argument.  Re-running with the same name overwrites — there's no
+    silent merge surprise.
+    """
+    if not name:
+        _print("ERROR: group name required.", file=sys.stderr)
+        sys.exit(1)
+    if name.startswith("_"):
+        _print(
+            "ERROR: group names starting with '_' are reserved for "
+            "operator notes (preserved on read, never written).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not members:
+        _print(
+            "ERROR: at least one member is required "
+            "(use 'glowup group rm' to delete).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if _server_url:
+        # Server takes a single create-or-update body.  Use POST for
+        # create; if the group already exists, fall through to PUT.
+        body: dict[str, Any] = {"name": name, "members": list(members)}
+        try:
+            _server_post(_server_url, "/api/groups", body)
+            _print(f"  created group {name!r} ({len(members)} member(s))")
+        except SystemExit:
+            # POST failed — try PUT for the update path.
+            _server_request(
+                _server_url,
+                f"/api/groups/{quote(name, safe='')}",
+                method="PUT", body=body,
+            )
+            _print(f"  updated group {name!r} ({len(members)} member(s))")
+        return
+
+    groups: dict[str, Any] = _load_local_groups()
+    existed: bool = name in groups
+    groups[name] = list(members)
+    _save_local_groups(groups)
+    verb: str = "updated" if existed else "created"
+    _print(
+        f"  {verb} group {name!r} "
+        f"({len(members)} member(s)) → {_LOCAL_GROUPS}"
+    )
+
+
+def _cmd_group_rm(name: str) -> None:
+    """``glowup group rm <name>`` — delete a group."""
+    if _server_url:
+        try:
+            _server_delete(
+                _server_url, f"/api/groups/{quote(name, safe='')}",
+            )
+            _print(f"  removed group {name!r}")
+        except SystemExit:
+            _print(f"ERROR: server refused delete for {name!r}.",
+                   file=sys.stderr)
+            sys.exit(1)
+        return
+    groups: dict[str, Any] = _load_local_groups()
+    if name not in groups or name.startswith("_"):
+        _print(f"ERROR: group {name!r} not found.", file=sys.stderr)
+        sys.exit(1)
+    del groups[name]
+    _save_local_groups(groups)
+    _print(f"  removed group {name!r} → {_LOCAL_GROUPS}")
 
 
 def cmd_power(args: argparse.Namespace) -> None:
@@ -2491,18 +2931,18 @@ def cmd_play(args: argparse.Namespace) -> None:
     sim_only: bool = bool(getattr(args, "sim_only", False))
     virtual_zones: int = getattr(args, "zones", None) or 0
 
-    # -- Server-side play via --device ----------------------------------------
-    # When --device is given, the server does all the work: resolve the
-    # label/MAC to an IP, run the effect, send packets.  The CLI just
-    # blocks until Ctrl+C, then tells the server to stop.
+    # -- --device routing -----------------------------------------------------
+    # When ``--device`` is given, two paths:
+    #   1. Server reachable → server resolves the label/MAC, runs the
+    #      effect, sends packets.  CLI blocks on Ctrl+C and tells the
+    #      server to stop.
+    #   2. Server unreachable → resolve the label / MAC against
+    #      ``~/.glowup/devices.json`` (BASIC standalone path), then
+    #      fall through to the existing ``--ip`` UDP path.  This is
+    #      what closes the gap docs/BASIC.md describes for standalone:
+    #      "From now on you can address that bulb by name instead of
+    #      by IP."
     if has_device:
-        if not _server_url:
-            _print(
-                "ERROR: --device requires a reachable GlowUp server "
-                "(the server resolves labels and runs effects).",
-                file=sys.stderr,
-            )
-            sys.exit(1)
         if has_ip or has_group:
             _print(
                 "ERROR: --device is mutually exclusive with "
@@ -2510,8 +2950,23 @@ def cmd_play(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
-        _play_via_server(args)
-        return
+        if _server_url:
+            _play_via_server(args)
+            return
+        # Standalone: resolve via local registry, then carry on as --ip.
+        resolved_ip: Optional[str] = _resolve_ref_local(args.device)
+        if resolved_ip is None:
+            _print(
+                f"ERROR: --device {args.device!r} not found in "
+                f"{_LOCAL_DEVICES} and no GlowUp server is reachable.\n"
+                f"       Run 'glowup name --ip <addr> {args.device!r}' "
+                f"first, or pass --ip directly.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        args.ip = resolved_ip
+        has_ip = True
+        has_device = False
 
     # -- Screen-reactive mode --------------------------------------------------
     # --video-url implies --screen.
@@ -3452,6 +3907,63 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # -- name -----------------------------------------------------------------
+    # ``glowup name --ip 192.168.1.41 "Kitchen Bulb"`` — assign a label,
+    # write it to bulb firmware, persist to local devices.json (standalone)
+    # or via POST /api/registry/device (server reachable).  See
+    # docs/BASIC.md §Naming Your Lights.
+    p_name = sub.add_parser(
+        "name", help="Assign a label to a bulb",
+    )
+    p_name.add_argument(
+        "label",
+        help="Human-readable label (max 32 UTF-8 bytes)",
+    )
+    p_name.add_argument(
+        "--ip", default="",
+        help="Target bulb IP (queried via UDP for MAC + product)",
+    )
+    p_name.add_argument(
+        "--mac", default="",
+        help=(
+            "Target bulb MAC address (lowercase colon-separated).  "
+            "Use when the bulb is offline but its IP is set by router "
+            "reservation — skips the firmware label write."
+        ),
+    )
+
+    # -- group ----------------------------------------------------------------
+    # ``glowup group add | list | show | rm`` — manage named bulb groups.
+    # Members are labels, MACs, or IPs — resolution happens at effect time.
+    # See docs/BASIC.md §Grouping Lights.
+    p_group = sub.add_parser(
+        "group", help="Manage named bulb groups",
+    )
+    g_sub = p_group.add_subparsers(dest="group_action", required=True)
+
+    g_add = g_sub.add_parser(
+        "add", help="Create or replace a group",
+    )
+    g_add.add_argument("name", help="Group name")
+    g_add.add_argument(
+        "members", nargs="+",
+        help="One or more bulb references (label / MAC / IP)",
+    )
+
+    g_sub.add_parser(
+        "list", help="List all groups",
+    )
+
+    g_show = g_sub.add_parser(
+        "show", help="Show one group's members",
+    )
+    g_show.add_argument("name", help="Group name")
+
+    g_rm = g_sub.add_parser(
+        "rm", help="Remove a group",
+    )
+    g_rm.add_argument("name", help="Group name")
+
     # -- power ----------------------------------------------------------------
     p_power = sub.add_parser(
         "power",
@@ -3919,6 +4431,8 @@ def main() -> None:
         "effects": cmd_effects,
         "identify": cmd_identify,
         "monitor": cmd_monitor,
+        "name": cmd_name,
+        "group": cmd_group,
         "off": cmd_off,
         "power": cmd_power,
         "play": cmd_play,
