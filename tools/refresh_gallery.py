@@ -195,14 +195,29 @@ def _is_matrix_effect(effect_name: str) -> bool:
     return DEVICE_TYPE_MATRIX in affinity and DEVICE_TYPE_STRIP not in affinity
 
 
+# Keys that ``glowup record`` reserves for its own flags (output
+# dimensions, etc.).  An effect can declare a Param with the same name
+# (cylon.width = "Width of the eye in bulbs"); the recorder's argparse
+# rightly rejects it as an effect-flag, but old sidecars may still
+# carry such a value in ``params``.  Re-emitting it here as
+# ``--width 50`` would override the recorder's own ``--width 600``
+# output dimension and produce a 50×80 GIF instead of 600×80.
+_RECORDER_RESERVED_FLAGS: frozenset[str] = frozenset({"width", "height"})
+
+
 def _params_to_flags(params: dict) -> list[str]:
     """Convert ``{key: val}`` to ``["--key", str(val)]``, hyphenating keys.
 
     Matches the CLI's underscore-to-hyphen Param-name convention
-    (``burst_spread`` → ``--burst-spread``).
+    (``burst_spread`` → ``--burst-spread``).  Skips any key that
+    collides with a recorder-reserved flag (see
+    :data:`_RECORDER_RESERVED_FLAGS`) so a stale sidecar value can't
+    silently override the recorder's output dimensions.
     """
     flags: list[str] = []
     for k, v in params.items():
+        if k in _RECORDER_RESERVED_FLAGS:
+            continue
         flag: str = "--" + k.replace("_", "-")
         flags.append(flag)
         flags.append(str(v))
