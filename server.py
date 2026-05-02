@@ -196,6 +196,13 @@ from infrastructure.adapter_proxy import (
     AdapterProxy, KeepaliveProxy, MatterProxyWrapper,
 )
 
+# In-process keepalive (BASIC scope — no MQTT, no separate process).
+# BulbKeepAlive exposes the same public interface as KeepaliveProxy
+# (known_bulbs / known_bulbs_by_mac / ip_for_mac / wait_initial_scan
+# / _on_new_bulb) so the rest of _background_startup can be agnostic
+# about which one is wired in.
+from infrastructure.bulb_keepalive import BulbKeepAlive
+
 # MAC-based device identity registry.
 from device_registry import DeviceRegistry
 
@@ -2481,34 +2488,45 @@ def main() -> None:
                     )
                     proc_mqtt = None
 
-            # -- Step 1: Keepalive proxy (replaces in-process KeepaliveProxy) --
-            # The keepalive process runs separately via systemd.
-            # KeepaliveProxy subscribes to its MQTT topics and presents
-            # the same interface (known_bulbs, known_bulbs_by_mac, etc.)
-            # so all handlers and device_manager work unchanged.
+            # -- Step 1: Keepalive — pick implementation based on MQTT --
+            # Two equivalent implementations of the same interface
+            # (known_bulbs / known_bulbs_by_mac / ip_for_mac /
+            # wait_initial_scan / _on_new_bulb), selected by whether
+            # process-comm MQTT is wired:
+            #
+            #   - proc_mqtt set → KeepaliveProxy (subscribes to the
+            #     out-of-process glowup-keepalive's MQTT publishes;
+            #     fleet hosts ship that systemd unit).
+            #   - proc_mqtt None → BulbKeepAlive in-process thread
+            #     (BASIC public install has no broker and no separate
+            #     keepalive process; the same ARP-discovery + UDP-ping
+            #     daemon runs inside the server process instead).
+            #
+            # Steps 3+ call only the shared interface, so they don't
+            # need to know which implementation is active.  This is
+            # what BASIC.md's "LIFX discovery" line in the Basic scope
+            # actually requires — the previous proxy-only path silently
+            # disabled discovery on BASIC and broke real-light control.
             if proc_mqtt is not None:
                 keepalive = KeepaliveProxy(proc_mqtt)
-                GlowUpRequestHandler.keepalive = keepalive
-            else:
-                logging.warning(
-                    "MQTT not available — keepalive proxy disabled, "
-                    "device discovery will not work"
+                logging.info(
+                    "Keepalive: KeepaliveProxy over MQTT"
                 )
+            else:
+                bka: BulbKeepAlive = BulbKeepAlive()
+                bka.start()
+                keepalive = bka
+                logging.info(
+                    "Keepalive: in-process BulbKeepAlive (no broker — "
+                    "BASIC scope; ARP-based discovery + UDP keepalive "
+                    "running inside server process)"
+                )
+            GlowUpRequestHandler.keepalive = keepalive
 
-            # -- Step 1.5: Bail early if keepalive is unavailable -------
-            # Every remaining step (Steps 3 / 4 / 5 / operator manager /
-            # LockManager) calls into ``keepalive`` directly or
-            # subscribes via ``proc_mqtt``.  Without MQTT none of them
-            # can do useful work — Step 3's ``keepalive.wait_initial_scan``
-            # was the canonical AttributeError on the BASIC public install.
-            # A clean early return here keeps the foreground HTTP path
-            # (``/api/home/health``, static dashboard, /api endpoints
-            # that don't depend on live device data) responsive while
-            # making it explicit in the journal that distributed
-            # features are off.  Device registry load (Step 2) is
-            # cheap and useful even without MQTT — labels for whatever
-            # the operator already registered — so we leave it before
-            # the bail-out.
+            # -- Step 2: Load the device registry ------------------------
+            # Cheap, useful with or without MQTT — provides labels for
+            # registered devices so /api/devices output names them
+            # rather than showing bare IPs.
             device_reg: DeviceRegistry = DeviceRegistry()
             if device_reg.load():
                 logging.info(
@@ -2521,16 +2539,6 @@ def main() -> None:
                     "until devices are registered"
                 )
             GlowUpRequestHandler.registry = device_reg
-
-            if keepalive is None:
-                logging.info(
-                    "Background startup: stopping at Step 2 — keepalive "
-                    "proxy unavailable, distributed features (ARP scan, "
-                    "group resolution, adapters, operators, lock "
-                    "manager) skipped.  Foreground HTTP API remains "
-                    "available."
-                )
-                return
 
             # -- Step 3: Wait for initial ARP scan ------------------------
             logging.info("Waiting for initial ARP scan...")
