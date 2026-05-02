@@ -279,6 +279,10 @@ class TestRouteFlags(unittest.TestCase):
         # - media/stream: SSE endpoint consumed by media pipeline nodes
         # - calibrate/time_sync: device-facing, no user credentials
         AUTH_FREE_PATTERNS: set[tuple[str, ...]] = {
+            # Root path: 302 redirect to /home, no body served, no
+            # secrets — exempting it lets a fresh public install
+            # respond to ``GET /`` without requiring a token.
+            ("",),
             ("dashboard",),
             ("home",),
             ("power",),
