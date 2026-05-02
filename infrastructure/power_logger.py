@@ -168,7 +168,25 @@ class PowerLogger:
     def _open(self) -> None:
         """Open the PG connection and create tables if needed."""
         if not _HAS_PSYCOPG2:
-            logger.error("psycopg2 not installed — power logger disabled")
+            logger.info(
+                "Power logger disabled — psycopg2 not installed "
+                "(BASIC scope: no Postgres consumer)"
+            )
+            return
+        if not self._dsn:
+            # No DSN configured anywhere — site.json has no
+            # ``postgres_dsn``, the GLOWUP_DIAG_DSN env var is unset,
+            # and the installer didn't seed one.  This is the
+            # default BASIC-install state, not an error.  A connect
+            # attempt against an empty DSN falls back to libpq
+            # defaults (local Unix socket) and emits the noisy
+            # "could not connect ... PGSQL.5432 ... No such file"
+            # ERROR every BASIC operator would see.  Stay quiet.
+            logger.info(
+                "Power logger disabled — no DSN configured "
+                "(set 'postgres_dsn' in site.json or "
+                "GLOWUP_DIAG_DSN env var to enable)"
+            )
             return
         try:
             from infrastructure.timed_io import timed_io, IOClass
@@ -179,6 +197,11 @@ class PowerLogger:
                 cur.execute(_PG_DDL)
             logger.info("Power logger connected: %s", self._dsn.split("@")[-1])
         except Exception as exc:
+            # DSN was configured but connect failed — that's a real
+            # operator-visible misconfiguration on a fleet host
+            # (Postgres down, wrong credentials, network).  Keep
+            # ERROR for that case; only the empty-DSN path above
+            # downgrades to INFO.
             logger.error("Power logger DB open failed: %s", exc)
             self._conn = None
 

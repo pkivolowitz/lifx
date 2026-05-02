@@ -172,8 +172,16 @@ class BleSnifferLogger:
     def _open(self) -> None:
         """Open the PG connection and create schema if needed."""
         if not _HAS_PSYCOPG2:
-            logger.error(
-                "psycopg2 not installed — ble sniffer logger disabled",
+            logger.info(
+                "BLE sniffer logger disabled — psycopg2 not installed "
+                "(BASIC scope: no Postgres consumer)",
+            )
+            return
+        if not self._dsn:
+            logger.info(
+                "BLE sniffer logger disabled — no DSN configured "
+                "(set 'postgres_dsn' in site.json or "
+                "GLOWUP_DIAG_DSN env var to enable)",
             )
             return
         try:

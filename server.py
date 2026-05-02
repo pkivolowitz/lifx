@@ -3278,15 +3278,35 @@ def main() -> None:
             # rule — if paho is not importable the subscriber is a
             # no-op and the /thermal dashboard degrades to whatever
             # historical data was already on disk.
+            # MQTT-subscribing loggers/buffers below.  When proc_mqtt
+            # is None (BASIC scope: no broker), each .start_subscriber
+            # call would attempt a localhost:1883 connect and emit a
+            # "Connection refused" ERROR line into the journal, even
+            # though the loggers themselves degrade gracefully.  The
+            # construction stays unconditional (the logger object is
+            # still useful for serving cached / historical data via
+            # the dashboard) but the subscriber call is gated.  A
+            # single INFO line at the top documents the skip; we
+            # don't emit one per logger or the journal becomes a
+            # wall of noise.
+            if proc_mqtt is None:
+                logging.info(
+                    "MQTT subscribers disabled — no broker; loggers "
+                    "and buffers constructed for read-side use only "
+                    "(thermal/tpms/ble-sniffer/meter/airwaves/"
+                    "maritime/buoy)"
+                )
+
             try:
                 from infrastructure.thermal_logger import ThermalLogger, DEFAULT_DSN as _THERMAL_DEFAULT_DSN
                 thermal_log = ThermalLogger(
                     dsn=os.environ.get("GLOWUP_DIAG_DSN", _THERMAL_DEFAULT_DSN),
                 )
-                thermal_log.start_subscriber(
-                    broker_host=broker_addr,
-                    broker_port=broker_port,
-                )
+                if proc_mqtt is not None:
+                    thermal_log.start_subscriber(
+                        broker_host=broker_addr,
+                        broker_port=broker_port,
+                    )
                 GlowUpRequestHandler.thermal_logger = thermal_log
             except Exception as exc:
                 logging.warning("Thermal logger unavailable: %s", exc)
@@ -3305,10 +3325,11 @@ def main() -> None:
                 tpms_log = TpmsLogger(
                     dsn=os.environ.get("GLOWUP_DIAG_DSN", _TPMS_DEFAULT_DSN),
                 )
-                tpms_log.start_subscriber(
-                    broker_host=broker_addr,
-                    broker_port=broker_port,
-                )
+                if proc_mqtt is not None:
+                    tpms_log.start_subscriber(
+                        broker_host=broker_addr,
+                        broker_port=broker_port,
+                    )
                 GlowUpRequestHandler.tpms_logger = tpms_log
             except Exception as exc:
                 logging.warning("TPMS logger unavailable: %s", exc)
@@ -3325,10 +3346,11 @@ def main() -> None:
                 ble_log = BleSnifferLogger(
                     dsn=os.environ.get("GLOWUP_DIAG_DSN", _BLE_DEFAULT_DSN),
                 )
-                ble_log.start_subscriber(
-                    broker_host=broker_addr,
-                    broker_port=broker_port,
-                )
+                if proc_mqtt is not None:
+                    ble_log.start_subscriber(
+                        broker_host=broker_addr,
+                        broker_port=broker_port,
+                    )
                 GlowUpRequestHandler.ble_sniffer_logger = ble_log
             except Exception as exc:
                 logging.warning("BLE sniffer logger unavailable: %s", exc)
@@ -3349,10 +3371,11 @@ def main() -> None:
                 meter_log = MeterLogger(
                     dsn=os.environ.get("GLOWUP_DIAG_DSN", _METER_DEFAULT_DSN),
                 )
-                meter_log.start_subscriber(
-                    broker_host=broker_addr,
-                    broker_port=broker_port,
-                )
+                if proc_mqtt is not None:
+                    meter_log.start_subscriber(
+                        broker_host=broker_addr,
+                        broker_port=broker_port,
+                    )
                 GlowUpRequestHandler.meter_logger = meter_log
             except Exception as exc:
                 logging.warning("Meter logger unavailable: %s", exc)
@@ -3365,10 +3388,11 @@ def main() -> None:
             try:
                 from infrastructure.airwaves_buffer import AirwavesBuffer
                 airwaves_buf = AirwavesBuffer()
-                airwaves_buf.start_subscriber(
-                    broker_host=broker_addr,
-                    broker_port=broker_port,
-                )
+                if proc_mqtt is not None:
+                    airwaves_buf.start_subscriber(
+                        broker_host=broker_addr,
+                        broker_port=broker_port,
+                    )
                 GlowUpRequestHandler.airwaves_buffer = airwaves_buf
             except Exception as exc:
                 logging.warning("Airwaves buffer unavailable: %s", exc)
@@ -3389,10 +3413,11 @@ def main() -> None:
                 from glowup_site import site as _site
                 maritime_ref: Any = _site.get("maritime_reference")
                 maritime_buf = MaritimeBuffer(reference=maritime_ref)
-                maritime_buf.start_subscriber(
-                    broker_host=broker_addr,
-                    broker_port=broker_port,
-                )
+                if proc_mqtt is not None:
+                    maritime_buf.start_subscriber(
+                        broker_host=broker_addr,
+                        broker_port=broker_port,
+                    )
                 GlowUpRequestHandler.maritime_buffer = maritime_buf
             except Exception as exc:
                 logging.warning("Maritime buffer unavailable: %s", exc)
@@ -3408,10 +3433,11 @@ def main() -> None:
             try:
                 from infrastructure.buoy_buffer import BuoyBuffer
                 buoy_buf = BuoyBuffer()
-                buoy_buf.start_subscriber(
-                    broker_host=broker_addr,
-                    broker_port=broker_port,
-                )
+                if proc_mqtt is not None:
+                    buoy_buf.start_subscriber(
+                        broker_host=broker_addr,
+                        broker_port=broker_port,
+                    )
                 GlowUpRequestHandler.buoy_buffer = buoy_buf
             except Exception as exc:
                 logging.warning("Buoy buffer unavailable: %s", exc)
@@ -3424,10 +3450,11 @@ def main() -> None:
             try:
                 from infrastructure.buoy_logger import BuoyLogger
                 buoy_log = BuoyLogger()
-                buoy_log.start_subscriber(
-                    broker_host=broker_addr,
-                    broker_port=broker_port,
-                )
+                if proc_mqtt is not None:
+                    buoy_log.start_subscriber(
+                        broker_host=broker_addr,
+                        broker_port=broker_port,
+                    )
                 GlowUpRequestHandler.buoy_logger = buoy_log
             except Exception as exc:
                 logging.warning("Buoy logger unavailable: %s", exc)

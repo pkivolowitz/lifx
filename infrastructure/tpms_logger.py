@@ -160,7 +160,17 @@ class TpmsLogger:
     def _open(self) -> None:
         """Open the PG connection and create schema if needed."""
         if not _HAS_PSYCOPG2:
-            logger.error("psycopg2 not installed — tpms logger disabled")
+            logger.info(
+                "TPMS logger disabled — psycopg2 not installed "
+                "(BASIC scope: no Postgres consumer)"
+            )
+            return
+        if not self._dsn:
+            logger.info(
+                "TPMS logger disabled — no DSN configured "
+                "(set 'postgres_dsn' in site.json or "
+                "GLOWUP_DIAG_DSN env var to enable)"
+            )
             return
         try:
             self._conn = psycopg2.connect(self._dsn, connect_timeout=10)

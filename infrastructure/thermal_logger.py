@@ -202,7 +202,19 @@ class ThermalLogger:
     def _open(self) -> None:
         """Open the PG connection and create schema if needed."""
         if not _HAS_PSYCOPG2:
-            logger.error("psycopg2 not installed — thermal logger disabled")
+            logger.info(
+                "Thermal logger disabled — psycopg2 not installed "
+                "(BASIC scope: no Postgres consumer)"
+            )
+            return
+        if not self._dsn:
+            # See power_logger._open for the full rationale: empty
+            # DSN is the default BASIC-install state, not an error.
+            logger.info(
+                "Thermal logger disabled — no DSN configured "
+                "(set 'postgres_dsn' in site.json or "
+                "GLOWUP_DIAG_DSN env var to enable)"
+            )
             return
         try:
             self._conn = psycopg2.connect(self._dsn, connect_timeout=10)
