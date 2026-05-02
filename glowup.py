@@ -444,9 +444,7 @@ def _probe_server(server: str) -> bool:
         ``True`` if the server responded with HTTP 200, ``False``
         otherwise (unreachable, bad token, any error).
     """
-    if not TOKEN_PATH.is_file():
-        return False
-    token: str = TOKEN_PATH.read_text().strip()
+    token: str = _resolve_token()
     if not token:
         return False
     url: str = f"http://{server}/api/status"
@@ -481,23 +479,8 @@ def _fetch_group_from_server(
         SystemExit: If the token file is missing, the server is
                     unreachable, or the group does not exist.
     """
-    # --- Read auth token -----------------------------------------------------
-    if not TOKEN_PATH.is_file():
-        _print(
-            f"ERROR: Token file not found: {TOKEN_PATH}\n"
-            "       Create it with the server's auth_token value "
-            "(chmod 600).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    token: str = TOKEN_PATH.read_text().strip()
-    if not token:
-        _print(
-            f"ERROR: Token file is empty: {TOKEN_PATH}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    # --- Read auth token (env first, then ~/.glowup_token) -------------------
+    token: str = _read_token()
 
     # --- Fetch groups from the server ----------------------------------------
     url: str = f"http://{server}/api/groups"
@@ -552,26 +535,53 @@ def _fetch_group_from_server(
     return ips
 
 
+def _resolve_token() -> str:
+    """Return the bearer token, env first then file, or empty string.
+
+    Resolution order:
+
+    1. ``GLOWUP_TOKEN`` env var — set by the server-install
+       ``/usr/local/bin/glowup`` shim, which auto-exports it from
+       ``/etc/glowup/server.json`` for users in the ``glowup`` group.
+    2. ``~/.glowup_token`` — the standalone path; user drops the
+       token there themselves once after a server install.
+
+    Returns ``""`` when neither source supplies a non-empty value.
+    Callers decide whether that's fatal (a server-routed CLI command)
+    or recoverable (the startup probe — falls through to direct UDP).
+    """
+    env_token: str = os.environ.get("GLOWUP_TOKEN", "").strip()
+    if env_token:
+        return env_token
+    if TOKEN_PATH.is_file():
+        file_token: str = TOKEN_PATH.read_text().strip()
+        if file_token:
+            return file_token
+    return ""
+
+
 def _read_token() -> str:
-    """Read the bearer token from :data:`TOKEN_PATH`.
+    """Read the bearer token, raising :class:`SystemExit` if absent.
+
+    Wraps :func:`_resolve_token` for callers that require a token
+    (every server-routed CLI command).  The startup probe uses
+    :func:`_resolve_token` directly so a missing token degrades to
+    direct-UDP mode rather than crashing.
 
     Returns:
         The token string, stripped of whitespace.
 
     Raises:
-        SystemExit: If the file is missing or empty.
+        SystemExit: If neither GLOWUP_TOKEN nor the file is set.
     """
-    if not TOKEN_PATH.is_file():
+    token: str = _resolve_token()
+    if not token:
         _print(
-            f"ERROR: Token file not found: {TOKEN_PATH}\n"
-            "       Create it with the server's auth_token value "
-            "(chmod 600).",
+            f"ERROR: No GlowUp auth token found.\n"
+            f"       Set GLOWUP_TOKEN, or place the server's "
+            f"auth_token at {TOKEN_PATH} (chmod 600).",
             file=sys.stderr,
         )
-        sys.exit(1)
-    token: str = TOKEN_PATH.read_text().strip()
-    if not token:
-        _print(f"ERROR: Token file is empty: {TOKEN_PATH}", file=sys.stderr)
         sys.exit(1)
     return token
 

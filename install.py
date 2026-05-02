@@ -945,6 +945,48 @@ def ensure_glowup_user() -> None:
     ok(f"created {GLOWUP_USER_NAME}:{GLOWUP_GROUP_NAME}")
 
 
+def add_invoking_user_to_glowup_group(host: HostInfo) -> None:
+    """Add the sudo-invoking user to the ``glowup`` group.
+
+    This is what makes the ``/usr/local/bin/glowup`` shim's
+    auto-token-export work without further configuration: the shim
+    reads ``/etc/glowup/server.json`` (mode 0640 root:glowup) to
+    extract ``auth_token`` and export it as ``GLOWUP_TOKEN`` for the
+    invoked CLI.  Without group membership the read silently fails
+    and every server-routed command (``glowup name``, ``glowup group
+    list``, ``glowup --device …``) falls back to direct UDP — which
+    is correct but confusing on a server install where the operator
+    expected the local server to handle it.
+
+    Idempotent: ``adduser <user> <group>`` is a no-op when the user
+    is already in the group.  The user must log out and back in
+    (or run ``newgrp glowup``) for the new group membership to take
+    effect in their existing shell — the installer prints a hint if
+    the membership changed.
+    """
+    invoker: str = host.user
+    if not invoker or invoker == "root":
+        # No discoverable non-root invoker (e.g. running install.py
+        # directly as root in a container).  No user to add.
+        return
+    # Probe current group membership so we only print the
+    # "log out and back in" hint when membership actually changed.
+    try:
+        proc = run(["id", "-Gn", invoker], capture=True, check=False)
+        groups: set[str] = set(proc.stdout.split())
+    except Exception:
+        groups = set()
+    if GLOWUP_GROUP_NAME in groups:
+        ok(f"user {invoker!r} already in {GLOWUP_GROUP_NAME!r} group")
+        return
+    run_sudo(["adduser", invoker, GLOWUP_GROUP_NAME])
+    ok(
+        f"added {invoker!r} to {GLOWUP_GROUP_NAME!r} group "
+        f"(log out + back in, or run 'newgrp {GLOWUP_GROUP_NAME}', "
+        f"for the change to take effect in your current shell)"
+    )
+
+
 def ensure_etc_dir() -> None:
     """Create ``/etc/glowup`` (root-owned, 0750, group=glowup)."""
     if not ETC_DIR.is_dir():
@@ -1474,6 +1516,7 @@ def run_server(host: HostInfo, *, assume_yes: bool) -> None:
     ensure_server_venv(host)
     seed_server_config(host, assume_yes=assume_yes)
     write_server_shim(host)
+    add_invoking_user_to_glowup_group(host)
     unit_changed = render_systemd_unit(host)
     # Upgrade case: unit changed and service was already running → restart so
     # the new ExecStart / hardening settings take effect.  enable --now below
