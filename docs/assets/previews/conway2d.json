@@ -1,17 +1,6 @@
 {
-  "command": "python3 glowup.py record conway2d --grid 24x24 --brightness 80 --hue -1 --mode dissolve --pattern 1 --rate medium",
-  "created": "2026-05-02",
-  "description": "Cellular automaton evolving on a 2D matrix device",
-  "duration": 8.0,
   "effect": "conway2d",
-  "file": "conway2d.gif",
-  "format": "gif",
-  "fps": 20,
-  "grid": "24x24",
-  "height": 360,
-  "lerp": "lab",
-  "looping": false,
-  "media_url": "conway2d.gif",
+  "description": "Conway's Game of Life on an 8x8 toroidal grid",
   "params": {
     "brightness": 80,
     "hue": -1,
@@ -19,8 +8,18 @@
     "pattern": 1,
     "rate": "medium"
   },
-  "title": "Conway's Game of Life",
+  "zones": 64,
+  "zpb": 1,
+  "duration": 8.0,
+  "looping": false,
+  "fps": 20,
   "width": 360,
-  "zones": 576,
-  "zpb": 1
+  "height": 360,
+  "format": "gif",
+  "lerp": "lab",
+  "file": "conway2d.gif",
+  "created": "2026-05-02",
+  "grid": "8x8",
+  "media_url": "conway2d.gif",
+  "command": "python3 glowup.py record conway2d --grid 8x8 --brightness 80 --hue -1 --mode dissolve --pattern 1 --rate medium"
 }

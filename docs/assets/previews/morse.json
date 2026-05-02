@@ -6,13 +6,13 @@
     "brightness": 100,
     "hue": 0.0,
     "kelvin": 3500,
-    "message": "SOS",
+    "message": "HELLO WORLD",
     "pause": 5.0,
     "saturation": 0,
     "unit": 0.15
   },
-  "zones": 108,
-  "zpb": 3,
+  "zones": 64,
+  "zpb": 1,
   "duration": 9.05,
   "looping": false,
   "fps": 20,
@@ -23,5 +23,5 @@
   "file": "morse.gif",
   "created": "2026-05-02",
   "media_url": "morse.gif",
-  "command": "python3 glowup.py play morse --zones 108 --zpb 3 --bg-bri 0 --brightness 100 --hue 0.0 --kelvin 3500 --message SOS --pause 5.0 --saturation 0 --unit 0.15"
+  "command": "python3 glowup.py play morse --zones 64 --zpb 1 --bg-bri 0 --brightness 100 --hue 0.0 --kelvin 3500 --message HELLO WORLD --pause 5.0 --saturation 0 --unit 0.15"
 }
