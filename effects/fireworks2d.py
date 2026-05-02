@@ -152,7 +152,7 @@ class Fireworks2D(Effect):
         description="Average new bursts per second",
     )
     burst_spread = Param(
-        6.0, min=1.0, max=30.0,
+        2.0, min=1.0, max=30.0,
         description="Maximum burst radius in pixels from detonation point",
     )
     burst_duration = Param(
