@@ -16,10 +16,14 @@ display.
 
 Usage (from anywhere)::
 
-    ~/venv/bin/python /Users/perrykivolowitz/glowup/tools/refresh_gallery.py
+    python -m tools.refresh_gallery        # from repo root
+    python tools/refresh_gallery.py        # equivalent
 
 The ``glowup`` CLI is invoked via subprocess so each render runs in
 its own process and a crash in one effect doesn't poison the rest.
+The subprocess re-uses ``sys.executable`` (i.e. whichever Python is
+running this script), so the recording inherits the same venv —
+matplotlib / imageio / pillow have to be importable there.
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.
@@ -36,14 +40,15 @@ from pathlib import Path
 from typing import Optional
 
 # ---------------------------------------------------------------------------
-# Paths.  REPO is derived from this file's location so the script works
-# regardless of CWD; PYTHON points at Perry's venv since matplotlib /
-# imageio / pillow live there, not in the system Python.
+# Paths.  REPO is derived from this file's location so the script
+# works regardless of CWD.  PYTHON re-uses ``sys.executable`` so the
+# subprocess inherits the venv that's running us — no hardcoded
+# absolute paths and the script is portable across machines / users.
 # ---------------------------------------------------------------------------
 REPO: Path = Path(__file__).resolve().parent.parent
 PREVIEWS_DIR: Path = REPO / "docs" / "assets" / "previews"
 MANIFEST: Path = REPO / "docs" / "effects.json"
-PYTHON: str = "/Users/perrykivolowitz/venv/bin/python"
+PYTHON: str = sys.executable
 GLOWUP: str = str(REPO / "glowup.py")
 
 # Gallery JS resolves <img src> relative to the page URL, which is
