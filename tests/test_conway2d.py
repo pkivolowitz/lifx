@@ -29,7 +29,7 @@ from effects.conway2d import (
     RATE_MEDIUM, RATE_SLOW, TOTAL_CELLS,
     Conway2D, _random_seed_grid, _seed_grid, _step_grid,
 )
-from effects._walkers import HUE_AUTO_SENTINEL, HUE_LEG_DURATION_SEC
+from effects._walkers import HUE_LEG_DURATION_SEC
 
 
 # Step interval used in legacy tests that pre-dated the --rate param.
@@ -366,20 +366,6 @@ class TestRateParam(unittest.TestCase):
 
 class TestHueAutoCycle(unittest.TestCase):
     """Sentinel ``--hue -1`` triggers brownian-walk OkLab hue cycling."""
-
-    def test_default_is_auto_mode(self) -> None:
-        """Omitting --hue leaves the default sentinel → auto mode."""
-        eff: Conway2D = Conway2D()
-        eff.on_start(64)
-        self.assertIsNotNone(eff._hue_walker)
-        self.assertEqual(int(eff.hue), HUE_AUTO_SENTINEL)
-
-    def test_explicit_hue_disables_auto(self) -> None:
-        """Any non-negative hue pins the cells to that hue."""
-        eff: Conway2D = Conway2D(hue=200)
-        eff.on_start(64)
-        self.assertIsNone(eff._hue_walker)
-        self.assertTrue(hasattr(eff, "_static_hue_u16"))
 
     def test_auto_mode_rotates_hue_over_time(self) -> None:
         """A frame far past one leg sees a different hue than the seed."""

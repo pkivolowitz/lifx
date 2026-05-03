@@ -60,13 +60,12 @@ class TestComputeRMS(unittest.TestCase):
 class TestUtteranceCapture(unittest.TestCase):
     """Tests for UtteranceCapture configuration and ring buffer."""
 
-    def test_construction_defaults(self) -> None:
-        """Default construction produces valid state."""
-        cap = UtteranceCapture()
-        self.assertIsNotNone(cap)
-
-    def test_custom_params(self) -> None:
-        """Custom parameters are accepted without error."""
+    def test_custom_params_translate_to_chunk_bounds(self) -> None:
+        """Constructor converts seconds-based parameters into chunk
+        counts that bound the capture loop, using the chosen sample
+        rate / chunk size as the conversion basis.
+        """
+        # 16 kHz / 1280 samples per chunk → 12.5 chunks per second.
         cap = UtteranceCapture(
             sample_rate=16000,
             chunk_samples=1280,
@@ -76,7 +75,15 @@ class TestUtteranceCapture(unittest.TestCase):
             min_seconds=0.5,
             pre_wake_seconds=0.5,
         )
-        self.assertIsNotNone(cap)
+        self.assertEqual(cap._sample_rate, 16000)
+        self.assertEqual(cap._chunk_samples, 1280)
+        self.assertEqual(cap._silence_rms, 100)
+        self.assertEqual(cap._max_chunks, int(16000 / 1280 * 10.0))
+        self.assertEqual(cap._silence_chunks, int(3.0 * 16000 / 1280))
+        self.assertEqual(cap._min_chunks, int(0.5 * 16000 / 1280))
+        self.assertEqual(
+            cap._ring.maxlen, max(1, int(0.5 * 16000 / 1280)),
+        )
 
     def test_ring_buffer_fills(self) -> None:
         """Feeding chunks into the ring buffer accumulates data."""

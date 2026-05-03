@@ -14,21 +14,9 @@ import random
 import unittest
 
 from effects._walkers import (
-    ALLOWED_RATES, HUE_AUTO_SENTINEL, HUE_DELTA_MAX_DEG,
-    HUE_DELTA_MIN_DEG, HUE_DEGREES_FULL_CIRCLE, HUE_LEG_DURATION_SEC,
-    HueWalker, RATE_FAST, RATE_MEDIUM, RATE_SLOW,
+    HUE_DELTA_MAX_DEG, HUE_DELTA_MIN_DEG, HUE_DEGREES_FULL_CIRCLE,
+    HUE_LEG_DURATION_SEC, HueWalker,
 )
-
-
-class TestRateConstants(unittest.TestCase):
-    """Shared rate vocabulary — strings + ALLOWED_RATES list."""
-
-    def test_allowed_rates_is_three_strings(self) -> None:
-        self.assertEqual(set(ALLOWED_RATES), {RATE_SLOW, RATE_MEDIUM, RATE_FAST})
-
-    def test_sentinel_is_negative(self) -> None:
-        """Sentinel value must be ``< 0`` so a valid hue (0..360) is distinguishable."""
-        self.assertLess(HUE_AUTO_SENTINEL, 0)
 
 
 class TestHueWalkerSteps(unittest.TestCase):

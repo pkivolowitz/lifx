@@ -76,16 +76,24 @@ class TestAffinityMetadata(unittest.TestCase):
             )
 
     def test_universal_effects_have_all_types(self) -> None:
-        """Effects that should work everywhere have ALL_DEVICE_TYPES."""
-        # These effects are documented as universal.
+        """Effects that should work everywhere have ALL_DEVICE_TYPES.
+
+        Effects must be present in the registry — silently skipping
+        missing entries would mask the exact regression this test
+        guards against (e.g. an effect dropped from the registry).
+        """
+        # ``_primary_cycle`` is registered with a leading underscore
+        # (hidden from the public effect list) but still must satisfy
+        # the universal-affinity contract.
         universal_names: list[str] = [
-            "breathe", "morse", "primary_cycle", "soundlevel", "twinkle",
+            "breathe", "morse", "_primary_cycle", "soundlevel", "twinkle",
         ]
         registry: dict[str, Any] = get_registry()
         for name in universal_names:
-            if name not in registry:
-                # Some universal effects may be hidden or not loaded.
-                continue
+            self.assertIn(
+                name, registry,
+                f"{name!r} expected universal but missing from registry",
+            )
             cls = registry[name]
             self.assertEqual(
                 cls.affinity, ALL_DEVICE_TYPES,
@@ -93,14 +101,21 @@ class TestAffinityMetadata(unittest.TestCase):
             )
 
     def test_strip_only_effects(self) -> None:
-        """Spot-check that known strip-only effects exclude bulb and matrix."""
+        """Spot-check that known strip-only effects exclude bulb and matrix.
+
+        See note on ``test_universal_effects_have_all_types`` — missing
+        entries fail rather than skip, so a registry regression cannot
+        slip past the spot-check.
+        """
         strip_only_names: list[str] = [
             "aurora", "fireworks", "flag", "ripple", "sine",
         ]
         registry: dict[str, Any] = get_registry()
         for name in strip_only_names:
-            if name not in registry:
-                continue
+            self.assertIn(
+                name, registry,
+                f"{name!r} expected strip-only but missing from registry",
+            )
             cls = registry[name]
             self.assertEqual(
                 cls.affinity,

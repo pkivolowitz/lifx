@@ -23,6 +23,7 @@ from typing import Any, Optional
 from urllib.parse import unquote
 
 # server_constants not used in this module.
+from atomic_io import write_json_atomic
 from operators import OperatorManager
 from media import SignalBus
 from schedule_utils import parse_time_spec as _parse_time_spec
@@ -1554,6 +1555,12 @@ class DashboardHandlerMixin:
             value: The new value.
         """
         with self._config_save_lock:
+            # All three write paths below use ``write_json_atomic`` so
+            # that a SIGKILL or power loss during the write never
+            # leaves the state file truncated / unparseable; the worst
+            # case is the previous good contents survive.  See
+            # atomic_io.py for the durability boundary this provides.
+
             # Route schedule writes to the schedule file if it exists.
             sched_path: Optional[str] = self.config.get("_schedule_path")
             if key == "schedule" and sched_path:
@@ -1561,9 +1568,7 @@ class DashboardHandlerMixin:
                     with open(sched_path, "r") as f:
                         sched_config: dict[str, Any] = json.load(f)
                     sched_config["schedule"] = value
-                    with open(sched_path, "w") as f:
-                        json.dump(sched_config, f, indent=4)
-                        f.write("\n")
+                    write_json_atomic(sched_path, sched_config)
                 except Exception as exc:
                     logging.exception(
                         "Failed to save schedule to '%s'",
@@ -1583,9 +1588,7 @@ class DashboardHandlerMixin:
             groups_path: Optional[str] = self.config.get("_groups_path")
             if key == "groups" and groups_path:
                 try:
-                    with open(groups_path, "w") as f:
-                        json.dump(value, f, indent=4)
-                        f.write("\n")
+                    write_json_atomic(groups_path, value)
                 except Exception as exc:
                     logging.exception(
                         "Failed to save groups to '%s'",
@@ -1600,9 +1603,7 @@ class DashboardHandlerMixin:
                 with open(config_path, "r") as f:
                     config: dict[str, Any] = json.load(f)
                 config[key] = value
-                with open(config_path, "w") as f:
-                    json.dump(config, f, indent=4)
-                    f.write("\n")
+                write_json_atomic(config_path, config)
             except Exception as exc:
                 logging.warning(
                     "Failed to save config field '%s': %s",

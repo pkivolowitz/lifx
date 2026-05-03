@@ -1,9 +1,14 @@
-"""Quick integration test — MQTT theremin signals → AudioOutEmitter.
+"""Manual integration runner — MQTT theremin signals → AudioOutEmitter.
+
+Renamed out of the ``test_*`` pytest namespace on 2026-05-02 because
+this is a hardware-bound runner (live MQTT broker + audio device),
+not a unit test.  Pytest used to attempt collection on it and find
+no real test cases; the new ``run_`` prefix keeps it visible in the
+package without confusing the test runner.
 
 Subscribes to the theremin note signals on the Pi's MQTT broker and
-feeds them directly into the AudioOutEmitter.  This validates the
-emitter works end-to-end without needing the full worker agent
-assignment machinery.
+feeds them directly into the AudioOutEmitter.  Validates the emitter
+end-to-end without needing the full worker agent assignment machinery.
 
 Requires:
     - Pi running with MQTT broker (192.0.2.48:1883)
@@ -12,7 +17,7 @@ Requires:
 
 Usage::
 
-    ~/venv/bin/python3 -m distributed.test_audio_emitter
+    ~/venv/bin/python3 -m distributed.run_audio_emitter
 
 Press Ctrl+C to stop.
 """
@@ -34,7 +39,7 @@ try:
     import paho.mqtt.client as mqtt
 except ImportError:
     sys.exit(
-        "distributed.test_audio_emitter: missing package: paho-mqtt  "
+        "distributed.run_audio_emitter: missing package: paho-mqtt  "
         "— pip install paho-mqtt"
     )
 

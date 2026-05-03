@@ -87,10 +87,15 @@ class TestIntentParserPrompt(unittest.TestCase):
         parser._capabilities_last_refresh = 0.0
 
         prompt = parser._build_system_prompt()
+        # ``scene`` was removed 2026-05-02 — it was a vestigial entry
+        # with no actions.yml backing, exposed by
+        # ``voice/tests/test_intent_actions_parity.py``.  This test
+        # remains as a quick smoke check on the core action surface;
+        # the parity test is the authoritative full check.
         for action in [
             "power", "brightness", "color", "temperature",
             "play_effect", "stop", "query_sensor", "query_power",
-            "query_status", "scene",
+            "query_status",
         ]:
             self.assertIn(action, prompt, f"Missing action: {action}")
 

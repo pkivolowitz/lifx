@@ -2,7 +2,6 @@
 
 Covers:
     - write_state atomicity + schema
-    - MockEngine behaviour (deterministic and prompt modes)
     - Availability gates on FasterWhisperEngine / MLXWhisperEngine
     - SpeechToText facade: unknown engine, primary load failure
       falls back cleanly, both engines failing raises,
@@ -30,7 +29,6 @@ from pathlib import Path
 from voice.coordinator.stt_engines import (
     FasterWhisperEngine,
     MLXWhisperEngine,
-    MockEngine,
     STTEngineLoadError,
 )
 from voice.coordinator.stt_engines import base as base_module
@@ -121,19 +119,6 @@ class TestWriteState(unittest.TestCase):
         # No orphan tmp files left behind.
         tmps = list(base_module.STT_STATE_DIR.glob("*.tmp"))
         self.assertEqual(tmps, [])
-
-
-class TestMockEngine(unittest.TestCase):
-    def test_deterministic_transcript(self) -> None:
-        e = MockEngine(transcript="hello world")
-        e.load()
-        self.assertEqual(e.transcribe(b"\x00" * 100), "hello world")
-
-    def test_is_available_always_true(self) -> None:
-        self.assertTrue(MockEngine.is_available())
-
-    def test_name(self) -> None:
-        self.assertEqual(MockEngine.name, "mock")
 
 
 class TestEngineAvailability(unittest.TestCase):

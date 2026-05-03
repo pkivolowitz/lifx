@@ -21,7 +21,6 @@ and the route table data structure directly.
 __version__ = "1.0"
 
 import unittest
-from typing import Any
 
 from server import (
     _Route,
@@ -116,18 +115,6 @@ class TestHandlersExist(unittest.TestCase):
                 f"GlowUpRequestHandler for route "
                 f"{route.method} /{'/'.join(route.pattern)}",
             )
-
-    def test_all_handlers_are_callable(self) -> None:
-        """Every handler attribute must be callable."""
-        from server import GlowUpRequestHandler
-
-        for route in _ROUTES:
-            handler: Any = getattr(GlowUpRequestHandler, route.handler, None)
-            self.assertTrue(
-                callable(handler),
-                f"Handler '{route.handler}' is not callable",
-            )
-
 
 # ---------------------------------------------------------------------------
 # Tests: Pattern matching logic

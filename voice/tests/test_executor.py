@@ -185,9 +185,11 @@ class TestResolveBody(unittest.TestCase):
         self.assertEqual(result, 42)
 
     def test_boolean_passthrough(self) -> None:
-        """Boolean values pass through unchanged."""
-        result = self.ex._resolve_body(True, {})
-        self.assertTrue(result)
+        """Boolean values pass through unchanged (and stay bool)."""
+        result_true = self.ex._resolve_body(True, {})
+        result_false = self.ex._resolve_body(False, {})
+        self.assertIs(result_true, True)
+        self.assertIs(result_false, False)
 
     def test_preserves_param_type(self) -> None:
         """Resolved param preserves its Python type (not stringified)."""
@@ -576,6 +578,55 @@ class TestExecuteDispatch(unittest.TestCase):
                 )
         self.assertIn("Bedroom", result["confirmation"])
         self.assertNotIn("group:", result["confirmation"])
+
+    def test_handler_exception_returns_generic_error(self) -> None:
+        """A handler raising an unexpected exception must not crash the
+        worker — the executor's outer try/except (executor.py around
+        line 817) is the last line of defense for the voice path.
+        Without it, a single malformed upstream API response would
+        deadlock the satellite waiting on TTS that never arrives.
+        """
+        ex = _MockExecutor.make()
+        with patch.object(ex, "_resolve_target", return_value="all"):
+            with patch.object(
+                ex, "_dispatch_query",
+                side_effect=RuntimeError("simulated handler crash"),
+            ):
+                result = ex.execute(
+                    {
+                        "action": "query_status",
+                        "target": "all",
+                        "params": {},
+                    },
+                    "room",
+                )
+        self.assertEqual(result["status"], "error")
+        self.assertTrue(result["speak"])
+        # The exact text is the user-facing apology — pinned so a
+        # well-meaning rewording doesn't make the response empty.
+        self.assertIn("went wrong", result["confirmation"].lower())
+
+    def test_command_dispatch_exception_returns_generic_error(self) -> None:
+        """Same contract for the command path — a network blip or a
+        handler crash inside ``_dispatch_command`` must not bubble out.
+        """
+        ex = _MockExecutor.make()
+        with patch.object(ex, "_resolve_target", return_value="all"):
+            with patch.object(
+                ex, "_dispatch_command",
+                side_effect=ConnectionError("simulated network blip"),
+            ):
+                result = ex.execute(
+                    {
+                        "action": "power",
+                        "target": "all",
+                        "params": {"on": True},
+                    },
+                    "room",
+                )
+        self.assertEqual(result["status"], "error")
+        self.assertTrue(result["speak"])
+        self.assertIn("went wrong", result["confirmation"].lower())
 
 
 class TestExecChat(unittest.TestCase):

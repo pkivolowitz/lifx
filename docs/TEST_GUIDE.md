@@ -110,7 +110,7 @@ Additional test files in the `tests/` directory:
 | `tests/test_media.py` | MediaManager lifecycle, source start/stop |
 | `tests/test_override.py` | Phone override state machine |
 | `tests/test_cylon_ack.py` | Ack-paced send timing for the cylon effect |
-| `tests/test_e2e_audio.py` | Audio capture → extraction → signal bus (needs ffmpeg) |
+| `tools/run_e2e_audio.py` | Manual E2E runner: NVR audio → SignalBus (needs RTSP_URL + ffmpeg). Not collected by pytest. |
 | `tests/test_audio_out.py` | AudioOutEmitter construction, params, lifecycle, registration |
 
 To discover and run *everything* (including the slower use-case tests):

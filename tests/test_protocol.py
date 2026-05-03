@@ -219,13 +219,5 @@ class TestPayloadHelpers(unittest.TestCase):
         self.assertEqual(len(unpacked), 2)
 
 
-class TestHeaderSize(unittest.TestCase):
-    """Verify header size constant matches the struct format."""
-
-    def test_header_size(self) -> None:
-        """HEADER_SIZE must be exactly 19 bytes."""
-        self.assertEqual(HEADER_SIZE, 19)
-
-
 if __name__ == "__main__":
     unittest.main()

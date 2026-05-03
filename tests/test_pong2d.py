@@ -29,7 +29,7 @@ from effects.pong2d import (
     Pong2D, _wall_predict_arrival_y,
 )
 from effects._walkers import (
-    HUE_AUTO_SENTINEL, RATE_FAST, RATE_MEDIUM, RATE_SLOW,
+    HUE_LEG_DURATION_SEC, RATE_FAST, RATE_MEDIUM, RATE_SLOW,
 )
 
 
@@ -226,16 +226,39 @@ class TestRateAndHueParams(unittest.TestCase):
             places=5,
         )
 
-    def test_default_hue_is_auto_walker(self) -> None:
+    @staticmethod
+    def _hues_over_window(eff: Pong2D, t_end: float, frames: int) -> set[int]:
+        """Render evenly-spaced frames and collect distinct lit-cell hues.
+
+        Stepwise rendering avoids degenerate single-step physics
+        (subpixel ball straddling cell boundaries with all
+        contributions rounding to zero brightness).
+        """
+        hues: set[int] = set()
+        for i in range(frames):
+            t: float = t_end * (i / max(1, frames - 1))
+            for hsbk in eff.render(t, 64):
+                if hsbk[2] > 0:
+                    hues.add(hsbk[0])
+        return hues
+
+    def test_auto_mode_rotates_hue_over_time(self) -> None:
+        """Default (auto) hue mode drifts the rendered hue across
+        multiple walker legs.
+        """
+        random.seed(13)
         eff: Pong2D = Pong2D()
         eff.on_start(64)
-        self.assertEqual(int(eff.hue), HUE_AUTO_SENTINEL)
-        self.assertIsNotNone(eff._hue_walker)
+        hues = self._hues_over_window(eff, HUE_LEG_DURATION_SEC * 2.5, 60)
+        self.assertGreater(len(hues), 1)
 
-    def test_explicit_hue_disables_walker(self) -> None:
+    def test_manual_hue_constant_over_time(self) -> None:
+        """Explicit --hue pins every lit cell to one hue across frames."""
+        random.seed(13)
         eff: Pong2D = Pong2D(hue=42)
         eff.on_start(64)
-        self.assertIsNone(eff._hue_walker)
+        hues = self._hues_over_window(eff, HUE_LEG_DURATION_SEC * 5.0, 60)
+        self.assertEqual(len(hues), 1)
 
 
 class TestRenderShape(unittest.TestCase):

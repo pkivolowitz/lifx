@@ -24,7 +24,7 @@ from effects.boing_ball import (
     BALL_RADIUS, BoingBall, EDGE_HALF_WIDTH, _ball_brightness,
 )
 from effects._walkers import (
-    HUE_AUTO_SENTINEL, RATE_CELLS_PER_SEC, RATE_FAST,
+    HUE_LEG_DURATION_SEC, RATE_CELLS_PER_SEC, RATE_FAST,
     RATE_MEDIUM, RATE_SLOW,
 )
 
@@ -179,16 +179,43 @@ class TestRateAndHueParams(unittest.TestCase):
             places=5,
         )
 
-    def test_default_hue_is_auto_walker(self) -> None:
+    @staticmethod
+    def _hues_over_window(eff: BoingBall, t_end: float, frames: int) -> set[int]:
+        """Render ``frames`` evenly-spaced frames over [0, t_end] and
+        return the set of distinct hue values from any lit cell.
+
+        Stepwise rendering matters here because boing_ball advances
+        physics by ``dt = t - last_t`` per call — a single jump from
+        t=0 to t_end would mirror-reflect the ball straight to a
+        position where the antialiased kernel rounds to zero brightness.
+        """
+        hues: set[int] = set()
+        for i in range(frames):
+            t: float = t_end * (i / max(1, frames - 1))
+            for hsbk in eff.render(t, 64):
+                if hsbk[2] > 0:
+                    hues.add(hsbk[0])
+        return hues
+
+    def test_auto_mode_rotates_hue_over_time(self) -> None:
+        """Default (auto) hue mode drifts the rendered hue across
+        multiple walker legs.
+        """
+        random.seed(11)
         eff: BoingBall = BoingBall()
         eff.on_start(64)
-        self.assertEqual(int(eff.hue), HUE_AUTO_SENTINEL)
-        self.assertIsNotNone(eff._hue_walker)
+        hues = self._hues_over_window(eff, HUE_LEG_DURATION_SEC * 2.5, 60)
+        self.assertGreater(len(hues), 1)
 
-    def test_explicit_hue_disables_walker(self) -> None:
+    def test_manual_hue_constant_over_time(self) -> None:
+        """Explicit --hue pins every lit cell to a single hue across
+        frames separated by multiple walker leg durations.
+        """
+        random.seed(11)
         eff: BoingBall = BoingBall(hue=200)
         eff.on_start(64)
-        self.assertIsNone(eff._hue_walker)
+        hues = self._hues_over_window(eff, HUE_LEG_DURATION_SEC * 5.0, 60)
+        self.assertEqual(len(hues), 1)
 
 
 if __name__ == "__main__":

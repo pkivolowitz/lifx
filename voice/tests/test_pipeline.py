@@ -38,6 +38,22 @@ class FakeSTT:
         return self._text
 
 
+class RaisingSTT:
+    """STT that always raises on transcribe — simulates total engine
+    failure (e.g., both primary and fallback engines crashed at runtime).
+
+    Used to verify that the pipeline catches the exception, emits a
+    friendly error, and stays alive for the next utterance instead of
+    leaving the satellite hanging.
+    """
+
+    def __init__(self, exc: Exception | None = None) -> None:
+        self._exc: Exception = exc or RuntimeError("engine unavailable")
+
+    def transcribe(self, pcm: bytes, sample_rate: int) -> str:
+        raise self._exc
+
+
 class FakeTTS:
     """Fake TTS that returns deterministic audio."""
 
@@ -315,6 +331,45 @@ class TestProcessUtterance(unittest.TestCase):
         self.assertIsNone(result["intent"])
         # Player should have received the apology audio.
         self.assertGreater(len(player.played), 0)
+
+    def test_stt_engine_failure_returns_friendly_error(self) -> None:
+        """If both STT engines fail at transcribe time, the pipeline
+        must catch the exception, publish a friendly error TTS, and
+        return a normal error result — not propagate the exception
+        upward and leave the satellite hanging.
+
+        ``SpeechToText`` does load-time fallback only.  A runtime
+        failure (CUDA crash, model file corruption, OOM, etc.) will
+        raise out of ``transcribe()``; this test pins the contract
+        that the pipeline absorbs it.
+        """
+        _phrase_cache.clear()
+        published: list[tuple[str, str]] = []
+        stt = RaisingSTT()
+        intent = FakeIntentParser()
+        executor = FakeExecutor()
+        tts = FakeTTS()
+        player = FakePlayer()
+
+        result = process_utterance(
+            "bedroom", b"\x00" * 100,
+            {"sample_rate": 16000},
+            stt, intent, executor, tts, player,
+            tts_text_publisher=lambda r, t: published.append((r, t)),
+        )
+
+        self.assertEqual(result["result"]["status"], "error")
+        self.assertTrue(result["result"]["speak"])
+        # User-facing copy must not leak the exception type or message.
+        confirm: str = result["result"]["confirmation"]
+        self.assertNotIn("RuntimeError", confirm)
+        self.assertNotIn("engine unavailable", confirm)
+        # Friendly message reached both the local speaker and the MQTT
+        # text channel that the satellite consumes.
+        self.assertGreater(len(player.played), 0)
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0][0], "bedroom")
+        self.assertIn("speech engine", published[0][1].lower())
 
     def test_command_says_got_it(self) -> None:
         """Successful command plays 'Got it.'"""

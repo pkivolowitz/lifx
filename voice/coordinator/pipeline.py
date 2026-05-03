@@ -264,7 +264,38 @@ def process_utterance(
     sample_rate: int = meta.get("sample_rate", 16000)
 
     # Step 1: Speech-to-text.
-    text: str = stt.transcribe(pcm, sample_rate)
+    #
+    # Both engines can raise at runtime (model crash, OOM, transient
+    # CUDA/Metal failure on Daedalus, etc.).  ``SpeechToText.transcribe``
+    # provides no runtime fallback — load-time fallback only — so an
+    # exception here would propagate up to the worker thread and the
+    # satellite would hang waiting on TTS that never arrives.  Catch it,
+    # publish a friendly error, and keep the worker alive for the next
+    # utterance.  Logged at WARNING (not ERROR) because it is recoverable
+    # by retrying; if the engine is permanently dead the operator will
+    # see a flood of these and act on it.
+    try:
+        text: str = stt.transcribe(pcm, sample_rate)
+    except Exception as exc:
+        logger.warning(
+            "[%s] STT transcribe failed (%s: %s) — emitting friendly error",
+            room, type(exc).__name__, exc,
+        )
+        _stt_err: str = "Sorry, my speech engine had a problem. Please try again."
+        _speak(_stt_err, room, tts, player, playback_notifier)
+        if tts_text_publisher:
+            tts_text_publisher(room, _stt_err)
+        return {
+            "room": room,
+            "text": "",
+            "intent": None,
+            "result": {
+                "status": "error",
+                "confirmation": _stt_err,
+                "speak": True,
+            },
+            "latency_ms": _elapsed_ms(t0),
+        }
 
     if not text:
         logger.info("[%s] Empty transcription — nothing heard", room)

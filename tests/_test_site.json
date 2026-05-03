@@ -1,0 +1,14 @@
+{
+  "_comment_purpose": "Fixture site.json used by the test suite when no /etc/glowup/site.json (or ~/.glowup/site.json) is present on the host. Loaded via the GLOWUP_SITE_JSON env var that tests/conftest.py sets at pytest session start. Mobile, AL coordinates are used so any test that touches the production sunrise/sunset or weather code paths gets a sensible (but explicitly fixture-flagged) location instead of failing on missing keys post the public-release Phase 1+2 cutover (commit 4a4d5ae, 2026-05-02), which made several site keys mandatory at module import.",
+
+  "schema_version": 1,
+
+  "latitude": 30.6954,
+  "longitude": -88.0399,
+
+  "zigbee_service_url": "http://test-zigbee.invalid:8422",
+
+  "electricity_rate_per_kwh": 0.171,
+
+  "_comment_no_secrets": "Do not add real broker hosts, IPs, or credentials here. This file is committed; tests that need a network-bound seam should mock at the request boundary instead."
+}

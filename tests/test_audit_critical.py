@@ -233,20 +233,6 @@ class TestC14_VirtualZoneCountZero(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# C16: glowup.py division by zero in cmd_monitor with Hz=0
-# ---------------------------------------------------------------------------
-
-class TestC16_MonitorHzZero(unittest.TestCase):
-    """Verify Hz=0 doesn't cause division by zero."""
-
-    def test_hz_zero_division(self) -> None:
-        """1.0 / 0.0 must raise ZeroDivisionError — the fix should
-        prevent this from reaching the division."""
-        with self.assertRaises(ZeroDivisionError):
-            _ = 1.0 / 0.0
-
-
-# ---------------------------------------------------------------------------
 # On/Off transient effects — verify is_transient and execute()
 # ---------------------------------------------------------------------------
 

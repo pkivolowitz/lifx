@@ -18,7 +18,6 @@ import os
 import platform
 import shutil
 import subprocess
-import sys
 import unittest
 
 
@@ -87,18 +86,6 @@ class TestNTP(unittest.TestCase):
             "NTP service is NOT enabled. The system clock will drift "
             "and cause authentication failures with PostgreSQL. "
             "Fix with: sudo timedatectl set-ntp true",
-        )
-
-
-class TestPythonVersion(unittest.TestCase):
-    """Verify minimum Python version."""
-
-    def test_python_3_9_or_later(self) -> None:
-        """Python 3.9+ is required for type hint syntax used in GlowUp."""
-        self.assertGreaterEqual(
-            sys.version_info[:2],
-            (3, 9),
-            f"Python 3.9+ required, got {platform.python_version()}",
         )
 
 

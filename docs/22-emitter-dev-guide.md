@@ -507,8 +507,8 @@ The emitter generates a continuous multi-harmonic waveform with:
 ### Mute Support
 
 The emitter has a `toggle_mute()` method that silences output without
-tearing down the audio stream.  The MQTT test harness
-(`distributed/test_audio_emitter.py`) maps the `h` key to this toggle.
+tearing down the audio stream.  The MQTT runner
+(`distributed/run_audio_emitter.py`) maps the `h` key to this toggle.
 
 ### Standalone Test
 
@@ -517,7 +517,7 @@ tearing down the audio stream.  The MQTT test harness
 ~/venv/bin/python3 -m emitters.audio_out
 
 # MQTT integration (requires Pi + theremin effect)
-cd ~/glowup && ~/venv/bin/python3 -m distributed.test_audio_emitter
+cd ~/glowup && ~/venv/bin/python3 -m distributed.run_audio_emitter
 ```
 
 ### Agent Configuration

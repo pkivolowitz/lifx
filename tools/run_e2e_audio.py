@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""End-to-end integration test: Reolink NVR audio → SignalBus.
+"""Manual end-to-end runner: Reolink NVR audio → SignalBus.
+
+Moved from ``tests/test_e2e_audio.py`` to ``tools/run_e2e_audio.py``
+on 2026-05-02 because this is a hardware-bound runner (live RTSP
+stream, ffmpeg subprocess), not a unit test.  Pytest used to attempt
+collection on it; the new ``tools/run_*`` location keeps it as an
+ops tool without confusing the test runner.
 
 Pulls ~3 seconds of live audio from the backyard camera via RTSP,
 feeds it through the AudioExtractor pipeline, and verifies that
@@ -11,7 +17,7 @@ Requirements:
     - Run from the project root
 
 Usage:
-    python3 test_e2e_audio.py
+    python3 tools/run_e2e_audio.py
 """
 
 # Copyright (c) 2026 Perry Kivolowitz. All rights reserved.

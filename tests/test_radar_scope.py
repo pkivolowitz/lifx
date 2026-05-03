@@ -15,6 +15,7 @@ Covers:
 __version__: str = "1.1"
 
 import math
+import random
 import unittest
 
 from effects.radar_scope import (
@@ -22,7 +23,7 @@ from effects.radar_scope import (
     RadarScope, TAIL_ANGLE_RAD, TAU,
 )
 from effects._walkers import (
-    HUE_AUTO_SENTINEL, RATE_FAST, RATE_MEDIUM, RATE_SLOW,
+    HUE_LEG_DURATION_SEC, RATE_FAST, RATE_MEDIUM, RATE_SLOW,
 )
 
 
@@ -206,16 +207,33 @@ class TestRateAndHueParams(unittest.TestCase):
             out_mid: list = eff.render(eff._rotation_period * 0.5, 64)
             self.assertNotEqual(out_t0, out_mid)
 
-    def test_default_hue_is_auto_walker(self) -> None:
+    @staticmethod
+    def _hues_over_window(eff: RadarScope, t_end: float, frames: int) -> set[int]:
+        """Render evenly-spaced frames and collect distinct lit-cell hues."""
+        hues: set[int] = set()
+        for i in range(frames):
+            t: float = t_end * (i / max(1, frames - 1))
+            for hsbk in eff.render(t, 64):
+                if hsbk[2] > 0:
+                    hues.add(hsbk[0])
+        return hues
+
+    def test_auto_mode_rotates_hue_over_time(self) -> None:
+        """Default (auto) hue mode drifts the rendered hue across
+        multiple walker legs.
+        """
+        random.seed(17)
         eff: RadarScope = RadarScope()
         eff.on_start(64)
-        self.assertEqual(int(eff.hue), HUE_AUTO_SENTINEL)
-        self.assertIsNotNone(eff._hue_walker)
+        hues = self._hues_over_window(eff, HUE_LEG_DURATION_SEC * 2.5, 60)
+        self.assertGreater(len(hues), 1)
 
-    def test_explicit_hue_disables_walker(self) -> None:
+    def test_manual_hue_constant_over_time(self) -> None:
+        """Explicit --hue pins every lit cell to one hue across frames."""
         eff: RadarScope = RadarScope(hue=42)
         eff.on_start(64)
-        self.assertIsNone(eff._hue_walker)
+        hues = self._hues_over_window(eff, HUE_LEG_DURATION_SEC * 5.0, 60)
+        self.assertEqual(len(hues), 1)
 
 
 class TestCentreCell(unittest.TestCase):

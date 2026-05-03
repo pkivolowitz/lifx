@@ -509,45 +509,39 @@ class TestLightBridgeMultiDevice(unittest.TestCase):
 
 
 class TestFluidSynthPitchBendOffset(unittest.TestCase):
-    """Test that FluidSynthBackend applies the pitch bend offset.
-
-    pyfluidsynth expects -8192..+8191 (center=0) but MIDI wire
-    format is 0..16383 (center=8192).  The backend subtracts 8192.
+    """FluidSynthBackend.pitch_bend converts MIDI 0..16383 (center 8192)
+    to pyfluidsynth's -8192..+8191 (center 0).  Test the actual method
+    against a mock FluidSynth so the offset isn't merely re-implemented
+    in the test body.
     """
 
-    def test_center_becomes_zero(self) -> None:
-        """MIDI center value 8192 becomes 0 for pyfluidsynth."""
-        # Can't call real FluidSynth in tests, but we can verify
-        # the conversion logic is correct by checking the code.
-        midi_center: int = 8192
-        converted: int = midi_center - 8192
-        self.assertEqual(converted, 0)
+    def _backend_with_mock_fs(self) -> tuple[Any, Any]:
+        from emitters.midi_out import FluidSynthBackend
+        backend = FluidSynthBackend.__new__(FluidSynthBackend)
+        backend._fs = MagicMock()
+        return backend, backend._fs
 
-    def test_min_becomes_negative(self) -> None:
-        """MIDI min value 0 becomes -8192 for pyfluidsynth."""
-        midi_min: int = 0
-        converted: int = midi_min - 8192
-        self.assertEqual(converted, -8192)
+    def test_pitch_bend_offset_applied(self) -> None:
+        """Backend forwards (value - 8192) to FluidSynth across the range."""
+        cases: list[tuple[int, int]] = [
+            (0, -8192),       # MIDI min
+            (8192, 0),        # center
+            (16383, 8191),    # MIDI max
+            (8192 + 1024, 1024),
+            (8192 - 1024, -1024),
+        ]
+        for midi_value, expected in cases:
+            with self.subTest(midi_value=midi_value):
+                backend, fs = self._backend_with_mock_fs()
+                backend.pitch_bend(channel=3, value=midi_value)
+                fs.pitch_bend.assert_called_once_with(3, expected)
 
-    def test_max_becomes_positive(self) -> None:
-        """MIDI max value 16383 becomes +8191 for pyfluidsynth."""
-        midi_max: int = 16383
-        converted: int = midi_max - 8192
-        self.assertEqual(converted, 8191)
-
-    def test_quarter_tone_up(self) -> None:
-        """Small bend up from center maps correctly."""
-        midi_val: int = 8192 + 1024  # ~quarter semitone up.
-        converted: int = midi_val - 8192
-        self.assertEqual(converted, 1024)
-        self.assertGreater(converted, 0)
-
-    def test_quarter_tone_down(self) -> None:
-        """Small bend down from center maps correctly."""
-        midi_val: int = 8192 - 1024  # ~quarter semitone down.
-        converted: int = midi_val - 8192
-        self.assertEqual(converted, -1024)
-        self.assertLess(converted, 0)
+    def test_pitch_bend_noop_when_fs_absent(self) -> None:
+        """No exception when the FluidSynth client failed to initialize."""
+        from emitters.midi_out import FluidSynthBackend
+        backend = FluidSynthBackend.__new__(FluidSynthBackend)
+        backend._fs = None
+        backend.pitch_bend(channel=0, value=8192)  # Must not raise.
 
 
 if __name__ == "__main__":

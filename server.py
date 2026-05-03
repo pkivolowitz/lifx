@@ -78,6 +78,7 @@ import hmac
 import http.server
 import ipaddress
 import json
+from atomic_io import write_json_atomic
 from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -2080,9 +2081,7 @@ def _migrate_automations_to_triggers(config: dict[str, Any]) -> None:
             disk_cfg: dict = json.load(f)
         disk_cfg["operators"] = operators
         disk_cfg.pop("automations", None)
-        with open(config_path, "w") as f:
-            json.dump(disk_cfg, f, indent=4)
-            f.write("\n")
+        write_json_atomic(config_path, disk_cfg)
         logging.info("Persisted trigger migration to %s", config_path)
     except Exception as exc:
         logging.warning("Failed to persist trigger migration: %s", exc)
@@ -2833,9 +2832,7 @@ def main() -> None:
                         with open(config_path_local, "r") as f:
                             disk_cfg: dict = json.load(f)
                         disk_cfg["automations"] = config["automations"]
-                        with open(config_path_local, "w") as f:
-                            json.dump(disk_cfg, f, indent=4)
-                            f.write("\n")
+                        write_json_atomic(config_path_local, disk_cfg)
                         logging.info("Persisted migrated automations to %s",
                                      config_path_local)
                     except Exception as exc:
