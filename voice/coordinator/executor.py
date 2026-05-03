@@ -2120,6 +2120,15 @@ class GlowUpExecutor:
         """Report alarm/security panel state from Vivint adapter.
 
         One API call to /api/home/security.
+
+        The hub's ``/api/home/security`` handler
+        (``handlers/dashboard.py:_handle_get_home_security``) names the
+        field ``alarm`` — not ``alarm_state``.  This handler used to
+        read ``alarm_state`` and silently fall through to ``"unknown"``
+        for every query (caught 2026-05-02 while debugging a stale
+        Vivint cache).  Anyone changing the JSON shape on the hub side
+        must keep the ``alarm`` key intact, or update both this lookup
+        and the dashboard handler in the same change.
         """
         try:
             data: dict[str, Any] = self._request("GET", "/api/home/security")
@@ -2130,7 +2139,7 @@ class GlowUpExecutor:
                 "speak": True,
             }
 
-        state: str = data.get("alarm_state", "unknown")
+        state: str = data.get("alarm", "unknown")
         # Map internal state names to spoken forms.
         spoken_map: dict[str, str] = {
             "disarmed": "disarmed",

@@ -770,6 +770,74 @@ class TestHandlePowerSummary(unittest.TestCase):
         self.assertIn("50", result["confirmation"])
 
 
+class TestHandleAlarmStatus(unittest.TestCase):
+    """Tests for _handle_alarm_status.
+
+    Pins the contract that this handler reads the ``alarm`` key from
+    the hub's ``/api/home/security`` response — not ``alarm_state``.
+    Caught 2026-05-02 while debugging a stale Vivint cache: the
+    handler had been silently returning "in an unknown state" for
+    every query because the field name didn't match the API.
+    """
+
+    def _make(self) -> Any:
+        return _MockExecutor.make(actions={
+            "query_alarm": {
+                "type": "query",
+                "label": "alarm",
+                "handler": "alarm_status",
+                "speak": True,
+            },
+        })
+
+    def test_armed_stay_spoken(self) -> None:
+        ex = self._make()
+        with patch.object(
+            ex, "_request",
+            return_value={"alarm": "armed_stay", "doors": [], "sensors": {}},
+        ):
+            result = ex._handle_alarm_status({}, "", "all", "all", {})
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("armed in stay mode", result["confirmation"])
+
+    def test_armed_away_spoken(self) -> None:
+        ex = self._make()
+        with patch.object(
+            ex, "_request",
+            return_value={"alarm": "armed_away"},
+        ):
+            result = ex._handle_alarm_status({}, "", "all", "all", {})
+        self.assertIn("armed in away mode", result["confirmation"])
+
+    def test_disarmed_spoken(self) -> None:
+        ex = self._make()
+        with patch.object(
+            ex, "_request",
+            return_value={"alarm": "disarmed"},
+        ):
+            result = ex._handle_alarm_status({}, "", "all", "all", {})
+        self.assertIn("disarmed", result["confirmation"])
+
+    def test_missing_field_falls_back_to_unknown(self) -> None:
+        """Hub returns no ``alarm`` field (e.g. adapter not yet ready)
+        → spoken "in an unknown state", not crash.
+        """
+        ex = self._make()
+        with patch.object(ex, "_request", return_value={}):
+            result = ex._handle_alarm_status({}, "", "all", "all", {})
+        self.assertIn("unknown", result["confirmation"])
+
+    def test_api_unreachable_returns_friendly_error(self) -> None:
+        ex = self._make()
+        with patch.object(
+            ex, "_request",
+            side_effect=ConnectionError("hub down"),
+        ):
+            result = ex._handle_alarm_status({}, "", "all", "all", {})
+        self.assertEqual(result["status"], "error")
+        self.assertIn("security system", result["confirmation"].lower())
+
+
 class TestVoiceGateHandlers(unittest.TestCase):
     """Tests for enable_voice_gate / disable_voice_gate handlers."""
 
