@@ -224,7 +224,7 @@ class TestStateFileResolution(_TempDirCase):
 
         Unlike groups_file (must exist; loaded eagerly), state_file is
         only a path — the actual sqlite3 connect happens later in the
-        consumers (DeviceManager / LockManager / occupancy operator).
+        consumers (DeviceManager / occupancy operator).
         """
         target: Path = self.tmp / "subdir" / "state.db"
         self._write_minimal_server_json(state_file=str(target))

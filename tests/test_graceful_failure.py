@@ -52,7 +52,6 @@ class TestAdapterSentinels(unittest.TestCase):
             "_HAS_NVR",
             "_HAS_PRINTER",
             "_HAS_MATTER",
-            "_HAS_LOCK_MANAGER",
         ]
         for sentinel in expected_sentinels:
             self.assertTrue(
@@ -175,7 +174,6 @@ class TestNavConfigGraceful(unittest.TestCase):
         links: list = captured["data"]["links"]
         # Should have built-in links but no external ones.
         labels: list[str] = [l["label"] for l in links]
-        self.assertIn("Home", labels)
         self.assertIn("Dashboard", labels)
         self.assertIn("Power", labels)
 
@@ -200,7 +198,7 @@ class TestNavConfigGraceful(unittest.TestCase):
 
         labels: list[str] = [l["label"] for l in captured["data"]["links"]]
         self.assertIn("Zigbee", labels)
-        self.assertIn("Home", labels)
+        self.assertIn("Dashboard", labels)
 
 
 # ---------------------------------------------------------------------------

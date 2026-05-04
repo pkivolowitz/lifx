@@ -31,17 +31,7 @@ Supported operators (all operate on scalar floats):
     - ``DROP``                 — pop top
 
 The combinator is fully reusable: pass any RPN expression and any set
-of input signals, write any output signal.  For a 2-input AND-NOT gate
-(the canonical "night if time:is_night AND main bedroom lights are
-off"), use::
-
-    {
-        "type": "combine",
-        "name": "clock_night_mode",
-        "input_signals": ["time:is_night", "group:main_bedroom:any_on"],
-        "expression": "time:is_night group:main_bedroom:any_on NOT AND",
-        "output_signals": ["kiosk:night_mode"]
-    }
+of input signals, write any output signal.
 
 The operator is reactive: any change to an input signal triggers a
 re-evaluation and write of the output.  Unknown tokens (neither a

@@ -57,8 +57,6 @@ Endpoints::
     GET  /api/diagnostics/now_playing    Currently playing effects (from DB)
     GET  /api/diagnostics/history        Recent effect history (from DB)
     GET  /dashboard                      Web dashboard (HTML)
-    GET  /home                           Sensor display dashboard (HTML)
-    GET  /api/home/photos                List available photos for home display
     GET  /photos/{filename}              Serve a photo from static/photos/
 Usage::
 
@@ -116,11 +114,6 @@ from infrastructure.ble_trigger import BleTriggerManager
 # still load-bearing on every startup.
 from automation import validate_automation, migrate_ble_triggers
 from operators import OperatorManager
-try:
-    from infrastructure.lock_manager import LockManager
-    _HAS_LOCK_MANAGER: bool = True
-except ImportError:
-    _HAS_LOCK_MANAGER = False
 
 try:
     from contrib.adapters.vivint_adapter import VivintAdapter
@@ -301,7 +294,7 @@ _ROUTES: tuple[_Route, ...] = (
     # -- Pre-auth routes -----------------------------------------------------
     # Root path: a fresh public install should not greet the operator
     # with a 404 — they typed http://<host>:8420/ and the only
-    # honest answer is "the dashboard is at /home".  302 redirect
+    # honest answer is "the dashboard is at /dashboard".  302 redirect
     # there so a browser follows automatically and the address bar
     # reflects where they actually are.  ("",) is what the dispatch
     # parser produces for "/" after strip("/").split("/").
@@ -309,36 +302,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_root", requires_auth=False),
     _Route("GET", ("dashboard",),
            "_handle_get_dashboard", requires_auth=False),
-    _Route("GET", ("home",),
-           "_handle_get_home", requires_auth=False),
     _Route("GET", ("vivint",),
            "_handle_get_vivint_page", requires_auth=False),
-    _Route("GET", ("api", "home", "vivint"),
-           "_handle_get_home_vivint", requires_auth=False),
-    _Route("GET", ("api", "home", "photos"),
-           "_handle_get_home_photos", requires_auth=False),
-    _Route("GET", ("api", "home", "lights"),
-           "_handle_get_home_lights", requires_auth=False),
-    _Route("GET", ("api", "home", "locks"),
-           "_handle_get_home_locks", requires_auth=False),
-    _Route("GET", ("api", "home", "security"),
-           "_handle_get_home_security", requires_auth=False),
-    _Route("GET", ("api", "home", "cameras"),
-           "_handle_get_home_cameras", requires_auth=False),
-    _Route("GET", ("api", "home", "camera", "{channel}"),
-           "_handle_get_home_camera_snapshot", requires_auth=False),
-    _Route("GET", ("api", "home", "occupancy"),
-           "_handle_get_home_occupancy", requires_auth=False),
-    _Route("GET", ("api", "home", "mode"),
-           "_handle_get_home_mode", requires_auth=False),
-    _Route("GET", ("api", "home", "printer"),
-           "_handle_get_home_printer", requires_auth=False),
-    _Route("GET", ("api", "home", "soil"),
-           "_handle_get_home_soil", requires_auth=False),
-    _Route("GET", ("api", "home", "health"),
-           "_handle_get_home_health", requires_auth=False),
-    _Route("GET", ("api", "home", "all"),
-           "_handle_get_home_all", requires_auth=False),
     _Route("GET", ("api", "io", "stats"),
            "_handle_get_io_stats", requires_auth=False),
     _Route("GET", ("io",),
@@ -441,8 +406,8 @@ _ROUTES: tuple[_Route, ...] = (
            "_handle_get_nav_config", requires_auth=False),
     # Satellite health — continuous view of every known satellite,
     # and on-demand deep check for a single room.  Both are
-    # auth-free so the /home dashboard and future tooling can poll
-    # without a token.  See handlers/dashboard.py for handler bodies.
+    # auth-free so external tooling can poll without a token.
+    # See handlers/dashboard.py for handler bodies.
     _Route("GET", ("api", "satellites", "health"),
            "_handle_get_satellites_health", requires_auth=False),
     _Route("POST", ("api", "satellites", "{room}", "health", "check"),
@@ -795,7 +760,6 @@ class GlowUpRequestHandler(
     keepalive: Optional[KeepaliveProxy] = None
     registry: Optional[DeviceRegistry] = None
     operator_manager: Optional[OperatorManager] = None
-    lock_manager: Optional[Any] = None
     # Hub-side BLE state.  After the 2026-04-15 service-pattern
     # pivot, BLE no longer has an in-process adapter.  The handler
     # dict that used to be `ble_adapter` is gone; /api/ble/sensors
@@ -809,19 +773,19 @@ class GlowUpRequestHandler(
     meter_logger: Optional[Any] = None
     # Timestamp of the most recent non-time signal seen on
     # glowup/signals/#.  Populated by the _on_remote_signal callback
-    # in _background_startup below.  Used by _handle_get_home_health
-    # as the liveness probe for broker-2 — currently the sole
-    # producer of device-origin signals (glowup-zigbee-service and
-    # glowup-ble-sensor).  time:* signals are excluded because they
-    # originate from the hub's own scheduler and would mask a silent
-    # broker-2 outage.  None means "never seen since server start."
+    # in _background_startup below.  Reserved for liveness probes
+    # against broker-2 — currently the sole producer of device-origin
+    # signals (glowup-zigbee-service and glowup-ble-sensor).  time:*
+    # signals are excluded because they originate from the hub's own
+    # scheduler and would mask a silent broker-2 outage.  None means
+    # "never seen since server start."
     broker2_signals_last_ts: Optional[float] = None
 
     # -- Satellite health state (populated by the MQTT callbacks
     # wired in _background_startup and by the periodic prober
     # thread).  Handlers read these dicts to answer
-    # GET /api/satellites/health, POST /api/satellites/{room}/health/check,
-    # and the "satellites" block in /api/home/health.
+    # GET /api/satellites/health and
+    # POST /api/satellites/{room}/health/check.
     #
     # satellite_heartbeats: {room: {"ts": float, "payload": dict}}
     #     Updated every time a message lands on
@@ -1416,8 +1380,7 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         idle: float = now - self._last_request_time
 
         # Log stall after 60 seconds of no accepted requests.
-        # The kiosk polls every POLL_FAST (10s), so 60s means six
-        # consecutive missed polls — a genuine problem, not jitter.
+        # 60s indicates a genuine problem, not request jitter.
         if idle > 60.0 and not self._stall_logged:
             self._stall_logged = True
             last_step: str = getattr(self, "_last_step", "none")
@@ -1633,8 +1596,7 @@ def _load_config(config_path: str) -> dict[str, Any]:
     # State-file split companion to groups_file / schedule_file (Phase 1).
     # The state.db SQLite file is written by:
     #   1. DeviceManager._state — per-device power/effect record for the dashboard
-    #   2. LockManager — lock state mirror keyed off lock_state signals
-    #   3. operators.occupancy — HOME/AWAY persistence for restart recovery
+    #   2. operators.occupancy — HOME/AWAY persistence for restart recovery
     # All three previously joined ``state.db`` to ``dirname(config_path)``,
     # which works on fleet hosts where /etc/glowup is writable, but breaks
     # on the public installer where /etc/glowup is mounted read-only by
@@ -2970,9 +2932,9 @@ def main() -> None:
                     if len(parts) < 3:
                         return
                     sig_name: str = parts[2]
-                    # Liveness stamp for /api/home/health's "zigbee"
-                    # probe.  Every non-time signal on this topic
-                    # originates from a broker-2 producer (currently
+                    # Liveness stamp for the broker-2 producer probe.
+                    # Every non-time signal on this topic originates
+                    # from a broker-2 producer (currently
                     # glowup-zigbee-service and glowup-ble-sensor).
                     # time:* signals come from the hub's own scheduler
                     # and would mask a silent broker-2 outage, so they
@@ -3043,8 +3005,7 @@ def main() -> None:
 
                 # -- Satellite health subscriptions --------------------
                 # Two topics, both feed into GlowUpRequestHandler's
-                # class-level dicts for /api/satellites/health and the
-                # "satellites" block in /api/home/health.
+                # class-level dicts for /api/satellites/health.
                 #
                 #   glowup/voice/status/{room}         — heartbeat
                 #   glowup/voice/health/reply/{room}   — deep-check reply
@@ -3472,22 +3433,6 @@ def main() -> None:
                 config["_mqtt_client"] = proc_mqtt
                 operator_mgr.start(full_config=config)
                 GlowUpRequestHandler.operator_manager = operator_mgr
-
-            # Lock manager (presentation layer for /home dashboard).
-            if config.get("locks") and _HAS_LOCK_MANAGER:
-                # ``_state_path`` is resolved by load_config — points at
-                # /var/lib/glowup/state.db on public installs and at
-                # <config_dir>/state.db on legacy fleet hosts.
-                lock_mgr = LockManager(
-                    config=config,
-                    server=server,
-                    db_path=config["_state_path"],
-                    broker=broker_addr,
-                    port=broker_port,
-                    bus=signal_bus,
-                )
-                lock_mgr.start()
-                GlowUpRequestHandler.lock_manager = lock_mgr
 
         except Exception:
             logging.exception("Background startup failed")

@@ -22,7 +22,7 @@
  *   A link is marked active when its href either (a) matches
  *   location.pathname exactly, or (b) is a path-prefix of it
  *   (e.g. "/thermal" stays active on "/thermal/host/foo").
- *   As a special case, the site root "/" maps to "/home".
+ *   As a special case, the site root "/" maps to "/dashboard".
  *
  * Failure mode:
  *   On fetch error the nav element remains empty — the page still
@@ -73,7 +73,7 @@
             // "+ '/'" guard prevents /photos from activating /p.
             var isActive =
                 (link.href === path) ||
-                (path === "/" && link.href === "/home") ||
+                (path === "/" && link.href === "/dashboard") ||
                 (link.href !== "/" &&
                  path.indexOf(link.href + "/") === 0);
             a.style.color = isActive ? COLOR_ACTIVE : COLOR_INACTIVE;

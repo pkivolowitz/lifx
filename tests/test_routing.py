@@ -312,7 +312,7 @@ class TestRouteFlags(unittest.TestCase):
             ("api", "shopping", "checked"),
             ("api", "voice", "gates"),
             # Satellite deep-health endpoints — diagnostic-only,
-            # no secrets in the payload; matches /api/home/health.
+            # no secrets in the payload.
             ("api", "satellites", "health"),
             ("api", "satellites", "{room}", "health", "check"),
             # SDR / ADS-B dashboard pages — same pattern as /power, /thermal.

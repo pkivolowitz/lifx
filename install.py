@@ -1058,8 +1058,8 @@ def seed_server_config(host: HostInfo, *, assume_yes: bool) -> None:
     # canonical registry and schedule live; the dashboard's PUT/POST
     # group + schedule handlers route writes there too (see
     # handlers/dashboard.py:_save_config_field).  ``state_file``
-    # routes the SQLite state store (DeviceManager, LockManager,
-    # occupancy operator) into the writable state directory rather
+    # routes the SQLite state store (DeviceManager and occupancy
+    # operator) into the writable state directory rather
     # than the read-only /etc tree where SQLite's first connect
     # fails under ProtectHome=true.  The DB file itself is created
     # on demand by SQLite — the installer only needs to publish the

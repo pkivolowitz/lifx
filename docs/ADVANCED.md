@@ -67,7 +67,6 @@ SOE graph.
 
 - [Automation & Triggers](30-automation.md) — Sensor-driven rules, watchdog timeouts, CRUD API
 - [Operators](31-operators.md) — Signal transformers: occupancy, motion gate, triggers
-- [Kiosk Display](32-kiosk.md) — /home ambient display, setup_clock.sh, portrait mode
 - [Persistent Services](24-persistent-services.md) — systemd (Linux) and launchd (macOS) patterns
 
 ---

@@ -279,8 +279,24 @@ Device identity is managed via the MAC-based registry at
 `/etc/glowup/device_registry.json`.  Use `register_device.py` to add,
 remove, or relabel devices.  See [Device Registry](26-device-registry.md).
 
-## The /home Kiosk Page
+## The /dashboard Page
 
-The /home page is an ambient display designed for wall-mounted kiosk
-use.  It requires no authentication and shows sensor data, cameras,
-locks, weather, and other tiles.
+The /dashboard page is the supported control surface for LIFX
+bulbs. It lists discovered devices, lets you trigger effects on
+groups, and exposes the schedule editor.
+
+If /dashboard loads but the bulb list is empty, discovery may
+not have completed yet. Wait, then refresh. If bulbs are still
+absent, verify each is powered on, joined to the same Wi-Fi
+network as the server, and that the server host's firewall is
+not blocking LIFX LAN broadcast traffic.
+
+Effects that do not start usually point to the target group
+being empty, the effect parameters being out of range for the
+target hardware (for example, a 2D effect aimed at a strip), or
+a competing schedule taking precedence within the same window
+— check the server log to confirm which.
+
+Schedules that miss usually mean the server was not running at
+the trigger time. Schedules are evaluated in real time; missed
+windows are not replayed.

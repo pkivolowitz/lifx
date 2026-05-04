@@ -38,8 +38,8 @@ always-on Linux server.  The supported surface:
 
 - **Schedule** bulbs to react to sunrise / sunset / clock time
 
-- **Dashboard** at `http://<host>:8420/home` — group control, schedule editor,
-  device registry
+- **Dashboard** at `http://<host>:8420/dashboard` — group control, schedule
+  editor, device registry
 
 - **Simulator** preview — render an effect to a window without
   touching a bulb

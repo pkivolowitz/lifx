@@ -530,8 +530,8 @@
 (function(){
   // Poll /api/voice/gates and toggle the banner.  Shows the
   // longest-remaining gate because there is usually only one
-  // (the doorbell).  Unauthed endpoint — banner works on both
-  // the public /home pages and the authed dashboard.
+  // (the doorbell).  Unauthed endpoint — banner works on every
+  // dashboard page that loads this script.
   var el = document.getElementById("voiceGateBanner");
   function fmt(sec){
     if(sec<=0)return "0s";
@@ -577,7 +577,7 @@
   <div class="header-bar">
     <div class="header-left">
       <h1>GlowUp Dashboard</h1>
-      <div class="subtitle">Auto-refreshes every 5 seconds &middot; <a href="/home" style="color: var(--dim); text-decoration: none; border-bottom: 1px dotted var(--dim);">Home</a> &middot; <a href="/traffic" style="color: var(--dim); text-decoration: none; border-bottom: 1px dotted var(--dim);">Traffic</a></div>
+      <div class="subtitle">Auto-refreshes every 5 seconds &middot; <a href="/traffic" style="color: var(--dim); text-decoration: none; border-bottom: 1px dotted var(--dim);">Traffic</a></div>
     </div>
     <div class="header-right">
       <div class="copyright">&copy; 2026 Perry Kivolowitz &middot; MIT License</div>

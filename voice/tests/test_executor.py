@@ -774,7 +774,7 @@ class TestHandleAlarmStatus(unittest.TestCase):
     """Tests for _handle_alarm_status.
 
     Pins the contract that this handler reads the ``alarm`` key from
-    the hub's ``/api/home/security`` response — not ``alarm_state``.
+    the hub's security-status response — not ``alarm_state``.
     Caught 2026-05-02 while debugging a stale Vivint cache: the
     handler had been silently returning "in an unknown state" for
     every query because the field name didn't match the API.

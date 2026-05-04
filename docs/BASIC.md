@@ -36,7 +36,6 @@ Not included in Basic support:
 - Vivint
 - distributed workers
 - MIDI
-- kiosk
 
 ---
 
@@ -476,9 +475,8 @@ by hand instead of via dashboard or CLI.
 
 Stop here if standalone or a basic server install is enough for
 you. GlowUp does more — sensor adapters, voice control, distributed
-workers, MIDI pipelines, screen-reactive lighting, kiosk displays,
-custom effect development — but none of that is necessary to drive
-your lights.
+workers, MIDI pipelines, screen-reactive lighting, custom effect
+development — but none of that is necessary to drive your lights.
 
 If you want any of those, the project's deeper documentation
 covers them. Open the `docs/` folder and look at `ADVANCED.md`.

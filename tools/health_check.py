@@ -546,13 +546,6 @@ def check_satellite(r: CheckResult) -> None:
     else:
         r.failed("openwakeword", "not installed")
 
-    # Kiosk display (optional).
-    if _process_running("chromium"):
-        r.passed("Kiosk display", "Chromium running")
-    elif _process_running("kiosk"):
-        r.passed("Kiosk display", "pygame kiosk running")
-    else:
-        r.warn("Kiosk display", "not detected")
 
 
 # ---------------------------------------------------------------------------

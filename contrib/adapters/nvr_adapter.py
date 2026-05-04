@@ -4,8 +4,8 @@ Connects to a Reolink NVR via ``reolink_aio`` and provides two
 capabilities:
 
 - **Snapshots:** caches JPEGs for each configured channel so the
-  server can proxy them at ``/api/home/camera/<channel>`` without
-  exposing NVR credentials to the browser.
+  server can proxy them on an internal endpoint without exposing
+  NVR credentials to the browser.
 - **Doorbell boost:** polls AI person-detection state on configured
   doorbell channels and, on a rising edge, boosts a set of LIFX
   devices (typically porch whites) to a configured effect by calling
