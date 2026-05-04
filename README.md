@@ -4,16 +4,12 @@
 
 # GLOWUP
 
-**LIFX lighting, with the bones of a sensor-fusion platform.**
+**LIFX lighting system**
 
-GlowUp is a self-hosted home control platform built on Sensors,
-Operators, and Emitters.  The supported install drives LIFX lights;
-the rest of the platform — sensors, voice, distributed workers,
-non-LIFX emitters — is in this same repo, working today in a real
-household, but not yet enabled by `install.sh`.  Future installer
-versions will surface more of it for operators who want to opt in.
+GlowUp is a self-hosted home lighting control platform. The supported install
+drives LIFX lights.
 
-This project previously used AI assistance (Claude 4.6) for boilerplate and
+This project has used AI assistance (Claude 4.6) for boilerplate and
 logic expansion. All architectural decisions and code integration are by Perry
 Kivolowitz, the sole Human Author.
 
@@ -29,76 +25,33 @@ A working LIFX system on either a single host (your laptop) or an
 always-on Linux server.  The supported surface:
 
 - **Discover** every LIFX bulb on your network
-- **Name** each bulb — the label travels in firmware and survives
-  DHCP changes
-- **Group** bulbs into named virtual surfaces — a whole room becomes
-  one canvas
-- **33 effects** — aurora, fireworks, Newton's Cradle, plasma, sonar,
-  matrix rain, Conway's Game of Life, 199 country flags, and more.
-  Effects span 1D strips, single bulbs, and 2D matrix devices (Tile,
-  Luna, Candle, Ceiling).  Animated previews in the
-  [Effect Gallery](https://pkivolowitz.github.io/glowup/)
+
+- **Name** each bulb — the label travels in firmware and survives DHCP changes
+
+- **Group** bulbs into named virtual surfaces — a whole room becomes one canvas
+
+- **33 effects** — aurora, fireworks, Newton's Cradle, plasma, sonar, matrix
+  rain, Conway's Game of Life, 199 country flags, and more. Effects span 1D
+  strips, single bulbs, and 2D matrix devices (Tile, Luna, Candle, Ceiling).
+  Animated previews in the [Effect
+  Gallery](https://pkivolowitz.github.io/glowup/)
+
 - **Schedule** bulbs to react to sunrise / sunset / clock time
-- **Dashboard** at `http://<host>:8420/home` — group control,
-  schedule editor, device registry
+
+- **Dashboard** at `http://<host>:8420/home` — group control, schedule editor,
+  device registry
+
 - **Simulator** preview — render an effect to a window without
   touching a bulb
 
-Two install flavors: **standalone** runs while you're at the
-keyboard, no `sudo`, state under `~/.glowup`.  **Server** runs as
-a `systemd` daemon on Linux, owns config under `/etc/glowup`,
-keeps schedules alive while your laptop sleeps.  You can move from
-the first to the second later without losing your bulb names or
-groups.
+Two install flavors: **standalone** runs while you're at the keyboard, no
+`sudo`, state under `~/.glowup`.  **Server** runs as a `systemd` daemon on
+Linux, owns config under `/etc/glowup`, keeps schedules alive while your laptop
+sleeps.  You can move from the first to the second later without losing your
+bulb names or groups.
 
-That is the **whole** supported surface today.  Full manual:
+That is the **whole** supported surface today.  Manual is located here:
 [docs/BASIC.md](docs/BASIC.md).
-
-## What's Also In Here
-
-GlowUp is a generalized sensor-fusion platform.  The codebase
-carries working implementations of layers that `install.sh` does
-not yet configure — you'd wire them up by hand for now:
-
-- **Voice** — wake-word detection, microphone capture, STT,
-  intent execution, spoken response.  Multi-room satellites
-  speaking to a single coordinator
-- **Sensor adapters** — BLE (ONVIS, HomeKit-over-Thread), Zigbee
-  (zigbee2mqtt bridge), Matter (Thread mesh), Vivint security,
-  Reolink NVR, Brother printer telemetry, HDHomeRun
-- **Distributed workers** — sensors, operators, and emitters on
-  separate hosts joined by MQTT.  Process-isolated adapters so a
-  flapping radio can't take down the server
-- **Audio, screen, MIDI** — microphone-reactive effects, screen
-  capture → tile lighting, MIDI files driving synchronized lights
-  and synth output
-- **Maritime + air** — AIS vessel feed, NDBC buoys, ADS-B aircraft —
-  unified `/maritime`, `/air`, `/traffic` map dashboards
-- **Kiosk** — bedroom displays running pygame, weather, photos,
-  schedule
-- **Diagnostics** — PostgreSQL-backed thermal, power, BLE, TPMS, and
-  utility-meter history
-
-Each is a working subsystem in this repo, exercised in production
-at the author's household across six fleet hosts.  A later release
-of `install.sh` will surface them as opt-in modules behind the same
-single command.
-
-## Architecture
-
-```
-Sensors ──► Operators ──► Emitters
-  BLE          FFT          LIFX multizone
-  Mic          Beat         LIFX single
-  Screen       Threshold    LIFX matrix (tiles)
-  MIDI         Blend        MIDI synth
-  Camera       Delay        Audio speakers
-                            WebGL (browser)
-```
-
-The SOE pipeline decouples input from output.  Any sensor can drive
-any operator, any operator can feed any emitter.  New radios,
-protocols, hosts, and outputs plug in without rewriting core.
 
 ## Requirements
 
@@ -120,10 +73,9 @@ matrix.
 
 ## Caveat
 
-Tested with LIFX string lights, Neon, Luna (700-series matrix),
-Candle, Ceiling, and monochrome bulbs.  I don't own every LIFX
-product — please report problems; fixes for other devices are
-welcome.
+Tested with LIFX string lights, Neon, Luna (700-series matrix), Ceiling, and
+monochrome bulbs.  I don't own every LIFX product — please report problems;
+fixes for other devices are welcome.
 
 ## License
 
